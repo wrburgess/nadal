@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { COMMANDS, dispatch, helpText } from "../src/cli/router.js";
 
 describe("tn router", () => {
@@ -10,8 +10,12 @@ describe("tn router", () => {
   });
 
   it("dispatch returns 2 and prints an error line for an unknown command", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const code = await dispatch(["bogus", "nope"]);
     expect(code).toBe(2);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unknown command"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("bogus"));
+    errorSpy.mockRestore();
   });
 
   it("dispatch of --help returns 0", async () => {
