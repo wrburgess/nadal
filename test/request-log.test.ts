@@ -45,6 +45,27 @@ describe("request telemetry", () => {
     expect(String(row?.outcome)).toMatch(/^error:/);
   });
 
+  it("records error:exit-N outcome and returns the exit code when fn returns non-zero without throwing", async () => {
+    const code = await logRequest("cli", "x", [], async () => 2);
+    expect(code).toBe(2);
+    const [row] = rows();
+    expect(row?.outcome).toBe("error:exit-2");
+  });
+
+  it("sanitizes control and bidi characters embedded in args before persisting", async () => {
+    // Same contract as sanitizeValue() (Task 6, hardened via src/sanitize.ts):
+    // control characters and bidi overrides must not survive into a value
+    // that could later be rendered in a terminal or report. A newline and an
+    // RTL override embedded in an arg must come out stripped/replaced.
+    const rtlOverride = String.fromCharCode(0x202e);
+    const dirty = [`a\nb`, `c${rtlOverride}d`];
+    const code = await logRequest("cli", "db migrate", dirty, async () => 0);
+    expect(code).toBe(0);
+    const [row] = rows();
+    const storedArgs = JSON.parse(String(row?.args)) as string[];
+    expect(storedArgs).toEqual(["a b", "c d"]);
+  });
+
   it("closes the sqlite handle even when the insert itself throws", async () => {
     // Drop request_log after migration so openDb() still succeeds but the
     // insert fails post-open — mirrors db-client-error-handling.test.ts's
