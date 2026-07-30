@@ -31,8 +31,9 @@ not something an "effective gate" caveat in prose can override.
 | Structural parity | `ruby scripts/parity_check.rb` |
 | Typecheck | `npm run typecheck` |
 | Lint | `npm run lint` |
+| CLI grammar parity | `npm test -- test/cli-grammar-parity.test.ts` |
 
-**Pending — Tasks 5–6 of the Foundation plan add these rows once the commands exist and pass**,
+**Pending — Task 6 of the Foundation plan adds these rows once the commands exist and pass**,
 nadal's real command set for a JS/TS host: Tests + coverage floor `npm run test:coverage` (script
 exists as of Task 4, but the global v8 thresholds do not yet pass — 72% lines / 66.66% functions
 against the 75% floor — because `src/cli/main.ts`'s top-level `process.exit` call cannot be exercised
