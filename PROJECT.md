@@ -139,6 +139,16 @@ and stays green.
   ([ADR 0027](docs/adr/0027-reviewer-chain-validated-against-invocation-paths.md) decision 7 records why
   the rest is unverifiable from a static declaration). If the exclusion empties the chain, the run is at
   the exhausted-chain floor — `stop-and-ask`.
+- **With `Fallback order: none`, that exclusion is unconditional whenever Codex is the acting
+  harness** — `chain` is just `[Codex]`, so `independent_chain` always empties it, and every
+  Codex-run `invoke`/`verify` would hit `stop-and-ask` with no other entry to try (a Codex reviewer
+  finding on this exact PR: nothing app-specific, the same logic applies to any host that names a
+  single-entry chain). nadal's mitigation is *not* a second *Invocation paths* row — it's
+  [§ Execution Profile](#execution-profile): Codex is routed **only** to the Adversarial-PR-review
+  step, never Driver/SOW-execution/Mechanical/AFK, so Codex is not expected to be the acting harness
+  for a lifecycle run in the first place. If a future task ever assigns Codex a Driver role, add back
+  a working fallback (e.g. `Copilot`, whose *Invocation paths* row already ships below) before doing
+  so, or this chain empties for it too.
 - **At the PR gate, the AC summons the Reviewer, not the HC**, and [`verify`](skills/verify/SKILL.md)
   is the **sole owner** of that summons. No other Skill issues it — a duplicated summons produces two
   review requests and two windows, and makes "did the primary respond?" unanswerable.
