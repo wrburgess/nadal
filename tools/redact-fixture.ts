@@ -14,6 +14,8 @@
  * redaction was applied and which categories were substituted — not the mapping.
  */
 
+import * as cheerio from "cheerio";
+
 export type Substitution = { from: string; to: string };
 
 /**
@@ -75,6 +77,31 @@ export function decodeEntities(value: string): string {
     .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
     .replace(/&#(\d+);?/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
     .replace(/&([a-z]+);/gi, (whole, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? whole);
+}
+
+/**
+ * What the page actually *renders*, with every entity resolved by a standards-complete decoder.
+ *
+ * `decodeEntities` above knows a hand-written handful of named references, and a hand-written list
+ * is exactly the wrong shape for this job: HTML5 defines over two thousand named references, and
+ * `Cory&NewLine;Hogan` renders as the name while evading any table that does not happen to list
+ * `&NewLine;`. So rather than lengthening the table, parse the document and read it back — the
+ * parser's decoder is complete by construction, and it stays complete as the spec moves.
+ *
+ * Text nodes *and* attribute values are included, because an identity can sit in either. Runs of
+ * whitespace are collapsed to a single space so that a name separated by a decoded newline or tab
+ * still matches a pattern written with a space.
+ *
+ * Verification only — this view is never written to a fixture, so parsing cannot alter the
+ * committed markup. (Provenance: Codex adversarial review round 8 on PR #26, rated critical.)
+ */
+function renderedView(html: string): string {
+  const $ = cheerio.load(html);
+  const parts = [$.root().text()];
+  $("*").each((_, el) => {
+    if (el.type === "tag") parts.push(...Object.values(el.attribs));
+  });
+  return parts.join("\n").replace(/\s+/g, " ");
 }
 
 /**
@@ -288,13 +315,16 @@ export function assertRedacted(
 ): void {
   const survivors: string[] = [];
 
-  // Sweep the raw markup AND an entity-decoded copy of it. An identity has to be absent from both
-  // to pass, so an encoding this module does not know how to *substitute* can still never ship
-  // silently — the capture fails instead.
+  // Three views, and an identity must be absent from all of them. An encoding this module cannot
+  // *substitute* still cannot ship silently — the capture fails instead.
   const decoded = decodeEntities(html);
+  const rendered = renderedView(html);
 
   for (const value of options.forbidden) {
-    const found = tolerantPattern(value).exec(html) ?? tolerantPattern(value).exec(decoded);
+    const found =
+      tolerantPattern(value).exec(html) ??
+      tolerantPattern(value).exec(decoded) ??
+      tolerantPattern(value).exec(rendered);
     if (found !== null) {
       survivors.push(`forbidden value survives: ${value} (as "${found[0]}")`);
     }

@@ -290,3 +290,39 @@ describe("replacement-introduced URL structure", () => {
     expect(out).toBe("<p>C&amp;D Club</p>");
   });
 });
+
+describe("named entity bypass", () => {
+  it.each([
+    ["&NewLine;", "Cory&NewLine;Hogan"],
+    ["&Tab;", "Cory&Tab;Hogan"],
+    ["&emsp;", "Cory&emsp;Hogan"],
+    ["&nbsp;", "Cory&nbsp;Hogan"],
+  ])("catches an identity separated by %s", (_label, encoded) => {
+    // HTML5 defines over two thousand named references, so a hand-written table is the wrong
+    // shape for a privacy control: `Cory&NewLine;Hogan` renders as the name while evading any
+    // list that does not happen to include it. Verification now reads the page back through a
+    // real parser, whose decoder is complete by construction.
+    // (Provenance: Codex adversarial review round 8 on PR #26, rated critical.)
+    expect(() => assertRedacted(`<p>${encoded}</p>`, { forbidden: ["Cory Hogan"] })).toThrow(
+      RedactionError,
+    );
+  });
+
+  it("catches an entity-separated identity inside an attribute value", () => {
+    // An identity can sit in an attribute as easily as in a text node, and `.text()` alone would
+    // not see it.
+    expect(() =>
+      assertRedacted(`<a title="Cory&NewLine;Hogan">x</a>`, { forbidden: ["Cory Hogan"] }),
+    ).toThrow(RedactionError);
+  });
+
+  it("does not fire on a page where the identity is genuinely absent", () => {
+    // The other half of the guard: collapsing whitespace across text and attributes must not
+    // manufacture a match out of unrelated neighbouring content.
+    expect(() =>
+      assertRedacted("<p>Dana Sample</p><p>Cory</p><p>Hogan is a place</p>", {
+        forbidden: ["Cory Hogan"],
+      }),
+    ).not.toThrow();
+  });
+});
