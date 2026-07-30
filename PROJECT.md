@@ -20,13 +20,19 @@ commands during Customization** (e.g. a Rails host: lint `bundle exec rubocop -a
 a JS/TS host: lint `npm run lint`, tests `npm test`, dependency audit `npm audit`). A **Stack Overlay**
 such as `ace-rails` can ship a ready-to-paste command set for its stack.
 
-This config repo ships no application code, so its own gate is the structural parity check plus the
-dependency-free stdlib self-tests:
+nadal's real command set (a JS/TS host), replacing the shipped ace config-repo rows during
+Customization:
 
 | Purpose | Command |
 |---------|---------|
+| Typecheck | `npm run typecheck` |
+| Lint | `npm run lint` |
+| Tests + coverage floor | `npm run test:coverage` |
 | Structural parity | `ruby scripts/parity_check.rb` |
-| Self-tests | `ruby test/parity_check_test.rb` |
+| CLI grammar parity | `npm test -- test/cli-grammar-parity.test.ts` |
+
+The `npm run` rows are not yet backed by a `package.json` — Tasks 4–6 of the Foundation plan create
+those commands. Until then, *Structural parity* is the effective gate.
 
 A check whose command runs but has nothing applicable to inspect (e.g. no application code to lint) is
 reported `pass`/`not_run` with a stated reason — checks are **not applicable, not skipped**, so rigor
@@ -58,7 +64,7 @@ the actual if they differ. Use human-readable names, never API ids.
 
 ## Branch & PR Policy
 
-- **Protected branches:** `main`, `master`, `develop` — this backticked list (everything up to the
+- **Protected branches:** `main` — this backticked list (everything up to the
   em dash) is the **authored source** the guardrails derive from. Never commit or push directly to a
   protected branch; agents work on feature branches. A host may trim or extend the backticked list,
   then run `bin/install-git-hooks` to regenerate the derived sidecar `.githooks/protected-branches`.
@@ -113,7 +119,7 @@ and stays green.
 | Field | Setting | Allowed values |
 |-------|---------|----------------|
 | **Primary** — the reviewer summoned first | `Codex` | any harness with a row in *Invocation paths* |
-| **Fallback order** — tried in turn when the primary is unreachable or silent | `Copilot` | comma-separated harnesses each with an *Invocation paths* row, or `none` alone; no blank elements and no repeat of *Primary*. Author the whole list inside **ONE pair of backticks** (`Copilot, Gemini`) — never one span per element, since the checker reads only the first span |
+| **Fallback order** — tried in turn when the primary is unreachable or silent | `none` | comma-separated harnesses each with an *Invocation paths* row, or `none` alone; no blank elements and no repeat of *Primary*. Author the whole list inside **ONE pair of backticks** (`Copilot, Gemini`) — never one span per element, since the checker reads only the first span |
 | **Bounded window** — how long to wait for a response before falling back | `30m` | `<integer><unit>`, unit one of `s` · `m` · `h` |
 | **Degradation floor** — what happens when the whole chain is exhausted | `stop-and-ask` | `stop-and-ask` (not configurable) |
 
@@ -261,6 +267,23 @@ in the shipped file, not in that default.)
   [ADR 0016](docs/adr/0016-interactive-sequential-disposition-scout.md)) — are out of scope too.
   `auto` is **not** licence to auto-merge any of their review PRs.
 
+### nadal merge-autonomy intent (recorded, not machine-enforced)
+
+The HC's stated intent for nadal (decision 2026-07-29): **AC merges after green Quality Checks +
+adversarial second-model review (SHA-bound). No human merge gate.** This paragraph **records** that
+intent; it does **not** change the *Merge* row above, and could not — `merge: required` is the only
+value `scripts/human_gates.rb` accepts (`ALLOWED = { merge: %w[required] }`), and the parity check
+hard-fails any other value **on every vendored host**, per the "Merge is not configurable" /
+"Merge is always human" invariants this same section states above ([ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
+decision, reaffirmed unconditionally at the end of this section). This is a **known delta**: nadal's
+stated operating intent is autonomous merge on green + attested review, while the vendored floor this
+repo runs today still requires a human to merge every PR, including this one. Closing that delta —
+if the HC still wants it after weighing the "no Host App may express self-merge" rationale — is a
+framework-level change (an ADR amending or overriding `scripts/human_gates.rb`'s `ALLOWED` set), out
+of scope for a `PROJECT.md`-only Customization task; it is not something this file can express on its
+own. Until such a change lands, `final` posts the SOW and **a human merges**, exactly as the table
+above requires.
+
 ### Rule-suggestion disposition
 
 How [`final`](skills/final/SKILL.md) handles the Rules-Layer / config improvements it learns during
@@ -314,3 +337,18 @@ pointing at the illustrative seed; a Host App repoints it during Customization.
 
 The Tool Roster *schema* (the fields, the provenance typing, the inclusion test) is business-neutral
 mechanism and lives with the artifact; only the location is host-configurable and belongs here.
+
+## Execution Profile
+
+Per-step model/effort routing (spec § Model routing; proving ground for ace#143).
+Ceiling: **Opus / high** — Fable only on explicit HC invocation.
+Executable at delegation boundaries (`.claude/agents/*.md`, subagent spawns) and via the
+project model pin; step-level routing inside one session is advisory.
+
+| Step | Model / effort |
+|------|----------------|
+| Driver sessions (grilling, planning, judgment) | Opus / high |
+| SOW execution (TDD implement) | Sonnet / high; escalate to Opus when stuck, noted on the issue |
+| Mechanical (scaffolds, fixture capture, writeups, findings appends) | Haiku or Sonnet / low |
+| Adversarial PR review | GPT family via Codex / high |
+| AFK research | Sonnet / medium |
