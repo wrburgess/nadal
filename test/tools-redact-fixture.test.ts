@@ -403,3 +403,48 @@ describe("base64 stripping and attribute boundaries", () => {
     expect(describeStructure(redactHtml(page, []))).toEqual(describeStructure(page));
   });
 });
+
+
+describe("Unicode normalisation forms", () => {
+  // "José Example" written two ways: composed (U+00E9) and decomposed (e + U+0301). Identical to
+  // every reader, different code-point sequences to a matcher — so a map entry written in one form
+  // silently misses the other, and an accented real name is common in this domain.
+  // (Provenance: Codex adversarial review round 11 on PR #26, rated critical.)
+  const composed = "Jos\u00e9 Example";
+  const decomposed = "Jose\u0301 Example";
+
+  it.each([
+    ["text", (name: string) => `<p>${name}</p>`],
+    ["attribute", (name: string) => `<a title="${name}">x</a>`],
+    ["comment", (name: string) => `<div><!-- ${name} --></div>`],
+    ["percent-encoded URL value", (name: string) => `<a href='/p?playername=${encodeURIComponent(name)}'>x</a>`],
+  ])("catches a decomposed identity in %s when the map lists the composed form", (_label, wrap) => {
+    expect(() => assertRedacted(wrap(decomposed), { forbidden: [composed] })).toThrow(
+      RedactionError,
+    );
+  });
+
+  it("catches a composed identity when the map lists the decomposed form", () => {
+    expect(() => assertRedacted(`<p>${composed}</p>`, { forbidden: [decomposed] })).toThrow(
+      RedactionError,
+    );
+  });
+
+  it("does not fire on a genuinely different name", () => {
+    expect(() =>
+      assertRedacted("<p>Dana Sample</p>", { forbidden: [composed] }),
+    ).not.toThrow();
+  });
+
+  it("treats an allow-listed detector value as equal across normalisation forms", () => {
+    const detector = { name: "playername", pattern: /playername=([^"&']+)/g };
+
+    expect(() =>
+      assertRedacted(`<a href='/p?playername=${decomposed}'>x</a>`, {
+        forbidden: [],
+        detectors: [detector],
+        allowed: [composed],
+      }),
+    ).not.toThrow();
+  });
+});

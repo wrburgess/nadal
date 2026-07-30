@@ -361,29 +361,33 @@ export function assertRedacted(
 ): void {
   const survivors: string[] = [];
 
-  // Three views, and an identity must be absent from all of them. An encoding this module cannot
-  // *substitute* still cannot ship silently — the capture fails instead.
-  const decoded = decodeEntities(html);
-  const rendered = renderedView(html);
+  // Several views, and an identity must be absent from ALL of them. An encoding this module
+  // cannot *substitute* still cannot ship silently — the capture fails instead.
+  const views = [html, decodeEntities(html), renderedView(html), percentDecodedView(html)];
+  // ...each also in NFC. `José` composed (U+00E9) and decomposed (`e` + U+0301) are the same name
+  // to every reader and different code-point sequences to a matcher, so a map entry written in
+  // one form silently misses the other. Normalising both sides collapses that difference.
+  // (Provenance: Codex adversarial review round 11 on PR #26, rated critical.)
+  const allViews = [...views, ...views.map(nfc)];
 
   for (const value of options.forbidden) {
-    const found =
-      tolerantPattern(value).exec(html) ??
-      tolerantPattern(value).exec(decoded) ??
-      tolerantPattern(value).exec(rendered);
-    if (found !== null) {
+    const found = [value, nfc(value)]
+      .flatMap((needle) => allViews.map((view) => tolerantPattern(needle).exec(view)))
+      .find((match) => match !== null);
+    if (found !== undefined && found !== null) {
       survivors.push(`forbidden value survives: ${value} (as "${found[0]}")`);
     }
   }
 
-  const allowed = new Set((options.allowed ?? []).map(lower));
+  const allowed = new Set((options.allowed ?? []).map((v) => nfc(lower(v))));
+  const detectorView = views[1] ?? html;
   for (const detector of options.detectors ?? []) {
-    for (const match of decoded.matchAll(detector.pattern)) {
+    for (const match of detectorView.matchAll(detector.pattern)) {
       const captured = match[1];
       if (captured === undefined) continue;
-      const decoded = decodePlus(captured);
-      if (allowed.has(lower(decoded)) || allowed.has(lower(captured))) continue;
-      survivors.push(`${detector.name} not in allow-list: ${decoded}`);
+      const value = decodePlus(captured);
+      if (allowed.has(nfc(lower(value))) || allowed.has(nfc(lower(captured)))) continue;
+      survivors.push(`${detector.name} not in allow-list: ${value}`);
     }
   }
 
@@ -397,6 +401,27 @@ export function assertRedacted(
 
 function lower(value: string): string {
   return value.toLowerCase();
+}
+
+/** Canonical composition, so the same name written two ways compares equal. */
+function nfc(value: string): string {
+  return value.normalize("NFC");
+}
+
+/**
+ * Percent-escapes resolved, so an identity hidden in a URL-encoded value is visible to the sweep
+ * in whichever normalisation form it was encoded from — `Jose%CC%81` decodes to the decomposed
+ * spelling, which the NFC pass above then folds onto the composed one. Invalid escape runs are
+ * left alone rather than throwing, since raw markup contains `%` for many reasons.
+ */
+function percentDecodedView(html: string): string {
+  return html.replace(/(?:%[0-9a-fA-F]{2})+/g, (escaped) => {
+    try {
+      return decodeURIComponent(escaped);
+    } catch {
+      return escaped;
+    }
+  });
 }
 
 function decodePlus(value: string): string {
