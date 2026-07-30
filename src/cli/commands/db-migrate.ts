@@ -6,9 +6,13 @@ const CONTROL_CHARS = new RegExp(
   "g",
 );
 
-/** Strip control characters (including newlines) so a value stays safe inside a one-line summary. */
+/**
+ * Make a value safe to embed in a one-line `key=value` CLI summary: strip control characters
+ * (including newlines) and escape embedded double quotes, so a value placed inside a quoted
+ * field (e.g. `message="..."`) can't be broken out of by its own content.
+ */
 export function sanitizeSummaryValue(value: string): string {
-  return value.replace(CONTROL_CHARS, " ").trim();
+  return value.replace(CONTROL_CHARS, " ").replace(/"/g, '\\"').trim();
 }
 
 export const dbMigrate: Command = {

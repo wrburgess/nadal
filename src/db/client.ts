@@ -28,6 +28,9 @@ export function openDb(path: string = dbPath()) {
 
 export function runMigrations(path: string = dbPath()): void {
   const { db, sqlite } = openDb(path);
-  migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  sqlite.close();
+  try {
+    migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+  } finally {
+    sqlite.close();
+  }
 }
