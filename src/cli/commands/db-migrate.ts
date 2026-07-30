@@ -6,13 +6,23 @@ const CONTROL_CHARS = new RegExp(
   "g",
 );
 
-/**
- * Make a value safe to embed in a one-line `key=value` CLI summary: strip control characters
- * (including newlines) and escape embedded double quotes, so a value placed inside a quoted
- * field (e.g. `message="..."`) can't be broken out of by its own content.
- */
+/** Strip control characters (including newlines) so a value stays safe inside a one-line summary. */
 export function sanitizeSummaryValue(value: string): string {
-  return value.replace(CONTROL_CHARS, " ").replace(/"/g, '\\"').trim();
+  return value.replace(CONTROL_CHARS, " ").trim();
+}
+
+/**
+ * Make a value safe to embed inside a double-quoted field of a one-line `key=value` CLI summary
+ * (e.g. `message="..."`): strip control characters, then backslash-escape backslashes and double
+ * quotes — backslashes FIRST, so an escaped backslash immediately preceding a quote can't be
+ * misread by an escape-aware parser as also escaping that quote (an even-length backslash run
+ * before a quote is unambiguous only when backslashes are escaped before quotes are).
+ *
+ * Not used for the unquoted `path=` field: `TN_DB_PATH` may legally contain `"`, and escaping it
+ * there would print a path that no longer matches the file actually migrated.
+ */
+export function quoteSummaryValue(value: string): string {
+  return sanitizeSummaryValue(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 export const dbMigrate: Command = {
@@ -24,7 +34,7 @@ export const dbMigrate: Command = {
       runMigrations();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`db migrate status=error message="${sanitizeSummaryValue(message)}"`);
+      console.error(`db migrate status=error message="${quoteSummaryValue(message)}"`);
       return 1;
     }
     console.log(`db migrate status=ok path=${sanitizeSummaryValue(dbPath())}`);
