@@ -86,7 +86,7 @@ Same services; tool names mirror the grammar (`team_pull`, `player_show`, `lineu
 
 ### Reports
 
-Deterministic markdown from DB state: per-opponent dossier, own-team book, matchup sheets.
+Deterministic rendering from DB state: per-opponent dossier, own-team book, matchup sheets. Formats: **self-contained print-optimized HTML (primary)** and markdown (agent/diff-friendly), with `--pdf` via the Playwright dependency the scrapers already carry. Report templates are tested code in the app — agents fetch reports through MCP rather than composing documents per session (the economization principle applied up front).
 
 ### Request telemetry
 
