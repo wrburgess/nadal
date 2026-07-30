@@ -1,14 +1,15 @@
 import type { Command } from "../router.js";
 import { dbPath, runMigrations } from "../../db/client.js";
 
+// \p{Cc} (Unicode category "Control") covers the full ASCII C0 block, DEL, and the full Latin-1 C1
+// block (NEL, CSI, OSC, ST, ...) in one property escape — a terminal or log consumer that
+// recognizes any of these could rewrite, hide, or reformat output built from an unsanitized value.
+// Line Separator / Paragraph Separator are category Zl/Zp, not Cc, so they're listed explicitly
+// (via character code, not a literal escape sequence, to avoid embedding one in the source).
+const CC_PROPERTY_ESCAPE = String.fromCharCode(0x5c) + "p{Cc}"; // "\p{Cc}"
 const CONTROL_CHARS = new RegExp(
-  `[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}` +
-    // NEL, Line Separator, Paragraph Separator: not ASCII C0 controls, but some
-    // terminals/log consumers still render or index them as a line break, so a
-    // range that only covers 0x00-0x1F/0x7F would still let a message forge an
-    // apparent second summary line.
-    `${String.fromCharCode(0x85)}${String.fromCharCode(0x2028)}${String.fromCharCode(0x2029)}]`,
-  "g",
+  `[${CC_PROPERTY_ESCAPE}${String.fromCharCode(0x2028)}${String.fromCharCode(0x2029)}]`,
+  "gu",
 );
 
 /** Strip control characters (including newlines and Unicode line separators) so a value stays safe inside a one-line summary. */

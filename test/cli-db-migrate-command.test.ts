@@ -12,6 +12,10 @@ import * as client from "../src/db/client.js";
 const NEL = String.fromCharCode(0x85);
 const LINE_SEPARATOR = String.fromCharCode(0x2028);
 const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
+// Unicode C1 control characters beyond NEL: CSI and OSC. A terminal that
+// recognizes these can have its output rewritten or hidden by them.
+const CSI = String.fromCharCode(0x9b);
+const OSC = String.fromCharCode(0x9d);
 
 /**
  * A correct escape-aware scan of a `key="..."` field: on a backslash, the NEXT
@@ -130,6 +134,15 @@ describe("sanitizeSummaryValue()", () => {
     // second summary line despite not being ASCII control characters.
     const withUnicodeBreaks = `a${NEL}b${LINE_SEPARATOR}c${PARAGRAPH_SEPARATOR}d`;
     expect(sanitizeSummaryValue(withUnicodeBreaks)).toBe("a b c d");
+  });
+
+  it("strips the rest of the Unicode C1 control block (e.g. CSI, OSC), not just NEL", () => {
+    // A terminal that recognizes C1 controls can have its output rewritten or
+    // hidden by CSI/OSC sequences embedded in an otherwise-plain-looking
+    // error message, defeating the "safe, observable one-line summary"
+    // guarantee just as much as an ASCII control character would.
+    const withC1Controls = `a${CSI}b${OSC}c`;
+    expect(sanitizeSummaryValue(withC1Controls)).toBe("a b c");
   });
 });
 
