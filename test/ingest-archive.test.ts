@@ -111,6 +111,25 @@ describe("assertArchivePathSafe", () => {
     expect(() => assertArchivePathSafe(escaped)).toThrow(ArchivePathError);
   });
 
+  // REGRESSION. Constraining only the LEAF ("is the file under rawRoot?") is satisfied trivially
+  // by a misconfigured root: `TN_RAW_PATH=src` makes every write "inside rawRoot" and therefore
+  // allowed, while putting un-redacted captures of real people's pages into a TRACKED directory of
+  // a PUBLIC repo. The guard has to constrain the ROOT too.
+  it("REGRESSION: refuses an archive ROOT inside the repo tree, even though the leaf is under it", () => {
+    process.env.TN_RAW_PATH = resolve("src");
+    const leafInsideThatRoot = join(resolve("src"), "tennisrecord", "x.html");
+    expect(() => assertArchivePathSafe(leafInsideThatRoot)).toThrow(ArchivePathError);
+    expect(() =>
+      archivePage({ sourceSet: "tennisrecord", slug: "x", url: "https://example.test", body: "bad", httpStatus: 200 }),
+    ).toThrow(ArchivePathError);
+    expect(existsSync(join(resolve("src"), "tennisrecord"))).toBe(false);
+  });
+
+  it("still allows the repo's own gitignored raw/ as the root", () => {
+    process.env.TN_RAW_PATH = resolve("raw");
+    expect(() => assertArchivePathSafe(join(resolve("raw"), "tennisrecord", "x.html"))).not.toThrow();
+  });
+
   it("archivePage refuses a traversal in sourceSet and writes nothing", () => {
     expect(() =>
       archivePage({

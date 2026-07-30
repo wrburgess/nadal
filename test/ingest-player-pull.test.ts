@@ -6,12 +6,15 @@ import { pullPlayer } from "../src/ingest/player-pull.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
+import { useTnRawPath } from "./helpers/tn-raw.js";
 
 const matchHistory = loadFixture("tennisrecord/match-history");
 const empty = loadFixture("tennisrecord/match-history-empty");
 
 describe("pullPlayer", () => {
   useTnDbPath();
+  // Without this, a pull archives its pages into the repo own raw/ on every test run.
+  useTnRawPath();
 
   it("writes court matches, court-match players, and rating observations, hand-verified against the fixture", async () => {
     runMigrations();

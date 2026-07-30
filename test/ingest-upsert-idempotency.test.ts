@@ -12,10 +12,11 @@ import { hrefParam } from "../src/parsers/dom.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
 import { pullTeam } from "../src/ingest/team-pull.js";
-import { upsertRatingObservation, upsertTeam, upsertTeamMatch } from "../src/ingest/upsert.js";
+import { upsertCourtMatch, upsertRatingObservation, upsertTeam, upsertTeamMatch } from "../src/ingest/upsert.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
+import { useTnRawPath } from "./helpers/tn-raw.js";
 
 const team = loadFixture("tennisrecord/team");
 const matchHistory = loadFixture("tennisrecord/match-history");
@@ -82,6 +83,8 @@ function buildFetcher() {
 
 describe("upsert idempotency — the headline test", () => {
   useTnDbPath();
+  // Without this, a pull archives its pages into the repo own raw/ on every test run.
+  useTnRawPath();
 
   it("running team pull twice through the stub fetcher leaves identical rows, and updates a changed rating in place", async () => {
     runMigrations();
@@ -186,6 +189,100 @@ describe("upsert idempotency — the headline test", () => {
 
       const rows = db.select().from(teamMatches).all();
       expect(rows).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // REGRESSION. The committed team fixture is an end-of-season page where every schedule row has a
+  // result link, so every row carries a `mid=` and the partial unique index deduplicates it. An
+  // UNPLAYED fixture has no result link and therefore no `mid=` — and that row took a plain-insert
+  // path, so re-pulling a mid-season team page grew one duplicate row per unplayed fixture, on
+  // every pull. The suite was green because no fixture exercised the case.
+  it("REGRESSION: re-pulling a page with an unplayed fixture (no result link) does not duplicate its team_match", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const withUnplayedFixture = team.html.replace(
+        '<a class="link" href="/adult/matchresults.aspx?year=2026&mid=181505">3-2</a>',
+        "",
+      );
+      expect(withUnplayedFixture).not.toBe(team.html);
+      const fetchPage = createStubFetcher({ [team.source.url]: { body: withUnplayedFixture } });
+
+      const first = await pullTeam({ db, fetchPage, target: team.source.url });
+      expect(first.kind).toBe("ok");
+      const afterFirst = db.select().from(teamMatches).all();
+      expect(afterFirst).toHaveLength(10);
+      expect(afterFirst.filter((r) => r.sourceMatchId === null)).toHaveLength(1);
+
+      const second = await pullTeam({ db, fetchPage, target: team.source.url });
+      expect(second.kind).toBe("ok");
+      expect(db.select().from(teamMatches).all()).toEqual(afterFirst);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // REGRESSION. `mid=` present but EMPTY is as unusable an idempotency key as an absent one, and
+  // the partial index treats "" as non-null — so every empty-id row would have collapsed into a
+  // single team_match. `match-history.ts` already made this argument for its own rows (Codex round
+  // 7 on PR #26); the schedule parser had not.
+  it("REGRESSION: an empty mid= is normalized to null, so two such rows stay distinct", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const emptyMid = team.html.replace(/mid=18150[58]/g, "mid=");
+      expect(emptyMid).not.toBe(team.html);
+      const fetchPage = createStubFetcher({ [team.source.url]: { body: emptyMid } });
+
+      expect((await pullTeam({ db, fetchPage, target: team.source.url })).kind).toBe("ok");
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(10);
+      expect(rows.filter((r) => r.sourceMatchId === null)).toHaveLength(2);
+      expect(rows.filter((r) => r.sourceMatchId === "")).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // REGRESSION. A TennisRecord pull knows nothing about `tennislink_url` and passes `district:
+  // null` unconditionally. Writing `values.x ?? null` across the conflict `set` meant every
+  // re-pull silently erased whatever another source had recorded there — latent today, live the
+  // moment #27 lands.
+  it("REGRESSION: re-upserting a team from a source that lacks a column preserves the stored value", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      upsertTeam(db, {
+        name: "Norbury, Nova",
+        section: "Missouri Valley",
+        district: "Iowa",
+        tennislinkUrl: "https://tennislink.usta.com/team/1",
+      });
+      const after = upsertTeam(db, { name: "Norbury, Nova", tennisrecordUrl: "https://tr/team" });
+
+      expect(after.tennislinkUrl).toBe("https://tennislink.usta.com/team/1");
+      expect(after.district).toBe("Iowa");
+      expect(after.section).toBe("Missouri Valley");
+      expect(after.tennisrecordUrl).toBe("https://tr/team");
+      expect(db.select().from(teams).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a court match with no source id is deduped on its natural composite rather than re-inserted", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const row = { teamMatchId: null, slot: "D1", discipline: "doubles", winnerSide: null, score: "6-3 6-4", leagueContext: "40+ 4.0", playedOn: "2026-03-01", sourceMatchId: null };
+      upsertCourtMatch(db, row);
+      upsertCourtMatch(db, { ...row, score: "6-3 6-2" });
+
+      const rows = db.select().from(courtMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.score).toBe("6-3 6-2");
     } finally {
       sqlite.close();
     }

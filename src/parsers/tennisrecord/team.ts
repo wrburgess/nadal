@@ -185,12 +185,19 @@ function parseSchedule($: CheerioAPI, source: SourceRef): TeamScheduleRow[] {
         );
       }
 
+      // An unplayed fixture's result cell carries no result link at all, so a schedule row
+      // legitimately has no `mid=` — unlike a match-history row, whose missing id IS a structural
+      // failure (see `match-history.ts`). What the two DO share is that `mid=` with an empty value
+      // is as unusable an idempotency key as a missing one, so both normalize `""` to null rather
+      // than letting every empty-id row collide under the partial unique index.
+      const rawSourceMatchId = hrefParam(cell(4).find("a").attr("href"), "mid");
+
       return {
         playedOn,
         opponentTeamName,
         site: collapse(cell(3).text()) || null,
         result: collapse(cell(4).text()) || null,
-        sourceMatchId: hrefParam(cell(4).find("a").attr("href"), "mid"),
+        sourceMatchId: rawSourceMatchId === "" ? null : rawSourceMatchId,
       } satisfies TeamScheduleRow;
     })
     .get();

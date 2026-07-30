@@ -7,6 +7,7 @@ import { pullTeam } from "../src/ingest/team-pull.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
+import { useTnRawPath } from "./helpers/tn-raw.js";
 
 const team = loadFixture("tennisrecord/team");
 
@@ -65,6 +66,8 @@ function buildFetcher(names = ROSTER_NAMES) {
 
 describe("pullTeam", () => {
   useTnDbPath();
+  // Without this, a pull archives its pages into the repo own raw/ on every test run.
+  useTnRawPath();
 
   it("writes the team, every roster membership, and every schedule row as a team_match with its source_match_id", async () => {
     runMigrations();

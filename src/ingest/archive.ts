@@ -1,12 +1,41 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Anchored to this module's own location (repo root, two levels up from src/ingest/) rather than
+// `process.cwd()`, for the same reason `src/db/client.ts` anchors its migrations folder: the
+// answer must not depend on where the caller happened to be standing.
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const DEFAULT_RAW_DIR = "raw";
 
 /**
  * The archive root every raw page and provenance record is written under. Mirrors `dbPath()` in
  * `src/db/client.ts`: an explicit env var when set, a repo-relative default otherwise.
  */
 export function rawRoot(): string {
-  return process.env.TN_RAW_PATH ?? "raw";
+  return process.env.TN_RAW_PATH ?? DEFAULT_RAW_DIR;
+}
+
+/** True when `child` is `parent` itself or lives underneath it. */
+function isWithin(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+/**
+ * The archive root itself must not sit inside the repo working tree — except at the one place
+ * `.gitignore` covers, `<repo>/raw`. Checking only "is the file under `rawRoot`" is not enough:
+ * that check is satisfied trivially by a misconfigured `TN_RAW_PATH=src`, which would then write
+ * un-redacted captures of real people's pages into a tracked directory of a PUBLIC repo. The
+ * guard has to constrain the root, not just the leaf.
+ */
+function assertRawRootSafe(resolvedRoot: string): void {
+  if (!isWithin(PACKAGE_ROOT, resolvedRoot)) return;
+  if (resolvedRoot === resolve(PACKAGE_ROOT, DEFAULT_RAW_DIR)) return;
+  throw new ArchivePathError(
+    `refusing an archive root inside the repository working tree: ${resolvedRoot} ` +
+      `(un-redacted captures may only be written to ${resolve(PACKAGE_ROOT, DEFAULT_RAW_DIR)} or a path outside the repo)`,
+  );
 }
 
 export type ArchivePageInput = {
@@ -36,6 +65,7 @@ export class ArchivePathError extends Error {}
 
 export function assertArchivePathSafe(candidatePath: string, root: string = rawRoot()): void {
   const resolvedRoot = resolve(root);
+  assertRawRootSafe(resolvedRoot);
   const resolvedCandidate = resolve(candidatePath);
   const rel = relative(resolvedRoot, resolvedCandidate);
   const escapes = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);

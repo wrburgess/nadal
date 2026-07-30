@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   courtMatchPlayers,
   courtMatches,
@@ -37,20 +37,33 @@ type RatingObservationInsert = typeof ratingObservations.$inferInsert;
  * writes to it directly, which is exactly as idempotent for a fixed id.
  */
 
-/** Team's own natural key is `teams.name` (existing unique index `teams_name_unique`). */
+/**
+ * Team's own natural key is `teams.name` (existing unique index `teams_name_unique`).
+ *
+ * On conflict, only the columns this pull actually CARRIES are written. Writing `values.x ?? null`
+ * across the board instead would mean a TennisRecord pull — which knows nothing about
+ * `tennislink_url` and passes `district: null` unconditionally — silently erased whatever another
+ * source had already recorded there, on every re-pull. Nothing sets those columns today, so the
+ * erasure is latent rather than live; #27 (TennisLink) is the run that would have hit it.
+ */
 export function upsertTeam(db: Db, values: TeamInsert): TeamRow {
+  const set: Partial<TeamInsert> = {};
+  if (values.section !== undefined && values.section !== null) set.section = values.section;
+  if (values.district !== undefined && values.district !== null) set.district = values.district;
+  if (values.tennislinkUrl !== undefined && values.tennislinkUrl !== null) {
+    set.tennislinkUrl = values.tennislinkUrl;
+  }
+  if (values.tennisrecordUrl !== undefined && values.tennisrecordUrl !== null) {
+    set.tennisrecordUrl = values.tennisrecordUrl;
+  }
+  // SQLite rejects an empty `DO UPDATE SET`, and a pull that carries no optional column at all is
+  // a real case — re-assign the conflict key to itself as a no-op so the row is still returned.
+  if (Object.keys(set).length === 0) set.name = values.name;
+
   return db
     .insert(teams)
     .values(values)
-    .onConflictDoUpdate({
-      target: teams.name,
-      set: {
-        section: values.section ?? null,
-        district: values.district ?? null,
-        tennislinkUrl: values.tennislinkUrl ?? null,
-        tennisrecordUrl: values.tennisrecordUrl ?? null,
-      },
-    })
+    .onConflictDoUpdate({ target: teams.name, set })
     .returning()
     .get();
 }
@@ -127,7 +140,36 @@ export function upsertMembership(db: Db, values: TeamMembershipInsert): TeamMemb
  */
 export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
   if (values.sourceMatchId === null || values.sourceMatchId === undefined) {
-    return db.insert(teamMatches).values(values).returning().get();
+    // A row with no source id still has to be idempotent, and the partial index deliberately does
+    // NOT cover it. An UNPLAYED fixture on a team page is exactly this case — its result cell has
+    // no result link, so no `mid=` — and re-pulling that page weekly through a plain insert grew
+    // one duplicate row per unplayed fixture per pull. Fall back to the row's natural composite:
+    // the same two teams on the same date IS the same team match.
+    const existing = db
+      .select()
+      .from(teamMatches)
+      .where(
+        and(
+          isNull(teamMatches.sourceMatchId),
+          eq(teamMatches.homeTeamId, values.homeTeamId),
+          eq(teamMatches.visitingTeamId, values.visitingTeamId),
+          values.playedOn === null || values.playedOn === undefined
+            ? isNull(teamMatches.playedOn)
+            : eq(teamMatches.playedOn, values.playedOn),
+        ),
+      )
+      .all()[0];
+    if (existing === undefined) return db.insert(teamMatches).values(values).returning().get();
+    return db
+      .update(teamMatches)
+      .set({
+        eventId: values.eventId ?? null,
+        homeCourtsWon: values.homeCourtsWon ?? null,
+        visitingCourtsWon: values.visitingCourtsWon ?? null,
+      })
+      .where(eq(teamMatches.id, existing.id))
+      .returning()
+      .get();
   }
   return db
     .insert(teamMatches)
@@ -154,7 +196,38 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
  */
 export function upsertCourtMatch(db: Db, values: CourtMatchInsert): CourtMatchRow {
   if (values.sourceMatchId === null || values.sourceMatchId === undefined) {
-    return db.insert(courtMatches).values(values).returning().get();
+    // Unreachable from `pullPlayer` today — the match-history parser throws rather than emit a
+    // court with no `mid=`. It is still deduped on its natural composite rather than blind-inserted,
+    // because the blind insert is a silent non-idempotency landmine for the next source that CAN
+    // produce an id-less court (the same defect that shipped in `upsertTeamMatch` above).
+    const existing = db
+      .select()
+      .from(courtMatches)
+      .where(
+        and(
+          isNull(courtMatches.sourceMatchId),
+          eq(courtMatches.slot, values.slot),
+          values.playedOn === null || values.playedOn === undefined
+            ? isNull(courtMatches.playedOn)
+            : eq(courtMatches.playedOn, values.playedOn),
+          values.teamMatchId === null || values.teamMatchId === undefined
+            ? isNull(courtMatches.teamMatchId)
+            : eq(courtMatches.teamMatchId, values.teamMatchId),
+        ),
+      )
+      .all()[0];
+    if (existing === undefined) return db.insert(courtMatches).values(values).returning().get();
+    return db
+      .update(courtMatches)
+      .set({
+        discipline: values.discipline,
+        winnerSide: values.winnerSide ?? null,
+        score: values.score ?? null,
+        leagueContext: values.leagueContext ?? null,
+      })
+      .where(eq(courtMatches.id, existing.id))
+      .returning()
+      .get();
   }
   return db
     .insert(courtMatches)
