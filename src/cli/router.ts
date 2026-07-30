@@ -27,7 +27,8 @@ export async function dispatch(argv: string[]): Promise<number> {
   const [noun, verb, ...rest] = argv;
   const cmd = COMMANDS.find((c) => c.noun === noun && c.verb === verb);
   if (!cmd) {
-    console.error(`error: unknown command "tn ${noun} ${verb ?? ""}".`.trim() + ` Run tn --help`);
+    const target = `${noun} ${verb ?? ""}`.trim();
+    console.error(`error: unknown command "tn ${target}". Run tn --help`);
     return 2;
   }
   return logRequest("cli", `${cmd.noun} ${cmd.verb}`, rest, () => cmd.run(rest));

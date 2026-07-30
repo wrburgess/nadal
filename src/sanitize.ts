@@ -19,7 +19,13 @@ const CONTROL_CHARS = new RegExp(
   "gu",
 );
 
-/** Strip control characters (including newlines and Unicode line separators) so a value stays safe inside a one-line summary. */
+/**
+ * Strip control characters (including newlines and Unicode line separators) so a value stays safe
+ * inside a one-line summary. Deliberately does NOT trim leading/trailing whitespace: every summary
+ * field this feeds is quoted (quoteSummaryValue()), so edge spaces are unambiguous once inside the
+ * quotes — trimming them would silently misname a real path (e.g. TN_DB_PATH="/tmp/x.db ", legal
+ * POSIX) and would make request_log.args lossy for edge whitespace.
+ */
 export function sanitizeValue(value: string): string {
-  return value.replace(CONTROL_CHARS, " ").trim();
+  return value.replace(CONTROL_CHARS, " ");
 }

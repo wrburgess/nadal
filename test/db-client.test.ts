@@ -1,21 +1,17 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_DB_PATH, dbPath, openDb, runMigrations } from "../src/db/client.js";
 import { playerAliases, players, teams } from "../src/db/schema.js";
+import { restoreTnDbPathAfterEach } from "./helpers/tn-db.js";
 
 function freshDbPath(): string {
   return join(mkdtempSync(join(tmpdir(), "tn-")), "test.db");
 }
 
 describe("dbPath()", () => {
-  const original = process.env.TN_DB_PATH;
-
-  afterEach(() => {
-    if (original === undefined) delete process.env.TN_DB_PATH;
-    else process.env.TN_DB_PATH = original;
-  });
+  restoreTnDbPathAfterEach();
 
   it("falls back to DEFAULT_DB_PATH when TN_DB_PATH is unset", () => {
     delete process.env.TN_DB_PATH;
