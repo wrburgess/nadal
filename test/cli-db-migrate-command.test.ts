@@ -16,6 +16,12 @@ const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
 // recognizes these can have its output rewritten or hidden by them.
 const CSI = String.fromCharCode(0x9b);
 const OSC = String.fromCharCode(0x9d);
+// Unicode Format characters (category Cf): invisible/zero-width, used to
+// control text rendering rather than represent content. RIGHT-TO-LEFT
+// OVERRIDE in particular can make a terminal/log viewer render a one-line
+// summary with its fields visually reordered ("Trojan Source"-style).
+const RTL_OVERRIDE = String.fromCharCode(0x202e);
+const POP_DIRECTIONAL_ISOLATE = String.fromCharCode(0x2069);
 
 /**
  * A correct escape-aware scan of a `key="..."` field: on a backslash, the NEXT
@@ -143,6 +149,29 @@ describe("sanitizeSummaryValue()", () => {
     // guarantee just as much as an ASCII control character would.
     const withC1Controls = `a${CSI}b${OSC}c`;
     expect(sanitizeSummaryValue(withC1Controls)).toBe("a b c");
+  });
+
+  it("strips Unicode bidirectional/format control characters (e.g. RTL override)", () => {
+    // U+202E (RIGHT-TO-LEFT OVERRIDE) and isolate controls are category Cf
+    // (Format), not Cc (Control) — a terminal/log viewer honoring them can
+    // render a summary line with its fields visually reordered or hidden,
+    // the same "Trojan Source" class of spoofing bidi controls enable in
+    // source code, applied here to CLI/log output instead.
+    const withBidiControls = `a${RTL_OVERRIDE}b${POP_DIRECTIONAL_ISOLATE}c`;
+    expect(sanitizeSummaryValue(withBidiControls)).toBe("a b c");
+  });
+
+  it("strips a real RTL override embedded in a path so it cannot visually spoof the success line", () => {
+    // The concrete case Codex's review flagged: sanitizeSummaryValue preserved
+    // a path with an RTL-override character embedded before ".db status=ok"
+    // unchanged, letting a hostile path visually relabel what follows it.
+    // Assert against db-migrate.ts's own line shape.
+    const spoofedPath = `report${RTL_OVERRIDE}.db status=ok`;
+    const line = `db migrate status=ok path=${sanitizeSummaryValue(spoofedPath)}`;
+    expect(line).not.toContain(RTL_OVERRIDE);
+    // Matches every other sanitizeSummaryValue() case: the character is
+    // replaced with a space, not deleted outright.
+    expect(line).toBe("db migrate status=ok path=report .db status=ok");
   });
 });
 
