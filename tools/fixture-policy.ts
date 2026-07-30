@@ -28,6 +28,22 @@
  *  7. A skeleton already present in the vocabulary is admitted.
  *  8. Otherwise the atom REFUSES the capture, reporting every unclassified atom (not only the
  *     first) with its skeleton, node kind and locating DOM path.
+ *
+ * KNOWN LIMITATION — bare digit runs of ANY length are admitted structurally (step 4's trailing
+ * `\b\d+\b` pattern), with no length cap: `computeSkeleton("8165551234", [])` and
+ * `computeSkeleton("99999", [])` both reduce to the empty string, same as a two-digit set score.
+ * This is deliberate, not an oversight — TennisRecord match ids and SVG path coordinates are
+ * legitimate long numeric runs that a real capture must be able to admit, and refusing every long
+ * digit run would break real fixtures rather than protect anyone. The practical consequence: this
+ * allow-list policy does NOT constrain numeric identifiers (phone numbers, USTA uaids, ITF
+ * tennis-ids, match ids) at all — a page could carry an unlisted phone number or id and this
+ * module alone would admit it. Those classes are covered by OTHER layers, not this one:
+ * `tools/redact-fixture.ts`'s `assertNoUnlistedPii` independently forbids phone numbers (and
+ * email addresses, mailto/tel links, street addresses), and the source-specific structural
+ * detector sweeps (`DETECTOR_SETS` in `tools/capture-fixture.ts`, e.g. `uaid`, `tennis-id`) cover
+ * USTA/ITF identifiers. Do not read "the allow-list policy passed" as "no numeric identifier is
+ * present" — read it as "no NON-numeric unclassified content is present"; the numeric-identifier
+ * guarantee, such as it is, comes from those other two layers.
  */
 
 import { readFileSync } from "node:fs";
@@ -103,13 +119,22 @@ export function extractAtoms(html: string): Atom[] {
       if (node.data !== "") atoms.push({ kind: "text", value: node.data, path });
       return;
     }
-    if (node.type === "tag") {
-      if (node.tagName === "script" || node.tagName === "style") return;
+    // domhandler types a <script>/<style> ELEMENT's `node.type` as "script"/"style", never "tag" —
+    // an earlier `if (node.type === "tag") { if (node.tagName === "script" ...) return; }` guard
+    // here could never fire, so those elements fell through to the generic children-walk below,
+    // which atomised their TEXT body (redaction already strips this — see redactHtml's
+    // SCRIPT_OR_STYLE handling — so atomising it here would only flood the vocabulary for no
+    // privacy gain) while never inspecting their ATTRIBUTES at all — a publication surface with no
+    // atom and therefore no allow-list check (issue #28 finding 2). Handling all three Element
+    // types together fixes both: attributes are atomised like any other tag's, and script/style
+    // children are explicitly skipped rather than relied upon to be absent already.
+    if (node.type === "tag" || node.type === "script" || node.type === "style") {
       const tagPath = `${path}>${node.tagName}`;
       for (const [attrName, attrValue] of Object.entries(node.attribs)) {
         if (isStructuralAttrName(attrName)) continue;
         atoms.push({ kind: "attribute", value: attrValue, path: tagPath, attrName });
       }
+      if (node.type === "script" || node.type === "style") return;
       if ("children" in node && Array.isArray(node.children)) {
         for (const child of node.children) walk(child as AnyNode, tagPath);
       }

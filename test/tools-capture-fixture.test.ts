@@ -116,3 +116,61 @@ describe("capture-fixture main() — allow-list policy wiring", () => {
     expect(existsSync(`${outPath}.provenance.json`)).toBe(true);
   });
 });
+
+describe("capture-fixture main() — refuses when no vocabulary resolves (issue #28 finding 1 fix)", () => {
+  it("refuses the DEFAULT invocation (no --detectors, no --vocabulary), naming --vocabulary, and writes neither file", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, "<p>ok</p>");
+    const outPath = join(dir, "out.html");
+
+    // No --detectors flag at all — the documented default — and no --vocabulary either. This is
+    // precisely the fail-open path issue #28 exists to eliminate: it must refuse rather than
+    // silently capture with no allow-list enforced.
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow(/--vocabulary/);
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+
+  it("still works with an explicit --vocabulary and detector set 'none'", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    // The page's only atom ("42") is structural (empty skeleton); the sourceUrl's atom needs an
+    // explicit vocabulary entry, proving the allow-list is genuinely enforced on this path too.
+    const vocabularyPath = writeVocabulary(dir, ["https example com page"]);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, "<p>42</p>");
+    const outPath = join(dir, "out.html");
+
+    await main([
+      "--file",
+      filePath,
+      "--source-url",
+      "https://example.com/page",
+      "--map",
+      mapPath,
+      "--detectors",
+      "none",
+      "--vocabulary",
+      vocabularyPath,
+      "--out",
+      outPath,
+    ]);
+
+    expect(existsSync(outPath)).toBe(true);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(true);
+  });
+});

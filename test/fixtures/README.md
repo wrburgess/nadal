@@ -79,6 +79,16 @@ applied to it a second time: `tools/fixture-vocabulary/stand-ins.txt` holds only
 replacement values from the substitution map, safe to publish by construction (see that file's own
 header for how it is derived and regenerated).
 
+**Known limitation — bare numeric runs are not constrained by the allow-list policy.** Step 1's
+structural elision admits a bare digit run of *any length* (a TennisRecord match id, an SVG path
+coordinate, a phone number — all reduce to the same empty skeleton as a two-digit set score), so
+the allow-list policy alone does **not** guarantee a numeric identifier is absent. That guarantee,
+where it exists, comes from the other two layers instead: the forbidden-value sweep's
+`assertNoUnlistedPii` (2) independently forbids phone numbers outright, and the structural detector
+sweep (3) independently covers USTA `uaid` and ITF `tennis-id`. Do not read "the vocabulary is
+complete" as "no numeric identifier is present" — read it as "no non-numeric unclassified content
+is present"; phone numbers and uaid/tennis-id are a different check's job, named above.
+
 ## Fixtures
 
 | Fixture | Source | Why this page |

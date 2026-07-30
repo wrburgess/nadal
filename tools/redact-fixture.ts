@@ -536,15 +536,23 @@ export function assertNoUnlistedPii(html: string): void {
 }
 
 /**
- * Redact and verify in one call — the shape every fixture capture should use.
+ * Redact and verify in one call.
  *
  * When `options.vocabulary` is supplied, the allow-list policy (`tools/fixture-policy.ts`) runs
  * FIRST, before the forbidden-value and detector sweeps: no caller can hold a redacted string
  * that still carries an atom that is neither synthetic, structural, nor already vocabulary-listed
  * (task 9). `vocabulary` is opt-in rather than always-on so that a bare `redact(html, subs)` call
  * — every pre-existing caller of this function, none of which has a vocabulary to pass — stays a
- * no-op for this stage; `tools/capture-fixture.ts` is the real production entrypoint and always
- * supplies one.
+ * no-op for this stage.
+ *
+ * A call WITHOUT `vocabulary` is the LEGACY blacklist-only path (forbidden-value sweep +
+ * structural detector sweep only) — it is **not** the closed allow-list boundary issue #28 added,
+ * and must not be read as one: it ships whatever nobody thought to forbid or detect. This
+ * function does not, and structurally cannot, enforce "never call me without a vocabulary" —
+ * that enforcement lives one layer up, in `tools/capture-fixture.ts`'s `main()`, which refuses
+ * the capture outright unless a vocabulary path resolves (default or explicit `--vocabulary`).
+ * `tools/capture-fixture.ts` is the real closed-boundary production entrypoint; call it, not this
+ * function directly, for any capture that must be allow-list-enforced.
  */
 export function redact(
   html: string,

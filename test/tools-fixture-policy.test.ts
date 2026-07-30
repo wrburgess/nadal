@@ -50,6 +50,54 @@ describe("extractAtoms", () => {
   });
 });
 
+describe("extractAtoms — script/style elements (issue #28 finding 2 fix)", () => {
+  // domhandler types a <script>/<style> element's node.type as "script"/"style", NOT "tag" — the
+  // exact input that proved the old `node.type === "tag"` tagName guard was dead code.
+  const html =
+    '<script src="/u/john.smith/tracker.js" data-user="Ellen Ripley"></script>' +
+    '<style data-owner="Ellen Ripley">.x{}</style><p>ok</p>';
+
+  it("creates an attribute atom for a <script src> and a <script data-user>", () => {
+    const atoms = extractAtoms(html);
+    const attrAtoms = atoms.filter((a) => a.kind === "attribute");
+
+    expect(
+      attrAtoms.some((a) => a.attrName === "src" && a.value === "/u/john.smith/tracker.js"),
+    ).toBe(true);
+    expect(
+      attrAtoms.some((a) => a.attrName === "data-user" && a.value === "Ellen Ripley"),
+    ).toBe(true);
+  });
+
+  it("creates an attribute atom for a <style data-owner>", () => {
+    const atoms = extractAtoms(html);
+
+    expect(
+      atoms.some(
+        (a) => a.kind === "attribute" && a.attrName === "data-owner" && a.value === "Ellen Ripley",
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT atomise the style body text — redaction already strips it", () => {
+    const atoms = extractAtoms(html);
+
+    expect(atoms.some((a) => a.value.includes(".x{}"))).toBe(false);
+  });
+
+  it("still walks past script/style to atomise a later sibling", () => {
+    const atoms = extractAtoms(html);
+
+    expect(atoms.some((a) => a.kind === "text" && a.value === "ok")).toBe(true);
+  });
+
+  it("REFUSES the capture when an unclassified identity sits in a script src", () => {
+    expect(() =>
+      assertAllowListed(html, { standIns: [], vocabulary: vocab() }),
+    ).toThrow(PolicyError);
+  });
+});
+
 describe("assertAllowListed - structural values admitted", () => {
   it.each([
     ["integer", "<p>42</p>"],

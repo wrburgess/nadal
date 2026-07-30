@@ -15,6 +15,11 @@
  * `--map` points at a substitution file OUTSIDE this repository: it pairs real identities with
  * their synthetic stand-ins, so committing it would publish precisely the data redaction removes.
  * Shape: { "substitutions": [ { "from": "...", "to": "..." } ] }
+ *
+ * `--detectors` defaults to "none" when omitted, and "none" has no committed default vocabulary
+ * file — so a capture with no `--detectors` and no explicit `--vocabulary` REFUSES outright rather
+ * than running with the allow-list policy silently disabled. Pass `--vocabulary <path>` naming a
+ * skeleton vocabulary file to run a "none"-detector capture at all.
  */
 
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -83,8 +88,11 @@ function required(argv: string[], name: string): string {
 /**
  * Default vocabulary path for a detector set — `tools/fixture-vocabulary/<set>.txt`, resolved
  * relative to this script rather than the caller's cwd. The "none" set (used by generic/ad-hoc
- * captures with no source-specific detectors) has no committed vocabulary file and is exempt from
- * the allow-list policy entirely, the same way it already carries no structural detectors.
+ * captures with no source-specific detectors) has no committed vocabulary file, so it resolves no
+ * default here — `main()` then REFUSES the capture unless an explicit `--vocabulary` is given
+ * (issue #28 follow-up fix): the allow-list policy is the closed boundary this tool exists to
+ * enforce, and it must never be possible to reach a written fixture without it, default
+ * invocation included.
  */
 function defaultVocabularyPath(detectorSet: string): string | undefined {
   if (detectorSet === "none") return undefined;
@@ -121,10 +129,21 @@ export async function main(argv: string[]): Promise<void> {
   // because, unlike the CI-facing completeness test, capture-fixture.ts runs with the real
   // out-of-repo map in hand.
   const vocabularyPath = arg(argv, "vocabulary") ?? defaultVocabularyPath(detectorSet);
-  const vocabulary =
-    vocabularyPath !== undefined
-      ? loadVocabulary(vocabularyPath, loadStandIns(committedStandInsPath()))
-      : undefined;
+  if (vocabularyPath === undefined) {
+    // No default vocabulary resolved (detector set "none") and no explicit --vocabulary was
+    // given — the DEFAULT invocation shape. Refusing here is the whole point of task 9/issue #28:
+    // a capture must never proceed without an allow-list. There is deliberately no bypass flag;
+    // see this function's caller-facing docs (tools/capture-fixture.ts usage comment /
+    // test/fixtures/README.md) for how to pick or create a vocabulary file.
+    throw new Error(
+      `refusing to capture: detector set "${detectorSet}" has no default vocabulary file, and no ` +
+        `--vocabulary was given. A capture must never run without the allow-list policy enforced ` +
+        `(tools/fixture-policy.ts) — pass --vocabulary <path> naming the skeleton vocabulary file ` +
+        `to check this capture against (see test/fixtures/README.md § Re-capturing), or choose a ` +
+        `--detectors set with a committed default (e.g. tennisrecord, usta).`,
+    );
+  }
+  const vocabulary = loadVocabulary(vocabularyPath, loadStandIns(committedStandInsPath()));
   const standIns = substitutions.map((s) => s.to);
 
   const url = arg(argv, "url");
