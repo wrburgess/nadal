@@ -158,6 +158,39 @@ describe("capture-fixture main() — unclosed script body bypass (issue #28 find
   });
 });
 
+describe("capture-fixture main() — parser-discarded bytes (issue #28 round-3 finding R3-1 fix)", () => {
+  it("writes NEITHER output file when a malformed end tag carries an identity the parser discards", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    // The parser discards this orphan end tag outright; redactHtml writes the raw string
+    // unchanged, so the identity must still be caught before anything is written.
+    writeFileSync(filePath, "<div></Patrick Turner>");
+    const outPath = join(dir, "out.html");
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+});
+
 describe("capture-fixture main() — free-form attribute PII channel (issue #28 finding 2 fix)", () => {
   it("writes NEITHER output file when an unlisted name sits in aria-label", async () => {
     const dir = tempDir();

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -710,6 +710,132 @@ describe("whole-document accounting (issue #28 round 2 findings R2-1/R2-2/R2-3)"
           vocabulary: vocab(),
         }),
       ).toThrow(PolicyError);
+    });
+  });
+
+  describe("parser-discarded bytes (issue #28 round-3 finding R3-1)", () => {
+    // `redactHtml` writes the RAW string; the policy used to inspect only cheerio's RECOVERED DOM.
+    // Where the parser recovers from malformed markup, those are two different documents, and an
+    // identity discarded by the parser reached no atom at all.
+    it("REFUSES the reviewer's exact repro: an orphan end tag between two real nodes", () => {
+      expect(() =>
+        assertAllowListed("<div></Patrick Turner>", { standIns: [], vocabulary: vocab() }),
+      ).toThrow(PolicyError);
+    });
+
+    it("creates a parser-discarded atom for the orphan end tag", () => {
+      const atoms = extractAtoms("<div></Patrick Turner>");
+      expect(
+        atoms.some(
+          (a) => a.kind === "parser-discarded" && a.value.includes("Patrick Turner"),
+        ),
+      ).toBe(true);
+    });
+
+    it("REFUSES an orphan end tag carrying an identity MID-TEXT, not only at top level", () => {
+      // The HTML5 tree builder merges the surrounding character-data runs into ONE text node
+      // ("helloworld") whose location spans the orphan token's bytes too, even though `.data`
+      // does not contain them — a gap-complement check alone would miss this shape.
+      expect(() =>
+        assertAllowListed("<p>hello</Patrick Turner>world</p>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+
+    it("does not refuse well-formed markup with no parser recovery involved", () => {
+      // "42" is purely structural (an atom that reduces to an empty skeleton), so this exercises
+      // parser-recovery accounting without also depending on an unrelated vocabulary entry.
+      expect(() =>
+        assertAllowListed("<!DOCTYPE html><html><body><p>42</p></body></html>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).not.toThrow();
+    });
+
+    it("does not flag every seven committed fixtures with a spurious parser-discarded atom", () => {
+      // Regression guard for the false positives found while building this fix: real captured
+      // markup with a duplicated/overlapping trailing-whitespace text node after </body>, and a
+      // malformed (but non-identity-bearing) unquoted-into-quoted attribute run, both produced
+      // zero parser-discarded atoms once the fix correctly cross-checks against every OTHER node's
+      // real start/end tag location before flagging an orphan.
+      const files = [
+        "test/fixtures/tennisrecord/match-history-empty.html",
+        "test/fixtures/tennisrecord/match-history.html",
+        "test/fixtures/tennisrecord/player-stats.html",
+        "test/fixtures/tennisrecord/profile.html",
+        "test/fixtures/tennisrecord/team.html",
+        "test/fixtures/usta/profile-wtn-both.html",
+        "test/fixtures/usta/profile-wtn-doubles-only.html",
+      ];
+      for (const file of files) {
+        const html = readFileSync(file, "utf8");
+        const atoms = extractAtoms(html);
+        expect(atoms.filter((a) => a.kind === "parser-discarded")).toEqual([]);
+      }
+    });
+  });
+
+  describe("closed value grammars for structural attributes (issue #28 round-3 finding R3-2)", () => {
+    // Round 2 removed xmlns/fill/stroke from name-only exemption but left the rest exempt by
+    // NAME alone — the same mistake the round-2 fix was supposed to have retired as a PRINCIPLE,
+    // reapplied only to the three attributes that round happened to name. With an empty
+    // vocabulary, every structural attribute below must now ATOMISE (and therefore refuse) a
+    // value outside its closed grammar, and ADMIT a value inside it.
+    describe("refuses a value outside the grammar", () => {
+      it.each([
+        ["d", '<path d="Patrick Turner"></path>'],
+        ["points", '<polygon points="Patrick Turner"></polygon>'],
+        ["viewBox", '<svg viewBox="Patrick Turner"></svg>'],
+        ["width", '<img width="Patrick Turner">'],
+        ["height", '<img height="Patrick Turner">'],
+        ["colspan", '<table><td colspan="Patrick Turner"></td></table>'],
+        ["rowspan", '<table><td rowspan="Patrick Turner"></td></table>'],
+        ["transform", '<path transform="Patrick Turner"></path>'],
+        ["role", '<div role="Patrick Turner"></div>'],
+        ["type", '<input type="Patrick Turner">'],
+        ["preserveAspectRatio", '<svg preserveAspectRatio="Patrick Turner"></svg>'],
+        ["focusable", '<svg focusable="Patrick Turner"></svg>'],
+      ])("%s", (_attr, html) => {
+        expect(() => assertAllowListed(html, { standIns: [], vocabulary: vocab() })).toThrow(
+          PolicyError,
+        );
+      });
+    });
+
+    describe("admits a legitimate value inside the grammar, with no vocabulary entry", () => {
+      it.each([
+        ["d (real path data)", '<path d="M0 0 L10 10 Z"></path>'],
+        ["points (real point list)", '<polygon points="0,0 1,1 2,0"></polygon>'],
+        ["viewBox (4 numbers)", '<svg viewBox="0 0 24 24"></svg>'],
+        ["width (bare number)", '<img width="120">'],
+        ["width (percentage)", '<img width="100%">'],
+        ["height (px unit)", '<img height="24px">'],
+        ["colspan (integer)", '<table><td colspan="2"></td></table>'],
+        ["rowspan (integer)", '<table><td rowspan="1"></td></table>'],
+        ["transform (real transform)", '<path transform="translate(1,1) rotate(45)"></path>'],
+        ["role (aria role)", '<div role="navigation"></div>'],
+        ["type (input type)", '<input type="checkbox">'],
+        ["preserveAspectRatio (token)", '<svg preserveAspectRatio="xMidYMid meet"></svg>'],
+        ["focusable (true)", '<svg focusable="true"></svg>'],
+      ])("%s", (_label, html) => {
+        expect(() =>
+          assertAllowListed(html, { standIns: [], vocabulary: vocab() }),
+        ).not.toThrow();
+      });
+    });
+
+    it("still yields zero attribute atoms for the full legitimate-value fixture (regression guard)", () => {
+      const html =
+        '<svg viewBox="0 0 10 10" d="M0 0 L10 10" width="10" height="10" fill="#fff" ' +
+        'stroke="#000" points="0,0 1,1" transform="translate(1,1)" preserveAspectRatio="none" ' +
+        'focusable="false" xmlns="http://www.w3.org/2000/svg"></svg>' +
+        '<table><td colspan="2" rowspan="1"></td></table><input type="text" role="button">';
+      const atoms = extractAtoms(html);
+
+      expect(atoms.filter((a) => a.kind === "attribute")).toHaveLength(0);
     });
   });
 

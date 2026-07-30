@@ -2694,3 +2694,5 @@ USTA HOA Jr Circuit BG
 Wexley KS
 # reviewed: an XML declaration/processing-instruction skeleton (<?xml version="…" encoding="…"?>) embedded in an inline SVG — markup boilerplate, no personal data.
 xml version encoding UTF
+# reviewed: a third-party (Google Custom Search widget) inline SVG's `role` attribute value — an apparent upstream typo ("imgage") in vendor-generated markup, not an ARIA role and not personal data. (issue #28 round-3 finding R3-2: role is no longer exempt by name, so this non-standard value must be vocabulary-listed.)
+imgage

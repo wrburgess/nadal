@@ -15,11 +15,15 @@
  * The reduction ladder, in order:
  *
  *  1. An attribute whose NAME is numeric, geometric, or enumerated by the HTML/SVG spec (d,
- *     viewBox, width, height, colspan, role, type, …) is admitted without its value ever being
- *     inspected — `extractAtoms` never creates an atom for one. A free-form, author-chosen
- *     attribute (class, id, style, aria-*, data-v-*, …) is NOT exempt — its value is atomised like
- *     any other content, since it is exactly the kind of human-authored string this policy exists
- *     to check (issue #28 finding 2).
+ *     viewBox, width, height, colspan, role, type, …) is admitted ONLY when its VALUE also matches
+ *     a closed, spec-derived grammar for that attribute — never on its name alone. Round 2 grammar-
+ *     gated `xmlns`/`fill`/`stroke` this way (finding R2-1) but left the rest name-only exempt;
+ *     round 3 closed that gap for every remaining structural attribute (finding R3-2), since a
+ *     value the parser never inspects is a value this policy never inspects either, whichever
+ *     attribute it happens to sit on. A free-form, author-chosen attribute (class, id, style,
+ *     aria-*, data-v-*, …) is NOT exempt at all — its value is atomised like any other content,
+ *     since it is exactly the kind of human-authored string this policy exists to check (issue #28
+ *     finding 2).
  *  2. The atom is normalised through `normalizeForComparison` in `tools/redact-fixture.ts` — the
  *     SAME pipeline the existing survivor sweeps use, so this is not a second, subtly different
  *     normaliser (see that module's docstring on why that would be a bypass).
@@ -69,7 +73,8 @@ export type AtomKind =
   | "comment"
   | "element-name"
   | "attribute-name"
-  | "directive";
+  | "directive"
+  | "parser-discarded";
 
 /**
  * One content atom: a normalised text-node run, a comment body, an attribute value, an element
@@ -109,26 +114,6 @@ export type Atom = {
  * already reaches this walk through the `comment` branch — confirmed empirically, not assumed, so
  * this is not itself a ninth blind spot.)
  */
-
-/**
- * Attribute NAMES the parser reads purely structurally — their VALUE is never inspected, whatever
- * it is. Principled, not convenient: numeric, geometric, or enumerated-by-spec values only, never
- * a free-form author-chosen string.
- */
-const NAME_ONLY_STRUCTURAL_ATTR_NAMES = new Set([
-  "d",
-  "viewbox",
-  "points",
-  "transform",
-  "width",
-  "height",
-  "colspan",
-  "rowspan",
-  "preserveaspectratio",
-  "focusable",
-  "type",
-  "role",
-]);
 
 /**
  * A CSS Color Module Level 4 named colour — a genuinely closed enumeration, used to decide
@@ -196,21 +181,165 @@ function isClosedNamespaceValue(value: string): boolean {
 }
 
 /**
- * Attribute names whose VALUE is exempt only when it matches a genuinely closed grammar —
- * `xmlns`/`xlink` (round-2 finding R2-1: these used to be name-only exempt, so
- * `xmlns="https://example.test/Patrick-Turner"` created no atom at all) and `fill`/`stroke` (a
- * `url(...)` paint reference must still be atomised).
+ * CLOSED VALUE GRAMMARS FOR EVERY STRUCTURAL ATTRIBUTE (issue #28 round-3 finding R3-2).
+ *
+ * Round 2 replaced NAME-ONLY exemption with a closed value grammar for `xmlns`/`xlink`/`fill`/
+ * `stroke` (finding R2-1) — but left every OTHER "structural" attribute (`d`, `viewBox`, `width`,
+ * `height`, `colspan`, `rowspan`, `transform`, `role`, `type`, `points`,
+ * `preserveAspectRatio`, `focusable`) exempt by NAME ALONE, via a separate
+ * `NAME_ONLY_STRUCTURAL_ATTR_NAMES` set. The round-2 LESSON was that name-only exemption is unsafe
+ * as a PRINCIPLE — a value the parser never inspects is a value this policy never inspects either
+ * — but the round-2 FIX applied that lesson only to the three attributes that round happened to
+ * name, reproducing the identical defect one round later: `<path d="Patrick Turner">`,
+ * `<img width="Patrick Turner">` and `<div role="Patrick Turner">` all produced zero attribute
+ * atoms with an empty vocabulary.
+ *
+ * Every structural attribute is now exempt ONLY when its value matches a closed, spec-derived
+ * grammar below — the same shape `CLOSED_VALUE_GRAMMARS` already used for xmlns/fill/stroke, now
+ * covering every entry, with `NAME_ONLY_STRUCTURAL_ATTR_NAMES` retired entirely. A value outside
+ * its grammar is atomised like any other content, so it refuses unless vocabulary-listed.
+ */
+// A bare number, used as the repeating unit inside both grammars below: optional sign, an integer
+// or decimal part (a LEADING bare decimal point — ".75", with no digit before it — is valid SVG
+// number syntax, and real minified path data leans on it hard: two adjacent decimals like
+// "0.75.75" are two numbers, "0.75" then ".75", with no separator between them at all), optional
+// exponent.
+const SVG_NUMBER = "-?(?:\\d+\\.\\d+|\\.\\d+|\\d+)(?:[eE][+-]?\\d+)?";
+
+// `d`: a command letter MUST be immediately followed by at least one number — this is stricter
+// than "only these characters appear", which would let a name built entirely from command letters
+// ("Seth": S,e,t,h are all individually valid path-command/exponent letters) slip through with no
+// numeric argument at all. `Z`/`z` (closepath) is the one command that takes NO argument per the
+// SVG spec, so it is the one alternative that doesn't require a following number. The separator
+// between two numbers is OPTIONAL, not required: real (especially minified) path data packs
+// adjacent numbers with no whitespace/comma between them whenever the boundary is unambiguous —
+// "0.75.75" is two numbers, "0.75" then ".75", split at the second "." with nothing between them.
+const SVG_PATH_VALUE = new RegExp(
+  `^(?:\\s*(?:[Zz]|[MmLlHhVvCcSsQqTtAa]\\s*${SVG_NUMBER}(?:[,\\s]*${SVG_NUMBER})*)\\s*)+$`,
+);
+
+function isSvgPathValue(value: string): boolean {
+  return SVG_PATH_VALUE.test(value);
+}
+
+// `points`: a plain list of numbers (coordinate pairs) — the spec never puts a command letter
+// here, so unlike `d` this grammar admits NO letters at all.
+const SVG_POINTS_VALUE = new RegExp(`^(?:\\s*${SVG_NUMBER}\\s*,?\\s*)+$`);
+
+function isSvgPointsValue(value: string): boolean {
+  return value.trim() !== "" && SVG_POINTS_VALUE.test(value);
+}
+
+function isViewBoxValue(value: string): boolean {
+  const tokens = value.trim().split(/[\s,]+/).filter((t) => t !== "");
+  return tokens.length === 4 && tokens.every((t) => /^-?\d+(\.\d+)?$/.test(t));
+}
+
+const LENGTH_WITH_UNIT = /^\d+(\.\d+)?(%|px|em|rem|pt|pc|in|cm|mm|ex|ch|vw|vh)?$/;
+
+function isLengthValue(value: string): boolean {
+  return LENGTH_WITH_UNIT.test(value.trim());
+}
+
+function isIntegerValue(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
+const TRANSFORM_FUNCTION =
+  /(translate|translatex|translatey|scale|scalex|scaley|rotate|skewx|skewy|matrix)\(\s*-?\d+(\.\d+)?(\s*[,\s]\s*-?\d+(\.\d+)?)*\s*\)/;
+
+function isTransformValue(value: string): boolean {
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === "") return false;
+  const withoutFunctions = trimmed.replace(new RegExp(TRANSFORM_FUNCTION, "g"), " ").trim();
+  return withoutFunctions === "";
+}
+
+/** WAI-ARIA role tokens — a closed enumeration, same reasoning as `aria-*` names above. */
+const ARIA_ROLES = new Set([
+  "alert", "alertdialog", "application", "article", "banner", "button", "cell", "checkbox",
+  "columnheader", "combobox", "complementary", "contentinfo", "definition", "dialog", "directory",
+  "document", "feed", "figure", "form", "grid", "gridcell", "group", "heading", "img", "link",
+  "list", "listbox", "listitem", "log", "main", "marquee", "math", "menu", "menubar", "menuitem",
+  "menuitemcheckbox", "menuitemradio", "navigation", "none", "note", "option", "presentation",
+  "progressbar", "radio", "radiogroup", "region", "row", "rowgroup", "rowheader", "scrollbar",
+  "search", "searchbox", "separator", "slider", "spinbutton", "status", "switch", "tab", "table",
+  "tablist", "tabpanel", "term", "textbox", "timer", "toolbar", "tooltip", "tree", "treegrid",
+  "treeitem",
+]);
+
+function isAriaRoleValue(value: string): boolean {
+  // `role` may carry a space-separated fallback list; every token must be a closed ARIA role.
+  return value
+    .trim()
+    .split(/\s+/)
+    .every((token) => ARIA_ROLES.has(token.toLowerCase()));
+}
+
+/**
+ * `type` closed tokens across every element it appears on in captured markup: `<input>`,
+ * `<button>`, `<script>`, `<style>`/`<link>` MIME types, and the `<ol>` numbering style.
+ */
+const TYPE_TOKENS = new Set([
+  // input
+  "text", "password", "email", "number", "checkbox", "radio", "submit", "button", "reset",
+  "hidden", "file", "date", "time", "datetime-local", "month", "week", "color", "range", "search",
+  "tel", "url", "image", "menu",
+  // script
+  "text/javascript", "module", "application/json", "application/ld+json", "importmap",
+  // style/link (stylesheets, favicons, preloaded fonts, feeds, manifests)
+  "text/css", "image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml",
+  "font/woff", "font/woff2", "font/ttf", "font/otf", "application/manifest+json",
+  "application/rss+xml", "application/atom+xml",
+  // <ol type>
+  "1", "a", "A", "i", "I",
+]);
+
+function isTypeValue(value: string): boolean {
+  return TYPE_TOKENS.has(value.trim().toLowerCase()) || TYPE_TOKENS.has(value.trim());
+}
+
+const PRESERVE_ASPECT_RATIO =
+  /^(none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max))(\s+(meet|slice))?$/i;
+
+function isPreserveAspectRatioValue(value: string): boolean {
+  return PRESERVE_ASPECT_RATIO.test(value.trim());
+}
+
+const FOCUSABLE_TOKENS = new Set(["true", "false", "auto"]);
+
+function isFocusableValue(value: string): boolean {
+  return FOCUSABLE_TOKENS.has(value.trim().toLowerCase());
+}
+
+/**
+ * Attribute names whose VALUE is exempt only when it matches a genuinely closed grammar. Every
+ * entry here used to be either name-only exempt (`d`, `points`, `viewBox`, `width`, `height`,
+ * `colspan`, `rowspan`, `transform`, `role`, `type`, `preserveAspectRatio`, `focusable` — round-3
+ * finding R3-2) or already grammar-gated (`xmlns`/`xlink`/`fill`/`stroke` — round-2 finding R2-1).
+ * No structural attribute is exempt on its name alone any more.
  */
 const CLOSED_VALUE_GRAMMARS: Record<string, (value: string) => boolean> = {
   xmlns: isClosedNamespaceValue,
   xlink: isClosedNamespaceValue,
   fill: isClosedPaintValue,
   stroke: isClosedPaintValue,
+  d: isSvgPathValue,
+  points: isSvgPointsValue,
+  viewbox: isViewBoxValue,
+  width: isLengthValue,
+  height: isLengthValue,
+  colspan: isIntegerValue,
+  rowspan: isIntegerValue,
+  transform: isTransformValue,
+  role: isAriaRoleValue,
+  type: isTypeValue,
+  preserveaspectratio: isPreserveAspectRatioValue,
+  focusable: isFocusableValue,
 };
 
 /** Is this attribute's VALUE exempt from atomisation, given its (lowercased) name? */
 function isExemptAttributeValue(lowerName: string, value: string): boolean {
-  if (NAME_ONLY_STRUCTURAL_ATTR_NAMES.has(lowerName)) return true;
   const grammar = CLOSED_VALUE_GRAMMARS[lowerName];
   return grammar !== undefined && grammar(value);
 }
@@ -357,29 +486,185 @@ function dataAttrRemainder(name: string): string | null {
 const STANDARD_DOCTYPE = /^!doctype\s+html\s*$/i;
 
 /**
+ * PARSER-DISCARDED BYTES (issue #28 round-3 finding R3-1).
+ *
+ * `redactHtml` writes the RAW string; this policy previously inspected only cheerio's RECOVERED
+ * DOM (`extractAtoms(html)` walking `cheerio.load(html)`'s tree). Where the parser recovers from
+ * malformed markup, those are two different documents, and only one was checked. The reviewer's
+ * repro: `<div></Patrick Turner>` — the malformed end tag `</Patrick Turner>` is not valid markup
+ * (a tag name cannot contain a space followed by more text before `>` in a way the HTML5 tree
+ * builder accepts here), so the parser discards it outright; the raw string still carries "Patrick
+ * Turner" verbatim, but the old walk produced no atom for it at all.
+ *
+ * The fix loads with `sourceCodeLocationInfo: true` (a parse5 option cheerio forwards) so every
+ * node the tree builder DID keep carries its exact byte range in the original source. Unioning
+ * every kept node's range and taking the COMPLEMENT within `[0, html.length)` finds every byte the
+ * parser discarded outright (`findParserDiscardedGaps`) — this catches the reviewer's exact repro,
+ * where the orphan end tag sits between two real nodes with nothing of the tree's own claiming its
+ * bytes.
+ *
+ * That complement alone is not sufficient: per the HTML5 tree-construction algorithm, an orphan
+ * token sitting INSIDE a run of text (rather than between two sibling elements) does not open a
+ * gap at all — the tree builder merges the surrounding character-data runs into ONE text node
+ * whose `sourceCodeLocation` spans the orphan token's bytes too, even though the text node's own
+ * `.data` does not contain them (confirmed empirically: `<p>hello</Patrick Turner>world</p>`
+ * produces a single text node `"helloworld"` located across the full `hello</Patrick
+ * Turner>world` source range). A gap-complement check alone misses this shape entirely.
+ * `findOrphanTagsWithinText` closes it: within every text node's own source range (skipping
+ * `script`/`style` bodies, which are RAWTEXT/SCRIPT-DATA — a literal `<div>`-shaped run there, or
+ * inside `<title>`/`<textarea>` RCDATA, is genuinely preserved character data, not a drop, so it
+ * legitimately appears in `.data` and must not be flagged), it looks for tag-shaped runs
+ * (`<letter…>` or `</letter…>`) that are (a) absent from that text node's OWN `.data` — the
+ * "genuinely preserved RCDATA" carve-out — AND (b) not already accounted for as some OTHER node's
+ * real start/end tag at those exact byte offsets — the carve-out that keeps this from firing on a
+ * real, well-formed document: per the HTML5 "after body" insertion mode, trailing whitespace after
+ * `</body>` is appended to the body element's existing trailing text node, so that text node's
+ * OWN reported range can legitimately span across `</body>`'s bytes too, even though `</body>` is
+ * simultaneously (and correctly) the body element's own recognised `endTag` location — confirmed
+ * empirically against all seven committed fixtures, several of which have exactly this shape.
+ *
+ * Every discarded run found either way is atomised like any other content (kind
+ * `"parser-discarded"`) rather than refusing the whole capture outright on sight: refusing
+ * unconditionally would be simpler, but a discarded run that is purely structural/synthetic (or
+ * already vocabulary-listed) is no more a bypass here than anywhere else this policy looks, and
+ * the failure mode this fix closes is "produced no atom at all", not "produced an atom that then
+ * had to be judged".
+ */
+type SourceRange = { startOffset: number; endOffset: number };
+type SourceCodeLocation = SourceRange & { startTag?: SourceRange; endTag?: SourceRange };
+
+function locationOf(node: AnyNode): SourceCodeLocation | null {
+  return (node as unknown as { sourceCodeLocation?: SourceCodeLocation }).sourceCodeLocation ?? null;
+}
+
+/** A tag-shaped run: `<letter…>` or `</letter…>`. Deliberately not a full tokenizer — see above. */
+const TAG_SHAPED_RUN = /<\/?[A-Za-z!][^<>]*>/g;
+
+/**
+ * `computeSkeleton` -> `normalizeForComparison` -> `fullyDecodeEntities` re-PARSES its input as
+ * HTML (`cheerio.load(value).root().text()`) to get a standards-complete entity decode. Handing it
+ * an atom value that is ITSELF markup-shaped — `</Patrick Turner>`, the exact bytes this function
+ * exists to atomise — re-triggers the SAME parser-recovery drop one level down: the malformed
+ * orphan tag disappears again, this time inside normalisation, and `computeSkeleton` silently
+ * returns "" for content that plainly is not empty. Stripping `<`/`>` before the atom is even
+ * created sidesteps this recursion entirely; every other punctuation character (including the `/`
+ * of an end tag) is already discarded later by `toSkeleton`, so nothing is lost by dropping these
+ * two early instead.
+ */
+function stripMarkupDelimiters(value: string): string {
+  return value.replace(/[<>]/g, " ");
+}
+
+type TextSpan = { start: number; end: number; data: string; path: string };
+
+/**
+ * Every text node's own source range and data, EXCLUDING `script`/`style` bodies (RAWTEXT/
+ * SCRIPT-DATA, where a literal `<letter`-shaped run is ordinary preserved content, not a drop —
+ * and is separately atomised whole regardless, per the script/style walk below).
+ */
+function findOrphanTagsWithinText(
+  html: string,
+  textSpans: TextSpan[],
+  structuralRanges: Set<string>,
+): Atom[] {
+  const atoms: Atom[] = [];
+  for (const span of textSpans) {
+    const raw = html.slice(span.start, span.end);
+    for (const match of raw.matchAll(TAG_SHAPED_RUN)) {
+      const matchStart = span.start + (match.index ?? 0);
+      const matchEnd = matchStart + match[0].length;
+      // Already the real, recognised start/end tag of some OTHER node at these exact offsets (the
+      // "after body" trailing-whitespace shape above) — not a drop.
+      if (structuralRanges.has(`${matchStart}-${matchEnd}`)) continue;
+      // Genuinely preserved RCDATA (title/textarea) — the run really is in this text node's data.
+      if (span.data.includes(match[0])) continue;
+      atoms.push({
+        kind: "parser-discarded",
+        value: stripMarkupDelimiters(match[0]),
+        path: `${span.path}>#parser-discarded`,
+      });
+    }
+  }
+  return atoms;
+}
+
+/** The complement of `coveredRanges` within `[0, html.length)`, skipping whitespace-only gaps. */
+function findParserDiscardedGaps(html: string, coveredRanges: SourceRange[]): Atom[] {
+  const sorted = [...coveredRanges].sort((a, b) => a.startOffset - b.startOffset);
+  const merged: SourceRange[] = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && range.startOffset <= last.endOffset) {
+      last.endOffset = Math.max(last.endOffset, range.endOffset);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+
+  const atoms: Atom[] = [];
+  let cursor = 0;
+  const emit = (start: number, end: number): void => {
+    const raw = html.slice(start, end);
+    if (raw.trim() === "") return;
+    atoms.push({
+      kind: "parser-discarded",
+      value: stripMarkupDelimiters(raw),
+      path: "#parser-discarded",
+    });
+  };
+  for (const range of merged) {
+    if (range.startOffset > cursor) emit(cursor, range.startOffset);
+    cursor = Math.max(cursor, range.endOffset);
+  }
+  if (cursor < html.length) emit(cursor, html.length);
+
+  return atoms;
+}
+
+/**
  * Walk EVERY node kind — text, comment, directive (doctype), and tag (including the `script`/
  * `style` element TYPES, which domhandler tags distinctly from generic `tag` nodes) — carrying a
  * locating DOM path for each atom. See the "WHOLE-DOCUMENT ACCOUNTING" note above for why this is
  * a positive walk of every node kind rather than an enumerated list of the ones some past review
  * happened to name.
+ *
+ * Also loads with `sourceCodeLocationInfo: true` and separately accounts for every byte the
+ * parser DISCARDED rather than kept in the recovered tree — see the "PARSER-DISCARDED BYTES" note
+ * above (issue #28 round-3 finding R3-1).
  */
 export function extractAtoms(html: string): Atom[] {
-  const $ = cheerio.load(html);
+  const $ = cheerio.load(html, { sourceCodeLocationInfo: true });
   const atoms: Atom[] = [];
+  const coveredRanges: SourceRange[] = [];
+  const structuralRanges = new Set<string>();
+  const textSpans: TextSpan[] = [];
 
-  const walk = (node: AnyNode, path: string): void => {
+  const pushCovered = (loc: SourceRange | undefined | null, structural: boolean): void => {
+    if (!loc) return;
+    coveredRanges.push(loc);
+    if (structural) structuralRanges.add(`${loc.startOffset}-${loc.endOffset}`);
+  };
+
+  const walk = (node: AnyNode, path: string, insideRawText: boolean): void => {
+    const loc = locationOf(node);
     if (node.type === "comment") {
       atoms.push({ kind: "comment", value: node.data, path: `${path}>#comment` });
+      pushCovered(loc, true);
       return;
     }
     if (node.type === "text") {
       if (node.data !== "") atoms.push({ kind: "text", value: node.data, path });
+      pushCovered(loc, false);
+      if (!insideRawText && loc) {
+        textSpans.push({ start: loc.startOffset, end: loc.endOffset, data: node.data, path });
+      }
       return;
     }
     if (node.type === "directive") {
       if (!STANDARD_DOCTYPE.test(node.data.trim())) {
         atoms.push({ kind: "directive", value: node.data, path: `${path}>#directive` });
       }
+      pushCovered(loc, true);
       return;
     }
     // domhandler types a <script>/<style> ELEMENT's `node.type` as "script"/"style", never "tag" —
@@ -433,17 +718,23 @@ export function extractAtoms(html: string): Atom[] {
           atoms.push({ kind: "attribute", value: attrValue, path: tagPath, attrName });
         }
       }
+      pushCovered(loc?.startTag, true);
+      pushCovered(loc?.endTag, true);
+      const rawText = node.type === "script" || node.type === "style";
       if ("children" in node && Array.isArray(node.children)) {
-        for (const child of node.children) walk(child as AnyNode, tagPath);
+        for (const child of node.children) walk(child as AnyNode, tagPath, rawText);
       }
       return;
     }
     if ("children" in node && Array.isArray(node.children)) {
-      for (const child of node.children) walk(child as AnyNode, path);
+      for (const child of node.children) walk(child as AnyNode, path, insideRawText);
     }
   };
 
-  for (const node of $.root().toArray()) walk(node as AnyNode, "");
+  for (const node of $.root().toArray()) walk(node as AnyNode, "", false);
+
+  atoms.push(...findOrphanTagsWithinText(html, textSpans, structuralRanges));
+  atoms.push(...findParserDiscardedGaps(html, coveredRanges));
 
   return atoms;
 }

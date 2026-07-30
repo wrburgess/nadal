@@ -502,4 +502,14 @@ describe("redact() wires in the allow-list policy", () => {
       }),
     ).not.toThrow();
   });
+
+  // Round-3 finding R3-1: redact() writes `redactHtml`'s RAW string, but the policy previously
+  // inspected only cheerio's RECOVERED DOM — two different documents whenever the parser recovers
+  // from malformed markup. The malformed end tag here is discarded by the parser and its bytes
+  // never reached an atom of any kind, so an empty vocabulary passed the identity through.
+  it("REFUSES the reviewer's repro through redact() itself: a parser-discarded orphan end tag", () => {
+    expect(() =>
+      redact("<div></Patrick Turner>", [], { vocabulary: new Set<string>() }),
+    ).toThrow(PolicyError);
+  });
 });
