@@ -19,7 +19,7 @@
 
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { redact, redactHtml, type Detector, type Substitution } from "./redact-fixture.js";
+import { redact, type Detector, type Substitution } from "./redact-fixture.js";
 
 /**
  * Per-source structural sweeps. Each pattern captures an identity the site advertises in its own
@@ -100,13 +100,14 @@ async function main(argv: string[]): Promise<void> {
   // passed both the forbidden-value sweep and the structural detector sweep.
   const redacted = redact(raw, substitutions, { detectors });
 
-  // The URL is redacted with the same map as the page. A TennisRecord URL carries the player's
-  // name and a USTA profile URL carries the uaid, so recording it verbatim would re-publish
-  // through the provenance file exactly what the page redaction removed — and it keeps the
-  // recorded URL consistent with the identities inside the fixture, which is what the parsers
-  // read it back as.
+  // The URL is redacted with the same map as the page, and — like the page — VERIFIED before it
+  // is written. A TennisRecord URL carries the player's name and a USTA profile URL carries the
+  // uaid, so a provenance file is a second publication surface with the same exposure as the
+  // fixture; redacting it without asserting the result would leave that surface guarded only by
+  // whether the operator happened to list every identity the URL contains.
+  const redactedUrl = redact(sourceUrl, substitutions, { detectors });
   const provenance: Provenance = {
-    sourceUrl: redactHtml(sourceUrl, substitutions),
+    sourceUrl: redactedUrl,
     fetchedAt: new Date().toISOString(),
     httpStatus,
     redacted: true,

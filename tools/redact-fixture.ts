@@ -47,28 +47,64 @@ function isAlnum(ch: string): boolean {
   return /[A-Za-z0-9]/.test(ch);
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  "#39": "'",
+};
+
+/**
+ * Decode HTML character references to their characters.
+ *
+ * Used for **verification only** — never to build a fixture — so the committed markup is never
+ * altered by it. `Cory&#32;Hogan`, `&#67;ory Hogan` and `O&#39;Brien` are all ordinary things for
+ * a server to emit, and each of them is invisible to a matcher that only knows literal, percent
+ * and plus encodings. Sweeping a decoded copy alongside the raw one means an identity has to
+ * survive *both* spellings to escape, whatever encoding a future page invents.
+ */
+export function decodeEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&([a-z]+);/gi, (whole, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? whole);
+}
+
 /**
  * Match one identity in **any** encoding, including the mixed ones real pages emit.
  *
  * Enumerating whole-string spellings (literal / `encodeURIComponent` / plus-encoded) is not
  * enough: TennisRecord writes `teamname=Gerleman%2c Garrett` — comma percent-encoded, space
  * left literal — which is none of those three. Rather than cross-product the encodings, match
- * per character: each non-alphanumeric character may appear literally or percent-encoded, and a
- * space may additionally appear as `+`. The `i` flag also covers `%2c` vs `%2C`.
+ * per character. Each character may appear:
  *
- * (Provenance: the detector sweep in `assertRedacted` caught this on the first real capture —
- * nine real surnames survived a redaction that reported success against the spelling list.)
+ * - literally;
+ * - percent-encoded (`%2c`), for a value inside an href;
+ * - as an HTML numeric character reference, decimal (`&#32;`) or hex (`&#x20;`), which a server
+ *   may emit for **any** character, letters included — `&#67;ory Hogan` renders as `Cory Hogan`;
+ * - as `+`, for a space in a query string.
+ *
+ * The `i` flag covers `%2c` vs `%2C` and `&#X20;` vs `&#x20;`.
+ *
+ * (Provenance: the percent/space mix was caught by this module's own detector sweep on the first
+ * real capture — nine real surnames survived a redaction that reported success against the
+ * spelling list. The character-reference gap was caught by the Codex adversarial review on
+ * PR #26, rated critical because this is a privacy control on a public repository.)
  */
 function tolerantPattern(value: string): RegExp {
-  const source = [...value]
-    .map((ch) => {
-      if (isAlnum(ch)) return escapeRegExp(ch);
-      const alternatives = [escapeRegExp(ch), escapeRegExp(encodeURIComponent(ch))];
-      if (ch === " ") alternatives.push("\\+");
-      return `(?:${alternatives.join("|")})`;
-    })
-    .join("");
+  const source = [...value].map((ch) => `(?:${characterAlternatives(ch).join("|")})`).join("");
   return new RegExp(source, "gi");
+}
+
+function characterAlternatives(ch: string): string[] {
+  const code = ch.codePointAt(0) ?? 0;
+  const alternatives = [escapeRegExp(ch), `&#${code};`, `&#x${code.toString(16)};`];
+  if (!isAlnum(ch)) alternatives.push(escapeRegExp(encodeURIComponent(ch)));
+  if (ch === " ") alternatives.push("\\+");
+  return alternatives;
 }
 
 /**
@@ -83,24 +119,27 @@ function encodingStyle(from: string, matched: string): Map<string, string> {
   const style = new Map<string, string>();
   let i = 0;
   for (const ch of from) {
-    if (isAlnum(ch)) {
-      i += 1;
-      continue;
-    }
     const rest = matched.slice(i);
-    if (rest.startsWith("%")) {
-      const width = encodeURIComponent(ch).length;
-      style.set(ch, rest.slice(0, width));
-      i += width;
-    } else if (ch === " " && rest.startsWith("+")) {
-      style.set(ch, "+");
-      i += 1;
-    } else {
-      style.set(ch, ch);
-      i += 1;
-    }
+    // Consume whichever alternative actually matched here. Walking the alternatives is what keeps
+    // the alignment exact now that a character can also appear as a multi-character entity — an
+    // assumed width of 1 would desynchronise the rest of the walk from the first `&#67;`.
+    const candidate =
+      characterAlternatives(ch)
+        .map(unescapeAlternative)
+        .find((option) => rest.toLowerCase().startsWith(option.toLowerCase())) ?? ch;
+    // Slice the ACTUAL text rather than reusing the candidate: the two differ in case
+    // (`encodeURIComponent(",")` is `%2C`, the page writes `%2c`), and echoing the candidate
+    // would rewrite the page's own casing on every replacement.
+    const used = rest.slice(0, candidate.length);
+    if (!isAlnum(ch)) style.set(ch, used);
+    i += used.length;
   }
   return style;
+}
+
+/** `characterAlternatives` returns regex source; recover the literal text each one matches. */
+function unescapeAlternative(alternative: string): string {
+  return alternative.replace(/\\(.)/g, "$1");
 }
 
 function applyStyle(value: string, style: Map<string, string>): string {
@@ -153,8 +192,13 @@ export function assertRedacted(
 ): void {
   const survivors: string[] = [];
 
+  // Sweep the raw markup AND an entity-decoded copy of it. An identity has to be absent from both
+  // to pass, so an encoding this module does not know how to *substitute* can still never ship
+  // silently — the capture fails instead.
+  const decoded = decodeEntities(html);
+
   for (const value of options.forbidden) {
-    const found = tolerantPattern(value).exec(html);
+    const found = tolerantPattern(value).exec(html) ?? tolerantPattern(value).exec(decoded);
     if (found !== null) {
       survivors.push(`forbidden value survives: ${value} (as "${found[0]}")`);
     }
@@ -162,7 +206,7 @@ export function assertRedacted(
 
   const allowed = new Set((options.allowed ?? []).map(lower));
   for (const detector of options.detectors ?? []) {
-    for (const match of html.matchAll(detector.pattern)) {
+    for (const match of decoded.matchAll(detector.pattern)) {
       const captured = match[1];
       if (captured === undefined) continue;
       const decoded = decodePlus(captured);

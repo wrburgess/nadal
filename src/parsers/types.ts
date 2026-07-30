@@ -60,9 +60,21 @@ export const playerRefSchema = z.object({
 });
 export type PlayerRef = z.infer<typeof playerRefSchema>;
 
-/** One set. `matchTiebreak` marks the 10-point tiebreak a third set is replaced by (`1-0`). */
+/**
+ * One set, **winner-first** — and the field names say so on purpose.
+ *
+ * TennisRecord prints every score from the match winner's side, not the profiled player's: an
+ * `L` row reads `6-3 6-3` because the *opponent* won those games. A `[number, number]` tuple
+ * would be read as player-first by anyone who did not check, silently inverting games-won for
+ * every loss in every dossier. Pair these with `CourtMatchRecord.result` to recover the profiled
+ * player's own games.
+ *
+ * `matchTiebreak` marks the 10-point tiebreak that replaces a deciding set, which the page prints
+ * as a one-game set (`1-0`).
+ */
 export const setScoreSchema = z.object({
-  games: z.tuple([z.number().int(), z.number().int()]),
+  winnerGames: z.number().int(),
+  loserGames: z.number().int(),
   matchTiebreak: z.boolean(),
 });
 export type SetScore = z.infer<typeof setScoreSchema>;

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as cheerio from "cheerio";
-import { RedactionError, assertRedacted, redactHtml } from "../tools/redact-fixture.js";
+import {
+  RedactionError,
+  assertRedacted,
+  decodeEntities,
+  redactHtml,
+} from "../tools/redact-fixture.js";
 
 const SUBS = [
   { from: "Cory Hogan", to: "Dana Sample" },
@@ -77,6 +82,38 @@ describe("redactHtml", () => {
     expect(out).toContain("playername=Dana Sample'");
     expect(out).toContain("playername=Dana%20Sample");
     expect(out).toContain("playername=Dana+Sample");
+  });
+
+  it("substitutes a name written with HTML character references", () => {
+    // A server may emit ANY character as a numeric reference — `&#67;ory` renders as `Cory`, and
+    // an apostrophe in a name is routinely written `O&#39;Brien`. A matcher that knows only
+    // literal, percent and plus encodings walks straight past all of it, and the identity ships
+    // to a public repository while redaction reports success.
+    // (Provenance: Codex adversarial review on PR #26, rated critical.)
+    const page = [
+      "<p>&#67;ory Hogan</p>",
+      "<p>Cory&#32;Hogan</p>",
+      "<p>Cory&#x20;Hogan</p>",
+    ].join("");
+    const out = redactHtml(page, [{ from: "Cory Hogan", to: "Dana Sample" }]);
+
+    expect(out).not.toMatch(/ory/i);
+    expect(out.match(/Dana/g)).toHaveLength(3);
+  });
+
+  it("catches an entity-encoded survivor in the forbidden sweep", () => {
+    // The belt to the substitution's braces: verification also sweeps an entity-decoded copy, so
+    // an encoding this module cannot yet SUBSTITUTE still cannot ship silently — the capture
+    // fails instead of writing the fixture.
+    const leaked = "<p>&#67;&#111;&#114;&#121; Hogan</p>";
+
+    expect(() => assertRedacted(leaked, { forbidden: ["Cory Hogan"] })).toThrow(RedactionError);
+  });
+
+  it("decodes decimal, hex and named character references", () => {
+    expect(decodeEntities("&#67;ory&#x20;Hogan &amp; O&#39;Brien")).toBe(
+      "Cory Hogan & O'Brien",
+    );
   });
 
   it("removes script and style content", () => {

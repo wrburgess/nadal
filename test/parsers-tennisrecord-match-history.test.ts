@@ -24,8 +24,8 @@ describe("parseMatchHistory", () => {
       ],
       result: "W",
       sets: [
-        { games: [7, 6], matchTiebreak: false },
-        { games: [6, 3], matchTiebreak: false },
+        { winnerGames: 7, loserGames: 6, matchTiebreak: false },
+        { winnerGames: 6, loserGames: 3, matchTiebreak: false },
       ],
       defaulted: false,
       matchRating: 3.73,
@@ -51,20 +51,84 @@ describe("parseMatchHistory", () => {
     const tiebreak = matches[4];
 
     expect(tiebreak?.sets).toEqual([
-      { games: [4, 6], matchTiebreak: false },
-      { games: [7, 5], matchTiebreak: false },
-      { games: [1, 0], matchTiebreak: true },
+      { winnerGames: 4, loserGames: 6, matchTiebreak: false },
+      { winnerGames: 7, loserGames: 5, matchTiebreak: false },
+      { winnerGames: 1, loserGames: 0, matchTiebreak: true },
     ]);
   });
 
-  it("does not mistake an early retirement for a match tiebreak", () => {
-    // `1-0` identifies a match tiebreak only because a tiebreak replaces the DECIDING set. The
-    // same notation in a first set is a retirement, and flagging it would silently remove a real
-    // (if short) set from every games-won ratio computed downstream.
-    const retired = fixture.html.replace(">4-6<br>7-5<br>1-0<", ">1-0<");
-    const parsed = parseMatchHistory(retired, fixture.source);
+  it("does not mistake a lone short set for a match tiebreak", () => {
+    // `1-0` identifies a match tiebreak only because a tiebreak replaces the DECIDING set. In
+    // first position it is something else — a retirement, an incomplete set — and flagging it
+    // would silently remove a real (if short) set from every games-won ratio downstream.
+    const shortened = fixture.html.replace(">4-6<br>7-5<br>1-0<", ">1-0<");
+    const parsed = parseMatchHistory(shortened, fixture.source);
 
-    expect(parsed[4]?.sets).toEqual([{ games: [1, 0], matchTiebreak: false }]);
+    expect(parsed[4]?.sets).toEqual([{ winnerGames: 1, loserGames: 0, matchTiebreak: false }]);
+  });
+
+  it("classifies the second real 1-0 row in the fixture, not just the mutated one", () => {
+    // Codex flagged that the tiebreak rule was only exercised through a mutation. The fixture
+    // carries a second, differently-shaped `1-0` row (`6-7 3-1 1-0`, an unusual middle set), so
+    // the rule is asserted against real markup here rather than only against a constructed case.
+    expect(matches[11]?.sets).toEqual([
+      { winnerGames: 6, loserGames: 7, matchTiebreak: false },
+      { winnerGames: 3, loserGames: 1, matchTiebreak: false },
+      { winnerGames: 1, loserGames: 0, matchTiebreak: true },
+    ]);
+  });
+
+  it("reports set scores winner-first, the way the page writes them", () => {
+    // Load-bearing and easy to get backwards. Every `L` row prints the OPPONENT winning — this
+    // match was lost 3-6, 3-6 and reads `6-3 6-3` — so a `[number, number]` tuple read as
+    // player-first would invert games-won for every loss in every dossier. The field names carry
+    // the orientation so no consumer has to know this.
+    const lost = matches[5];
+
+    expect(lost?.result).toBe("L");
+    expect(lost?.sets.every((s) => s.winnerGames > s.loserGames)).toBe(true);
+  });
+
+  it("throws on an unrecognised score component instead of dropping it", () => {
+    // A changed score format would otherwise yield an empty or half-length set list on a record
+    // that still reports its W/L: a plausible-looking match with the scores quietly removed.
+    const mangled = fixture.html.replace(">7-6<br>6-3<", ">7-6<br>ret.<");
+
+    expect(() => parseMatchHistory(mangled, fixture.source)).toThrow(ParseError);
+  });
+
+  it("throws when a doubles court is missing a participant", () => {
+    // An under-populated court silently removes people from partner-frequency and prior-meeting
+    // counts — the two derived fields a dossier leans on hardest.
+    const missing = fixture.html.replace(
+      "<a class='link' href='/adult/matchhistory.aspx?playername=Quinn Quillon&year=2025'>Quinn Quillon</a><br>(3.41)",
+      "",
+    );
+
+    expect(() => parseMatchHistory(missing, fixture.source)).toThrow(ParseError);
+  });
+
+  it("throws on a rating with no player before it", () => {
+    // The name/rating pairing depends on the cell's alternating shape. If a name goes missing,
+    // continuing would attach that rating to the previous player — wrong data that looks right.
+    const orphaned = fixture.html.replace(
+      "<a class='link' href='/adult/matchhistory.aspx?playername=Sawyer Sable&year=2025'>Sawyer Sable</a><br>",
+      "",
+    );
+
+    expect(() => parseMatchHistory(orphaned, fixture.source)).toThrow(ParseError);
+  });
+
+  it("throws when a mobile block stops naming the opponent team", () => {
+    // Count and date correlation both still pass here — only the opponent link is gone. Without
+    // this check the record is accepted with no opponent team while every other field looks
+    // correct, which is scouting history that silently forgets who each match was against.
+    const unlinked = fixture.html.replace(
+      "<a Class='link' href='/adult/teamprofile.aspx?teamname=Sable%2c Sawyer&year=2026'>",
+      "<span>",
+    );
+
+    expect(() => parseMatchHistory(unlinked, fixture.source)).toThrow(ParseError);
   });
 
   it("throws on an unreadable W/L cell rather than recording a loss", () => {

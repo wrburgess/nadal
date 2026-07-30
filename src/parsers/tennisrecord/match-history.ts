@@ -34,7 +34,7 @@ export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRe
   const rows = table.find("tr").filter((_, tr) => $(tr).find("td").length > 0);
   if (rows.length === 0) return [];
 
-  const opponentTeams = parseOpponentTeams($);
+  const opponentTeams = parseOpponentTeams($, source);
   if (opponentTeams.length !== rows.length) {
     throw new ParseError(
       `desktop rendering has ${rows.length} matches but mobile rendering has ${opponentTeams.length}`,
@@ -44,26 +44,56 @@ export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRe
   }
 
   return rows
-    .map((index, tr) => parseRow($, $(tr), opponentTeams[index], source))
+    .map((index, tr) => {
+      const opponentTeam = opponentTeams[index];
+      // Unreachable while the length check above holds; kept as a type-level guarantee that the
+      // record is never built from a missing correlate rather than as a runtime branch.
+      if (opponentTeam === undefined) {
+        throw new ParseError(
+          `no mobile block correlates with desktop row ${index}`,
+          `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
+          source.url,
+        );
+      }
+      return parseRow($, $(tr), opponentTeam, source);
+    })
     .get()
-    .map((record) => courtMatchRecordSchema.parse(record));
+    .map((record) => {
+      assertCardinality(record, source);
+      return courtMatchRecordSchema.parse(record);
+    });
 }
 
-type OpponentTeam = { name: string | null; section: string | null; playedOn: string | null };
+type OpponentTeam = { name: string; section: string | null; playedOn: string | null };
 
 /**
- * The mobile block renders one small table per match; the second row's third cell is the opposing
- * team. We also keep its date so the positional correlation can be verified rather than trusted.
+ * The mobile block renders one small table per match, linking both teams — the profiled player's
+ * and the opponent's — with the opponent second. We keep its date too, so the positional
+ * correlation with the desktop table is verified rather than trusted.
+ *
+ * A block that does not link exactly two teams throws. Returning a null opponent instead would
+ * turn a mobile-markup change into scouting history that is silently missing who each match was
+ * against, while every other field still looks correct.
  */
-function parseOpponentTeams($: CheerioAPI): OpponentTeam[] {
+function parseOpponentTeams($: CheerioAPI, source: SourceRef): OpponentTeam[] {
   return $(MOBILE_MATCH)
     .map((_, block) => {
       const $block = $(block);
       const teamCells = $block.find("a[href*='teamprofile.aspx']");
-      const opponent = teamCells.length > 1 ? $(teamCells.get(1)) : null;
-      const parts = opponent === null ? [] : lines($, opponent);
+      if (teamCells.length !== 2) {
+        throw new ParseError(
+          `mobile match block links ${teamCells.length} teams, expected 2 (own and opponent)`,
+          `${MOBILE_MATCH} a[href*='teamprofile.aspx']`,
+          source.url,
+        );
+      }
+      const parts = lines($, $(teamCells.get(1)));
+      const name = parts[0];
+      if (name === undefined || name === "") {
+        throw new ParseError("mobile match block names no opponent team", MOBILE_MATCH, source.url);
+      }
       return {
-        name: parts[0] ?? null,
+        name,
         section: parts[1] ?? null,
         playedOn: parseUsDate($block.find("th").first().text()),
       };
@@ -74,7 +104,7 @@ function parseOpponentTeams($: CheerioAPI): OpponentTeam[] {
 function parseRow(
   $: CheerioAPI,
   row: Cheerio<AnyNode>,
-  opponentTeam: OpponentTeam | undefined,
+  opponentTeam: OpponentTeam,
   source: SourceRef,
 ): CourtMatchRecord {
   const cells = row.find("td");
@@ -88,7 +118,7 @@ function parseRow(
       source.url,
     );
   }
-  if (opponentTeam !== undefined && opponentTeam.playedOn !== null && opponentTeam.playedOn !== playedOn) {
+  if (opponentTeam.playedOn !== null && opponentTeam.playedOn !== playedOn) {
     throw new ParseError(
       `renderings disagree at ${playedOn}: mobile block has ${opponentTeam.playedOn}`,
       `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
@@ -107,14 +137,14 @@ function parseRow(
     leagueContext: lines($, cell(1)).join(" "),
     teamName: teamParts[0] ?? "",
     teamSection: teamParts[1] ?? null,
-    opponentTeamName: opponentTeam?.name ?? null,
-    opponentTeamSection: opponentTeam?.section ?? null,
+    opponentTeamName: opponentTeam.name,
+    opponentTeamSection: opponentTeam.section,
     slot,
     discipline: disciplineFor(slot, source),
-    partner: parsePlayers(lines($, cell(4)))[0] ?? null,
-    opponents: defaulted ? [] : parsePlayers(opponentParts),
+    partner: parsePlayers(lines($, cell(4)), source)[0] ?? null,
+    opponents: defaulted ? [] : parsePlayers(opponentParts, source),
     result: parseResult(collapse(cell(6).text()), source),
-    sets: parseSets(lines($, cell(7))),
+    sets: parseSets(lines($, cell(7)), source),
     defaulted,
     matchRating: parseNumber(rawMatchRating),
     // "S" in the match column means the result was not rated because a participant was
@@ -158,13 +188,24 @@ function parseResult(raw: string, source: SourceRef): "W" | "L" {
  * A player cell alternates names and parenthesised ratings: `Sawyer Sable`, `(3.69)`,
  * `Quinn Quillon`, `(3.41)`. A rating line always follows the player it belongs to, so a missing
  * one (an unrated player prints `(-----)`, which parses to null) never shifts the pairing.
+ *
+ * **A rating with no player before it throws.** It means the cell is not the alternating shape
+ * this pairing depends on, and carrying on would attach ratings to the wrong people — the exact
+ * failure that looks like data rather than like a bug.
  */
-function parsePlayers(parts: string[]): PlayerRef[] {
+function parsePlayers(parts: string[], source: SourceRef): PlayerRef[] {
   const players: PlayerRef[] = [];
   for (const part of parts) {
     if (/^\(.*\)$/.test(part)) {
       const last = players[players.length - 1];
-      if (last !== undefined) last.dynamicRating = parseNumber(part);
+      if (last === undefined) {
+        throw new ParseError(
+          `rating "${part}" with no player before it`,
+          `${DESKTOP_TABLE} player cell`,
+          source.url,
+        );
+      }
+      last.dynamicRating = parseNumber(part);
       continue;
     }
     if (/^default/i.test(part)) continue;
@@ -174,22 +215,58 @@ function parsePlayers(parts: string[]): PlayerRef[] {
 }
 
 /**
- * `6-4`, `5-7`, `1-0` → two sets and a match tiebreak.
+ * A doubles court has a partner and two opponents; a singles court has one opponent and no
+ * partner. Anything else means the cell layout changed, and an under-populated court silently
+ * removes people from partner-frequency and prior-meeting counts.
  *
- * A 10-point match tiebreak is printed as a one-game "set", and a dossier that counts it as a set
- * understates every games-won ratio it computes. But "at most one game" alone is not enough to
- * identify one: a retirement early in the FIRST set prints the same way (this fixture already
- * carries a mid-set retirement, `6-7 3-1 1-0`), and calling that a tiebreak would be a false
- * positive on a real page. A match tiebreak replaces the deciding set, so it can only be the third
- * or later — that position is what separates the two.
+ * Defaulted courts are exempt: nobody played, so the opponents cell legitimately reads `Default`.
  */
-function parseSets(parts: string[]): SetScore[] {
+function assertCardinality(record: CourtMatchRecord, source: SourceRef): void {
+  if (record.defaulted) return;
+  const expectedOpponents = record.discipline === "doubles" ? 2 : 1;
+  const expectedPartner = record.discipline === "doubles";
+
+  if (record.opponents.length !== expectedOpponents || (record.partner !== null) !== expectedPartner) {
+    throw new ParseError(
+      `${record.discipline} court on ${record.playedOn} has ${record.opponents.length} opponent(s) and ${record.partner === null ? "no" : "a"} partner`,
+      `${DESKTOP_TABLE} participant cells`,
+      source.url,
+    );
+  }
+}
+
+/**
+ * `4-6`, `7-5`, `1-0` → two sets and a match tiebreak, all **winner-first**.
+ *
+ * Winner-first is established by the fixture, not assumed: every `L` row prints the opponent
+ * winning (`6-3 6-3` on a loss), which is only possible if the leading number is the winner's.
+ * `SetScore` names its fields accordingly so no consumer can read them the other way round.
+ *
+ * A 10-point match tiebreak replaces the deciding set and is printed as a one-game set, so only a
+ * third-or-later `1-0` qualifies. Position is what distinguishes it from a short first set.
+ *
+ * **An unrecognised, non-empty score line throws.** Skipping it would let a changed score format
+ * yield an empty or half-length set list on a record that still reports its W/L, which is a
+ * plausible-looking match with the scores quietly removed.
+ */
+function parseSets(parts: string[], source: SourceRef): SetScore[] {
   const sets: SetScore[] = [];
   for (const part of parts) {
     const match = /^(\d+)\s*-\s*(\d+)$/.exec(part);
-    if (match === null) continue;
-    const games: [number, number] = [Number(match[1]), Number(match[2])];
-    sets.push({ games, matchTiebreak: sets.length >= 2 && Math.max(games[0], games[1]) <= 1 });
+    if (match === null) {
+      throw new ParseError(
+        `unrecognised score component "${part}"`,
+        `${DESKTOP_TABLE} td:nth-child(8)`,
+        source.url,
+      );
+    }
+    const winnerGames = Number(match[1]);
+    const loserGames = Number(match[2]);
+    sets.push({
+      winnerGames,
+      loserGames,
+      matchTiebreak: sets.length >= 2 && Math.max(winnerGames, loserGames) <= 1,
+    });
   }
   return sets;
 }
