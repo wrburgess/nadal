@@ -15,6 +15,7 @@
  */
 
 import * as cheerio from "cheerio";
+import type { AnyNode } from "domhandler";
 
 export type Substitution = { from: string; to: string };
 
@@ -88,19 +89,42 @@ export function decodeEntities(value: string): string {
  * `&NewLine;`. So rather than lengthening the table, parse the document and read it back — the
  * parser's decoder is complete by construction, and it stays complete as the spec moves.
  *
- * Text nodes *and* attribute values are included, because an identity can sit in either. Runs of
- * whitespace are collapsed to a single space so that a name separated by a decoded newline or tab
- * still matches a pattern written with a space.
+ * Three kinds of node can carry an identity, and all three are collected:
+ *
+ * - **text nodes** — the obvious case;
+ * - **attribute values** — an identity sits in an `href` or a `title` as easily as in a text node;
+ * - **comment bodies** — which `.text()` does NOT return, so `<!-- Cory&NewLine;Hogan -->` was
+ *   invisible to a view built from rendered text alone. A comment's content is raw, so it is
+ *   parsed in turn and read back, giving it the same standards-complete decoding as the document.
+ *
+ * Runs of whitespace are collapsed to a single space so that a name separated by a decoded newline
+ * or tab still matches a pattern written with a space.
  *
  * Verification only — this view is never written to a fixture, so parsing cannot alter the
- * committed markup. (Provenance: Codex adversarial review round 8 on PR #26, rated critical.)
+ * committed markup. Stripping comment bodies at write time would also close the comment case, and
+ * is the stronger move if this surface ever grows again; it is not taken here because it would
+ * change committed markup for a case verification already covers.
+ * (Provenance: Codex adversarial review rounds 8 and 9 on PR #26, both rated critical.)
  */
 function renderedView(html: string): string {
   const $ = cheerio.load(html);
-  const parts = [$.root().text()];
-  $("*").each((_, el) => {
-    if (el.type === "tag") parts.push(...Object.values(el.attribs));
-  });
+  const parts: string[] = [$.root().text()];
+
+  const walk = (node: AnyNode): void => {
+    if (node.type === "comment") {
+      parts.push(cheerio.load(node.data).root().text());
+      return;
+    }
+    if (node.type === "tag") parts.push(...Object.values(node.attribs));
+    // Recurse on anything with children — including the document ROOT, whose type is not "tag".
+    // Returning early on a non-tag node stopped the walk at the root and silently collected no
+    // attributes at all, which a passing attribute test then hid.
+    if ("children" in node && Array.isArray(node.children)) {
+      for (const child of node.children) walk(child as AnyNode);
+    }
+  };
+  for (const node of $.root().toArray()) walk(node as AnyNode);
+
   return parts.join("\n").replace(/\s+/g, " ");
 }
 

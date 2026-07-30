@@ -326,3 +326,36 @@ describe("named entity bypass", () => {
     ).not.toThrow();
   });
 });
+
+describe("comment-node identities", () => {
+  it.each([
+    ["plain", "<!-- Cory Hogan -->"],
+    ["&NewLine;", "<!-- Cory&NewLine;Hogan -->"],
+    ["&Tab;", "<!-- Cory&Tab;Hogan -->"],
+    ["numeric", "<!-- Cory&#32;Hogan -->"],
+  ])("catches an identity inside an HTML comment (%s)", (_label, comment) => {
+    // `.text()` does not return comment bodies, so a view built from rendered text and attributes
+    // alone was blind to them — and the tolerant matcher does not know `&NewLine;`, so the raw
+    // sweep missed it too. A comment's content is raw text, so it is parsed in turn and read back.
+    // (Provenance: Codex adversarial review round 9 on PR #26, rated critical.)
+    expect(() =>
+      assertRedacted(`<div>${comment}<p>nothing here</p></div>`, { forbidden: ["Cory Hogan"] }),
+    ).toThrow(RedactionError);
+  });
+
+  it("catches an identity in a comment nested deep in the tree", () => {
+    expect(() =>
+      assertRedacted("<div><section><ul><li><!-- Cory&Tab;Hogan --></li></ul></section></div>", {
+        forbidden: ["Cory Hogan"],
+      }),
+    ).toThrow(RedactionError);
+  });
+
+  it("does not fire on a comment that holds no forbidden identity", () => {
+    expect(() =>
+      assertRedacted("<div><!-- Dana Sample, synthetic --><p>Dana Sample</p></div>", {
+        forbidden: ["Cory Hogan"],
+      }),
+    ).not.toThrow();
+  });
+});
