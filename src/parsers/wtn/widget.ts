@@ -56,6 +56,17 @@ export function parseWtnWidget(html: string, source: SourceRef): WtnProfile | nu
     })
     .get();
 
+  // A duplicate recognised title is not harmless: `ratingFrom` takes the first and drops the
+  // rest, so a responsive or stale second widget silently decides which rating a dossier shows.
+  // The USTA page does render other blocks twice (its identity block appears in a desktop and a
+  // mobile variant), so this is not hypothetical markup.
+  // (Provenance: Codex adversarial review round 4 on PR #26.)
+  const titles = sections.map((s) => s.title).filter((t) => t !== "");
+  const duplicated = titles.find((t, i) => titles.indexOf(t) !== i);
+  if (duplicated !== undefined) {
+    throw new ParseError(`duplicate WTN section "${duplicated}"`, TITLE, source.url);
+  }
+
   for (const { title, rawValue } of sections) {
     const known = title === "WTN SINGLES" || title === "WTN DOUBLES";
     // `rawValue === ""` is checked explicitly: `Number("")` is `0`, which is finite, so a

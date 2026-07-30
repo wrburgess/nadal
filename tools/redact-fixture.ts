@@ -67,9 +67,13 @@ const NAMED_ENTITIES: Record<string, string> = {
  * survive *both* spellings to escape, whatever encoding a future page invents.
  */
 export function decodeEntities(value: string): string {
+  // The terminating semicolon is OPTIONAL. HTML parsers recover a numeric reference without one
+  // — `&#67ory Hogan` is a parse error that still renders as `Cory Hogan` — so a decoder that
+  // requires it can be walked straight past by markup a browser displays perfectly.
+  // (Provenance: Codex adversarial review round 4 on PR #26.)
   return value
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);?/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
     .replace(/&([a-z]+);/gi, (whole, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? whole);
 }
 
@@ -95,7 +99,11 @@ export function decodeEntities(value: string): string {
  * PR #26, rated critical because this is a privacy control on a public repository.)
  */
 function tolerantPattern(value: string): RegExp {
-  const source = [...value].map((ch) => `(?:${characterAlternatives(ch).join("|")})`).join("");
+  const source = [...value]
+    .map((ch) => `(?:${characterAlternatives(ch)
+      .map((a) => a.pattern)
+      .join("|")})`)
+    .join("");
   return new RegExp(source, "gi");
 }
 
@@ -108,25 +116,42 @@ const NAMED_FOR_CHAR: Record<string, string[]> = {
 };
 
 /**
+ * `pattern` is regex source; `literal` is the text that source actually consumes. They differ
+ * wherever a pattern carries a zero-width assertion, and conflating them would both mis-sort the
+ * alternatives and desynchronise the alignment walk that reads them back.
+ */
+type Alternative = { pattern: string; literal: string };
+
+/**
  * Every spelling one character can take, **longest first**.
  *
- * Order is load-bearing, not cosmetic. `&` is a prefix of `&#38;` and `%` is a prefix of `%25`,
- * so a shortest-first walk consumes one character of a five-character sequence and every
- * subsequent offset is wrong — which corrupts the replacement rather than merely missing it.
- * Sorting by length means the longest spelling that actually matches is the one consumed.
- * (Provenance: Codex adversarial review round 2 on PR #26.)
+ * Order is load-bearing, not cosmetic. `&` is a prefix of `&#38;`, `%` of `%25`, and `&#67;` of
+ * `&#67`, so a shortest-first walk consumes one character of a multi-character sequence and every
+ * subsequent offset is wrong — corrupting the replacement rather than merely missing it. Sorting
+ * by the LITERAL length means the longest spelling that actually matches is the one consumed, and
+ * it also fixes the regex alternation order, which is first-match-wins.
+ * (Provenance: Codex adversarial review rounds 2 and 4 on PR #26.)
  */
-function characterAlternatives(ch: string): string[] {
+function characterAlternatives(ch: string): Alternative[] {
   const code = ch.codePointAt(0) ?? 0;
-  const alternatives = [
-    escapeRegExp(ch),
-    `&#${code};`,
-    `&#x${code.toString(16)};`,
-    ...(NAMED_FOR_CHAR[ch] ?? []),
+  const hex = code.toString(16);
+  const alternatives: Alternative[] = [
+    { pattern: escapeRegExp(ch), literal: ch },
+    { pattern: `&#${code};`, literal: `&#${code};` },
+    { pattern: `&#x${hex};`, literal: `&#x${hex};` },
+    // Semicolon-less forms, which HTML parsers recover and render. The negative lookahead stops
+    // `&#67` from matching inside a longer reference such as `&#671;`, which is a different
+    // character entirely.
+    { pattern: `&#${code}(?![0-9])`, literal: `&#${code}` },
+    { pattern: `&#x${hex}(?![0-9a-fA-F])`, literal: `&#x${hex}` },
+    ...(NAMED_FOR_CHAR[ch] ?? []).map((entity) => ({ pattern: entity, literal: entity })),
   ];
-  if (!isAlnum(ch)) alternatives.push(escapeRegExp(encodeURIComponent(ch)));
-  if (ch === " ") alternatives.push("\\+");
-  return alternatives.sort((a, b) => unescapeAlternative(b).length - unescapeAlternative(a).length);
+  if (!isAlnum(ch)) {
+    const encoded = encodeURIComponent(ch);
+    alternatives.push({ pattern: escapeRegExp(encoded), literal: encoded });
+  }
+  if (ch === " ") alternatives.push({ pattern: "\\+", literal: "+" });
+  return alternatives.sort((a, b) => b.literal.length - a.literal.length);
 }
 
 /**
@@ -146,9 +171,9 @@ function encodingStyle(from: string, matched: string): Map<string, string> {
     // the alignment exact now that a character can also appear as a multi-character entity — an
     // assumed width of 1 would desynchronise the rest of the walk from the first `&#67;`.
     const candidate =
-      characterAlternatives(ch)
-        .map(unescapeAlternative)
-        .find((option) => rest.toLowerCase().startsWith(option.toLowerCase())) ?? ch;
+      characterAlternatives(ch).find((option) =>
+        rest.toLowerCase().startsWith(option.literal.toLowerCase()),
+      )?.literal ?? ch;
     // Slice the ACTUAL text rather than reusing the candidate: the two differ in case
     // (`encodeURIComponent(",")` is `%2C`, the page writes `%2c`), and echoing the candidate
     // would rewrite the page's own casing on every replacement.
@@ -157,11 +182,6 @@ function encodingStyle(from: string, matched: string): Map<string, string> {
     i += used.length;
   }
   return style;
-}
-
-/** `characterAlternatives` returns regex source; recover the literal text each one matches. */
-function unescapeAlternative(alternative: string): string {
-  return alternative.replace(/\\(.)/g, "$1");
 }
 
 function applyStyle(value: string, style: Map<string, string>): string {

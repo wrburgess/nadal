@@ -93,3 +93,18 @@ describe("parseWtnWidget — partial section drift", () => {
     expect(parseWtnWidget(doublesOnly.html, doublesOnly.source)?.singles).toBeNull();
   });
 });
+
+describe("parseWtnWidget — duplicate sections", () => {
+  it("throws on a duplicated recognised section rather than silently picking one", () => {
+    // `find` takes the first and drops the rest, so a responsive or stale second widget would
+    // quietly decide which rating a dossier shows. The USTA page renders other blocks twice — its
+    // identity block has desktop and mobile variants — so this is not hypothetical markup.
+    // (Provenance: Codex adversarial review round 4 on PR #26.)
+    const section = /<div class="v-form-wtn-widget__section">[\s\S]*?<h5 class="v-form-wtn-widget__section-title">WTN DOUBLES<\/h5>/;
+    const match = section.exec(doublesOnly.html);
+    expect(match).not.toBeNull();
+    const duplicated = doublesOnly.html.replace(match![0], `${match![0]}${match![0]}`);
+
+    expect(() => parseWtnWidget(duplicated, doublesOnly.source)).toThrow(ParseError);
+  });
+});

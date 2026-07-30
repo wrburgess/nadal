@@ -15,8 +15,33 @@ const PLAYING_AREAS_LABEL = "Current Playing Areas (Player Rating Lists)";
 const RECENT_TEAM_LABEL = "Recent Team";
 const SEASON_LABEL = "All Matches";
 
-/** year + (total, win, loss, pct) x 3 + defaults. Positional decoding, so the count is a contract. */
-const AGGREGATE_CELLS = 14;
+/**
+ * The aggregate table's ordered column contract: year + (total, win, loss, pct) for matches, sets
+ * and games, then defaults.
+ *
+ * A *minimum* cell count is not enough. Insert one numeric column anywhere before the last decoded
+ * field and the row still has fourteen-or-more numeric cells, so every offset shifts and parsing
+ * succeeds with totals read from the wrong columns — the same silent corruption a count check was
+ * meant to prevent, just one step further along.
+ * (Provenance: Codex adversarial review round 4 on PR #26.)
+ */
+const AGGREGATE_COLUMNS: RegExp[] = [
+  /^allmatches$/,
+  /^totalmatches$/,
+  /^win$/,
+  /^loss$/,
+  /^wpct$/,
+  /^totalsets$/,
+  /^win$/,
+  /^loss$/,
+  /^wpct$/,
+  /^totalgames$/,
+  /^win$/,
+  /^loss$/,
+  /^wpct$/,
+  /^defaults$/,
+];
+const AGGREGATE_CELLS = AGGREGATE_COLUMNS.length;
 
 /**
  * Parse a TennisRecord player profile: where the player currently rates, which teams they have
@@ -89,6 +114,30 @@ function parseSeasonRecords($: CheerioAPI, source: SourceRef): SeasonRecord[] {
     );
   }
 
+  const headers = table
+    .find("tr")
+    .first()
+    .find("th, td")
+    .map((_, th) => collapse($(th).text()).replace(/\s+/g, "").toLowerCase())
+    .get();
+  if (headers.length !== AGGREGATE_COLUMNS.length) {
+    throw new ParseError(
+      `season table has ${headers.length} columns, expected ${AGGREGATE_COLUMNS.length}`,
+      `${SEASON_LABEL} tr th`,
+      source.url,
+    );
+  }
+  AGGREGATE_COLUMNS.forEach((expected, index) => {
+    const actual = headers[index] ?? "";
+    if (!expected.test(actual)) {
+      throw new ParseError(
+        `season column ${index} is "${actual}", expected ${String(expected)}`,
+        `${SEASON_LABEL} tr th:nth-child(${index + 1})`,
+        source.url,
+      );
+    }
+  });
+
   return table
     .find("tr")
     .slice(1)
@@ -102,9 +151,11 @@ function parseSeasonRecords($: CheerioAPI, source: SourceRef): SeasonRecord[] {
       // is exact, whereas storing a rounded copy invites the two to disagree.
       const year = cells[0] ?? "";
       if (year === "") return null;
-      if (cells.length < AGGREGATE_CELLS) {
+      // EXACT, not minimum: an inserted column keeps the row above any minimum while shifting
+      // every offset after it.
+      if (cells.length !== AGGREGATE_CELLS) {
         throw new ParseError(
-          `season row "${year}" has ${cells.length} cells, expected ${AGGREGATE_CELLS}`,
+          `season row "${year}" has ${cells.length} cells, expected exactly ${AGGREGATE_CELLS}`,
           `${SEASON_LABEL} tr`,
           source.url,
         );

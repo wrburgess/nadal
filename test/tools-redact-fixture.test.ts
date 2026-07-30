@@ -245,3 +245,27 @@ describe("replacement safety", () => {
     expect(out).toBe("<p>C&amp;D Club</p>");
   });
 });
+
+describe("semicolon-less character references", () => {
+  it("substitutes a numeric reference with no terminating semicolon", () => {
+    // `&#67ory Hogan` is a parse error that browsers recover from and render as `Cory Hogan`, so
+    // a matcher that requires the semicolon can be walked past by markup that displays perfectly.
+    // (Provenance: Codex adversarial review round 4 on PR #26.)
+    const out = redactHtml("<p>&#67ory Hogan</p>", [{ from: "Cory Hogan", to: "Dana Sample" }]);
+
+    expect(out).not.toMatch(/ory/i);
+    expect(out).toContain("Dana");
+  });
+
+  it("catches a semicolon-less reference in the forbidden sweep", () => {
+    expect(() => assertRedacted("<p>&#67ory Hogan</p>", { forbidden: ["Cory Hogan"] })).toThrow(
+      RedactionError,
+    );
+  });
+
+  it("does not treat a longer reference as a shorter one", () => {
+    // `&#671;` is ʟ, not `C` followed by `1;`. The negative lookahead is what keeps the
+    // semicolon-less alternative from reaching inside a longer, valid reference.
+    expect(decodeEntities("&#671;")).toBe("ʟ");
+  });
+});

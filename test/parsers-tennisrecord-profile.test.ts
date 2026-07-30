@@ -71,3 +71,18 @@ describe("parseTennisRecordProfile — aggregate integrity", () => {
     expect(() => parseTennisRecordProfile(blanked, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseTennisRecordProfile — aggregate column contract", () => {
+  it("throws when a numeric column is inserted mid-table", () => {
+    // A minimum cell count is not enough: insert one numeric column and the row still clears any
+    // minimum while every offset after it shifts, so totals are read from the wrong columns and
+    // parsing "succeeds". Only an exact ordered contract catches it.
+    // (Provenance: Codex adversarial review round 4 on PR #26.)
+    const inserted = fixture.html
+      .replace("<th>Defaults</th>", "<th>Extra</th><th>Defaults</th>")
+      .replace(/(<td[^>]*>0<\/td>\s*)(<\/tr>)/, "$1<td>0</td>$2");
+
+    expect(inserted).not.toBe(fixture.html);
+    expect(() => parseTennisRecordProfile(inserted, fixture.source)).toThrow(ParseError);
+  });
+});
