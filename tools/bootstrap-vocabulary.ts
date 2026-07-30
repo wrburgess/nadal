@@ -18,7 +18,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { computeSkeleton, extractAtoms, isNameShaped, loadStandIns } from "./fixture-policy.js";
+import { computeSkeleton, extractAtoms, loadStandIns, requiresReview } from "./fixture-policy.js";
 
 export type BootstrapReport = {
   total: number;
@@ -42,7 +42,7 @@ export function bootstrapVocabulary(fixturePaths: string[], standInsPath: string
   const nameShaped: string[] = [];
   const autoWritten: string[] = [];
   for (const skeleton of skeletons) {
-    (isNameShaped(skeleton) ? nameShaped : autoWritten).push(skeleton);
+    (requiresReview(skeleton) ? nameShaped : autoWritten).push(skeleton);
   }
   nameShaped.sort();
   autoWritten.sort();

@@ -7,6 +7,7 @@ import {
   assertAllowListed,
   extractAtoms,
   loadVocabulary,
+  requiresReview,
 } from "../tools/fixture-policy.js";
 
 /** A vocabulary is just a Set of skeletons for direct unit tests that don't need a file. */
@@ -233,9 +234,11 @@ describe("assertAllowListed - structural values admitted", () => {
     expect(() =>
       assertAllowListed(html, {
         // "profile" is now a real atom (class is no longer exempt by name — issue #28 finding 2),
-        // so it needs its own vocabulary entry alongside the pre-existing href skeleton.
+        // so it needs its own vocabulary entry alongside the pre-existing href skeleton. "owner" is
+        // the data-* PREFIX REMAINDER of `data-owner` (round-2 finding R2-2: attribute names are
+        // atomised too), a single token so it needs no "# reviewed:" justification of its own.
         standIns: STAND_INS,
-        vocabulary: vocab("p aspx playername", "profile"),
+        vocabulary: vocab("p aspx playername", "profile", "owner"),
       }),
     ).not.toThrow();
   });
@@ -378,16 +381,18 @@ describe("loadVocabulary", () => {
   });
 
   it("loads one skeleton per line, ignoring # comments", () => {
-    const path = tempVocabFile(["# a comment", "p aspx playername", "", "42"].join("\n"));
+    // A single-token skeleton, deliberately: a multi-token one now requires a preceding
+    // "# reviewed:" line (round-2 finding R2-3), which is a separate test below.
+    const path = tempVocabFile(["# a comment", "playername", "", "42"].join("\n"));
     const loaded = loadVocabulary(path);
 
-    expect(loaded.has("p aspx playername")).toBe(true);
+    expect(loaded.has("playername")).toBe(true);
     expect(loaded.has("42")).toBe(true);
     expect(loaded.size).toBe(2);
   });
 
   it("rejects a duplicate vocabulary entry", () => {
-    const path = tempVocabFile(["p aspx playername", "p aspx playername"].join("\n"));
+    const path = tempVocabFile(["playername", "playername"].join("\n"));
 
     expect(() => loadVocabulary(path)).toThrow(/duplicate/i);
   });
@@ -535,5 +540,196 @@ describe("loadVocabulary — synthetic-class enforcement (issue #28 fix)", () =>
 
     expect(() => loadVocabulary(path, [])).not.toThrow();
     expect(loadVocabulary(path, []).has("Riverdale Country Club")).toBe(true);
+  });
+});
+
+describe("whole-document accounting (issue #28 round 2 findings R2-1/R2-2/R2-3)", () => {
+  describe("R2-1: xmlns/fill/stroke are exempt only for a CLOSED value grammar", () => {
+    it("REFUSES an svg whose xmlns value carries an identity", () => {
+      expect(() =>
+        assertAllowListed('<svg xmlns="https://example.test/Patrick-Turner"></svg>', {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+
+    it("REFUSES a fill value that is a url() paint reference carrying an identity", () => {
+      expect(() =>
+        assertAllowListed('<path fill="url(https://example.test/Patrick-Turner)"></path>', {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+
+    it.each([["#ff0000"], ["none"], ["currentColor"]])(
+      "admits fill=\"%s\" without a vocabulary entry",
+      (value) => {
+        expect(() =>
+          assertAllowListed(`<path fill="${value}"></path>`, {
+            standIns: [],
+            vocabulary: vocab(),
+          }),
+        ).not.toThrow();
+      },
+    );
+
+    it("admits the standard SVG xmlns value without a vocabulary entry", () => {
+      expect(() =>
+        assertAllowListed('<svg xmlns="http://www.w3.org/2000/svg"></svg>', {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).not.toThrow();
+    });
+  });
+
+  describe("R2-2: element names and attribute names are atomised", () => {
+    it("REFUSES an unlisted, non-standard ELEMENT name", () => {
+      expect(() =>
+        assertAllowListed("<patrick-turner></patrick-turner>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+
+    it("REFUSES an unlisted data-* ATTRIBUTE name with an EMPTY value", () => {
+      // The value is deliberately empty so this cannot pass because of a checked value — only the
+      // NAME channel can be catching it.
+      expect(() =>
+        assertAllowListed("<div data-patrick-turner></div>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+
+    it("REFUSES an unlisted, non-data ATTRIBUTE name", () => {
+      expect(() =>
+        assertAllowListed('<div patrick-turner="x"></div>', {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+
+    it("admits a standard element with a standard, allow-listed attribute name/value", () => {
+      expect(() =>
+        assertAllowListed('<div class="wrapper"></div>', {
+          standIns: [],
+          vocabulary: vocab("wrapper"),
+        }),
+      ).not.toThrow();
+    });
+
+    it("creates an element-name atom for a non-standard tag", () => {
+      const atoms = extractAtoms("<patrick-turner></patrick-turner>");
+      expect(
+        atoms.some((a) => a.kind === "element-name" && a.value === "patrick-turner"),
+      ).toBe(true);
+    });
+
+    it("creates an attribute-name atom carrying only the REMAINDER after the data- prefix", () => {
+      const atoms = extractAtoms('<div data-patrick-turner=""></div>');
+      const nameAtom = atoms.find((a) => a.kind === "attribute-name");
+      expect(nameAtom?.value).toBe("patrick-turner");
+    });
+
+    it("does not flag a standard element/attribute pair at all", () => {
+      const atoms = extractAtoms('<div class="x" id="y"><span>ok</span></div>');
+      expect(atoms.some((a) => a.kind === "element-name")).toBe(false);
+      expect(atoms.some((a) => a.kind === "attribute-name")).toBe(false);
+    });
+  });
+
+  describe("R2-3: requiresReview is Unicode-aware and case-independent", () => {
+    it("returns true for a lowercase multi-token alphabetic skeleton", () => {
+      expect(requiresReview("patrick turner")).toBe(true);
+    });
+
+    it("returns true for a non-ASCII multi-token alphabetic skeleton", () => {
+      expect(requiresReview("josé garcía")).toBe(true);
+    });
+
+    it("returns false for a single token", () => {
+      expect(requiresReview("wrapper")).toBe(false);
+    });
+
+    it("REFUSES loading a lowercase name-shaped vocabulary entry with no justification", () => {
+      const dir = mkdtempSync(join(tmpdir(), "fixture-vocab-r2-"));
+      const path = join(dir, "vocab.txt");
+      writeFileSync(path, "patrick turner\n");
+
+      expect(() => loadVocabulary(path)).toThrow(/reviewed/i);
+    });
+
+    it("REFUSES loading a non-ASCII name-shaped vocabulary entry with no justification", () => {
+      const dir = mkdtempSync(join(tmpdir(), "fixture-vocab-r2-"));
+      const path = join(dir, "vocab.txt");
+      writeFileSync(path, "josé garcía\n");
+
+      expect(() => loadVocabulary(path)).toThrow(/reviewed/i);
+    });
+
+    it("loads a lowercase name-shaped entry once justified", () => {
+      const dir = mkdtempSync(join(tmpdir(), "fixture-vocab-r2-"));
+      const path = join(dir, "vocab.txt");
+      writeFileSync(path, "# reviewed: a real, public place — not identifying.\npatrick turner\n");
+
+      expect(() => loadVocabulary(path)).not.toThrow();
+    });
+  });
+
+  describe("directive content (doctype)", () => {
+    it("admits a standard <!DOCTYPE html>", () => {
+      expect(() =>
+        assertAllowListed("<!DOCTYPE html><html><body></body></html>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).not.toThrow();
+    });
+
+    it("REFUSES a doctype carrying an identity", () => {
+      expect(() =>
+        assertAllowListed("<!DOCTYPE Patrick Turner><html><body></body></html>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+  });
+
+  describe("CDATA content", () => {
+    it("REFUSES CDATA carrying an identity", () => {
+      expect(() =>
+        assertAllowListed("<svg><![CDATA[Patrick Turner]]></svg>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+  });
+
+  describe("capture-level: neither output nor provenance is written when a structural channel refuses", () => {
+    it("an identity in an ELEMENT NAME refuses assertAllowListed outright", () => {
+      expect(() =>
+        assertAllowListed("<div><patrick-turner></patrick-turner></div>", {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
+
+    it("an identity in an ATTRIBUTE NAME refuses assertAllowListed outright", () => {
+      expect(() =>
+        assertAllowListed('<div data-patrick-turner=""></div>', {
+          standIns: [],
+          vocabulary: vocab(),
+        }),
+      ).toThrow(PolicyError);
+    });
   });
 });

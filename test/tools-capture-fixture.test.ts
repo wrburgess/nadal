@@ -16,7 +16,15 @@ function writeMap(dir: string, substitutions: { from: string; to: string }[]): s
 
 function writeVocabulary(dir: string, skeletons: string[]): string {
   const path = join(dir, "vocabulary.txt");
-  writeFileSync(path, skeletons.join("\n"));
+  // Every entry gets its own preceding "# reviewed:" line so this helper works whether or not a
+  // given skeleton is multi-token (round-2 finding R2-3: `requiresReview` no longer cares about
+  // case, so a lowercase multi-word URL-path skeleton like "https example com page" now requires
+  // one too) — a harmless no-op for a single-token skeleton, which doesn't need it.
+  const lines = skeletons.flatMap((skeleton) => [
+    "# reviewed: test fixture content, not a real identity.",
+    skeleton,
+  ]);
+  writeFileSync(path, lines.join("\n"));
   return path;
 }
 

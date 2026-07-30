@@ -63,9 +63,18 @@ import type { AnyNode } from "domhandler";
 // first.
 import { assertNoUnlistedPii, escapeRegExp, nfc, normalizeForComparison } from "./redact-fixture.js";
 
-export type AtomKind = "text" | "attribute" | "comment";
+export type AtomKind =
+  | "text"
+  | "attribute"
+  | "comment"
+  | "element-name"
+  | "attribute-name"
+  | "directive";
 
-/** One content atom: a normalised text-node run, a comment body, or a non-structural attribute. */
+/**
+ * One content atom: a normalised text-node run, a comment body, an attribute value, an element
+ * NAME, an attribute NAME, or a directive's data (doctype).
+ */
 export type Atom = {
   kind: AtomKind;
   value: string;
@@ -74,17 +83,39 @@ export type Atom = {
 };
 
 /**
- * Attribute NAMES the parser reads structurally — their VALUE is never inspected, whatever it is.
+ * WHOLE-DOCUMENT ACCOUNTING (issue #28, round-2 adversarial review).
  *
- * The line is principled, not convenient: exempt ONLY attributes whose values are numeric,
- * geometric, or enumerated by the HTML/SVG spec — never an attribute whose value is a free-form,
- * author-chosen string. `class`, `id`, `style`, every `aria-*`, and every `data-v-*` used to be
- * exempt by NAME alone, which let a human-readable value like `aria-label="Patrick Turner"`
- * survive redaction with no atom and no allow-list check at all (issue #28 finding 2) — ARIA
- * labels are content exposed to assistive technology, and `id`/`class`/`style` are author-chosen
- * free-form strings, not fixed vocabularies. Those are now atomised like any other attribute.
+ * Eight structural escapes were found against this control across two rounds, and every single
+ * one was the same SHAPE of bug: a category of document content `extractAtoms` never looked at —
+ * an element name, an attribute name, a name-only-exempted attribute VALUE with no closed
+ * grammar, or a lowercase/non-ASCII identity that `isNameShaped` (now `requiresReview`) waved
+ * through. Never a rule that judged an atom wrongly; always an input class the walk never
+ * produced an atom for at all. A
+ * hand-enumerated set of "the content classes I checked" is a blacklist wearing an allow-list's
+ * clothes — the exact complaint that opened issue #28 in the first place.
+ *
+ * So the walk below is inverted to be POSITIVE rather than enumerative: every node kind
+ * cheerio/domhandler can produce for an HTML document — tag (including the `script`/`style`
+ * element TYPES, which domhandler tags distinctly from generic `tag` nodes), text, comment, and
+ * directive (doctype) — is walked, and EVERY element name and EVERY attribute name is atomised
+ * unless it is in a closed, spec-derived allow-list built explicitly in this module (never derived
+ * from what the fixtures happen to contain — that would just be a longer blacklist). Content this
+ * module does not recognise refuses by construction; it does not need a future reviewer to notice
+ * a ninth escape and go name it.
+ *
+ * (CDATA sections and non-doctype processing instructions are not walked as separate node kinds
+ * because cheerio's default, non-XML parse mode never produces them: htmlparser2's HTML tokenizer
+ * treats `<![CDATA[...]]>` and `<?...?>` as bogus comments per the HTML5 spec, so their content
+ * already reaches this walk through the `comment` branch — confirmed empirically, not assumed, so
+ * this is not itself a ninth blind spot.)
  */
-const STRUCTURAL_ATTR_NAMES = new Set([
+
+/**
+ * Attribute NAMES the parser reads purely structurally — their VALUE is never inspected, whatever
+ * it is. Principled, not convenient: numeric, geometric, or enumerated-by-spec values only, never
+ * a free-form author-chosen string.
+ */
+const NAME_ONLY_STRUCTURAL_ATTR_NAMES = new Set([
   "d",
   "viewbox",
   "points",
@@ -93,23 +124,244 @@ const STRUCTURAL_ATTR_NAMES = new Set([
   "height",
   "colspan",
   "rowspan",
-  "xmlns",
-  "fill",
-  "stroke",
   "preserveaspectratio",
   "focusable",
   "type",
   "role",
 ]);
 
-function isStructuralAttrName(name: string): boolean {
-  return STRUCTURAL_ATTR_NAMES.has(name.toLowerCase());
+/**
+ * A CSS Color Module Level 4 named colour — a genuinely closed enumeration, used to decide
+ * whether a `fill`/`stroke` value is exempt (see `CLOSED_VALUE_GRAMMARS` below).
+ */
+const CSS_NAMED_COLOURS = new Set([
+  "aliceblue", "antiquewhite", "aqua", "aquamarine", "azure", "beige", "bisque", "black",
+  "blanchedalmond", "blue", "blueviolet", "brown", "burlywood", "cadetblue", "chartreuse",
+  "chocolate", "coral", "cornflowerblue", "cornsilk", "crimson", "cyan", "darkblue", "darkcyan",
+  "darkgoldenrod", "darkgray", "darkgreen", "darkgrey", "darkkhaki", "darkmagenta",
+  "darkolivegreen", "darkorange", "darkorchid", "darkred", "darksalmon", "darkseagreen",
+  "darkslateblue", "darkslategray", "darkslategrey", "darkturquoise", "darkviolet", "deeppink",
+  "deepskyblue", "dimgray", "dimgrey", "dodgerblue", "firebrick", "floralwhite", "forestgreen",
+  "fuchsia", "gainsboro", "ghostwhite", "gold", "goldenrod", "gray", "green", "greenyellow",
+  "grey", "honeydew", "hotpink", "indianred", "indigo", "ivory", "khaki", "lavender",
+  "lavenderblush", "lawngreen", "lemonchiffon", "lightblue", "lightcoral", "lightcyan",
+  "lightgoldenrodyellow", "lightgray", "lightgreen", "lightgrey", "lightpink", "lightsalmon",
+  "lightseagreen", "lightskyblue", "lightslategray", "lightslategrey", "lightsteelblue",
+  "lightyellow", "lime", "limegreen", "linen", "magenta", "maroon", "mediumaquamarine",
+  "mediumblue", "mediumorchid", "mediumpurple", "mediumseagreen", "mediumslateblue",
+  "mediumspringgreen", "mediumturquoise", "mediumvioletred", "midnightblue", "mintcream",
+  "mistyrose", "moccasin", "navajowhite", "navy", "oldlace", "olive", "olivedrab", "orange",
+  "orangered", "orchid", "palegoldenrod", "palegreen", "paleturquoise", "palevioletred",
+  "papayawhip", "peachpuff", "peru", "pink", "plum", "powderblue", "purple", "rebeccapurple",
+  "red", "rosybrown", "royalblue", "saddlebrown", "salmon", "sandybrown", "seagreen", "seashell",
+  "sienna", "silver", "skyblue", "slateblue", "slategray", "slategrey", "snow", "springgreen",
+  "steelblue", "tan", "teal", "thistle", "tomato", "turquoise", "violet", "wheat", "white",
+  "whitesmoke", "yellow", "yellowgreen",
+]);
+
+const HEX_COLOUR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/** `fill`/`stroke`: a hex colour, a CSS Level 4 named colour, or one of the SVG paint keywords. */
+function isClosedPaintValue(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  return (
+    v === "none" ||
+    v === "currentcolor" ||
+    v === "transparent" ||
+    v === "context-fill" ||
+    v === "context-stroke" ||
+    HEX_COLOUR.test(v) ||
+    CSS_NAMED_COLOURS.has(v)
+  );
 }
 
 /**
- * Walk text nodes, comment bodies (recursively — `.text()` skips comments, same reason
- * `renderedView` in `redact-fixture.ts` re-parses them) and non-structural attribute values,
- * carrying a locating DOM path for each atom.
+ * The handful of standard XML/SVG namespace URIs a document can legitimately declare. `xlink` is
+ * in this same grammar because htmlparser2's HTML tokenizer (cheerio's default parser, confirmed
+ * empirically) does not understand the `xmlns:xlink` PREFIX — it reports the attribute NAME as
+ * bare `xlink`, discarding the `xmlns:` half, so the standard `xmlns:xlink="…"` declaration every
+ * captured SVG icon carries reaches this walk as an attribute literally named `xlink`. Refusing to
+ * recognise that would not protect anyone; the value is still drawn from the same closed URI set.
+ */
+const STANDARD_NAMESPACE_URIS = new Set([
+  "http://www.w3.org/2000/svg",
+  "http://www.w3.org/1999/xhtml",
+  "http://www.w3.org/1999/xlink",
+  "http://www.w3.org/2001/xmlschema-instance",
+  "http://www.w3.org/xml/1998/namespace",
+]);
+
+function isClosedNamespaceValue(value: string): boolean {
+  return STANDARD_NAMESPACE_URIS.has(value.trim().toLowerCase());
+}
+
+/**
+ * Attribute names whose VALUE is exempt only when it matches a genuinely closed grammar —
+ * `xmlns`/`xlink` (round-2 finding R2-1: these used to be name-only exempt, so
+ * `xmlns="https://example.test/Patrick-Turner"` created no atom at all) and `fill`/`stroke` (a
+ * `url(...)` paint reference must still be atomised).
+ */
+const CLOSED_VALUE_GRAMMARS: Record<string, (value: string) => boolean> = {
+  xmlns: isClosedNamespaceValue,
+  xlink: isClosedNamespaceValue,
+  fill: isClosedPaintValue,
+  stroke: isClosedPaintValue,
+};
+
+/** Is this attribute's VALUE exempt from atomisation, given its (lowercased) name? */
+function isExemptAttributeValue(lowerName: string, value: string): boolean {
+  if (NAME_ONLY_STRUCTURAL_ATTR_NAMES.has(lowerName)) return true;
+  const grammar = CLOSED_VALUE_GRAMMARS[lowerName];
+  return grammar !== undefined && grammar(value);
+}
+
+/**
+ * Standard HTML5 (living standard, including legacy/deprecated-but-conforming) and SVG element
+ * names, lowercased. Built explicitly from the specs — NOT derived from what the committed
+ * fixtures happen to contain, which would just be a longer blacklist (round-2 finding R2-2).
+ */
+const STANDARD_ELEMENT_NAMES = new Set([
+  // HTML
+  "a", "abbr", "acronym", "address", "applet", "area", "article", "aside", "audio", "b", "base",
+  "basefont", "bdi", "bdo", "big", "blockquote", "body", "br", "button", "canvas", "caption",
+  "center", "cite", "code", "col", "colgroup", "data", "datalist", "dd", "del", "details", "dfn",
+  "dialog", "dir", "div", "dl", "dt", "em", "embed", "fieldset", "figcaption", "figure", "font",
+  "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
+  "hgroup", "hr", "html", "i", "iframe", "img", "input", "ins", "kbd", "label", "legend", "li",
+  "link", "main", "map", "mark", "marquee", "menu", "meta", "meter", "nav", "noframes",
+  "noscript", "object", "ol", "optgroup", "option", "output", "p", "param", "picture", "pre",
+  "progress", "q", "rp", "rt", "ruby", "s", "samp", "script", "search", "section", "select",
+  "slot", "small", "source", "span", "strike", "strong", "style", "sub", "summary", "sup",
+  "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "time", "title", "tr",
+  "track", "tt", "u", "ul", "var", "video", "wbr",
+  // SVG
+  "svg", "animate", "animatemotion", "animatetransform", "circle", "clippath", "defs", "desc",
+  "ellipse", "feblend", "fecolormatrix", "fecomponenttransfer", "fecomposite",
+  "feconvolvematrix", "fediffuselighting", "fedisplacementmap", "fedistantlight", "fedropshadow",
+  "feflood", "fefunca", "fefuncb", "fefuncg", "fefuncr", "fegaussianblur", "feimage", "femerge",
+  "femergenode", "femorphology", "feoffset", "fepointlight", "fespecularlighting", "fespotlight",
+  "fetile", "feturbulence", "filter", "foreignobject", "g", "hatch", "hatchpath", "image", "line",
+  "lineargradient", "marker", "mask", "metadata", "mpath", "path", "pattern", "polygon",
+  "polyline", "radialgradient", "rect", "set", "stop", "switch", "symbol", "text", "textpath",
+  "tspan", "use", "view",
+]);
+
+function isStandardElementName(name: string): boolean {
+  return STANDARD_ELEMENT_NAMES.has(name.toLowerCase());
+}
+
+/**
+ * Standard global, event-handler, form/media/table, and ARIA HTML attribute names, plus SVG
+ * presentation/geometry/animation attribute names — lowercased, spec-derived (not
+ * fixture-derived, same reasoning as `STANDARD_ELEMENT_NAMES`).
+ *
+ * `aria-*` is enumerated explicitly rather than treated as a prefix class: unlike `data-*`, the
+ * WAI-ARIA spec defines a CLOSED list of `aria-*` states/properties — `aria-patrick-turner` is not
+ * a valid ARIA attribute, so it must not be waved through the way `data-*` is.
+ */
+const STANDARD_ATTRIBUTE_NAMES = new Set([
+  // Global
+  "accesskey", "autocapitalize", "autofocus", "class", "contenteditable", "dir", "draggable",
+  "enterkeyhint", "hidden", "id", "inert", "inputmode", "is", "itemid", "itemprop", "itemref",
+  "itemscope", "itemtype", "lang", "nonce", "part", "popover", "slot", "spellcheck", "style",
+  "tabindex", "title", "translate", "role", "xmlns",
+  // Event handlers
+  "onabort", "onafterprint", "onauxclick", "onbeforeprint", "onbeforeunload", "onblur",
+  "oncancel", "oncanplay", "oncanplaythrough", "onchange", "onclick", "onclose",
+  "oncontextmenu", "oncopy", "oncuechange", "oncut", "ondblclick", "ondrag", "ondragend",
+  "ondragenter", "ondragleave", "ondragover", "ondragstart", "ondrop", "ondurationchange",
+  "onemptied", "onended", "onerror", "onfocus", "onformdata", "onhashchange", "oninput",
+  "oninvalid", "onkeydown", "onkeypress", "onkeyup", "onload", "onloadeddata",
+  "onloadedmetadata", "onloadstart", "onmessage", "onmousedown", "onmouseenter",
+  "onmouseleave", "onmousemove", "onmouseout", "onmouseover", "onmouseup", "onoffline",
+  "ononline", "onpagehide", "onpageshow", "onpaste", "onpause", "onplay", "onplaying",
+  "onpopstate", "onprogress", "onratechange", "onreset", "onresize", "onscroll",
+  "onsecuritypolicyviolation", "onseeked", "onseeking", "onselect", "onslotchange",
+  "onstalled", "onstorage", "onsubmit", "onsuspend", "ontimeupdate", "ontoggle",
+  "onunhandledrejection", "onunload", "onvolumechange", "onwaiting", "onwheel",
+  // Element-specific
+  "accept", "accept-charset", "action", "allow", "allowfullscreen", "alt", "as", "async",
+  "autoplay", "capture", "cellpadding", "cellspacing", "charset", "checked", "cite", "cols",
+  "content", "controls", "coords", "crossorigin", "data", "datetime", "decoding", "default",
+  "defer", "disabled", "download", "enctype", "for", "form", "formaction", "formenctype",
+  "formmethod", "formnovalidate", "formtarget", "headers", "height", "high", "href",
+  "hreflang", "http-equiv", "integrity", "ismap", "kind", "label", "list", "loading", "loop",
+  "low", "manifest", "max", "maxlength", "media", "method", "min", "minlength", "multiple",
+  "muted", "name", "nomodule", "novalidate", "open", "optimum", "pattern", "ping",
+  "placeholder", "playsinline", "poster", "preload", "readonly", "referrerpolicy", "rel",
+  "required", "reversed", "rows", "rowspan", "sandbox", "scope", "selected", "shape", "size",
+  "sizes", "span", "src", "srcdoc", "srclang", "srcset", "start", "step", "target", "usemap",
+  "value", "width", "wrap", "colspan", "version",
+  // ARIA (closed enumeration, not a prefix class)
+  "aria-activedescendant", "aria-atomic", "aria-autocomplete", "aria-braillelabel",
+  "aria-brailleroledescription", "aria-busy", "aria-checked", "aria-colcount",
+  "aria-colindex", "aria-colindextext", "aria-colspan", "aria-controls", "aria-current",
+  "aria-describedby", "aria-description", "aria-details", "aria-disabled",
+  "aria-dropeffect", "aria-errormessage", "aria-expanded", "aria-flowto", "aria-grabbed",
+  "aria-haspopup", "aria-hidden", "aria-invalid", "aria-keyshortcuts", "aria-label",
+  "aria-labelledby", "aria-level", "aria-live", "aria-modal", "aria-multiline",
+  "aria-multiselectable", "aria-orientation", "aria-owns", "aria-placeholder",
+  "aria-posinset", "aria-pressed", "aria-readonly", "aria-relevant", "aria-required",
+  "aria-roledescription", "aria-rowcount", "aria-rowindex", "aria-rowindextext",
+  "aria-rowspan", "aria-selected", "aria-setsize", "aria-sort", "aria-valuemax",
+  "aria-valuemin", "aria-valuenow", "aria-valuetext",
+  // SVG presentation/geometry/animation (beyond the name-only-structural set above)
+  "cx", "cy", "r", "rx", "ry", "x", "y", "x1", "y1", "x2", "y2", "fx", "fy", "fr", "dx", "dy",
+  "fill", "fill-rule", "fill-opacity", "stroke", "stroke-width", "stroke-linecap",
+  "stroke-linejoin", "stroke-dasharray", "stroke-dashoffset", "stroke-opacity", "opacity",
+  "offset", "stop-color", "stop-opacity", "gradientunits", "gradienttransform",
+  "spreadmethod", "patternunits", "patterncontentunits", "patterntransform", "clip-path",
+  "clip-rule", "marker-start", "marker-mid", "marker-end", "text-anchor", "font-family",
+  "font-size", "font-weight", "letter-spacing", "dominant-baseline", "alignment-baseline",
+  "baseline-shift", "pointer-events", "shape-rendering", "vector-effect", "paint-order",
+  "in", "in2", "result", "mode", "operator", "values", "edgemode", "stddeviation",
+  "diffuseconstant", "specularconstant", "specularexponent", "surfacescale",
+  "kernelmatrix", "kernelunitlength", "targetx", "targety", "radius", "xchannelselector",
+  "ychannelselector", "scale", "azimuth", "elevation", "limitingconeangle", "pointsatx",
+  "pointsaty", "pointsatz", "refx", "refy", "markerwidth", "markerheight", "markerunits",
+  "orient", "overflow", "systemlanguage", "requiredextensions", "requiredfeatures",
+  "externalresourcesrequired", "attributename", "attributetype", "begin", "dur", "end",
+  "restart", "repeatcount", "repeatdur", "calcmode", "keytimes", "keysplines", "keypoints",
+  "rotate", "additive", "accumulate", "by", "to", "d", "viewbox", "points", "transform",
+  "preserveaspectratio", "focusable", "type",
+]);
+
+/**
+ * Standard XML-namespace-prefixed attributes htmlparser2's HTML tokenizer (cheerio's default
+ * parser) reports with the prefix stripped — confirmed empirically: `xmlns:xlink="…"` arrives as
+ * a bare `xlink` attribute, and `xml:space="preserve"` arrives as a bare `space` attribute.
+ */
+const PARSER_MANGLED_NAMESPACE_ATTR_NAMES = new Set(["xlink", "space"]);
+
+function isStandardAttributeName(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (STANDARD_ATTRIBUTE_NAMES.has(lower)) return true;
+  if (PARSER_MANGLED_NAMESPACE_ATTR_NAMES.has(lower)) return true;
+  return false;
+}
+
+/**
+ * The `data-*` PREFIX is a genuinely open-ended HTML mechanism (custom data attributes) — admit
+ * the prefix itself, but return the REMAINDER for atomisation so an identity in it (
+ * `data-patrick-turner`) is still caught (round-2 finding R2-2). Returns `null` when `name` is not
+ * `data-`-prefixed.
+ */
+function dataAttrRemainder(name: string): string | null {
+  const lower = name.toLowerCase();
+  if (!lower.startsWith("data-")) return null;
+  const remainder = name.slice(5);
+  return remainder === "" ? name : remainder;
+}
+
+/** A standard `<!DOCTYPE html>` (any casing), the only directive exempt from atomisation. */
+const STANDARD_DOCTYPE = /^!doctype\s+html\s*$/i;
+
+/**
+ * Walk EVERY node kind — text, comment, directive (doctype), and tag (including the `script`/
+ * `style` element TYPES, which domhandler tags distinctly from generic `tag` nodes) — carrying a
+ * locating DOM path for each atom. See the "WHOLE-DOCUMENT ACCOUNTING" note above for why this is
+ * a positive walk of every node kind rather than an enumerated list of the ones some past review
+ * happened to name.
  */
 export function extractAtoms(html: string): Atom[] {
   const $ = cheerio.load(html);
@@ -122,6 +374,12 @@ export function extractAtoms(html: string): Atom[] {
     }
     if (node.type === "text") {
       if (node.data !== "") atoms.push({ kind: "text", value: node.data, path });
+      return;
+    }
+    if (node.type === "directive") {
+      if (!STANDARD_DOCTYPE.test(node.data.trim())) {
+        atoms.push({ kind: "directive", value: node.data, path: `${path}>#directive` });
+      }
       return;
     }
     // domhandler types a <script>/<style> ELEMENT's `node.type` as "script"/"style", never "tag" —
@@ -143,9 +401,37 @@ export function extractAtoms(html: string): Atom[] {
     // exactly when the premise (stripping happened) is actually true, rather than being assumed.
     if (node.type === "tag" || node.type === "script" || node.type === "style") {
       const tagPath = `${path}>${node.tagName}`;
+      // ELEMENT NAME (round-2 finding R2-2): a tag whose name is not in the closed, spec-derived
+      // allow-list is itself an atom — `<patrick-turner>` produced no atom of any kind before this
+      // fix, so an identity spelled as a custom element name shipped with an empty vocabulary.
+      if (!isStandardElementName(node.tagName)) {
+        atoms.push({ kind: "element-name", value: node.tagName, path: tagPath });
+      }
       for (const [attrName, attrValue] of Object.entries(node.attribs)) {
-        if (isStructuralAttrName(attrName)) continue;
-        atoms.push({ kind: "attribute", value: attrValue, path: tagPath, attrName });
+        const lowerName = attrName.toLowerCase();
+        // ATTRIBUTE NAME (round-2 finding R2-2): `data-*` is a genuinely open-ended HTML
+        // mechanism, so only the REMAINDER after the prefix is atomised (`data-patrick-turner` ->
+        // `patrick-turner`) — the prefix itself is not a zero-atom escape hatch. Every other
+        // non-standard attribute name is atomised whole; `<patrick-turner>` as an attribute name
+        // produced no atom at all before this fix, same bug as the element-name case.
+        const dataRemainder = dataAttrRemainder(attrName);
+        if (dataRemainder !== null) {
+          atoms.push({
+            kind: "attribute-name",
+            value: dataRemainder,
+            path: tagPath,
+            attrName,
+          });
+        } else if (!isStandardAttributeName(attrName)) {
+          atoms.push({ kind: "attribute-name", value: attrName, path: tagPath, attrName });
+        }
+        // ATTRIBUTE VALUE, as before, except `xmlns`/`xlink`/`fill`/`stroke` are now exempt only
+        // when their value matches a closed grammar rather than by name alone (round-2 finding
+        // R2-1: `xmlns="https://example.test/…"` and `fill="url(https://example.test/…)"` used to
+        // create no atom at all).
+        if (!isExemptAttributeValue(lowerName, attrValue)) {
+          atoms.push({ kind: "attribute", value: attrValue, path: tagPath, attrName });
+        }
       }
       if ("children" in node && Array.isArray(node.children)) {
         for (const child of node.children) walk(child as AnyNode, tagPath);
@@ -293,21 +579,32 @@ export function assertAllowListed(
 }
 
 /**
- * Two or more consecutive capitalised words — the shape a real personal name takes. Exported so
- * `tools/bootstrap-vocabulary.ts` applies the SAME name-shape test when deciding which skeletons
- * it may auto-write versus which it must leave for a human to disposition by hand.
+ * Two or more consecutive alphabetic tokens — the shape a real personal name (or any other
+ * multi-word identity) takes. Exported so `tools/bootstrap-vocabulary.ts` applies the SAME test
+ * when deciding which skeletons it may auto-write versus which it must leave for a human to
+ * disposition by hand.
+ *
+ * Renamed from `isNameShaped` and rebuilt on Unicode `\p{L}`/`\p{M}` letter/mark classes rather
+ * than ASCII `[A-Z]` (round-2 finding R2-3): capitalisation is not a safety boundary. The old,
+ * ASCII-capitalised-only regex let `patrick turner` (lowercase — common in slugs and lower-cased
+ * page text) and any non-ASCII name (`josé garcía`) load from a vocabulary file with NO preceding
+ * `# reviewed:` justification and let `bootstrapVocabulary` auto-write it — defeating the human-
+ * review boundary the whole allow-list design rests on. This test does not claim a match IS a
+ * personal name; it claims a match COULD be one, which is why it is worded and named as a review
+ * TRIGGER ("requires review") rather than a classification.
  */
-export function isNameShaped(value: string): boolean {
-  return /\b[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*)+\b/.test(value);
+export function requiresReview(value: string): boolean {
+  return /\p{L}[\p{L}\p{M}'-]*(?:\s+\p{L}[\p{L}\p{M}'-]*)+/u.test(value);
 }
 
 /**
  * Load a per-source vocabulary file: one skeleton per line, `#` comments ignored, blank lines
- * reset any pending justification. A name-shaped entry (two or more consecutive capitalised
- * words — the shape a real personal name takes) must be immediately preceded by a justification
- * line, or the file fails to load outright; a plain comment or blank line between the
- * justification and the entry breaks the immediacy on purpose, so one justification cannot be
- * stretched to cover a second entry a human never actually read.
+ * reset any pending justification. An entry for which `requiresReview` returns true (two or more
+ * consecutive alphabetic tokens, ANY case or script — see that function's docstring for why
+ * capitalisation was dropped as the trigger) must be immediately preceded by a justification line,
+ * or the file fails to load outright; a plain comment or blank line between the justification and
+ * the entry breaks the immediacy on purpose, so one justification cannot be stretched to cover a
+ * second entry a human never actually read.
  *
  * Two justification forms exist, and they make different STRENGTHS of claim:
  *
@@ -365,10 +662,11 @@ export function loadVocabulary(path: string, standIns: string[] = []): Set<strin
     if (vocabulary.has(line)) {
       throw new Error(`duplicate vocabulary entry "${line}" in ${path}`);
     }
-    if (isNameShaped(line) && pendingReviewed === null) {
+    if (requiresReview(line) && pendingReviewed === null) {
       throw new Error(
-        `name-shaped vocabulary entry "${line}" in ${path} must be immediately preceded by a ` +
-          `"# reviewed: <reason>" or "# reviewed[synthetic]: <reason>" line`,
+        `vocabulary entry "${line}" in ${path} requires review (a multi-token alphabetic ` +
+          `skeleton) and must be immediately preceded by a "# reviewed: <reason>" or ` +
+          `"# reviewed[synthetic]: <reason>" line`,
       );
     }
     if (pendingReviewed?.kind === "synthetic") {
