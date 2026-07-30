@@ -40,13 +40,74 @@ describe("extractAtoms", () => {
     expect(textAtom?.kind).toBe("text");
   });
 
-  it("yields no atom for a structural attribute name", () => {
+  it("yields no atom for a NUMERIC/GEOMETRIC/ENUMERATED structural attribute name", () => {
     const html =
-      '<div class="profile" id="x" style="color:red" aria-hidden="true">' +
-      '<svg viewBox="0 0 10 10" d="M0 0 L10 10"></svg></div>';
+      '<svg viewBox="0 0 10 10" d="M0 0 L10 10" width="10" height="10" fill="#fff" ' +
+      'stroke="#000" points="0,0 1,1" transform="translate(1,1)" preserveAspectRatio="none" ' +
+      'focusable="false" xmlns="http://www.w3.org/2000/svg"></svg>' +
+      '<table><td colspan="2" rowspan="1"></td></table><input type="text" role="button">';
     const atoms = extractAtoms(html);
 
     expect(atoms.filter((a) => a.kind === "attribute")).toHaveLength(0);
+  });
+});
+
+describe("extractAtoms — free-form attribute values are NOT exempt (issue #28 finding 2 fix)", () => {
+  // aria-*/id/class/style/data-v-* used to be exempt from atomisation by NAME alone, so a
+  // free-form, author-chosen string in any of them survived redaction, produced no atom, and was
+  // never checked against the vocabulary — an uninspected publication surface exposed to assistive
+  // technology (aria-*) or simply human-authored (id/class/style/data-v-*).
+  it("creates an atom for aria-label", () => {
+    const atoms = extractAtoms('<button aria-label="Patrick Turner">x</button>');
+    expect(
+      atoms.some((a) => a.kind === "attribute" && a.attrName === "aria-label"),
+    ).toBe(true);
+  });
+
+  it("creates an atom for id", () => {
+    const atoms = extractAtoms('<div id="Patrick Turner"></div>');
+    expect(atoms.some((a) => a.kind === "attribute" && a.attrName === "id")).toBe(true);
+  });
+
+  it("creates an atom for class", () => {
+    const atoms = extractAtoms('<div class="Patrick Turner"></div>');
+    expect(atoms.some((a) => a.kind === "attribute" && a.attrName === "class")).toBe(true);
+  });
+
+  it("creates an atom for style", () => {
+    const atoms = extractAtoms('<div style="Patrick Turner"></div>');
+    expect(atoms.some((a) => a.kind === "attribute" && a.attrName === "style")).toBe(true);
+  });
+
+  it("creates an atom for data-v-*", () => {
+    const atoms = extractAtoms('<div data-v-abc123="Patrick Turner"></div>');
+    expect(
+      atoms.some((a) => a.kind === "attribute" && a.attrName === "data-v-abc123"),
+    ).toBe(true);
+  });
+
+  it("REFUSES the capture when an unlisted name sits in aria-label", () => {
+    expect(() =>
+      assertAllowListed('<button aria-label="Patrick Turner">x</button>', {
+        standIns: [],
+        vocabulary: vocab(),
+      }),
+    ).toThrow(PolicyError);
+  });
+
+  it("REFUSES the capture when an unlisted name sits in id", () => {
+    expect(() =>
+      assertAllowListed('<div id="Patrick Turner"></div>', { standIns: [], vocabulary: vocab() }),
+    ).toThrow(PolicyError);
+  });
+
+  it("REFUSES the capture when an unlisted name sits in class", () => {
+    expect(() =>
+      assertAllowListed('<div class="Patrick Turner"></div>', {
+        standIns: [],
+        vocabulary: vocab(),
+      }),
+    ).toThrow(PolicyError);
   });
 });
 
@@ -79,12 +140,6 @@ describe("extractAtoms — script/style elements (issue #28 finding 2 fix)", () 
     ).toBe(true);
   });
 
-  it("does NOT atomise the style body text — redaction already strips it", () => {
-    const atoms = extractAtoms(html);
-
-    expect(atoms.some((a) => a.value.includes(".x{}"))).toBe(false);
-  });
-
   it("still walks past script/style to atomise a later sibling", () => {
     const atoms = extractAtoms(html);
 
@@ -95,6 +150,38 @@ describe("extractAtoms — script/style elements (issue #28 finding 2 fix)", () 
     expect(() =>
       assertAllowListed(html, { standIns: [], vocabulary: vocab() }),
     ).toThrow(PolicyError);
+  });
+});
+
+describe("extractAtoms — script/style TEXT bodies (issue #28 finding 1 fix)", () => {
+  // redactHtml's SCRIPT_OR_STYLE regex only strips PAIRED script/style tags
+  // (`/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi`). A truncated/malformed capture like
+  // `<script>Patrick Turner` (no closing tag) never matches that pattern, so its body survives
+  // redaction untouched. The old `extractAtoms` unconditionally skipped script/style CHILDREN on
+  // the theory that redaction had already emptied them — which made this exact input produce NO
+  // atom at all, a silent bypass of the allow-list. Atomising the text body instead costs nothing
+  // for well-formed input (a paired, already-stripped `<script></script>` has no children to
+  // atomise) and closes the hole for malformed input.
+  it("REFUSES an unclosed <script> body reaching the end of the document", () => {
+    expect(() =>
+      assertAllowListed("<script>Patrick Turner", { standIns: [], vocabulary: vocab() }),
+    ).toThrow(PolicyError);
+  });
+
+  it("REFUSES an unclosed <style> body reaching the end of the document", () => {
+    expect(() =>
+      assertAllowListed("<style>Patrick Turner", { standIns: [], vocabulary: vocab() }),
+    ).toThrow(PolicyError);
+  });
+
+  it("admits a PAIRED <script>...</script> whose body was already stripped empty, with no atom flood", () => {
+    const strippedHtml = "<script></script><style></style><p></p>";
+    const atoms = extractAtoms(strippedHtml);
+
+    expect(atoms).toHaveLength(0);
+    expect(() =>
+      assertAllowListed(strippedHtml, { standIns: [], vocabulary: vocab() }),
+    ).not.toThrow();
   });
 });
 
@@ -145,8 +232,10 @@ describe("assertAllowListed - structural values admitted", () => {
       "</div>";
     expect(() =>
       assertAllowListed(html, {
+        // "profile" is now a real atom (class is no longer exempt by name — issue #28 finding 2),
+        // so it needs its own vocabulary entry alongside the pre-existing href skeleton.
         standIns: STAND_INS,
-        vocabulary: vocab("p aspx playername"),
+        vocabulary: vocab("p aspx playername", "profile"),
       }),
     ).not.toThrow();
   });
@@ -396,6 +485,44 @@ describe("loadVocabulary — synthetic-class enforcement (issue #28 fix)", () =>
     // "Riverdale" is backed; "Country" and "Club" are not — one matching token must not launder
     // the whole entry into the enforced class.
     expect(() => loadVocabulary(path, ["Riverdale Sample"])).toThrow(/not present in stand-ins/i);
+  });
+
+  it("FAILS a token-spliced entry: 'Avery Ashcroft' backed only by 'Avery Ashby' + 'Arden Ashcroft' (issue #28 finding 3)", () => {
+    // The committed register has "Avery Ashby" and "Arden Ashcroft" as SEPARATE full stand-ins.
+    // The old check verified each capitalised token independently, so "Avery" (from "Avery
+    // Ashby") and "Ashcroft" (from "Arden Ashcroft") each matched SOME token somewhere and the
+    // spliced full name "Avery Ashcroft" — which is in NO stand-in — passed as "synthetic". The
+    // fix must require the WHOLE entry to reduce to an empty skeleton once full stand-in PHRASES
+    // are elided at word boundaries, which "Avery Ashcroft" cannot do against either phrase.
+    const path = tempVocabFile(
+      ["# reviewed[synthetic]: invented stand-in — token-spliced probe", "Avery Ashcroft"].join(
+        "\n",
+      ),
+    );
+
+    expect(() => loadVocabulary(path, ["Avery Ashby", "Arden Ashcroft"])).toThrow(
+      /not present in stand-ins/i,
+    );
+  });
+
+  it("loads a synthetic entry that IS a full committed stand-in phrase", () => {
+    const path = tempVocabFile(
+      ["# reviewed[synthetic]: invented stand-in", "Avery Ashby"].join("\n"),
+    );
+
+    expect(() => loadVocabulary(path, ["Avery Ashby", "Arden Ashcroft"])).not.toThrow();
+    expect(loadVocabulary(path, ["Avery Ashby", "Arden Ashcroft"]).has("Avery Ashby")).toBe(true);
+  });
+
+  it("loads a synthetic entry combining TWO full stand-in phrases plus punctuation/numbers", () => {
+    const path = tempVocabFile(
+      [
+        "# reviewed[synthetic]: two invented stand-ins composited, plus structural content",
+        "Avery Ashby, Arden Ashcroft - 6-4 6-2 (2026)",
+      ].join("\n"),
+    );
+
+    expect(() => loadVocabulary(path, ["Avery Ashby", "Arden Ashcroft"])).not.toThrow();
   });
 
   it("loads a real/public-classed entry without needing ANY stand-ins backing", () => {

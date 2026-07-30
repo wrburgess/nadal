@@ -117,6 +117,70 @@ describe("capture-fixture main() — allow-list policy wiring", () => {
   });
 });
 
+describe("capture-fixture main() — unclosed script body bypass (issue #28 finding 1 fix)", () => {
+  it("writes NEITHER output file when an unclosed <script> body reaches the allow-list check", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    // No closing </script> tag — redactHtml's SCRIPT_OR_STYLE regex only matches PAIRED tags, so
+    // this body survives redaction untouched and must face the allow-list like any other atom.
+    writeFileSync(filePath, "<script>Patrick Turner");
+    const outPath = join(dir, "out.html");
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+});
+
+describe("capture-fixture main() — free-form attribute PII channel (issue #28 finding 2 fix)", () => {
+  it("writes NEITHER output file when an unlisted name sits in aria-label", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, '<button aria-label="Patrick Turner">x</button>');
+    const outPath = join(dir, "out.html");
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+});
+
 describe("capture-fixture main() — refuses when no vocabulary resolves (issue #28 finding 1 fix)", () => {
   it("refuses the DEFAULT invocation (no --detectors, no --vocabulary), naming --vocabulary, and writes neither file", async () => {
     const dir = tempDir();

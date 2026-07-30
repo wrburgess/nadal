@@ -88,6 +88,11 @@ WPct
 Win
 Year
 Years
+adheader
+adrectangle
+adrectangle2
+adsticky
+adtrailer
 adult league aspx flightname Men year s
 adult league index aspx
 adult matchhistory aspx playername s year
@@ -110,13 +115,50 @@ adult teamprofile aspx teamname year s
 adult teamsearch aspx
 apple touch icon
 apple touch icon png
+border bottom 1px solid
+box shadow none border
 canonical
+color
+container
+container ad
+container adheader
+container adheadercenter
+container adrectangle
+container adrectangle hidead
+container adsticky
+container adstickybottom
+container adtrailer
+container divider0
+container page
+container stickytopleft
+container stickytopright
+container1000
+container496
+containermenu
+content
+contentcenter
 description
+display none
+display table cell vertical align middle
 displayads
 en
 favicon 16x16 png
 favicon 32x32 png
 find league
+font size 12px color
+font weight bold
+header
+header footer
+headercontainer
+height 135px padding top 4px border bottom 1px solid
+height 45px
+height 45px border bottom 1px solid
+height 45px border bottom 1px solid font weight bold
+height 50px color background color border bottom 1px solid
+height 60px
+height 60px border bottom 1px solid
+height 60px border top 1px solid
+hide
 https www tennisrecord com adult matchhistory aspx year playername mt yr
 https www tennisrecord com adult playerstats aspx playername mt yr
 https www tennisrecord com adult profile aspx playername
@@ -126,21 +168,74 @@ images ratingbar15 png
 images ratingmeter15 png
 index aspx
 keywords
+large
+leftrigh
+leftsticky
+link
+link padding10row
+logo
+logo image
+logo title
 manifest
 manifest json
+margin auto width
+margin auto width font size 12px
+margin top 50px
+margin top 8px
 mask icon
 menu btn
+menu icon
+menu menu inner pos
+navicon
+padding top 5px
+padding10
+padding10 responsive14
 player ratings
 player search
 privacy aspx
+responsive12
+responsive14
+responsive16 leftrigh
+responsive18 padding10
+responsivewidth padding10
+resultrow responsive14
+rightsticky
 safari pinned tab svg
 sitemap aspx
+small
 stylesheet
 stylesheets globa css
 team search
+text align center
+text align center border right 1px solid
+text align center vertical align top
+text align left
+text align left border right 1px solid
+text align left border right 1px solid max width 180px
+text align left class
+text align left font weight bold
+text align left vertical align top
+text align left vertical align top border right 1px solid
+text align right
+text align right class
+text align right vertical align top
 theme color
+time1
+vertical align top text align right width white space nowrap
 viewport
+width
+width border bottom 1px solid
 width device width initial scale
+width display block
+width text align center
+width text align center padding 50px 0px 20px 0px
+width text align left font weight bold color
+wrapper
+wrapper responsive14
+wrapper1000
+wrapper336to728
+wrapper35
+wrapper65
 
 # --- name-shaped skeletons below, each dispositioned by hand ---
 

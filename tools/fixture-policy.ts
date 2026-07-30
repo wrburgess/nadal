@@ -14,8 +14,12 @@
  *
  * The reduction ladder, in order:
  *
- *  1. An attribute whose NAME is structural (class, id, style, d, viewBox, …) is admitted without
- *     its value ever being inspected — `extractAtoms` never creates an atom for one.
+ *  1. An attribute whose NAME is numeric, geometric, or enumerated by the HTML/SVG spec (d,
+ *     viewBox, width, height, colspan, role, type, …) is admitted without its value ever being
+ *     inspected — `extractAtoms` never creates an atom for one. A free-form, author-chosen
+ *     attribute (class, id, style, aria-*, data-v-*, …) is NOT exempt — its value is atomised like
+ *     any other content, since it is exactly the kind of human-authored string this policy exists
+ *     to check (issue #28 finding 2).
  *  2. The atom is normalised through `normalizeForComparison` in `tools/redact-fixture.ts` — the
  *     SAME pipeline the existing survivor sweeps use, so this is not a second, subtly different
  *     normaliser (see that module's docstring on why that would be a bypass).
@@ -71,34 +75,35 @@ export type Atom = {
 
 /**
  * Attribute NAMES the parser reads structurally — their VALUE is never inspected, whatever it is.
- * `aria-*` and `data-v-*` are prefix classes rather than single names.
+ *
+ * The line is principled, not convenient: exempt ONLY attributes whose values are numeric,
+ * geometric, or enumerated by the HTML/SVG spec — never an attribute whose value is a free-form,
+ * author-chosen string. `class`, `id`, `style`, every `aria-*`, and every `data-v-*` used to be
+ * exempt by NAME alone, which let a human-readable value like `aria-label="Patrick Turner"`
+ * survive redaction with no atom and no allow-list check at all (issue #28 finding 2) — ARIA
+ * labels are content exposed to assistive technology, and `id`/`class`/`style` are author-chosen
+ * free-form strings, not fixed vocabularies. Those are now atomised like any other attribute.
  */
 const STRUCTURAL_ATTR_NAMES = new Set([
-  "class",
-  "id",
-  "style",
   "d",
   "viewbox",
+  "points",
+  "transform",
   "width",
   "height",
   "colspan",
   "rowspan",
-  "role",
-  "type",
   "xmlns",
   "fill",
   "stroke",
-  "points",
-  "transform",
   "preserveaspectratio",
   "focusable",
+  "type",
+  "role",
 ]);
 
 function isStructuralAttrName(name: string): boolean {
-  const lower = name.toLowerCase();
-  return (
-    STRUCTURAL_ATTR_NAMES.has(lower) || lower.startsWith("aria-") || lower.startsWith("data-v-")
-  );
+  return STRUCTURAL_ATTR_NAMES.has(name.toLowerCase());
 }
 
 /**
@@ -122,19 +127,26 @@ export function extractAtoms(html: string): Atom[] {
     // domhandler types a <script>/<style> ELEMENT's `node.type` as "script"/"style", never "tag" —
     // an earlier `if (node.type === "tag") { if (node.tagName === "script" ...) return; }` guard
     // here could never fire, so those elements fell through to the generic children-walk below,
-    // which atomised their TEXT body (redaction already strips this — see redactHtml's
-    // SCRIPT_OR_STYLE handling — so atomising it here would only flood the vocabulary for no
-    // privacy gain) while never inspecting their ATTRIBUTES at all — a publication surface with no
-    // atom and therefore no allow-list check (issue #28 finding 2). Handling all three Element
-    // types together fixes both: attributes are atomised like any other tag's, and script/style
-    // children are explicitly skipped rather than relied upon to be absent already.
+    // which never inspected their ATTRIBUTES at all — a publication surface with no atom and
+    // therefore no allow-list check (issue #28 finding 2).
+    //
+    // A LATER fix (issue #28 finding 1) also made this walk descend into script/style CHILDREN
+    // instead of skipping them. The earlier reasoning — "redaction already strips this, so
+    // atomising it here would only flood the vocabulary for no privacy gain" — was wrong: it
+    // assumed the body reaching this policy had necessarily survived `redactHtml`'s
+    // SCRIPT_OR_STYLE regex, which only matches PAIRED `<script>...</script>`/`<style>...</style>`
+    // tags. A truncated or malformed capture like `<script>Patrick Turner` (no closing tag) never
+    // matches that regex, so its body survives redaction untouched — and the old skip then threw
+    // that survivor away unread, producing NO atom and no allow-list check at all. Atomising the
+    // text body instead costs nothing for well-formed input: a paired, already-stripped
+    // `<script></script>` has no children left to atomise, so the "no flood" property holds
+    // exactly when the premise (stripping happened) is actually true, rather than being assumed.
     if (node.type === "tag" || node.type === "script" || node.type === "style") {
       const tagPath = `${path}>${node.tagName}`;
       for (const [attrName, attrValue] of Object.entries(node.attribs)) {
         if (isStructuralAttrName(attrName)) continue;
         atoms.push({ kind: "attribute", value: attrValue, path: tagPath, attrName });
       }
-      if (node.type === "script" || node.type === "style") return;
       if ("children" in node && Array.isArray(node.children)) {
         for (const child of node.children) walk(child as AnyNode, tagPath);
       }
@@ -290,17 +302,6 @@ export function isNameShaped(value: string): boolean {
 }
 
 /**
- * Split text into its capitalised (leading-uppercase) tokens, using the SAME punctuation-stripping
- * pass as `toSkeleton` so a token extracted from a raw stand-in line ("Fairbrook, KS") matches a
- * token extracted from an already-skeletonised vocabulary entry ("Fairbrook KS") byte-for-byte.
- */
-function capitalisedTokens(text: string): string[] {
-  const skeleton = toSkeleton(text);
-  if (skeleton === "") return [];
-  return skeleton.split(" ").filter((token) => /^[A-Z]/.test(token));
-}
-
-/**
  * Load a per-source vocabulary file: one skeleton per line, `#` comments ignored, blank lines
  * reset any pending justification. A name-shaped entry (two or more consecutive capitalised
  * words — the shape a real personal name takes) must be immediately preceded by a justification
@@ -311,12 +312,23 @@ function capitalisedTokens(text: string): string[] {
  * Two justification forms exist, and they make different STRENGTHS of claim:
  *
  *  - `# reviewed[synthetic]: <reason>` asserts the entry is an invented stand-in value — a claim
- *    this loader can and does verify: every capitalised token in the entry must appear as a
- *    capitalised token somewhere in `standIns` (the committed `stand-ins.txt`, ordinarily), or the
- *    file fails to load. This is deliberately narrower than "this string looks synthetic" — a
- *    human guessing at syntheticity is exactly the failure this marker exists to make impossible
- *    (issue #28 follow-up: an unenforced "already-redacted synthetic" claim covered 14 entries
- *    that were not backed by any stand-in, several of them real Kansas City-area place names).
+ *    this loader can and does verify, by reusing `computeSkeleton` (the SAME reduction the
+ *    allow-list check itself runs, not a second, subtly different one): the entry passes iff
+ *    `computeSkeleton(entry, standIns) === ""`, i.e. eliding full stand-in PHRASES at word
+ *    boundaries (and structural runs) leaves nothing behind. This is deliberately narrower than
+ *    "this string looks synthetic" — a human guessing at syntheticity is exactly the failure this
+ *    marker exists to make impossible (issue #28 follow-up: an unenforced "already-redacted
+ *    synthetic" claim covered 14 entries that were not backed by any stand-in, several of them
+ *    real Kansas City-area place names).
+ *
+ *    An earlier version of this check verified each CAPITALISED TOKEN in the entry independently
+ *    against tokens drawn from `standIns`, rather than requiring the whole entry to be accounted
+ *    for by full stand-in phrases. Since the committed register contains both "Avery Ashby" and
+ *    "Arden Ashcroft" as separate stand-ins, that independent-token check let a spliced entry
+ *    "Avery Ashcroft" — a full name in NEITHER stand-in — pass as "synthetic", because "Avery" and
+ *    "Ashcroft" each matched a token from a DIFFERENT stand-in (issue #28 finding 3). Requiring the
+ *    full-phrase skeleton to reduce to empty closes that: "Avery Ashcroft" cannot be elided by
+ *    either "Avery Ashby" or "Arden Ashcroft" at a word boundary, so it fails to load.
  *  - `# reviewed: <reason>` is the general free-text form for every other honest classification
  *    (a real public place/club/league/section/tournament name, static UI chrome, boilerplate, …).
  *    It is not machine-checked beyond the PII sweep below, the same as before this fix — there is
@@ -330,7 +342,6 @@ export function loadVocabulary(path: string, standIns: string[] = []): Set<strin
   const raw = readFileSync(path, "utf8");
   const lines = raw.split("\n");
   const vocabulary = new Set<string>();
-  const standInTokens = new Set(standIns.flatMap((standIn) => capitalisedTokens(standIn)));
   let pendingReviewed: { kind: "synthetic" | "plain"; reason: string } | null = null;
 
   for (const rawLine of lines) {
@@ -361,13 +372,20 @@ export function loadVocabulary(path: string, standIns: string[] = []): Set<strin
       );
     }
     if (pendingReviewed?.kind === "synthetic") {
-      const missing = capitalisedTokens(line).filter((token) => !standInTokens.has(token));
-      if (missing.length > 0) {
+      // The SAME reduction the allow-list check itself runs (`computeSkeleton`), not a second,
+      // independent-token check — that independent-token form let a spliced entry like "Avery
+      // Ashcroft" pass by matching "Avery" against ONE stand-in and "Ashcroft" against a
+      // DIFFERENT one, with no stand-in ever backing the full phrase (issue #28 finding 3).
+      // Requiring the whole entry to reduce to an empty skeleton after eliding full stand-in
+      // phrases at word boundaries closes that: a real identity with mere token overlap survives.
+      const remainder = computeSkeleton(line, standIns);
+      if (remainder !== "") {
         throw new Error(
-          `synthetic-classed vocabulary entry "${line}" in ${path} contains capitalised ` +
-            `token(s) not present in stand-ins.txt: ${missing.join(", ")} — reclassify with a ` +
-            `plain "# reviewed: <reason>" line (e.g. real-public) if it is a real public name, ` +
-            `or add the missing stand-in(s) to stand-ins.txt if it is genuinely synthetic; do ` +
+          `synthetic-classed vocabulary entry "${line}" in ${path} is not fully accounted for ` +
+            `by stand-ins.txt — content not present in stand-ins: "${remainder}" remains after ` +
+            `eliding full stand-in phrases at word boundaries — reclassify with a plain ` +
+            `"# reviewed: <reason>" line (e.g. real-public) if it is a real public name, or add ` +
+            `the missing stand-in phrase(s) to stand-ins.txt if it is genuinely synthetic; do ` +
             `not weaken this check`,
         );
       }
