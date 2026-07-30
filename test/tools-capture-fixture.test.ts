@@ -1,0 +1,281 @@
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { main } from "../tools/capture-fixture.js";
+
+function tempDir(): string {
+  return mkdtempSync(join(tmpdir(), "capture-fixture-"));
+}
+
+function writeMap(dir: string, substitutions: { from: string; to: string }[]): string {
+  const path = join(dir, "map.json");
+  writeFileSync(path, JSON.stringify({ substitutions }));
+  return path;
+}
+
+function writeVocabulary(dir: string, skeletons: string[]): string {
+  const path = join(dir, "vocabulary.txt");
+  // Every entry gets its own preceding "# reviewed:" line so this helper works whether or not a
+  // given skeleton is multi-token (round-2 finding R2-3: `requiresReview` no longer cares about
+  // case, so a lowercase multi-word URL-path skeleton like "https example com page" now requires
+  // one too) — a harmless no-op for a single-token skeleton, which doesn't need it.
+  const lines = skeletons.flatMap((skeleton) => [
+    "# reviewed: test fixture content, not a real identity.",
+    skeleton,
+  ]);
+  writeFileSync(path, lines.join("\n"));
+  return path;
+}
+
+describe("capture-fixture main() — allow-list policy wiring", () => {
+  it("writes NEITHER the fixture NOR the provenance sidecar when the page carries an unclassified atom", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, [{ from: "Cory Hogan", to: "Dana Sample" }]);
+    // Empty vocabulary: "Dana Sample" elides to nothing (a stand-in), but "Unrelated Person" is a
+    // real-shaped run nobody listed and nobody vocabulary-approved — the capture must refuse.
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, "<p>Cory Hogan</p><p>Unrelated Person</p>");
+    const outPath = join(dir, "out.html");
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+
+  it("refuses the capture when the provenance sourceUrl carries an unclassified identity", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, [{ from: "Cory Hogan", to: "Dana Sample" }]);
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    // The page itself is clean: its only identity is listed, and the stand-in elides to an empty
+    // skeleton.
+    writeFileSync(filePath, "<p>Cory Hogan</p>");
+    const outPath = join(dir, "out.html");
+    // The URL carries a SECOND identity nobody remembered to list — a real name in a query
+    // parameter, exactly the second-publication-surface exposure the module docstring describes.
+    const sourceUrl = "https://example.com/profile.aspx?playername=Cory%20Hogan&other=RealName";
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        sourceUrl,
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+
+  it("writes both the fixture and the provenance sidecar when everything is allow-listed", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, [{ from: "Cory Hogan", to: "Dana Sample" }]);
+    // The page's only atom is the stand-in itself (elides to an empty skeleton), but the
+    // sourceUrl's surrounding path/query text is real, non-synthetic content that has to be
+    // vocabulary-listed for the capture to proceed.
+    const vocabularyPath = writeVocabulary(dir, ["https example com profile aspx playername"]);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, "<p>Cory Hogan</p>");
+    const outPath = join(dir, "out.html");
+
+    await main([
+      "--file",
+      filePath,
+      "--source-url",
+      "https://example.com/profile.aspx?playername=Cory%20Hogan",
+      "--map",
+      mapPath,
+      "--vocabulary",
+      vocabularyPath,
+      "--detectors",
+      "none",
+      "--out",
+      outPath,
+    ]);
+
+    expect(existsSync(outPath)).toBe(true);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(true);
+  });
+});
+
+describe("capture-fixture main() — unclosed script body bypass (issue #28 finding 1 fix)", () => {
+  it("writes NEITHER output file when an unclosed <script> body reaches the allow-list check", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    // No closing </script> tag — redactHtml's SCRIPT_OR_STYLE regex only matches PAIRED tags, so
+    // this body survives redaction untouched and must face the allow-list like any other atom.
+    writeFileSync(filePath, "<script>Patrick Turner");
+    const outPath = join(dir, "out.html");
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+});
+
+describe("capture-fixture main() — parser-discarded bytes (issue #28 round-3 finding R3-1 fix)", () => {
+  it("writes NEITHER output file when a malformed end tag carries an identity the parser discards", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    // The parser discards this orphan end tag outright; redactHtml writes the raw string
+    // unchanged, so the identity must still be caught before anything is written.
+    writeFileSync(filePath, "<div></Patrick Turner>");
+    const outPath = join(dir, "out.html");
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+});
+
+describe("capture-fixture main() — free-form attribute PII channel (issue #28 finding 2 fix)", () => {
+  it("writes NEITHER output file when an unlisted name sits in aria-label", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const vocabularyPath = writeVocabulary(dir, []);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, '<button aria-label="Patrick Turner">x</button>');
+    const outPath = join(dir, "out.html");
+
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--vocabulary",
+        vocabularyPath,
+        "--detectors",
+        "none",
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow();
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+});
+
+describe("capture-fixture main() — refuses when no vocabulary resolves (issue #28 finding 1 fix)", () => {
+  it("refuses the DEFAULT invocation (no --detectors, no --vocabulary), naming --vocabulary, and writes neither file", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, "<p>ok</p>");
+    const outPath = join(dir, "out.html");
+
+    // No --detectors flag at all — the documented default — and no --vocabulary either. This is
+    // precisely the fail-open path issue #28 exists to eliminate: it must refuse rather than
+    // silently capture with no allow-list enforced.
+    await expect(
+      main([
+        "--file",
+        filePath,
+        "--source-url",
+        "https://example.com/page",
+        "--map",
+        mapPath,
+        "--out",
+        outPath,
+      ]),
+    ).rejects.toThrow(/--vocabulary/);
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(false);
+  });
+
+  it("still works with an explicit --vocabulary and detector set 'none'", async () => {
+    const dir = tempDir();
+    const mapPath = writeMap(dir, []);
+    // The page's only atom ("42") is structural (empty skeleton); the sourceUrl's atom needs an
+    // explicit vocabulary entry, proving the allow-list is genuinely enforced on this path too.
+    const vocabularyPath = writeVocabulary(dir, ["https example com page"]);
+    const filePath = join(dir, "source.html");
+    writeFileSync(filePath, "<p>42</p>");
+    const outPath = join(dir, "out.html");
+
+    await main([
+      "--file",
+      filePath,
+      "--source-url",
+      "https://example.com/page",
+      "--map",
+      mapPath,
+      "--detectors",
+      "none",
+      "--vocabulary",
+      vocabularyPath,
+      "--out",
+      outPath,
+    ]);
+
+    expect(existsSync(outPath)).toBe(true);
+    expect(existsSync(`${outPath}.provenance.json`)).toBe(true);
+  });
+});

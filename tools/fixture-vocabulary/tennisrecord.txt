@@ -1,0 +1,482 @@
+# Skeleton vocabulary for TennisRecord fixtures (test/fixtures/tennisrecord/*.html).
+# Auto-written (non-name-shaped) entries by tools/bootstrap-vocabulary.ts, followed by
+# hand-dispositioned name-shaped entries (issue #28, task 8; round-2 whole-document
+# accounting rewrite, issue #28 round-2 reconciliation).
+
+16x16
+180x180
+1st
+2nd
+32x32
+3rd
+adheader
+adrectangle
+adrectangle2
+adsticky
+adtrailer
+Adul
+Adult
+Against
+All
+C
+canonical
+color
+container
+container1000
+container496
+containermenu
+content
+contentcenter
+Copyright
+Court
+D1
+D2
+D3
+Default
+Defaults
+description
+displayads
+Doubles
+en
+favicon 16x16 png
+favicon 32x32 png
+For
+fuse
+Games
+Gender
+GeoEdge
+Glossary
+header
+headercontainer
+height 45px
+height 60px
+hide
+icon
+keywords
+L
+large
+League
+leftrigh
+leftsticky
+link
+Local
+Location
+logo
+Loss
+M
+Male
+manifest
+Match
+Matches
+Name
+navicon
+NC
+NTRP
+Opponent
+Overall
+padding10
+padding10 responsive14
+Partner
+PM
+Rating
+Recen
+Record
+RECORD
+responsive12
+responsive14
+responsive16 leftrigh
+responsive18 padding10
+Result
+rightsticky
+S
+Section
+Sets
+Singles
+Sitemap
+small
+stickycheck
+stylesheet
+Team
+TENNIS
+Time
+time1
+Total
+Type
+UTF
+viewport
+W
+width
+Win
+WPct
+wrapper
+wrapper1000
+wrapper336to728
+wrapper35
+wrapper65
+Year
+Years
+
+# --- name-shaped skeletons below, each dispositioned by hand ---
+
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+3rd Set Tiebreak
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+3rd Set Tiebreak Record
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+All Matches
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Average Opponent Rating
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Bagel and Breadstick
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Current Playing Areas Player Rating Lists
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Current Rating History
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Current Rating Season
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Current W L Streak
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Double Bagel
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Double Breadstick
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Dynamic rating after completed match
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Estimated Dynamic Rating
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Estimated NTRP ratings computer ratings tennis ratings adult tennis junior tennis junior team tennis tennis stats tennis rankings
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+League Type
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Local Schedule
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Longest Losing Streak
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Longest Winning Streak
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Match Date
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Match History
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Match not yet calculated into rating
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Match S
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Match Site
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Match Start
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Match Type
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Modified number of games won in a standard game set that applies to 1st and 2nd sets 3rd sets are modified to game
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+No Matches Found
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Number of matches resulting in a outcome
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Number of matches resulting in either a or outcome
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Opponent s
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Player Profile
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Player rating for individual match
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Player Stats
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Postseason Record
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Projected Year End Rating
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Rating Meter
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Recent Match History
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Recent Team
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Self rated or unrated player involved in match so no match rating calculated for current player
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Set Tiebreak
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Set Tiebreak Record
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Statistical Analysis and Estimated Tennis Ratings to the 000th of a Point
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Team Profile
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+TennisRecord com
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+TennisRecord com Estimated Tennis Ratings Stats
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+View Advanced Player Stats
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+W L
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Win Loss record for 1st or 2nd sets resulting in a outcome
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Win Loss record for 3rd set tiebreakers
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Win Loss record for league matches played beyond local play
+# reviewed: a URL/query-string skeleton whose only capitalised content is the real, public USTA section name "Missouri Valley" (see the "Missouri Valley" entries below) plus the generic adult-division label and a gender code — real and public, not a personal identity. (Reclassified from a "synthetic" claim that no committed stand-in backed — issue #28 reconciliation; see docs/findings.md.)
+Adul Missouri Valley M
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult league aspx flightname Men year s
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult league index aspx
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult matchhistory aspx playername s year
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult matchhistory aspx playername year
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult matchhistory aspx playername year sid
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult matchhistory aspx year playername mt yr
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult matchhistory aspx year Rating playername
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult matchhistory aspx year Recent playername
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult matchresults aspx year mid
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult playerstats aspx playername mt yr
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult playerstats aspx playername year
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult playerstats aspx playername year mt
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult profile aspx playername
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult profile aspx playername mt yr
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult profile aspx playername s
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult ratingssection aspx
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult search aspx
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult teamprofile aspx teamname year
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult teamprofile aspx teamname year s
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+adult teamsearch aspx
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+apple touch icon png
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+https www tennisrecord com adult matchhistory aspx year playername mt yr
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+https www tennisrecord com adult playerstats aspx playername mt yr
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+https www tennisrecord com adult profile aspx playername
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+https www tennisrecord com adult teamprofile aspx teamname year s
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+images ratingbar15 png
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+images ratingmeter15 png
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+index aspx
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+Main css
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+manifest json
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+privacy aspx
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+safari pinned tab svg
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+sitemap aspx
+# reviewed: static asset/URL path segment (an image, font, tracking-pixel, or page-route path baked into the site template) — no personal data.
+stylesheets globa css
+# reviewed: a URL/query-string skeleton whose only capitalised content is the real, public USTA section name "Missouri Valley" and area name "Kansas" (see the section/area entries elsewhere in this file) plus query-parameter names and a gender code — real and public, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+adult ratings aspx sectionname Missouri Valley districtname Kansas areaname Area gender M orderby DynamicRating
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+All rights reserved
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Privacy Policy
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+This site is not affiliated endorsed or associated by or with the USTA in any manner nor are the ratings affiliated with the NTRP rating system
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+apple touch icon
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+find league
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Games Per Set
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Global site tag gtag js Google Analytics
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+header footer
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Left Side Bar Sticky
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+link padding10row
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+logo image
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+logo title
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Lookup adult and junior tennis players and stats
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+mask icon
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+menu btn
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+menu icon
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+menu menu inner pos
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+New PubLift
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+player search
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Plaza Tennis Center
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Right Side Bar Sticky
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Sticky Ad
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+team search
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+border bottom 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+box shadow none border
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+font size 12px color
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+font weight bold
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+height 135px padding top 4px border bottom 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+height 45px border bottom 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+height 45px border bottom 1px solid font weight bold
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+height 50px color background color border bottom 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+height 60px border bottom 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+height 60px border top 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+margin auto width
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+margin auto width font size 12px
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+margin top 50px
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+margin top 8px
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+padding top 5px
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align center
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align center border right 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align center vertical align top
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align left
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align left border right 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align left border right 1px solid max width 180px
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align left class
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align left font weight bold
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align left vertical align top
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align left vertical align top border right 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align right
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align right class
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+text align right vertical align top
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+vertical align top text align right width white space nowrap
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+width border bottom 1px solid
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+width device width initial scale
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+width display block
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+width text align center
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+width text align center padding 50px 0px 20px 0px
+# reviewed: an inline CSS declaration-block skeleton (property/value tokens) baked into the site template — no personal data.
+width text align left font weight bold color
+# reviewed: a city-name-plus-state-abbreviation skeleton — structurally a place name, not the two-given-name shape a person's identity takes. No committed stand-in backs any of its tokens and no corroborating evidence confirms the specific municipality, so — per policy — it is classified real-public rather than guessed into the synthetic class it cannot pass. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+Cedar Falls MO
+# reviewed: a city-name-plus-state-abbreviation skeleton — structurally a place name, not the two-given-name shape a person's identity takes. No committed stand-in backs any of its tokens and no corroborating evidence confirms the specific municipality, so — per policy — it is classified real-public rather than guessed into the synthetic class it cannot pass. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+Halden CA
+# reviewed: a city-name-plus-state-abbreviation skeleton — structurally a place name, not the two-given-name shape a person's identity takes. No committed stand-in backs any of its tokens and no corroborating evidence confirms the specific municipality, so — per policy — it is classified real-public rather than guessed into the synthetic class it cannot pass. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+Norwood MO
+# reviewed: a real, public tennis club name — corroborated by the unredacted URL slug "clayviewcountryclub" committed in the sibling tools/fixture-vocabulary/usta.txt (its "https playtennis usta com Competitions clayviewcountryclub ..." entry) — an organisation name, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+Clayview Country Club
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+container ad
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord other_header
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord other_hrec
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord other_mrec_1
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord other_mrec_2
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord ratingsmatchhistory_header
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord ratingsmatchhistory_hrec
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord ratingsmatchhistory_mrec_1
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord ratingsmatchhistory_mrec_2
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord ratingsmatchhistory_vrec_1
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord ratingsmatchhistory_vrec_2
+# reviewed: an opaque, machine-generated hash/id/token (analytics, ad-tech, AEM component, or session infrastructure identifier) with letters left after digit elision — not a personal name, no personal data.
+GA TNNSRCRD_tennisrecord sticky_footer
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container adheader
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container adheadercenter
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container adrectangle
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container adrectangle hidead
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container adsticky
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container adstickybottom
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container adtrailer
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container divider0
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container page
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container stickytopleft
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+container stickytopright
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+display none
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+display table cell vertical align middle
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+player ratings
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+responsivewidth padding10
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+resultrow responsive14
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+theme color
+# reviewed: short, lowercase technical/interaction copy or a UI control's internal identifier (a link's javascript: target, an accessibility helper string, a form-field internal name) — generic to the control, no personal data.
+wrapper responsive14
+# reviewed: a league/division-name skeleton built from the real, public "Heart of America" district abbreviation "HOA" (see the "Heart of America" entry in tools/fixture-vocabulary/usta.txt) plus generic adult/season/gender vocabulary — real and public, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+HOA Adul Over Summer 5W Men
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Missouri Valley
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Missouri Valley Kansas Area
