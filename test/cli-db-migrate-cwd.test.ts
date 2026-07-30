@@ -20,6 +20,6 @@ describe("tn db migrate (invoked from a different working directory)", () => {
       encoding: "utf8",
     });
 
-    expect(output.trim()).toBe(`db migrate status=ok path=${dbPath}`);
+    expect(output.trim()).toBe(`db migrate status=ok path="${dbPath}"`);
   });
 });

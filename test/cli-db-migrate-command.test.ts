@@ -47,6 +47,50 @@ function strictParseQuotedValue(line: string, key: string): string {
   return line.slice(start, i).replace(/\\(.)/g, "$1");
 }
 
+/**
+ * A naive-but-representative whitespace-delimited key/value parser: an unquoted
+ * value is read up to the next space (so an unescaped space in it WOULD end the
+ * value early, exactly the vulnerability an unquoted field has); a quoted value
+ * is scanned to its true closing quote. Later occurrences of a key overwrite
+ * earlier ones, mirroring how many simple log parsers behave — which is exactly
+ * what lets an injected `status=error` inside an unquoted path spoof the real
+ * `status=ok` field if that field isn't quoted.
+ */
+function parseSummaryFields(line: string): Record<string, string> {
+  const rest = line.replace(/^\S+\s+\S+\s*/, ""); // drop the "db migrate " prefix
+  const fields: Record<string, string> = {};
+  let i = 0;
+  while (i < rest.length) {
+    while (rest[i] === " ") i++;
+    if (i >= rest.length) break;
+    const eq = rest.indexOf("=", i);
+    if (eq === -1) break; // no more key=value pairs — trailing content, not a field
+    const key = rest.slice(i, eq);
+    i = eq + 1;
+    let value: string;
+    if (rest[i] === '"') {
+      i++;
+      const start = i;
+      while (i < rest.length) {
+        if (rest[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (rest[i] === '"') break;
+        i++;
+      }
+      value = rest.slice(start, i).replace(/\\(.)/g, "$1");
+      i++;
+    } else {
+      const start = i;
+      while (i < rest.length && rest[i] !== " ") i++;
+      value = rest.slice(start, i);
+    }
+    fields[key] = value;
+  }
+  return fields;
+}
+
 describe("tn db migrate (end-to-end via dispatch)", () => {
   const original = process.env.TN_DB_PATH;
 
@@ -65,8 +109,30 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
     expect(code).toBe(0);
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/^db migrate status=ok path=.+cmd\.db$/),
+      expect.stringMatching(/^db migrate status=ok path=".+cmd\.db"$/),
     );
+    logSpy.mockRestore();
+  });
+
+  it("keeps status= from being spoofed by a path containing whitespace and an embedded key=value pair", async () => {
+    // Not a contrived attack scenario: any path with a space in it — e.g. a
+    // home directory like "/Users/Randy Burgess/..." — already breaks a naive
+    // unquoted path= field with today's shape. This case also embeds a literal
+    // "status=error" to prove the quoted field can't be mistaken for a second,
+    // overriding status field by a whitespace-delimited parser.
+    const trickyDir = mkdtempSync(join(tmpdir(), "tn-"));
+    const trickyPath = join(trickyDir, "weird status=error dir", "cmd.db");
+    process.env.TN_DB_PATH = trickyPath;
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch(["db", "migrate"]);
+    expect(code).toBe(0);
+
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    const fields = parseSummaryFields(printed);
+    expect(fields.status).toBe("ok"); // not overwritten by the embedded "status=error"
+    expect(fields.path).toBe(trickyPath); // decodes back to the exact real path
+
     logSpy.mockRestore();
   });
 
@@ -123,13 +189,13 @@ describe("sanitizeSummaryValue()", () => {
     expect(sanitizeSummaryValue("/tmp/foo/bar.db")).toBe("/tmp/foo/bar.db");
   });
 
-  it("does not mangle a path containing a literal double quote", () => {
-    // sanitizeSummaryValue() is also used for the UNQUOTED `path=` field
-    // (db-migrate.ts's success line). It must not apply message-quoting escapes
-    // there: POSIX filenames may legally contain `"`, and inserting a backslash
-    // would print a path that no longer matches the file actually migrated.
-    // Quote-escaping belongs only to quoteSummaryValue(), for the quoted
-    // `message="..."` field.
+  it("does not itself escape double quotes — that responsibility belongs only to quoteSummaryValue()", () => {
+    // sanitizeSummaryValue() strips control/format characters only; quoting
+    // and backslash/quote escaping are quoteSummaryValue()'s job (it calls
+    // sanitizeSummaryValue() first, then escapes). Every db-migrate.ts summary
+    // field is quoted via quoteSummaryValue() today, but this locks down
+    // sanitizeSummaryValue()'s own narrower contract regardless of how many
+    // callers wrap it, so the two responsibilities don't blur back together.
     expect(sanitizeSummaryValue('a"b.db')).toBe('a"b.db');
   });
 

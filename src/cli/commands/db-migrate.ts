@@ -29,13 +29,15 @@ export function sanitizeSummaryValue(value: string): string {
 
 /**
  * Make a value safe to embed inside a double-quoted field of a one-line `key=value` CLI summary
- * (e.g. `message="..."`): strip control characters, then backslash-escape backslashes and double
- * quotes — backslashes FIRST, so an escaped backslash immediately preceding a quote can't be
- * misread by an escape-aware parser as also escaping that quote (an even-length backslash run
+ * (e.g. `message="..."`, `path="..."`): strip control characters, then backslash-escape backslashes
+ * and double quotes — backslashes FIRST, so an escaped backslash immediately preceding a quote can't
+ * be misread by an escape-aware parser as also escaping that quote (an even-length backslash run
  * before a quote is unambiguous only when backslashes are escaped before quotes are).
  *
- * Not used for the unquoted `path=` field: `TN_DB_PATH` may legally contain `"`, and escaping it
- * there would print a path that no longer matches the file actually migrated.
+ * Every summary field is quoted, not just error messages: an UNQUOTED value can contain a space or
+ * `=`, letting a whitespace-delimited key/value parser see extra or duplicate fields it shouldn't —
+ * including for a perfectly ordinary path once it contains a space (not even an adversarial case,
+ * e.g. any home directory whose name has one).
  */
 export function quoteSummaryValue(value: string): string {
   return sanitizeSummaryValue(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -53,7 +55,7 @@ export const dbMigrate: Command = {
       console.error(`db migrate status=error message="${quoteSummaryValue(message)}"`);
       return 1;
     }
-    console.log(`db migrate status=ok path=${sanitizeSummaryValue(dbPath())}`);
+    console.log(`db migrate status=ok path="${quoteSummaryValue(dbPath())}"`);
     return 0;
   },
 };
