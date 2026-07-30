@@ -4,6 +4,7 @@ import {
   RedactionError,
   assertRedacted,
   decodeEntities,
+  redact,
   redactHtml,
 } from "../tools/redact-fixture.js";
 
@@ -445,6 +446,32 @@ describe("Unicode normalisation forms", () => {
         detectors: [detector],
         allowed: [composed],
       }),
+    ).not.toThrow();
+  });
+});
+
+describe("never-publish identity classes", () => {
+  it.each([
+    ["mailto link", '<a href="mailto:real.person@example.com">Contact</a>'],
+    ["bare email", "<p>real.person@example.com</p>"],
+    ["tel link", '<a href="tel:+18165551234">Call</a>'],
+    ["phone number", "<p>(816) 555-1234</p>"],
+    ["street address", "<p>1234 Maple Street</p>"],
+  ])("refuses to write output containing a %s, even when the map omits it", (_label, markup) => {
+    // The map-derived sweep only catches identities someone enumerated, and the source detectors
+    // are narrow spot checks tied to one site's markup. Neither sees an email — so an unlisted
+    // identity of a kind the map was never about reached a public fixture with the tool reporting
+    // success. (Provenance: Codex adversarial review round 12 on PR #26.)
+    expect(() => redact(markup, [{ from: "Cory Hogan", to: "Dana Sample" }])).toThrow(
+      RedactionError,
+    );
+  });
+
+  it("does not fire on ordinary fixture content", () => {
+    // Negative control: match ids and SVG path coordinates are five-digit runs, and must not be
+    // mistaken for postal codes or phone numbers.
+    expect(() =>
+      redact('<a href="/adult/matchresults.aspx?year=2026&mid=20336">7-6</a><path d="m4.8 7.8 0.57232-0.58292"/>', []),
     ).not.toThrow();
   });
 });

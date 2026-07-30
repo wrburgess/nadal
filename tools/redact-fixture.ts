@@ -432,6 +432,58 @@ function decodePlus(value: string): string {
   }
 }
 
+/**
+ * Identity classes that must NEVER appear in a committed fixture, whether or not anyone listed
+ * them in the substitution map.
+ *
+ * The map-derived sweep can only catch identities someone thought to enumerate, and the
+ * source-specific detectors are narrow spot checks tied to one site's markup. Neither sees a
+ * `mailto:` link, a phone number, or a street address — so an unlisted identity of a kind the map
+ * was never about would be written to a public fixture with the tool reporting success.
+ *
+ * This closes the demonstrated classes. It does NOT make the control complete: a blacklist cannot
+ * be, which is the finding recorded against this tool and the reason the allow-list redesign is
+ * tracked as follow-up work rather than claimed as done here.
+ * (Provenance: Codex adversarial review round 12 on PR #26.)
+ */
+const NEVER_PUBLISH: { name: string; pattern: RegExp }[] = [
+  { name: "email address", pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g },
+  { name: "mailto link", pattern: /mailto:[^"'\s>]+/gi },
+  { name: "tel link", pattern: /tel:\+?[\d()\-. ]{7,}/gi },
+  { name: "phone number", pattern: /\b\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b/g },
+  {
+    name: "street address",
+    pattern:
+      /\b\d{1,6}\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Way|Ter|Terrace)\b/g,
+  },
+];
+
+/**
+ * Fail the capture if any never-publish class appears anywhere in the output — raw, decoded,
+ * rendered or percent-decoded.
+ */
+export function assertNoUnlistedPii(html: string): void {
+  const views = [html, decodeEntities(html), renderedView(html), percentDecodedView(html)];
+  const survivors: string[] = [];
+  for (const { name, pattern } of NEVER_PUBLISH) {
+    for (const view of views) {
+      const found = new RegExp(pattern.source, pattern.flags).exec(view);
+      if (found !== null) {
+        survivors.push(`${name}: ${found[0]}`);
+        break;
+      }
+    }
+  }
+  if (survivors.length > 0) {
+    throw new RedactionError(
+      `output contains identity classes that must never be committed, whether or not they are in the substitution map:\n${survivors
+        .map((s) => `  ${s}`)
+        .join("\n")}`,
+      survivors,
+    );
+  }
+}
+
 /** Redact and verify in one call — the shape every fixture capture should use. */
 export function redact(
   html: string,
@@ -439,6 +491,7 @@ export function redact(
   options?: { detectors?: Detector[]; allowed?: string[] },
 ): string {
   const out = redactHtml(html, substitutions);
+  assertNoUnlistedPii(out);
   assertRedacted(out, {
     forbidden: substitutions.map((s) => s.from),
     detectors: options?.detectors,
