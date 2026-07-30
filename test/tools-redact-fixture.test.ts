@@ -269,3 +269,24 @@ describe("semicolon-less character references", () => {
     expect(decodeEntities("&#671;")).toBe("ʟ");
   });
 });
+
+describe("replacement-introduced URL structure", () => {
+  it("refuses a replacement that introduces an ampersand the original lacked", () => {
+    // applyStyle can only reproduce encodings for characters present in the ORIGINAL, so a `&`
+    // that exists only in the replacement is emitted literally — inside `playername=Cory%20Hogan`
+    // that splits the query parameter. The earlier ampersand test passes only because `&` appears
+    // on both sides, letting the recorded `&amp;` style be reused.
+    // (Provenance: Codex adversarial review round 6 on PR #26.)
+    expect(() =>
+      redactHtml("<a href='/p?playername=Cory%20Hogan&year=2026'>x</a>", [
+        { from: "Cory Hogan", to: "A&B Club" },
+      ]),
+    ).toThrow(RedactionError);
+  });
+
+  it("still allows an ampersand present on both sides", () => {
+    const out = redactHtml("<p>A&amp;B Club</p>", [{ from: "A&B Club", to: "C&D Club" }]);
+
+    expect(out).toBe("<p>C&amp;D Club</p>");
+  });
+});

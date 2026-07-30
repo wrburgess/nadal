@@ -35,6 +35,13 @@ const ROSTER_COLUMNS: RegExp[] = [
 ];
 
 /**
+ * The physical width of a roster BODY row, which is not the header count: the `Rating` header
+ * spans two columns, so eight headers describe nine cells. Header count and row width have to be
+ * tracked separately or "exact cell count" quietly means "at least as many as there are headers".
+ */
+const ROSTER_ROW_CELLS = 9;
+
+/**
  * Parse a TennisRecord team profile: the team's league context and its roster with ratings.
  *
  * This is the roster discovery path for scouting an opposing team. TennisLink's own team pages
@@ -64,10 +71,16 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
         .find("td")
         .map((_i, td) => collapse($(td).text()))
         .get();
-      if (cells.length < ROSTER_COLUMNS.length) {
+      // EXACT, and against the ROW width rather than the header count — the two differ here
+      // because the `Rating` header carries `colspan="2"`, so eight headers describe nine cells.
+      // The earlier `>= headers.length` form accepted a body row with an extra cell inserted
+      // before the rating and silently read a different column as the rating, while the
+      // header-mutation tests never reached this guard because `assertColumns` threw first.
+      // (Provenance: Codex adversarial review round 6 on PR #26.)
+      if (cells.length !== ROSTER_ROW_CELLS) {
         throw new ParseError(
-          `roster row has ${cells.length} cells, expected at least ${ROSTER_COLUMNS.length}`,
-          `${ROSTER_SCOPE} tr`,
+          `roster row has ${cells.length} cells, expected exactly ${ROSTER_ROW_CELLS}`,
+          `${ROSTER_SCOPE} tr td`,
           source.url,
         );
       }

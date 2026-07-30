@@ -211,6 +211,19 @@ function applyStyle(value: string, style: Map<string, string>): string {
  */
 const UNSAFE_IN_REPLACEMENT = /["'<>]/;
 
+/**
+ * Characters that are structurally significant in a URL query and must not be *introduced* by a
+ * replacement.
+ *
+ * `applyStyle` can only reproduce the encoding of characters that appear in the ORIGINAL — that is
+ * where the per-character styles come from. A character present only in the replacement is
+ * emitted literally, so substituting a name for one containing `&` inside
+ * `playername=Cory%20Hogan` yields `playername=A&B` and splits the parameter. Characters already
+ * present in the original are fine: their encoding was observed and is reproduced.
+ * (Provenance: Codex adversarial review round 6 on PR #26.)
+ */
+const URL_STRUCTURAL = ["&", "=", "?", "#"];
+
 function assertSafeReplacements(substitutions: Substitution[]): void {
   const unsafe = substitutions.filter((s) => UNSAFE_IN_REPLACEMENT.test(s.to));
   if (unsafe.length > 0) {
@@ -219,6 +232,20 @@ function assertSafeReplacements(substitutions: Substitution[]): void {
         .map((s) => `  ${s.to}`)
         .join("\n")}`,
       unsafe.map((s) => s.to),
+    );
+  }
+
+  const introduced = substitutions.flatMap((s) =>
+    URL_STRUCTURAL.filter((ch) => s.to.includes(ch) && !s.from.includes(ch)).map(
+      (ch) => `${s.from} -> ${s.to} (introduces "${ch}")`,
+    ),
+  );
+  if (introduced.length > 0) {
+    throw new RedactionError(
+      `a replacement may not introduce ${URL_STRUCTURAL.join(" ")} that the original lacks — the encoding to write it back with is unknown, so it would be emitted literally and could split a URL query:\n${introduced
+        .map((entry) => `  ${entry}`)
+        .join("\n")}`,
+      introduced,
     );
   }
 }

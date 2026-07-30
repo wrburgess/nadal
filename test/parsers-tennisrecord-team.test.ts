@@ -96,3 +96,20 @@ describe("parseTennisRecordTeam — column contract", () => {
     expect(() => parseTennisRecordTeam(swapped, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseTennisRecordTeam — body-row width", () => {
+  it("throws when a body cell is inserted while the headers are left alone", () => {
+    // The header-mutation tests above never reach this guard: assertColumns throws first, so they
+    // pass for a reason other than the one their titles claim about row decoding. This mutation
+    // leaves the headers untouched and shifts only the body, which is the case that silently
+    // changed a player's stored rating.
+    // (Provenance: Codex adversarial review round 6 on PR #26.)
+    const extraCell = fixture.html.replace(
+      '<td style="text-align:left;" class="padding10"><a class="link" href="/adult/profile.aspx?playername=Ellis Eastwick">Ellis Eastwick</a></td>',
+      '<td>x</td><td style="text-align:left;" class="padding10"><a class="link" href="/adult/profile.aspx?playername=Ellis Eastwick">Ellis Eastwick</a></td>',
+    );
+
+    expect(extraCell).not.toBe(fixture.html);
+    expect(() => parseTennisRecordTeam(extraCell, fixture.source)).toThrow(ParseError);
+  });
+});
