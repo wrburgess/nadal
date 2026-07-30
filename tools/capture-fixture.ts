@@ -19,7 +19,7 @@
 
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { redactHtml, assertRedacted, type Detector, type Substitution } from "./redact-fixture.js";
+import { redact, redactHtml, type Detector, type Substitution } from "./redact-fixture.js";
 
 /**
  * Per-source structural sweeps. Each pattern captures an identity the site advertises in its own
@@ -96,12 +96,9 @@ async function main(argv: string[]): Promise<void> {
     throw new Error("one of --url or --file is required");
   }
 
-  const redacted = redactHtml(raw, substitutions);
-  assertRedacted(redacted, {
-    forbidden: substitutions.map((s) => s.from),
-    detectors,
-    allowed: substitutions.map((s) => s.to),
-  });
+  // redact() is redact-then-verify in one call: no capture path can write a fixture that has not
+  // passed both the forbidden-value sweep and the structural detector sweep.
+  const redacted = redact(raw, substitutions, { detectors });
 
   // The URL is redacted with the same map as the page. A TennisRecord URL carries the player's
   // name and a USTA profile URL carries the uaid, so recording it verbatim would re-publish

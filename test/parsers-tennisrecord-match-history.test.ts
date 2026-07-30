@@ -57,6 +57,27 @@ describe("parseMatchHistory", () => {
     ]);
   });
 
+  it("does not mistake an early retirement for a match tiebreak", () => {
+    // `1-0` identifies a match tiebreak only because a tiebreak replaces the DECIDING set. The
+    // same notation in a first set is a retirement, and flagging it would silently remove a real
+    // (if short) set from every games-won ratio computed downstream.
+    const retired = fixture.html.replace(">4-6<br>7-5<br>1-0<", ">1-0<");
+    const parsed = parseMatchHistory(retired, fixture.source);
+
+    expect(parsed[4]?.sets).toEqual([{ games: [1, 0], matchTiebreak: false }]);
+  });
+
+  it("throws on an unreadable W/L cell rather than recording a loss", () => {
+    // "Anything that isn't a W is an L" is the tempting one-liner, and it converts a renamed or
+    // emptied cell into a silent defeat that still balances and still renders.
+    const blanked = fixture.html.replace(
+      '<td style="text-align:center; vertical-align: top;">W</td>',
+      '<td style="text-align:center; vertical-align: top;"></td>',
+    );
+
+    expect(() => parseMatchHistory(blanked, fixture.source)).toThrow(ParseError);
+  });
+
   it("reports an unrated player as null, never as zero", () => {
     // TennisRecord prints `(-----)` for a player with no dynamic rating yet. A 0 here would drag
     // every average-opponent-rating in a dossier downward while looking like real data.

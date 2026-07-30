@@ -113,7 +113,7 @@ function parseRow(
     discipline: disciplineFor(slot, source),
     partner: parsePlayers(lines($, cell(4)))[0] ?? null,
     opponents: defaulted ? [] : parsePlayers(opponentParts),
-    result: /^w/i.test(collapse(cell(6).text())) ? "W" : "L",
+    result: parseResult(collapse(cell(6).text()), source),
     sets: parseSets(lines($, cell(7))),
     defaulted,
     matchRating: parseNumber(rawMatchRating),
@@ -133,6 +133,23 @@ function disciplineFor(slot: string, source: SourceRef): "singles" | "doubles" {
   throw new ParseError(
     `unrecognised court slot "${slot}"`,
     `${DESKTOP_TABLE} td:nth-child(4)`,
+    source.url,
+  );
+}
+
+/**
+ * `W` or `L` — and nothing else.
+ *
+ * Treating "anything that isn't a W" as a loss is the tempting one-liner, and it turns an empty or
+ * renamed cell into a silent defeat: the record still balances, the dossier still renders, and the
+ * player's win rate is simply wrong. A result that cannot be read is a page that changed.
+ */
+function parseResult(raw: string, source: SourceRef): "W" | "L" {
+  const value = raw.toUpperCase();
+  if (value === "W" || value === "L") return value;
+  throw new ParseError(
+    `unreadable match result "${raw}"`,
+    `${DESKTOP_TABLE} td:nth-child(7)`,
     source.url,
   );
 }
@@ -159,9 +176,12 @@ function parsePlayers(parts: string[]): PlayerRef[] {
 /**
  * `6-4`, `5-7`, `1-0` → two sets and a match tiebreak.
  *
- * A 10-point match tiebreak is printed as a one-game "set". No real set can be won with a single
- * game, so a set whose winner has at most one game is the tiebreak — flagged rather than dropped,
- * because a dossier that counts it as a set understates every games-won ratio it computes.
+ * A 10-point match tiebreak is printed as a one-game "set", and a dossier that counts it as a set
+ * understates every games-won ratio it computes. But "at most one game" alone is not enough to
+ * identify one: a retirement early in the FIRST set prints the same way (this fixture already
+ * carries a mid-set retirement, `6-7 3-1 1-0`), and calling that a tiebreak would be a false
+ * positive on a real page. A match tiebreak replaces the deciding set, so it can only be the third
+ * or later — that position is what separates the two.
  */
 function parseSets(parts: string[]): SetScore[] {
   const sets: SetScore[] = [];
@@ -169,7 +189,7 @@ function parseSets(parts: string[]): SetScore[] {
     const match = /^(\d+)\s*-\s*(\d+)$/.exec(part);
     if (match === null) continue;
     const games: [number, number] = [Number(match[1]), Number(match[2])];
-    sets.push({ games, matchTiebreak: Math.max(games[0], games[1]) <= 1 });
+    sets.push({ games, matchTiebreak: sets.length >= 2 && Math.max(games[0], games[1]) <= 1 });
   }
   return sets;
 }

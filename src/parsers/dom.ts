@@ -34,11 +34,6 @@ export function lines($: CheerioAPI, el: Cheerio<AnyNode>): string[] {
   return out.map(collapse).filter((line) => line !== "");
 }
 
-/** Whitespace-collapsed text of an element. */
-export function text($: CheerioAPI, el: Cheerio<AnyNode>): string {
-  return collapse(el.text());
-}
-
 export function collapse(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
