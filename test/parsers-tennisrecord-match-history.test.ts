@@ -257,3 +257,23 @@ describe("parseMatchHistory — blank source match id", () => {
     expect(() => parseMatchHistory(blankId, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseMatchHistory — mobile date correlation", () => {
+  it.each([
+    ["blank", ""],
+    ["malformed", "not a date"],
+  ])("throws when a mobile block's date is %s, rather than falling back to count-only", (_l, replacement) => {
+    // The mobile date is the ONLY thing verifying that the two renderings line up. Treating it as
+    // best-effort and skipping the comparison left count-only correlation, under which a reorder
+    // silently attributes every opponent team after the divergence to the wrong match — while the
+    // parser's own comment claimed position was verified by matching dates.
+    // (Provenance: Codex adversarial review round 10 on PR #26.)
+    const broken = fixture.html.replace(
+      '<th style="text-align:left;" class="padding10">11/15/2025</th>',
+      `<th style="text-align:left;" class="padding10">${replacement}</th>`,
+    );
+
+    expect(broken).not.toBe(fixture.html);
+    expect(() => parseMatchHistory(broken, fixture.source)).toThrow(ParseError);
+  });
+});

@@ -214,13 +214,25 @@ describe("assertRedacted", () => {
   });
 });
 
+/**
+ * Every tag with EVERY attribute, not just its class.
+ *
+ * Comparing tag/class pairs alone let a redaction that silently deleted an unrelated attribute
+ * pass a test named "structurally identical" — the base64 pattern consumed the separator before
+ * the next attribute in an unquoted value, and `alt` simply vanished.
+ * (Provenance: Codex adversarial review round 10 on PR #26.)
+ */
 function describeStructure(html: string): string[] {
   const $ = cheerio.load(html);
   const out: string[] = [];
   $("*").each((_, el) => {
     if (el.type !== "tag") return;
     if (el.tagName === "script" || el.tagName === "style") return;
-    out.push(`${el.tagName}.${el.attribs["class"] ?? ""}`);
+    // Attribute NAMES plus the class VALUE. Names catch an attribute silently deleted; class
+    // values are compared because selectors are written against them. Other attribute values are
+    // expected to change — substituting them is the entire point of redaction.
+    const names = Object.keys(el.attribs).sort().join(" ");
+    out.push(`${el.tagName}[${names}].${el.attribs["class"] ?? ""}`);
   });
   return out;
 }
@@ -357,5 +369,37 @@ describe("comment-node identities", () => {
         forbidden: ["Cory Hogan"],
       }),
     ).not.toThrow();
+  });
+});
+
+describe("zero-width separators", () => {
+  it.each([
+    ["text", "<p>Cory&ZeroWidthSpace;Hogan</p>"],
+    ["attribute", '<a title="Cory&ZeroWidthSpace;Hogan">x</a>'],
+    ["comment", "<div><!-- Cory&ZeroWidthSpace;Hogan --></div>"],
+  ])("catches an identity split by a zero-width space in %s", (_label, markup) => {
+    // U+200B is not JavaScript whitespace, so collapsing `\s+` leaves it in place: the decoded
+    // text matches neither the raw pattern nor `Cory Hogan`, while rendering as the name. Format
+    // characters are normalised to a space before the collapse. (The separator is written as an
+    // entity in the fixtures above rather than as a literal, which lint rightly rejects.)
+    // (Provenance: Codex adversarial review round 10 on PR #26, rated critical.)
+    expect(() => assertRedacted(markup, { forbidden: ["Cory Hogan"] })).toThrow(RedactionError);
+  });
+});
+
+describe("base64 stripping and attribute boundaries", () => {
+  it("does not swallow the attribute that follows an unquoted data URI", () => {
+    // The payload class previously included `\s`, so the match ran past the end of an unquoted
+    // value and ate the separator: `alt` was silently deleted from the fixture.
+    const out = redactHtml("<img src=data:image/png;base64,QUJD alt=logo>", []);
+
+    expect(out).toContain("alt=logo");
+    expect(out).toContain("data:image/png;base64,REDACTED");
+  });
+
+  it("keeps every attribute, not merely every tag and class", () => {
+    const page = '<div id="a" data-x="1"><img src="data:image/png;base64,QUJD" alt="logo"></div>';
+
+    expect(describeStructure(redactHtml(page, []))).toEqual(describeStructure(page));
   });
 });

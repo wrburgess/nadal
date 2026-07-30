@@ -92,7 +92,7 @@ export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRe
     });
 }
 
-type OpponentTeam = { name: string; section: string | null; playedOn: string | null };
+type OpponentTeam = { name: string; section: string | null; playedOn: string };
 
 /**
  * The mobile block renders one small table per match, linking both teams — the profiled player's
@@ -120,11 +120,20 @@ function parseOpponentTeams($: CheerioAPI, source: SourceRef): OpponentTeam[] {
       if (name === undefined || name === "") {
         throw new ParseError("mobile match block names no opponent team", MOBILE_MATCH, source.url);
       }
-      return {
-        name,
-        section: parts[1] ?? null,
-        playedOn: parseUsDate($block.find("th").first().text()),
-      };
+      // The date is REQUIRED, not best-effort. It is the only thing that verifies the positional
+      // correlation with the desktop table; skipping the comparison when it fails to parse leaves
+      // count-only matching, under which a reordering silently attributes every opponent team
+      // after the divergence to the wrong match.
+      // (Provenance: Codex adversarial review round 10 on PR #26.)
+      const playedOn = parseUsDate($block.find("th").first().text());
+      if (playedOn === null) {
+        throw new ParseError(
+          "mobile match block has no parseable date to correlate on",
+          `${MOBILE_MATCH} th`,
+          source.url,
+        );
+      }
+      return { name, section: parts[1] ?? null, playedOn };
     })
     .get();
 }
@@ -153,7 +162,7 @@ function parseRow(
       source.url,
     );
   }
-  if (opponentTeam.playedOn !== null && opponentTeam.playedOn !== playedOn) {
+  if (opponentTeam.playedOn !== playedOn) {
     throw new ParseError(
       `renderings disagree at ${playedOn}: mobile block has ${opponentTeam.playedOn}`,
       `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,

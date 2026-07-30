@@ -36,7 +36,12 @@ export class RedactionError extends Error {
 }
 
 const SCRIPT_OR_STYLE = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
-const BASE64_DATA_URI = /data:[a-z0-9.+/-]+;base64,[A-Za-z0-9+/=\s]+/gi;
+// The payload class deliberately EXCLUDES whitespace. Including `\s` made the match run past the
+// end of an unquoted attribute value and eat the separator before the next attribute, so
+// `<img src=data:image/png;base64,QUJD alt=logo>` became `...REDACTEDalt=logo` — silently deleting
+// `alt` and changing the markup this tool exists to preserve.
+// (Provenance: Codex adversarial review round 10 on PR #26.)
+const BASE64_DATA_URI = /data:[a-z0-9.+/-]+;base64,[A-Za-z0-9+/=]+/gi;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -125,8 +130,25 @@ function renderedView(html: string): string {
   };
   for (const node of $.root().toArray()) walk(node as AnyNode);
 
-  return parts.join("\n").replace(/\s+/g, " ");
+  // Zero-width and format characters are NOT JavaScript whitespace, so `\s+` leaves them in
+  // place: cheerio decodes `&ZeroWidthSpace;` to U+200B, and `Cory\u200BHogan` then matches
+  // neither the raw pattern nor `Cory Hogan`. Mapping the whole Cf category to a space first
+  // makes an invisible separator behave like the visible one it imitates.
+  // (Provenance: Codex adversarial review round 10 on PR #26, rated critical.)
+  return parts
+    .join("\n")
+    .replace(FORMAT_CHARS, " ")
+    .replace(/\s+/g, " ");
 }
+
+/**
+ * Unicode format characters (category Cf) plus the zero-width set, which render as nothing and
+ * can therefore sit invisibly inside an identity.
+ */
+const FORMAT_CHARS = new RegExp(
+  `[${String.fromCharCode(0x5c)}p{Cf}${String.fromCharCode(0x200b)}-${String.fromCharCode(0x200d)}${String.fromCharCode(0xfeff)}${String.fromCharCode(0x2060)}]`,
+  "gu",
+);
 
 /**
  * Match one identity in **any** encoding, including the mixed ones real pages emit.
