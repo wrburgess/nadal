@@ -9,5 +9,5 @@
     "types": ["node"],
     "outDir": "dist"
   },
-  "include": ["src", "test", "vitest.config.ts", "eslint.config.js", "drizzle.config.ts"]
+  "include": ["src", "test", "tools", "vitest.config.ts", "eslint.config.js", "drizzle.config.ts"]
 }

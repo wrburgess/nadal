@@ -1,0 +1,118 @@
+import * as cheerio from "cheerio";
+import type { CheerioAPI } from "cheerio";
+import { collapse, parseNumber, parseUsDate, tableWithCellText } from "../dom.js";
+import { parseHeaderFrom } from "./header.js";
+import {
+  ParseError,
+  tennisRecordProfileSchema,
+  type RecentTeam,
+  type SeasonRecord,
+  type SourceRef,
+  type TennisRecordProfile,
+} from "../types.js";
+
+const PLAYING_AREAS_LABEL = "Current Playing Areas (Player Rating Lists)";
+const RECENT_TEAM_LABEL = "Recent Team";
+const SEASON_LABEL = "All Matches";
+
+/**
+ * Parse a TennisRecord player profile: where the player currently rates, which teams they have
+ * appeared for, and their per-season aggregate record.
+ *
+ * The recent-team list is what makes cross-league scouting possible — the same player shows up
+ * under Adult 18+ and Adult 40+, and § Domain model requires both to be ingested with their
+ * league context intact.
+ */
+export function parseTennisRecordProfile(html: string, source: SourceRef): TennisRecordProfile {
+  const $ = cheerio.load(html);
+
+  return tennisRecordProfileSchema.parse({
+    header: parseHeaderFrom($, source),
+    playingAreas: parsePlayingAreas($),
+    recentTeams: parseRecentTeams($),
+    seasonRecords: parseSeasonRecords($, source),
+  });
+}
+
+function parsePlayingAreas($: CheerioAPI): string[] {
+  const table = tableWithCellText($, PLAYING_AREAS_LABEL);
+  if (table === null) return [];
+  return table
+    .find("tr")
+    .slice(1)
+    .map((_, tr) => collapse($(tr).text()))
+    .get()
+    .filter((value) => value !== "");
+}
+
+function parseRecentTeams($: CheerioAPI): RecentTeam[] {
+  const table = tableWithCellText($, RECENT_TEAM_LABEL);
+  if (table === null) return [];
+  return table
+    .find("tr")
+    .slice(1)
+    .map((_, tr) => {
+      const cells = $(tr)
+        .find("td")
+        .map((_i, td) => collapse($(td).text()))
+        .get();
+      return {
+        teamName: cells[0] ?? "",
+        leagueType: cells[1] ?? null,
+        section: cells[2] ?? null,
+        gender: cells[3] ?? null,
+        ratingLevel: cells[4] ?? null,
+        matchStartOn: parseUsDate(cells[5]),
+      };
+    })
+    .get()
+    .filter((team) => team.teamName !== "");
+}
+
+/**
+ * The aggregate table: one row per year, then a totals row.
+ *
+ * The totals row is kept as its own record rather than recomputed from the year rows. It is the
+ * site's own claim, and a disagreement between it and the years is a signal the page changed —
+ * information that silently reconciling the two would destroy.
+ */
+function parseSeasonRecords($: CheerioAPI, source: SourceRef): SeasonRecord[] {
+  const table = tableWithCellText($, SEASON_LABEL);
+  if (table === null) {
+    throw new ParseError(
+      "season record table not found",
+      `th:contains("${SEASON_LABEL}")`,
+      source.url,
+    );
+  }
+
+  return table
+    .find("tr")
+    .slice(1)
+    .map((_, tr) => {
+      const cells = $(tr)
+        .find("td")
+        .map((_i, td) => collapse($(td).text()))
+        .get();
+      // Columns: year, then (total, win, loss, pct) for matches / sets / games, then defaults.
+      // The percentages are derived and deliberately dropped — recomputing them from the counts
+      // is exact, whereas storing a rounded copy invites the two to disagree.
+      return {
+        year: cells[0] ?? "",
+        matches: counts(cells, 1),
+        sets: counts(cells, 5),
+        games: counts(cells, 9),
+        defaults: parseNumber(cells[13]) ?? 0,
+      };
+    })
+    .get()
+    .filter((row) => row.year !== "");
+}
+
+function counts(cells: string[], at: number): { total: number; wins: number; losses: number } {
+  return {
+    total: parseNumber(cells[at]) ?? 0,
+    wins: parseNumber(cells[at + 1]) ?? 0,
+    losses: parseNumber(cells[at + 2]) ?? 0,
+  };
+}
