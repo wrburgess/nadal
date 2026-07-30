@@ -20,19 +20,21 @@ commands during Customization** (e.g. a Rails host: lint `bundle exec rubocop -a
 a JS/TS host: lint `npm run lint`, tests `npm test`, dependency audit `npm audit`). A **Stack Overlay**
 such as `ace-rails` can ship a ready-to-paste command set for its stack.
 
-nadal's real command set (a JS/TS host), replacing the shipped ace config-repo rows during
-Customization:
+nadal's Host App gate, replacing the shipped ace config-repo rows during Customization. Only
+**currently-runnable** checks are registered as rows: [`AGENTS.md`](AGENTS.md) → *Quality gate*
+requires every `invoke`/`verify` run to run every row here, so listing a command with no backing
+script would exit "Missing script" on every lifecycle run from Task 3 onward, never reaching green —
+not something an "effective gate" caveat in prose can override.
 
 | Purpose | Command |
 |---------|---------|
-| Typecheck | `npm run typecheck` |
-| Lint | `npm run lint` |
-| Tests + coverage floor | `npm run test:coverage` |
 | Structural parity | `ruby scripts/parity_check.rb` |
-| CLI grammar parity | `npm test -- test/cli-grammar-parity.test.ts` |
 
-The `npm run` rows are not yet backed by a `package.json` — Tasks 4–6 of the Foundation plan create
-those commands. Until then, *Structural parity* is the effective gate.
+**Pending — Tasks 4–6 of the Foundation plan add these rows once `package.json` and the scripts
+exist**, nadal's real command set for a JS/TS host: Typecheck `npm run typecheck`; Lint
+`npm run lint`; Tests + coverage floor `npm run test:coverage`; CLI grammar parity
+`npm test -- test/cli-grammar-parity.test.ts`. Whichever task adds the first one adds it as a live row
+above, not here.
 
 A check whose command runs but has nothing applicable to inspect (e.g. no application code to lint) is
 reported `pass`/`not_run` with a stated reason — checks are **not applicable, not skipped**, so rigor
