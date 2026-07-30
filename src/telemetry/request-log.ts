@@ -34,8 +34,12 @@ export async function logRequest(
     } finally {
       sqlite.close();
     }
-  } catch {
-    // Telemetry must never break the request itself (e.g. before first migrate).
+  } catch (err) {
+    // Telemetry must never break the request itself (e.g. before first migrate) — the wrapped
+    // fn's own code/outcome above is untouched. But swallowing this with zero signal means a
+    // stopped capture (SQLITE_BUSY, a dropped table, a read-only volume) could go undiscovered
+    // forever, so surface it to stderr as one diagnostic line.
+    console.error(`telemetry: request_log write failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   return code;
 }

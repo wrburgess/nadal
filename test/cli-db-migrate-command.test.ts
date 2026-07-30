@@ -1,9 +1,10 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import * as client from "../src/db/client.js";
+import { useTnDbPath } from "./helpers/tn-db.js";
 
 // Unicode line-break characters that are NOT ASCII C0 controls: NEL, Line
 // Separator, Paragraph Separator. Some terminals/log consumers render or
@@ -57,16 +58,7 @@ function parseSummaryFields(line: string): Record<string, string> {
 }
 
 describe("tn db migrate (end-to-end via dispatch)", () => {
-  const original = process.env.TN_DB_PATH;
-
-  beforeEach(() => {
-    process.env.TN_DB_PATH = join(mkdtempSync(join(tmpdir(), "tn-")), "cmd.db");
-  });
-
-  afterEach(() => {
-    if (original === undefined) delete process.env.TN_DB_PATH;
-    else process.env.TN_DB_PATH = original;
-  });
+  useTnDbPath("cmd.db");
 
   it("applies migrations, prints one status=ok summary line, and exits 0", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -113,9 +105,19 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
     const code = await dispatch(["db", "migrate"]);
     expect(code).toBe(1);
     expect(logSpy).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy).toHaveBeenCalledWith(
+    // The command's own one-line status=error summary is call #1 — that "one deterministic
+    // summary line" contract is unchanged. Telemetry's own openDb() (inside logRequest's
+    // wrapper, attempting to persist this very request) hits the exact same broken path and
+    // throws too; per item 5's contract that failure is now reported as a second, distinct
+    // stderr diagnostic instead of vanishing into a bare `catch {}`.
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      1,
       expect.stringMatching(/^db migrate status=error message=".+"$/),
+    );
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("telemetry: request_log write failed"),
     );
     logSpy.mockRestore();
     errorSpy.mockRestore();
@@ -133,12 +135,19 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
     const code = await dispatch(["db", "migrate"]);
 
     expect(code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    // Call #1 is the command's own summary (asserted below for Unicode stripping). Because
+    // runMigrations() is mocked to throw before any real migration runs, request_log never gets
+    // created either — so telemetry's own insert attempt (inside logRequest's wrapper) also
+    // fails, and per item 5's contract that surfaces as call #2 rather than being swallowed.
+    expect(errorSpy).toHaveBeenCalledTimes(2);
     const printed = errorSpy.mock.calls[0]?.[0] as string;
     expect(printed).toMatch(/^db migrate status=error message=".+"$/);
     expect(printed).not.toContain(LINE_SEPARATOR);
     expect(printed).not.toContain(PARAGRAPH_SEPARATOR);
     expect(printed).not.toContain(NEL);
+    expect(errorSpy.mock.calls[1]?.[0]).toEqual(
+      expect.stringContaining("telemetry: request_log write failed"),
+    );
 
     runMigrationsSpy.mockRestore();
     errorSpy.mockRestore();

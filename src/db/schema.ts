@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const players = sqliteTable("players", {
@@ -38,7 +39,15 @@ export const teamMemberships = sqliteTable("team_memberships", {
   playerId: integer("player_id").notNull().references(() => players.id),
   teamId: integer("team_id").notNull().references(() => teams.id),
   eventId: integer("event_id").references(() => events.id),
-}, (t) => [uniqueIndex("membership_unique").on(t.playerId, t.teamId, t.eventId)]);
+}, (t) => [
+  uniqueIndex("membership_unique").on(t.playerId, t.teamId, t.eventId),
+  // SQLite treats NULLs as distinct even under a UNIQUE index/constraint, so the 3-column index
+  // above fails open when event_id is NULL — the NORMAL path for a roster pulled outside an
+  // event, not an edge case. A partial unique index scoped to `event_id IS NULL` closes that gap
+  // without changing behavior for the non-NULL (event-scoped) case, which the index above still
+  // covers.
+  uniqueIndex("membership_unique_no_event").on(t.teamId, t.playerId).where(sql`event_id IS NULL`),
+]);
 
 export const teamMatches = sqliteTable("team_matches", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -101,5 +110,5 @@ export const requestLog = sqliteTable("request_log", {
   args: text("args"),                             // sanitized JSON
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"),
-  outcome: text("outcome"),                       // ok | error:<class>
+  outcome: text("outcome"),                       // ok | error:<class> | error:exit-<code>
 });

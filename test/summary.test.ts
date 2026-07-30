@@ -61,4 +61,14 @@ describe("quoteSummaryValue()", () => {
     const line = `db migrate status=error message="${quoteSummaryValue(raw)}"`;
     expect(strictParseQuotedValue(line, "message")).toBe(raw);
   });
+
+  it("round-trips a trailing space in a path through the quoted summary field", () => {
+    // The concrete bug this guards: TN_DB_PATH="/tmp/x.db " (trailing space, legal POSIX) must
+    // not come out the other side as "/tmp/x.db" — that would misname the file that was actually
+    // created. Every summary field is quoted, so the edge space is unambiguous once inside the
+    // quotes; it must survive quoteSummaryValue() intact.
+    const raw = "/tmp/x.db ";
+    const line = `db migrate status=ok path="${quoteSummaryValue(raw)}"`;
+    expect(strictParseQuotedValue(line, "path")).toBe(raw);
+  });
 });

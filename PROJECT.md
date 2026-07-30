@@ -34,9 +34,10 @@ not something an "effective gate" caveat in prose can override.
 | CLI grammar parity | `npm test -- test/cli-grammar-parity.test.ts` |
 | Tests + coverage floor | `npm run test:coverage` |
 
-All rows are live: Task 6 turned the coverage floor green (98.2% lines / 87.5% functions against
-the 75% floor, `src/cli/main.ts` included, no vitest coverage exclusion needed) by adding real tests
-that exercise `src/db/schema.ts` and `src/cli/commands/db-migrate.ts` end-to-end via `openDb`/
+All rows are live: the coverage floor is enforced at 75% lines / 75% functions via
+`vitest.config.ts` thresholds, with every file under `src/` in scope and no vitest coverage
+exclusions — `src/cli/main.ts` included. Task 6 turned that floor green by adding real tests that
+exercise `src/db/schema.ts` and `src/cli/commands/db-migrate.ts` end-to-end via `openDb`/
 `runMigrations` and `dispatch(["db", "migrate"])`, rather than padding with tautological tests — see
 the Task 6 report.
 

@@ -1,25 +1,17 @@
 import Database from "better-sqlite3";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runMigrations } from "../src/db/client.js";
 import { logRequest } from "../src/telemetry/request-log.js";
+import { useTnDbPath } from "./helpers/tn-db.js";
 
-let dbPath: string;
+const fixture = useTnDbPath();
 
 beforeEach(() => {
-  dbPath = join(mkdtempSync(join(tmpdir(), "tn-")), "test.db");
-  process.env.TN_DB_PATH = dbPath;
-  runMigrations(dbPath);
-});
-
-afterEach(() => {
-  delete process.env.TN_DB_PATH;
+  runMigrations(fixture.path());
 });
 
 function rows() {
-  const sqlite = new Database(dbPath);
+  const sqlite = new Database(fixture.path());
   const r = sqlite.prepare("SELECT * FROM request_log").all() as Array<Record<string, unknown>>;
   sqlite.close();
   return r;
@@ -71,19 +63,27 @@ describe("request telemetry", () => {
     // insert fails post-open — mirrors db-client-error-handling.test.ts's
     // seed-a-conflict approach, exercising close-on-error rather than the
     // before-first-migrate swallow path the other tests cover.
-    const seed = new Database(dbPath);
+    const seed = new Database(fixture.path());
     seed.exec("DROP TABLE request_log");
     seed.close();
 
     const closeSpy = vi.spyOn(Database.prototype, "close");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const code = await logRequest("cli", "db migrate", [], async () => 0);
       expect(code).toBe(0);
       expect(closeSpy).toHaveBeenCalledTimes(1);
       const ctx = closeSpy.mock.contexts[0] as InstanceType<typeof Database>;
       expect(ctx.open).toBe(false);
+      // Not breaking the wrapped request is correct and stays (code is still 0 above) — but a
+      // telemetry write failure (dropped table, SQLITE_BUSY, a read-only volume, ...) must not
+      // vanish with zero signal: it needs to reach stderr so it's discoverable, not silently
+      // swallowed forever.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("telemetry: request_log write failed"));
     } finally {
       closeSpy.mockRestore();
+      errorSpy.mockRestore();
     }
   });
 });

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `membership_unique_no_event` ON `team_memberships` (`team_id`,`player_id`) WHERE event_id IS NULL;

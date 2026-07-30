@@ -65,6 +65,17 @@ describe("sanitizeValue()", () => {
     expect(sanitizeValue(withBidiControls)).toBe("a b c");
   });
 
+  it("preserves leading/trailing whitespace instead of trimming it", () => {
+    // A path like "/tmp/x.db " (trailing space) is legal POSIX — TN_DB_PATH could hold one. Every
+    // summary field that carries a sanitizeValue()-derived value is quoted (quoteSummaryValue()),
+    // so edge spaces inside the quotes are unambiguous; trimming them here silently misnames the
+    // file the caller actually created (the DB gets created at the untrimmed path, but the summary
+    // would print the trimmed one). Control/bidi replacement (each stripped char -> one space) is
+    // unchanged — this only concerns whitespace that was already there, not whitespace introduced
+    // by replacement.
+    expect(sanitizeValue("  /tmp/x.db  ")).toBe("  /tmp/x.db  ");
+  });
+
   it("strips a real RTL override embedded in a path so it cannot visually spoof the success line", () => {
     // The concrete case Codex's review flagged: sanitizeValue preserved
     // a path with an RTL-override character embedded before ".db status=ok"
