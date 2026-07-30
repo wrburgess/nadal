@@ -1,0 +1,49 @@
+name: ci
+
+# Structural parity (`ruby scripts/parity_check.rb`) is intentionally NOT a job here — it already
+# runs in the vendored `.github/workflows/parity.yml` (ace baseline, untouched by nadal) on every
+# push and pull_request. Duplicating it here would burn a second runner for zero new signal and,
+# because parity.yml is vendored, would silently diverge from it across future ace re-syncs.
+#
+# Coverage mapping — PROJECT.md § Quality Checks rows to the step that covers each one, so an
+# absent row here reads as "covered elsewhere," never as "not covered":
+#   Structural parity        -> ruby scripts/parity_check.rb   (separate vendored workflow: parity.yml)
+#   Typecheck                -> npm run typecheck               (this file, `app` job)
+#   Lint                     -> npm run lint                     (this file, `app` job)
+#   CLI grammar parity       -> npm test -- test/cli-grammar-parity.test.ts
+#                                (subsumed by `npm run test:coverage` below, which runs the whole
+#                                 vitest suite including this test file — a second explicit
+#                                 invocation would double-run the suite for no new signal)
+#   Tests + coverage floor    -> npm run test:coverage           (this file, `app` job; the floor
+#                                 itself — lines 75% / functions 75% — is enforced automatically by
+#                                 vitest.config.ts:9, not by anything in this workflow)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Drizzle schema-drift check
+        # `git diff --exit-code drizzle/` alone is NOT sufficient here: it only inspects TRACKED
+        # files, so a brand-new, untracked migration `.sql` (the most likely drift artifact) would
+        # pass silently. `git status --porcelain drizzle/` also surfaces untracked (`??`) files, so
+        # a schema change with no matching committed migration fails the build.
+        run: |
+          npx drizzle-kit generate
+          test -z "$(git status --porcelain drizzle/)"
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:coverage
