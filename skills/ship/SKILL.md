@@ -1,6 +1,6 @@
 ---
 name: ship
-description: The hands-off orchestrator. Sequences the six lifecycle skills (assess → devise → invoke → verify → listen → final) end to end while keeping a lean orchestrator context — delegating output-heavy work to discardable sub-agents and honoring the human gates as PROJECT.md declares them — merge is always human, and plan approval is host-settable (`auto` by default). Use to run the whole development lifecycle for one issue in a single driven flow.
+description: The hands-off orchestrator. Sequences the six lifecycle skills (assess → devise → invoke → verify → listen → final) end to end while keeping a lean orchestrator context — delegating output-heavy work to discardable sub-agents and honoring the gates as PROJECT.md declares them — merge ships `required` (a human merges) and is host-settable to `attested` (the AC merges only on a SHA-bound external review), and plan approval is host-settable (`auto` by default). Use to run the whole development lifecycle for one issue in a single driven flow.
 ---
 
 <what-to-do>
@@ -20,8 +20,10 @@ Read host-specific values — the lifecycle host and its artifact map, the branc
 quality-check commands, the review severities, the attribution/model, and the **human-gate policy** —
 from [`PROJECT.md`](../../PROJECT.md). Never hardcode them here. **Baseline: plan approval is
 `auto` and merge is `required`**; a Host App may set *plan approval* back to `required` in `PROJECT.md` →
-*Human Gates*, and **merge is never configurable**. Read that section at the start of a run so the
-gates below are honored as the host declares them.
+*Human Gates*, and may set *merge* to **`attested`**, under which `final` merges the PR itself but only
+against an independent external-model adversarial review bound to the merged SHA (`auto` stays
+forbidden). Read that section at the start of a run so the gates below are honored as the host declares
+them.
 
 **Design goal: a lean main-thread context** ([ADR 0005](../../docs/adr/0005-ship-hybrid-delegation-offload-retrieval-protect-judgment.md)).
 `ship` reaches it by delegating **output-heavy, signal-light** work to sub-agents whose context is
@@ -122,7 +124,7 @@ function over those artifacts** — no 14th skill and no separate `resume` comma
 | self-review posted, Reviewer **responded**, findings still open | `listen` |
 | self-review posted, chain **exhausted** (every entry unreachable/silent) | `needs_human_call` — the `stop-and-ask` floor (posted as a durable stop pair; see below) |
 | Reviewer response **resolved**, green, no open must-fix, no SOW | `final` |
-| SOW posted | await human merge |
+| SOW posted | `required` → await human merge · `attested` → `final` merges on the SHA-bound review |
 
 Two reads are finer than "does an artifact exist," and both are load-bearing
 ([ADR 0028](../../docs/adr/0028-context-reset-boundary-resumable-stops-autonomous-listen.md) decisions 4–5):
@@ -164,7 +166,8 @@ Then run the phases from the derived point:
    the ledger is durable rather than in-context, this terminal pass still catches a late ask that landed
    *after* `invoke`-time self-review even though the pre-`final` reset discarded the conversation that
    raised it — the exact gap an in-memory ledger would drop.
-   **→ Human gate 2 (merge) — always human, never configurable.**
+   **→ Gate 2 (merge) — `required` (a human merges, shipped default) or `attested` (`final` merges only
+   against an external review bound to the merged SHA). Never unconditional.**
 
 ## The driving loop — a stop is a pause, not a termination
 
@@ -173,7 +176,9 @@ ends it** ([ADR 0028](../../docs/adr/0028-context-reset-boundary-resumable-stops
 decision 2). The orchestrator seeds each build stretch from a compact **build brief**, runs to the next
 stop or to delivery, and — on a stop — records the question and its answer **durably** (see *Gates as
 context boundaries*), folds the answer into the brief, **resets its context, and resumes from the
-re-derived point**. The loop exits **only** at `delivered`, where the HC merges (the one standing stop).
+re-derived point**. The loop exits **only** at `delivered` — under `required` that is where the HC merges
+(the one standing stop); under `attested` `final` merges on the SHA-bound review and the loop exits with
+the PR merged.
 There is no path where `ship` returns the HC a list of commands to run.
 
 **Emit a stage-transition heartbeat.** At each phase boundary — entering `assess`, `devise`, `invoke`,

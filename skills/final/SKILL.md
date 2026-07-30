@@ -13,12 +13,24 @@ Read host-specific values — the quality-check commands from [`PROJECT.md`](../
 policy from *Branch & PR Policy*, the lifecycle host from *Lifecycle Host*, the attribution/model from
 *Attribution & Model Declaration*, the gate policy from *Human Gates*. Never hardcode them.
 
-**This stage operates on the PR that already exists — it never opens one, and it never self-merges.**
-Merge is the second human gate, and **it is not configurable.** `PROJECT.md` → *Human Gates* declares
-the gate policy, but merge's only allowed value is `required`: **no Host App can express self-merge**,
-and the parity check hard-fails any attempt to set it otherwise. A host that has set *plan approval* to
-`auto` has changed nothing here — merge is still human. If there is no PR, a prior stage's terminal
-artifact was skipped: stop and recheck.
+**This stage operates on the PR that already exists — it never opens one.** Whether it may *merge* that
+PR is the second gate, read from `PROJECT.md` → *Human Gates*. **The shipped default is `required`: post
+the SOW and stop — a human merges.** A host may set it to **`attested`**, and then this stage merges the
+PR itself **only when all of the following hold**, each verified here and not taken from a report:
+
+1. every *Quality Checks* row is green, and the host's required checks are green **at the delivered head**;
+2. there are no open must-fix findings;
+3. an **independent external-model adversarial review is on record** for this PR (see *Reviewer*); and
+4. that review is **bound to the exact SHA being merged** — the attestation names a literal commit SHA
+   equal to the PR head. An attestation naming a different SHA is not evidence about this code.
+
+If any one of them fails, **do not merge**: post the SOW, state which condition failed, and stop.
+**`auto` is not an allowed value** and the parity check hard-fails it — there is no setting under which
+this stage merges on its own say-so. A host that has set *plan approval* to `auto` has changed nothing
+here. `attested` also does **not** reach the intake/authoring PRs (`scout` / `clip` / `follow` /
+`restock` / `create-skill`) — a human still disposes on those
+([ADR 0037](../../docs/adr/0037-merge-gate-accepts-attested.md)). If there is no PR, a prior stage's
+terminal artifact was skipped: stop and recheck.
 
 A **pre-`final` context check** — a fresh context before the merge-readiness judgment — applies under
 every setting, for the same reason the plan gate is a context boundary: this call must be made on
@@ -34,7 +46,11 @@ context you actually re-read (the PR, its checks, its review threads), not on a 
    the verification and SOW below**, so a folded change is part of the diff those steps check and
    record — never edited in after the SOW is posted:
    - Under **`autonomous-fold`** (the shipped baseline): **fold** the well-scoped, low-risk ones into
-     **this PR** — the same PR a human merges, so the merge gate stays their backstop — and **defer**
+     **this PR** — so the merge gate stays the backstop for them. Under `required` that backstop is the
+     human; under `attested` it is the SHA-bound review, which is why a fold must be pushed **before**
+     the review is summoned. A fold that lands *after* the attestation moves the head away from the
+     attested SHA, and condition 4 above then refuses the merge — the gate catches it rather than
+     trusting the ordering — and **defer**
      the large or contentious ones to a tracked follow-up issue. The discretion bar is *well-scoped
      **and** low-risk → fold; large **or** contentious → defer.* **Commit and push the folds** so
      Step 2's checks run on the folded diff, and record BOTH — what was folded and what was deferred
