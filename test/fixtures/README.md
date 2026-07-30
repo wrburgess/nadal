@@ -25,14 +25,59 @@ The substitution map is **not** in this repository, by design: it pairs each rea
 stand-in, so committing it would publish exactly what redaction removes. It is passed with
 `--map <path>` from outside the repo.
 
-Redaction is verified two ways, both of which must pass before a fixture is written:
+Redaction is verified three ways, ALL of which must pass before a fixture is written. The first is
+the one that decides whether the other two even matter:
 
-1. **Forbidden-value sweep** — every listed identity, in every encoding, must be absent.
-2. **Structural detector sweep** — every identity the page still advertises in its own markup
+1. **Allow-list policy** (`tools/fixture-policy.ts`) — runs FIRST, after substitution, over the
+   redacted output. Every content atom (a text-node run, a comment body, or a non-structural
+   attribute value) is reduced to a normalised "skeleton": every synthetic stand-in and every
+   structural value (integers, decimals, US dates, set scores, hex colours, SVG path data) is
+   elided, and what's left has its punctuation collapsed away. An atom whose skeleton is non-empty
+   must already be listed in that source's committed vocabulary
+   (`tools/fixture-vocabulary/tennisrecord.txt` / `usta.txt`) — a per-source file of skeletons a
+   human has read and approved, name-shaped entries only with a justification line immediately
+   above them.
+
+   **What the vocabulary admits is a public/structural allow-list, not a "this is all invented"
+   list.** A name-shaped entry is justified one of two ways, and they make different STRENGTHS of
+   claim:
+   - `# reviewed[synthetic]: <reason>` — an invented stand-in value from the substitution map.
+     `loadVocabulary()` machine-checks this claim: every capitalised token in the entry must
+     appear as a capitalised token somewhere in the committed `stand-ins.txt`, or the file fails
+     to load outright. This marker exists so "synthetic" is never asserted on prose alone.
+   - `# reviewed: <reason>` — every other honest classification, most commonly a **real, public**
+     place, club, league, section, or tournament name (e.g. "Missouri Valley", "Leawood, KS",
+     "Clayview Country Club"). Real public organisation and geography names ARE deliberately
+     admitted here: they identify a place or an organisation, not a person, so they carry none of
+     the privacy risk this policy exists to contain. **A real PERSON's identity is never admitted
+     this way** — that is what the forbidden-value sweep and the structural detector sweep below
+     exist to catch, and what `# reviewed[synthetic]:` exists to keep honest.
+
+   Anything else — content nobody enumerated AND nobody structurally recognised — refuses the
+   capture outright, reporting every unclassified atom with its skeleton, node kind and DOM path.
+   The other two checks below are a **blacklist**: each one only catches an identity somebody
+   thought to name or a shape somebody thought to detect. This check is the **inversion** —
+   unrecognised content fails closed instead of shipping by default — and is what makes "every
+   fixture's vocabulary is complete" a fact enforced by
+   `test/fixtures-vocabulary-complete.test.ts` in CI, not a claim a human has to remember to
+   re-verify.
+2. **Forbidden-value sweep** — every listed identity, in every encoding, must be absent.
+3. **Structural detector sweep** — every identity the page still advertises in its own markup
    (each `playername=` / `teamname=` in a TennisRecord href, each `uaid` and `tennis-id` on a USTA
    profile) is re-derived from the output and must be a synthetic value. This catches a name nobody
    remembered to list — and it did: it caught nine real surnames on the first real capture, where
    TennisRecord's mixed `teamname=Surname%2c First` encoding slipped past a whole-string matcher.
+
+None of the three guarantees the page contains **zero** real identifying information in some
+encoding or shape none of them was built to recognise — that is a stronger claim than any of these
+checks can support, and this file does not make it. What they DO guarantee, each enforced by its
+own test: every identity anyone listed is gone (1); every identity the page's own markup still
+advertises through a known detector is synthetic (3); and every remaining atom — the class neither
+of those two was ever built to see — is either provably synthetic/structural or has been read and
+approved by a human (1). A synthetic stand-in's own vocabulary line does not need this reasoning
+applied to it a second time: `tools/fixture-vocabulary/stand-ins.txt` holds only the invented
+replacement values from the substitution map, safe to publish by construction (see that file's own
+header for how it is derived and regenerated).
 
 ## Fixtures
 
@@ -65,3 +110,15 @@ tsx tools/capture-fixture.ts --url <url> --map <path outside the repo> \
 
 Use `--file <path> --source-url <url>` instead of `--url` for a page taken from an existing archive
 of a login-assisted capture.
+
+`--vocabulary <path>` is optional and defaults to `tools/fixture-vocabulary/<detector-set>.txt`. If
+the capture introduces content the vocabulary doesn't already list, the capture refuses — read what
+`PolicyError` reports, decide whether each skeleton is safe (structural/boilerplate, real-public, or
+genuinely synthetic) or needs a human justification (name-shaped), then add it to the committed
+vocabulary file and re-run the capture. A name-shaped entry needs `# reviewed[synthetic]: <reason>`
+ONLY if it is truly an invented stand-in value — `loadVocabulary()` will refuse to load it unless
+every capitalised token is backed by `stand-ins.txt`, so do not reach for this marker to make a real
+place, club, league, or section name load; use the plain `# reviewed: <reason>` form for that (and
+for boilerplate/UI-chrome) instead. `tools/bootstrap-vocabulary.ts` reports skeletons for a set of
+fixtures and auto-writes the non-name-shaped ones; every name-shaped one still has to be
+dispositioned by hand.

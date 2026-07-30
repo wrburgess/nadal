@@ -1,0 +1,960 @@
+# Skeleton vocabulary for USTA fixtures (test/fixtures/usta/*.html).
+# Auto-written (non-name-shaped) entries by tools/bootstrap-vocabulary.ts, followed by
+# hand-dispositioned name-shaped entries (issue #28, task 8).
+
+0px
+6056e2e4 b0 f e9ee64 d
+9d96dd a d 22bc e86bf1
+ADULT_ _5_M_STANDING_Y18_OVER_SINGLES_NULL_NULL
+ADULT_ _5_M_STANDING_Y40_OVER_SINGLES_NULL_NULL
+ADULT_ _5_M_STANDING_Y55_OVER_SINGLES_NULL_NULL
+ADULT_ _5_M_YEAR_END_Y40_OVER_SINGLES_NULL_NULL
+About
+Accordion basic element
+Accordion header
+Account
+Adult
+AlK2UR5SkAlj8jjdE p3F3xuFYlF6LYjAM EOqw1g26eCwWPjdmecULvB MVPoqKYrOfPhYV xAXI1IBQoAAAB8eyJvcmlnaW4iOiJodHRwczov RvdWJsZWNsaWNrL ldDo0NDMiLCJmZWF0dXJlIjoi ViVmlld1hSZXF1ZXN0ZWRXaXRoRGVwcmVjYXRpb24iLCJleHBpcnkiOjE3NTgwNjcxOTksImlzU3ViZG9tYWluIjp0cnVlfQ
+Am NmvvQfhwCib6I7ZsmUxiSCfOxWxHayJwyU1r3gRIItzr7bNQid6O8ZYaE1GSQT WwhP flq oYkRBwsAAACCeyJvcmlnaW4iOiJodHRwczov dvb2dsZXN5bmRpY2F0aW9uLmNvbTo0NDMiLCJmZWF0dXJlIjoi ViVmlld1hSZXF1ZXN0ZWRXaXRoRGVwcmVjYXRpb24iLCJleHBpcnkiOjE3NTgwNjcxOTksImlzU3ViZG9tYWluIjp0cnVlfQ
+Apply
+Avatar placeholder
+Become an Official
+Begin typing to search use arrow keys to navigate Enter to select
+Business
+Button to launch messaging window
+C
+CAREERS
+CARIBBEAN
+Cancel
+Clear
+Coaches
+College
+Consent
+Cookie lost link
+Cookie subgroup container
+Create a free account Adult memberships for Juniors are free
+EASTERN
+Enable accessibility
+Español
+FLORIDA
+Facebook
+Family
+Find a Coach
+Find a Place to Play
+Find your account
+Flag
+Focus from back to top button
+Footer buttons and logo
+GTag for user consent
+Google tag gtag js
+Heart of America
+Home
+IE edge
+INTERMOUNTAIN
+INTERNSHIPS
+Instagram
+JOIN
+Language
+Learn how to make a report or raise a concern
+Location
+Lost your account information
+MALE
+MIDWEST
+Membership
+More information
+NATIONAL
+NEWS
+NORTHERN
+Nationality
+New
+No content
+Officiating
+PLAY
+PLAY submenu
+POINTS
+PRO
+PRO submenu
+Play
+Please try logging in again or email customer care at
+Powered by Onetrust
+Profile
+Programs
+REGISTER
+Rankings
+Rankings data is unavailable
+Results
+Reviewed by Onetrust for privacy
+SDI include path en home play player search profile _jcr_content root content container_785702353_ tabs_copy item_1657134808648 container container experiencefragment ttl html usta components core experiencefragment resourceType usta components core experiencefragment
+SDI include path en home play player search profile _jcr_content root content container_785702353_ tabs_copy item_1657135576386 container_copy_copy container experiencefragment ttl html usta components core experiencefragment resourceType usta components core experiencefragment
+SITEMAP
+SOUTHERN
+SOUTHWEST
+Save
+Schools
+Search
+Sign in to view player results
+Sign up for our Newsletter
+Skip to main content
+Subscriptions
+System error ends
+TENNISLINK
+TEXAS
+Tennis fact Playing tennis can add nearly years to your life
+Tennis in Schools
+The following section filters the results according to your selections
+These cookies allow us to count visits and traffic sources so we can measure and improve the performance of our site Our cookies do not store directly personal information but are based on uniquely identifying your browser and device We do not track your activity using other information that identifies you like your email address We do not link data collected from our digital properties including USTA s mobile apps with third party data for advertising purposes or share the collected data with a data broker They help us to know which pages are the most and least popular and see how visitors move around the site All information these cookies collect is aggregated and therefore anonymous If you do not allow these cookies we will not know when you have visited our site and will not be able to monitor its performance
+These cookies are necessary for the website to function and cannot be switched off in our systems They are usually only set in response to actions made by you which amount to a request for services such as setting your privacy preferences logging in or filling in forms You can set your browser to block or alert you about these cookies but some parts of the site will not then work These cookies do not store any personally identifiable information
+These cookies enable the website to provide enhanced functionality and personalization Our cookies do not store directly personal information but are based on uniquely identifying your browser and device We do not track your activity using other information that identifies you like your email address We do not link data collected from our digital properties including USTA s mobile apps with third party data for advertising purposes or share the collected data with a data broker They may be set by us or by third party providers whose services we have added to our pages If you do not allow these cookies then some or all of these services may not function properly
+These cookies may be set through our site by our advertising partners They may be used by those companies to build a profile of your interests and show you relevant adverts on other sites They do not store directly personal information but are based on uniquely identifying your browser and internet device They do not track your activity using other information that identifies you like your email address We do not link data collected from our digital properties including USTA s mobile apps with third party data for advertising purposes or share the collected data with a data broker If you do not allow these cookies you will experience less targeted advertising
+This player has not filled out their profile
+Tournaments
+Twitter
+USA
+USTA
+USTA provides tennis for all ages
+Updated
+Valuable information and helpful resources on how to keep sport safe
+Vendor list link
+Wallet
+When you visit any website it may store or retrieve information on your browser mostly in the form of cookies This information might be about you your preferences or your device and is mostly used to make the site work as you expect it to The information does not usually directly identify you but it can give you a more personalized web experience Our cookies do not store directly personal information but are based on uniquely identifying your browser and device This technology helps us to better understand user behavior including for security and fraud prevention purposes tell us which parts of our websites people have visited and facilitate and measure the effectiveness of content and web searches Because we respect your right to privacy you can choose not to allow some types of cookies Click on the different category headings to find out more and change our default settings However blocking some types of cookies may impact your experience of the site and the services we are able to offer
+Whoops something went wrong
+You are not logged in
+YouTube
+Youth
+__gppLocator
+_blank
+_hjSafeContext
+_self
+about blank
+accordion detail
+allow same origin
+anonymous
+apple touch icon
+article
+border
+border wrapper
+bovR QVXNx2 38qDbmeYYf1wdte9EO37K9eM r 541qo0byhYU899BhPB7C QqD7wIbR1B6OA kEfYC AAACQeyJvcmlnaW4iOiJodHRwczov dvb2dsZXN5bmRpY2F0aW9uLmNvbTo0NDMiLCJmZWF0dXJlIjoiQUlQc tcHRBUElNdWx0aW1vZGFsSW5wdXQiLCJleHBpcnkiOjE3NzQzMT MDAsImlzU3ViZG9tYWluIjp0cnVlLCJp RoaXJkUGFydHkiOnRydW
+canonical
+checkbox label
+chkbox id
+clear results
+closed
+compression dictionary
+content dam usta flags USA svg
+content dam usta icons 19226_C_NY_22_USTA_Website_icons_69x54 advanced certification png
+content dam usta icons Asse png
+content dam usta icons USTA_Website_icons_69x54 participate leve png
+content dam usta icons USTA_Website_icons_69x54 training webinars png
+content dam usta icons eye tes x54 png
+content dam usta icons icon find account svg
+content dam usta icons lock icon svg
+content dam usta icons program offering x54 png
+content dam usta logos app store png
+content dam usta logos google play badge png
+content dam usta logos section logos districts USTA MisVal_HoA_1c black RGB png
+content experience fragments usta usta en footer ef master _jcr_content root container image coreimg png app store png
+content experience fragments usta usta en footer ef master _jcr_content root container image coreimg width png app store png
+content experience fragments usta usta en footer ef master _jcr_content root container image_746557089 coreimg png google play badge png
+content experience fragments usta usta en footer ef master _jcr_content root container image_746557089 coreimg width png google play badge png
+content usta en home html
+content usta en home myaccount profile join self rate html
+content usta en home play adult tennis programs national usta league faqs html General
+content usta en home play itf world tennis number html
+content usta en home search profile find your account html
+contentUrl
+customercare usta com
+data image png base64 REDACTED
+description
+dropdown
+en
+en home about usta html
+en home about usta usta connect html
+en home about usta usta ventures html
+en home about usta who we are national by the usta s growth strategy for million tennis play html
+en home about usta who we are national get to know the usta sections html
+en home about usta who we are national usta privacy policy html
+en home coach organize coaches career development html
+en home coach organize coaches coaching fundamentals workshops html
+en home coach organize coaches html
+en home coach organize html
+en home coach organize officiating html
+en home coach organize officiating national interested in becoming an official html
+en home coach organize officiating national officiating certification regulations html
+en home coach organize organization facilities community tennis associations html
+en home coach organize organization facilities html
+en home coach organize organization facilities national junior tennis learning html
+en home coach organize organization facilities parks recreation html
+en home coach organize organization facilities tennis in schools html
+en home coach organize tennis support facility assistance html
+en home coach organize tennis support grants assistance html
+en home coach organize tennis support html
+en home coach organize tennis support tennis industry united html
+en home coach organize tennis support tennis service representatives html
+en home coach organize tennis tool center html
+en home coach organize tennis tool center resource library html
+en home coach organize tennis tool center resource library html category coaches
+en home coach organize tennis tool center run usta programs html
+en home coach organize tennis tool center run usta programs national itf world tennis number html
+en home coach organize tennis tool center serve tennis html
+en home coach organize trainings webinars html
+en home html
+en home improve gear up html
+en home improve tennis health fitness html
+en home improve tips and instruction html
+en home improve tips and instruction national tennis player webinars html
+en home improve tips and instruction national tennis scoring rules html
+en home membership join benefits html
+en home membership shopping shoppingcart html
+en home myaccount data privacy html
+en home myaccount data privacy verify email html
+en home myaccount family html
+en home myaccount membership html
+en home myaccount my organization html
+en home myaccount notifications html
+en home myaccount player html
+en home myaccount profile html
+en home myaccount schools html
+en home myaccount wallet html
+en home play adult tennis html
+en home play coach search html
+en home play college tennis html
+en home play facility listing html
+en home play get kids involved in tennis html
+en home play high school tennis html
+en home play html
+en home play itf world tennis number html
+en home play play tennis near me html
+en home play player search html
+en home play player search profile _jcr_content root content container_94340692_357917357 tabs_1240716700 item_1606303556243 container_copy container image coreimg svg lock icon svg
+en home play player search profile _jcr_content root content container_94340692_357917357 tabs_1240716700 item_1606303556243 container_copy container image coreimg width svg lock icon svg
+en home play player search report profile html
+en home play rankings html
+en home play rankings html tab adult
+en home play rankings html tab family
+en home play rankings html tab junior
+en home play rankings html tab ntrp
+en home play rankings html tab wheelchair
+en home play usta apps html
+en home play usta apps usta flex tennis html
+en home play youth tennis html
+en home pro html
+en home pro pro tennis events billie jean king cup html
+en home pro pro tennis events bnp paribas world team cup html
+en home pro pro tennis events davis cup html
+en home pro pro tennis events international team event html
+en home pro pro tennis events live streaming html
+en home pro pro tennis events pro circuit html
+en home safe play check your status html
+en home safe play html
+en home safe play report suspicious activity html
+en home safe play safe play resources html
+en home safe play safesport courses html
+en home safe play search for a tennis provider html
+en home search profile find your account html
+en home stay current html
+es
+es home html
+etc clientlibs usta clientlibs clientlib all min 595482710bd a f5489e css
+etc clientlibs usta clientlibs clientlib site resources images apple touch icon png
+etc clientlibs usta clientlibs clientlib site resources images favicon ico
+etc clientlibs usta clientlibs clientlib vue min ab882dde2bb564d81664915799f16110 css
+etc clientlibs usta clientlibs clientlib vue resources img Apple_Button png
+etc clientlibs usta clientlibs clientlib vue resources img Arrow_Right svg
+etc clientlibs usta clientlibs clientlib vue resources img Arrow_Right_Green svg
+etc clientlibs usta clientlibs clientlib vue resources img Avatar_Placeholder svg
+etc clientlibs usta clientlibs clientlib vue resources img Cancel_Bold svg
+etc clientlibs usta clientlibs clientlib vue resources img Google_Play_Button png
+etc clientlibs usta clientlibs clientlib vue resources img High_Confidence_Checkmark svg
+etc clientlibs usta clientlibs clientlib vue resources img Location_White svg
+etc clientlibs usta clientlibs clientlib vue resources img Medium_Confidence_Checkmark svg
+etc clientlibs usta clientlibs clientlib vue resources img Tennis_Ball_Racquet svg
+etc clientlibs usta clientlibs clientlib vue resources img Tennis_Swing svg
+etc clientlibs usta components clientlibs common min 0e38534d779f12ab9 bf cd93d0 css
+etc clientlibs usta components content common errorpopup clientlibs min b5ce8887684687d fd6bcd08e79 css
+etc clientlibs usta components core tabs clientlibs site min f59d05070f0370edaf a eb0 css
+etc clientlibs usta components structure editable basepage clientlibs min e acdd91e270b6f3668b032d2 css
+evenodd
+false
+fojrAunSDrFbD8OfGmFHdRFZymSM 1s G NEttCLfHkXvlcF6LGL Mo5PakLO1sCASXU1 gQf6XGuTBgwAAACQeyJvcmlnaW4iOiJodHRwczov dvb2dsZXRh NlcnZpY2VzLmNvbTo0NDMiLCJmZWF0dXJlIjoiQUlQc tcHRBUElNdWx0aW1vZGFsSW5wdXQiLCJleHBpcnkiOjE3NzQzMT MDAsImlzU3ViZG9tYWluIjp0cnVlLCJp RoaXJkUGFydHkiOnRydW
+font
+for assistance
+form tex
+fullName
+gridfilter d9b042dfd0
+gsc i id1
+http schema org ImageObject
+http www lavercup com
+http www usopenseries com
+http www w3 org xlink
+https apps apple com us app us open tennis championships id327455869
+https apps apple com us app usta flex id6446393326
+https apps apple com us app usta mobile id411621803
+https apps apple com us app usta programming id1501843836
+https apps apple com us app usta tennis id6443585452
+https assets adobedtm com
+https careers usta com
+https cdn cookielaw org logos f302bf bd b db26b06fe fe5e3f c ee b1 f88 b972ed 7eb9864b b72f c d e USTA_1c black_RGB png
+https cdn cookielaw org logos static powered_by_logo svg
+https chat satis fi
+https connect facebook com
+https customercare usta com hc en us
+https maps googleapis com
+https netgeneration usta com
+https play google com store apps details id com usta player
+https playtennis usta com AccessServeTennis
+https playtennis usta com Programming
+https playtennis usta com programming
+https playtennis usta com tournaments
+https securepubads g doubleclick net
+https securepubads g doubleclick net pagead managed dict gpt
+https servingsuccess usta com
+https tennislink usta com
+https ustaconnect usta com
+https ustadigital atlassian net wiki spaces DEV overview
+https worldtennisnumber com
+https worldtennisnumber com eng player profile tennis id
+https www facebook com usta
+https www google com cse static element 6467658b9628de43 default en css
+https www google com cse static element db2 b2 default en css
+https www google com cse static style look default css
+https www googletagmanager com
+https www instagram com usta
+https www ntc usta com
+https www onetrust com
+https www onetrust com products cookie consent
+https www playerdevelopment usta com
+https www redballtennis com
+https www twitter com usta
+https www usopen org
+https www usta com content dam usta Articles deafultImages default article rectangular image png
+https www usta com content dam usta app icons Serve app png
+https www usta com content dam usta app icons USTA app png
+https www usta com content dam usta footer Facebook_White_footer svg
+https www usta com content dam usta footer Instagram_White_footer svg
+https www usta com content dam usta footer Privacy_Icon_footer svg
+https www usta com content dam usta footer TwitterX_White footer svg
+https www usta com content dam usta footer USTA_Logo_White_footer svg
+https www usta com content dam usta footer YouTube_White_footer svg
+https www usta com content dam usta logos Tennislink app png
+https www usta com content dam usta logos usta flex icon png
+https www usta com en home about usta who we are national usta accessibility statement html
+https www usta com en home about usta who we are national usta com sitemap html
+https www usta com en home about usta who we are national usta contact us html
+https www usta com en home about usta who we are national usta privacy policy html
+https www usta com en home about usta who we are national usta privacy policy usta cookie policy html
+https www usta com en home about usta who we are national usta terms of use html
+https www usta com en home about usta who we are national usta umpire anti discrimination policy html
+https www usta com en home coach organize tennis tool center marketing generator down for maintenance html
+https www usta com en home play player search profile html
+https www usta com en home safe play individuals permanently ineligible suspended or other measures html
+https www usta com en home search profile find your account html
+https www ustacoaching com
+https www ustafoundation com
+https www ustahawaii com
+https www ustanationalcampus com
+https www youtube com usta videos
+image
+index follow
+item_1606303541611
+item_1606303556243
+item_1606303571056
+item_1657134808648
+item_1657135576386
+items in the cart
+javascript false
+javascript void
+jpeg jpg png
+keywords
+label
+link
+ltr
+mainContent
+microphone
+modal
+nameGenderAddress
+navigation
+nofollow
+nonLogged
+nonzero
+noopener
+noopener noreferrer
+nrunKdU5 PSN1XsSGr3qOP0lvPFUB2AiAylCDlN5DT uDFkpQuHj1AFtgWLxpLaiBZuhrtb2WOu7ofHwEAAACKeyJvcmlnaW4iOiJodHRwczov RvdWJsZWNsaWNrL ldDo0NDMiLCJmZWF0dXJlIjoiQUlQc tcHRBUElNdWx0aW1vZGFsSW5wdXQiLCJleHBpcnkiOjE3NzQzMT MDAsImlzU3ViZG9tYWluIjp0cnVlLCJp RoaXJkUGFydHkiOnRydW
+ntrpSummary
+off
+og description
+og image
+og image height
+og image width
+og title
+og type
+onetrust text resize
+origin trial
+ot group id
+plus minus
+preconnect
+preload
+preserve
+private
+return enableUsableNetAssistive
+robots
+search
+select
+select all hosts groups handler
+select all vendor groups handler
+select all vendor leg handler
+shortcut icon
+stylesheet
+summary_large_image
+tab
+tabpanel
+to
+true
+twitter card
+twitter description
+twitter image
+twitter image height
+twitter image width
+twitter title
+utf
+vendor search handler
+viewport
+web_widget
+width device width initial scale maximum scale minimum scale
+xml version encoding UTF
+
+# --- name-shaped skeletons below, each dispositioned by hand ---
+
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation About Icon svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Coach Icon svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon About Tennis Gear svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Age Groups svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Chair svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Facilities svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Health svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Memberships svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Pro Tennis Circuit svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Racket svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Rankings svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Tips Training svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Tips svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Tool Center svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Icon Usta Leagues svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Phone Icon svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Play Tennis Icon svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Search Icon svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+content dam usta top navigation Tennis News Icon svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+etc clientlibs usta clientlibs clientlib site resources fonts Graphik Regular App woff2
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+etc clientlibs usta clientlibs clientlib site resources fonts Graphik Semibold App woff2
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+etc clientlibs usta clientlibs clientlib site resources fonts GraphikXXCondensed Bold App woff2
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+etc clientlibs usta clientlibs clientlib vue resources img Avatar Menu Arrow svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+etc clientlibs usta clientlibs clientlib vue resources img English Flag svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+etc clientlibs usta clientlibs clientlib vue resources img Espanol Flag svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+etc clientlibs usta clientlibs clientlib vue resources img Hamburger Menu Black svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+http activesupport force com usta articles en_US Article Appeal NTRP Rating
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https bttrack com Pixel Retarget
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https maps googleapis com maps api geocode json result_type postal_code key AIzaSy RRL Ee RuqlVlzxltKTzzsmoIb1 g
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Competitions OPRC Tournaments Overview 8707cb b e31 f4 f7d456
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Competitions OPRC Tournaments Overview e46802a ca f ad55 b2d dd5
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Competitions clayviewcountryclub Tournaments Overview 147132d b5d2e3246
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Competitions genesishealthclublawerencesouth Tournaments Overview b02488 b d1e b51147847
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Competitions genesishealthclublawerencesouth Tournaments Overview bae c e8cd35f8bf4
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Competitions hallbrookcountryclub Tournaments Overview f5eb61ce e2b173cf2
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Programming OPRC Coaching Session 1fc f eb ba aeed 1ce818ee361a
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https playtennis usta com Programming OPRC Coaching Session edee d 59db5b9398
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https tennislink usta com Dashboard Main default aspx
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https tennislink usta com Leagues Common Default aspx
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https tennislink usta com TeamTennis Main Home aspx
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https tennislink usta com Tournaments Rankings RankingHome aspx
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https www usta com content dam usta logos AppIcons USO png
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https www usta com content dam usta top navigation Section Icon svg
+# reviewed: static asset/URL path segment (an image, font, or tracking-pixel path baked into the site template) — no personal data.
+https www usta com content dam usta top navigation Sites Icon svg
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+ACCESSIBILITY STATEMENT
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+COOKIE POLICY
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Cookie List
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Cookies Details
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Cookies Settings
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Data Privacy
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+End Meta Pixel Code
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+End of usta Zendesk Widget script
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Functional Cookies
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Manage Consent Preferences
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Meta Pixel Code
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+OneTrust Cookies Consent Notice end for usta com
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+OneTrust Cookies Consent Notice start for usta com
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+PRIVACY POLICY
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Performance Cookies
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Powered by OneTrust Opens in a new Tab
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Privacy Preference Center
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Start of usta Zendesk Widget script
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Strictly Necessary Cookies
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+TERMS OF USE
+# reviewed: cookie-consent banner / legal / third-party analytics script boilerplate present on every page load — no personal data.
+Targeting Cookies
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+ABOUT TENNIS GEAR
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+ABOUT US
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+ABOUT USTA
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+ABOUT USTA submenu
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+ADDITIONAL SAFE SPORT COURSES
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+API DEVELOPER PORTAL
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Access your USTA Player Profile to track match results view rankings and manage your NTRP rating Update your information and take your tennis journey to the next level
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Accordion Group section ends
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Accordion Group section starts
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+All Tournaments Results
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Allow All
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Always Active
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Arrow SVG element
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Back Button
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+COACH ORGANIZE
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+COACH ORGANIZE submenu
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+CONTACT US
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Career Development
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Checkbox HTML
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Coaching Resources
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Coaching Workshops
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Community Tennis Associations
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Complete the USTA s Safe Play program for providers and coaches
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Confirm My Choices
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Custom Profile
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Download USTA App from Apple store
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Download USTA App from Google Play
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Download USTA Tennis App from App Store
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Download USTA Tennis App from Google Play
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Download the USTA App
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Early Birds
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+English Select Language
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+FIND MY ACCOUNT
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+FIND TENNIS PROGRAMS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+FIND TOURNAMENTS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+FIND YOUR ACCOUNT
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Facility Assistance
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Filter Icon
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Find Local Tennis
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Flex Leagues
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+GET SAFE PLAY APPROVED
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+GET TO KNOW THE USTA SECTIONS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+GET TO KNOW THE USTA SECTIONS submenu
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+GPP Locator
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Get Educated Let s create a safe and respectful sporting environment together
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+HEALTH BENEFITS OF TENNIS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+High School
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+High School Match Play Event
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+International Team Events
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Junior Team Tennis
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+LEARN ABOUT ITF WTN
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Learn More
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Leg Interest
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+MAIN MENU
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+MY PROFILE SETTINGS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Marketing Generator
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+NET GENERATION
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+National Junior Tennis Learning
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Non Accordion Group
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Officiating Certification Regulations
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Organizations Facilities
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+PC Header
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+PLAYER DEVELOPMENT
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+PLAYER PARENTS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+PRO TENNIS CIRCUIT
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+PRO TENNIS EVENTS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+PROGRAMS NEAR YOU
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Page Language
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Play Tennis
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Player Overview
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Player Profile View Rankings Match Results Ratings USTA
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Player Search
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Pro Tennis
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Pro Tennis News
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+RED BALL TENNIS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+REPORT SUSPICIOUS ACTIVITY
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Reject All
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Resource Library
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Run USTA Programs
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SAFE PLAY
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SAFE PLAY DISCIPLINARY LIST
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SAFE PLAY PROVIDER SEARCH
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SAFE PLAY RESOURCES
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SAFE PLAY submenu
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SEARCH PLAYERS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SEARCH PROGRAMS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SEARCH TOURNAMENTS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SERVING SUCCESS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SIGN IN
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+SIGN OUT
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Search Icon
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Search USTA com
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Search our list of over Safe PlayTM approved coaches trainers umpires and more
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Serve Tennis
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Sign In
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Spanish Select Language
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+System Error starts
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+TENNIS GAME RULES
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+TENNIS PARKS RECREATION
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+TIPS TRAINING PODCASTS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+TOURNAMENTS NEAR YOU
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Tennis Grants
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Tennis Industry United
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Tennis News
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Tennis Service Representatives
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Tennis Support
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Tennis Tool Center
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+TennisLink Application
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Third Party Pixels End
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Third Party Pixels Start
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Toggle HTML element
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+UMPIRE POLICY
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USO Application
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA AGE GROUPS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA ALL RIGHTS RESERVED
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA APPS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA COACHING
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA CONNECT
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA CONNECT PORTAL
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Connect boosts tennis industry connectivity fostering data sharing and services for growth at all levels
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA FOUNDATION
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Flex App
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA GEOGRAPHIC SECTIONS MAP
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Growth Strategy
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA LEAGUES
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA League
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Logo
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Logo Home
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA MEMBERSHIPS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA RANKINGS STANDINGS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA SECTIONS
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA SITES
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Serve
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Tennis Application
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA VENTURES
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA Ventures by the USTA assesses varied long term investments via its Strategic Investment Committee
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+USTA is comprised of individual sections representing locations throughout the U S
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Use your USTA Number to search for your account or search for your profile
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+VIEW MAP
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+VISIT OUR OTHER SITES
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+VISIT OUR OTHER SITES submenu
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Vendor Service container and item template
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Watch Live
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+Webinars Podcasts
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+X UA Compatible
+# reviewed: static site navigation, button, or UI chrome text (menu item, page heading, or accessibility label) common to every visitor — no personal data.
+YEAR END NTRP RATINGS ARE HERE
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Billie Jean King Cup
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Davis Cup
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+District Heart of America
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+HAWAII PACIFIC
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Laver Cup
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+MID ATLANTIC
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+MIDDLE STATES
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+MISSOURI VALLEY
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+MISSOURI VALLEY HEART OF AMERICA
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Missouri Valley
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+NATIONAL CAMPUS
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+NATIONAL TENNIS CENTER
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+NEW ENGLAND
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+NORTHERN CALIFORNIA
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+PACIFIC NORTHWEST
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+SOUTHERN CALIFORNIA
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Section Missouri Valley
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+Section Missouri Valley District Heart of America Nationality
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+US Open
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+US Open Series
+# reviewed: a real, publicly-known USTA section/region name or professional tournament name, shared by the entire membership or public — not identifying to any individual.
+World Team Cup
+# reviewed: a league/division-name skeleton built from the real, public "Heart of America" district abbreviation "HOA" (see the "Heart of America" entry above) plus single-letter division codes — real and public, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+HOA B G
+# reviewed: a real, public tennis club name — corroborated by this file's own unredacted URL slug "hallbrookcountryclub" (see the "https playtennis usta com Competitions hallbrookcountryclub ..." entry above) — an organisation name, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+Hallbrook Country Club Co Ed U BG U division
+# reviewed: Lawrence, KS is a real, public Kansas City-area municipality within the USTA Missouri Valley section (the trailing "K" is a truncated state-abbreviation fragment) — a place name, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+LAWRENCE K
+# reviewed: Leawood, KS is a real, public Kansas City-area municipality within the USTA Missouri Valley section (the trailing "K" is a truncated state-abbreviation fragment) — a place name, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+Leawood K
+# reviewed: a league/division-name skeleton built from the real, public USTA organisation name and the real, public "Heart of America" district abbreviation "HOA" (see the "Heart of America" entry above) plus a division code — real and public, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+USTA HOA BG
+# reviewed: a league/division-name skeleton built from the real, public USTA organisation name and the real, public "Heart of America" district abbreviation "HOA" (see the "Heart of America" entry above) plus generic junior-circuit/division vocabulary — real and public, not a personal identity. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+USTA HOA Jr Circuit BG
+# reviewed: a city-name-plus-state-abbreviation skeleton — structurally a place name, not the two-given-name shape a person's identity takes. No committed stand-in backs any of its tokens and no corroborating evidence confirms the specific municipality, so — per policy — it is classified real-public rather than guessed into the synthetic class it cannot pass. (Reclassified from an unbacked "synthetic" claim — issue #28 reconciliation; see docs/findings.md.)
+Wexley KS
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Adult Rankings
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+An NTRP Rating is a numerical indicator of tennis playing ability from beginner through touring pro which aligns with a set of general characteristics that break down the skills and abilities of each level in increments
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Family Rankings
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+GAME ZONE TO
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+High Confidence
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+How To Appeal NTRP Rating
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+ITF Tennis ID
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+ITF WORLD TENNIS NUMBER
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Junior Rankings
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Last Played
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Medium Confidence
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+NTRP Faqs
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+NTRP Men Final Ranking Singles
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+NTRP Men s Single National Standings List
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+NTRP Rankings
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+NTRP Rating
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+NTRP Rating Additional information
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Rank List
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+SEE WTN PROFILE
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Standing List Rankings
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+The following field filters the results by Rank List
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Updated Date
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+View Past Rankings
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+WORLD TENNIS NUMBER
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+WTN DOUBLES
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+WTN Logo
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+WTN SINGLES
+# reviewed: tennis scoring/statistics terminology used in every profile's table headers and labels — no personal data.
+Wheelchair Rankings

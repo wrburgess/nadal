@@ -7,6 +7,7 @@ import {
   redact,
   redactHtml,
 } from "../tools/redact-fixture.js";
+import { PolicyError } from "../tools/fixture-policy.js";
 
 const SUBS = [
   { from: "Cory Hogan", to: "Dana Sample" },
@@ -472,6 +473,33 @@ describe("never-publish identity classes", () => {
     // mistaken for postal codes or phone numbers.
     expect(() =>
       redact('<a href="/adult/matchresults.aspx?year=2026&mid=20336">7-6</a><path d="m4.8 7.8 0.57232-0.58292"/>', []),
+    ).not.toThrow();
+  });
+});
+
+describe("redact() wires in the allow-list policy", () => {
+  // Task 9: when a vocabulary is supplied, redact() runs the policy BEFORE the forbidden-value
+  // and detector sweeps, so a caller can never hold a redacted string that still carries an
+  // unclassified atom. The other 55 cases in this file call redact()/redactHtml() without a
+  // vocabulary at all, which is intentionally a no-op for the policy stage (backward compatible)
+  // — this is the ONE test that opts in and proves the wiring actually runs and throws.
+  it("throws before returning when an atom is neither synthetic, structural, nor vocabulary-listed", () => {
+    const page = "<p>Cory Hogan</p><p>Patrick Turner</p>";
+
+    expect(() =>
+      redact(page, [{ from: "Cory Hogan", to: "Dana Sample" }], {
+        vocabulary: new Set<string>(),
+      }),
+    ).toThrow(PolicyError);
+  });
+
+  it("does not throw when every atom is synthetic, structural, or vocabulary-listed", () => {
+    const page = "<p>Cory Hogan</p>";
+
+    expect(() =>
+      redact(page, [{ from: "Cory Hogan", to: "Dana Sample" }], {
+        vocabulary: new Set<string>(),
+      }),
     ).not.toThrow();
   });
 });

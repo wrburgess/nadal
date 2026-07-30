@@ -16,6 +16,11 @@
 
 import * as cheerio from "cheerio";
 import type { AnyNode } from "domhandler";
+// Deliberately circular with tools/fixture-policy.ts, which imports normalisation helpers back
+// from this module. Both references are used only inside function BODIES (never at module-scope
+// evaluation), which is the shape Node's ESM loader resolves without a "before initialization"
+// error — see the `redact()` docstring below for why the cycle exists at all.
+import { assertAllowListed } from "./fixture-policy.js";
 
 export type Substitution = { from: string; to: string };
 
@@ -43,7 +48,7 @@ const SCRIPT_OR_STYLE = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
 // (Provenance: Codex adversarial review round 10 on PR #26.)
 const BASE64_DATA_URI = /data:[a-z0-9.+/-]+;base64,[A-Za-z0-9+/=]+/gi;
 
-function escapeRegExp(value: string): string {
+export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
@@ -117,7 +122,7 @@ function renderedView(html: string): string {
 
   const walk = (node: AnyNode): void => {
     if (node.type === "comment") {
-      parts.push(cheerio.load(node.data).root().text());
+      parts.push(fullyDecodeEntities(node.data));
       return;
     }
     if (node.type === "tag") parts.push(...Object.values(node.attribs));
@@ -130,15 +135,19 @@ function renderedView(html: string): string {
   };
   for (const node of $.root().toArray()) walk(node as AnyNode);
 
-  // Zero-width and format characters are NOT JavaScript whitespace, so `\s+` leaves them in
-  // place: cheerio decodes `&ZeroWidthSpace;` to U+200B, and `Cory\u200BHogan` then matches
-  // neither the raw pattern nor `Cory Hogan`. Mapping the whole Cf category to a space first
-  // makes an invisible separator behave like the visible one it imitates.
-  // (Provenance: Codex adversarial review round 10 on PR #26, rated critical.)
-  return parts
-    .join("\n")
-    .replace(FORMAT_CHARS, " ")
-    .replace(/\s+/g, " ");
+  return collapseFormatChars(parts.join("\n"));
+}
+
+/**
+ * Decode entities the way a browser renders them, by parsing the fragment and reading its text
+ * back — complete by construction (HTML5 defines over two thousand named references) rather
+ * than a hand-written table. This is the SAME mechanism `renderedView` has always used for a
+ * comment body (which `.text()` does not reach on the document itself); naming and exporting it
+ * lets `tools/fixture-policy.ts` reduce an atom's content through the identical decoder instead
+ * of inventing a second one.
+ */
+export function fullyDecodeEntities(value: string): string {
+  return cheerio.load(value).root().text();
 }
 
 /**
@@ -149,6 +158,18 @@ const FORMAT_CHARS = new RegExp(
   `[${String.fromCharCode(0x5c)}p{Cf}${String.fromCharCode(0x200b)}-${String.fromCharCode(0x200d)}${String.fromCharCode(0xfeff)}${String.fromCharCode(0x2060)}]`,
   "gu",
 );
+
+/**
+ * Fold zero-width/format characters to a space and collapse whitespace runs to one space.
+ *
+ * Split out of `renderedView` so `normalizeForComparison` applies the EXACT same fold rather than
+ * a re-derived regex — a second, subtly different normaliser would be a bypass of exactly the
+ * kind the reviews above closed.
+ * (Provenance: Codex adversarial review round 10 on PR #26, rated critical.)
+ */
+export function collapseFormatChars(value: string): string {
+  return value.replace(FORMAT_CHARS, " ").replace(/\s+/g, " ");
+}
 
 /**
  * Match one identity in **any** encoding, including the mixed ones real pages emit.
@@ -363,12 +384,12 @@ export function assertRedacted(
 
   // Several views, and an identity must be absent from ALL of them. An encoding this module
   // cannot *substitute* still cannot ship silently — the capture fails instead.
-  const views = [html, decodeEntities(html), renderedView(html), percentDecodedView(html)];
+  const baseViews = views(html);
   // ...each also in NFC. `José` composed (U+00E9) and decomposed (`e` + U+0301) are the same name
   // to every reader and different code-point sequences to a matcher, so a map entry written in
   // one form silently misses the other. Normalising both sides collapses that difference.
   // (Provenance: Codex adversarial review round 11 on PR #26, rated critical.)
-  const allViews = [...views, ...views.map(nfc)];
+  const allViews = [...baseViews, ...baseViews.map(nfc)];
 
   for (const value of options.forbidden) {
     const found = [value, nfc(value)]
@@ -380,7 +401,7 @@ export function assertRedacted(
   }
 
   const allowed = new Set((options.allowed ?? []).map((v) => nfc(lower(v))));
-  const detectorView = views[1] ?? html;
+  const detectorView = baseViews[1] ?? html;
   for (const detector of options.detectors ?? []) {
     for (const match of detectorView.matchAll(detector.pattern)) {
       const captured = match[1];
@@ -404,7 +425,7 @@ function lower(value: string): string {
 }
 
 /** Canonical composition, so the same name written two ways compares equal. */
-function nfc(value: string): string {
+export function nfc(value: string): string {
   return value.normalize("NFC");
 }
 
@@ -413,9 +434,12 @@ function nfc(value: string): string {
  * in whichever normalisation form it was encoded from — `Jose%CC%81` decodes to the decomposed
  * spelling, which the NFC pass above then folds onto the composed one. Invalid escape runs are
  * left alone rather than throwing, since raw markup contains `%` for many reasons.
+ *
+ * Works on any string, not only a full page — `tools/fixture-policy.ts` runs this over a single
+ * atom's value, same as `assertRedacted`/`assertNoUnlistedPii` run it over the whole document.
  */
-function percentDecodedView(html: string): string {
-  return html.replace(/(?:%[0-9a-fA-F]{2})+/g, (escaped) => {
+export function percentDecode(value: string): string {
+  return value.replace(/(?:%[0-9a-fA-F]{2})+/g, (escaped) => {
     try {
       return decodeURIComponent(escaped);
     } catch {
@@ -424,12 +448,40 @@ function percentDecodedView(html: string): string {
   });
 }
 
-function decodePlus(value: string): string {
+export function decodePlus(value: string): string {
   try {
     return decodeURIComponent(value.replace(/\+/g, " "));
   } catch {
     return value;
   }
+}
+
+/**
+ * The four independent readings a survivor sweep checks: raw markup, the hand-written
+ * decimal/hex/named-entity decode, the standards-complete parser decode (which also reaches
+ * comment bodies and folds zero-width/format characters to a space), and percent-decoding.
+ *
+ * Named and exported so `assertRedacted` and `assertNoUnlistedPii` share one construction instead
+ * of two independently-maintained array literals, and so `tools/fixture-policy.ts` can build the
+ * same views over a single atom rather than re-deriving the list.
+ */
+export function views(html: string): string[] {
+  return [html, decodeEntities(html), renderedView(html), percentDecode(html)];
+}
+
+/**
+ * Reduce one atom's raw value to a single normalised string, through the SAME pipeline the
+ * multi-view survivor sweeps above use — entity decode (including the parser-based decode that
+ * reaches comment bodies and the full named-entity table), percent decode, zero-width/format
+ * character collapse, NFC, whitespace collapse. `tools/fixture-policy.ts` reduces every atom
+ * through this one function rather than a second, independently-written normaliser — see the
+ * module docstring on why that would be a bypass of exactly the kind rounds 8-11 closed.
+ */
+export function normalizeForComparison(value: string): string {
+  const decoded = fullyDecodeEntities(decodeEntities(value));
+  const percentDecoded = percentDecode(decoded);
+  const folded = collapseFormatChars(percentDecoded);
+  return nfc(folded).trim();
 }
 
 /**
@@ -463,10 +515,9 @@ const NEVER_PUBLISH: { name: string; pattern: RegExp }[] = [
  * rendered or percent-decoded.
  */
 export function assertNoUnlistedPii(html: string): void {
-  const views = [html, decodeEntities(html), renderedView(html), percentDecodedView(html)];
   const survivors: string[] = [];
   for (const { name, pattern } of NEVER_PUBLISH) {
-    for (const view of views) {
+    for (const view of views(html)) {
       const found = new RegExp(pattern.source, pattern.flags).exec(view);
       if (found !== null) {
         survivors.push(`${name}: ${found[0]}`);
@@ -484,13 +535,34 @@ export function assertNoUnlistedPii(html: string): void {
   }
 }
 
-/** Redact and verify in one call — the shape every fixture capture should use. */
+/**
+ * Redact and verify in one call — the shape every fixture capture should use.
+ *
+ * When `options.vocabulary` is supplied, the allow-list policy (`tools/fixture-policy.ts`) runs
+ * FIRST, before the forbidden-value and detector sweeps: no caller can hold a redacted string
+ * that still carries an atom that is neither synthetic, structural, nor already vocabulary-listed
+ * (task 9). `vocabulary` is opt-in rather than always-on so that a bare `redact(html, subs)` call
+ * — every pre-existing caller of this function, none of which has a vocabulary to pass — stays a
+ * no-op for this stage; `tools/capture-fixture.ts` is the real production entrypoint and always
+ * supplies one.
+ */
 export function redact(
   html: string,
   substitutions: Substitution[],
-  options?: { detectors?: Detector[]; allowed?: string[] },
+  options?: {
+    detectors?: Detector[];
+    allowed?: string[];
+    standIns?: string[];
+    vocabulary?: Set<string>;
+  },
 ): string {
   const out = redactHtml(html, substitutions);
+  if (options?.vocabulary !== undefined) {
+    assertAllowListed(out, {
+      standIns: options.standIns ?? substitutions.map((s) => s.to),
+      vocabulary: options.vocabulary,
+    });
+  }
   assertNoUnlistedPii(out);
   assertRedacted(out, {
     forbidden: substitutions.map((s) => s.from),
