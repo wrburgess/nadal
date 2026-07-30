@@ -859,3 +859,46 @@ describe("whole-document accounting (issue #28 round 2 findings R2-1/R2-2/R2-3)"
     });
   });
 });
+
+describe("transform grammar (CodeQL js/redos regression)", () => {
+  // The previous single-regex grammar was exponential on `scale(0` + many `\t\t0` repetitions,
+  // because `\s*[,\s]\s*` could consume one whitespace run in many ways. If that form ever
+  // returns, this test does not merely fail — it hangs, which is the point: assert the bound.
+  it("rejects the pathological input in linear time", () => {
+    const pathological = `<path transform="scale(0${"\t\t0".repeat(40)}"></path>`;
+    const started = Date.now();
+    expect(() =>
+      assertAllowListed(pathological, { standIns: [], vocabulary: new Set<string>() }),
+    ).toThrow();
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it.each([
+    ["single function", "translate(1,1)"],
+    ["two functions, comma args", "translate(1,1) rotate(45)"],
+    ["space-separated args", "matrix(1 0 0 1 0 0)"],
+    ["negative and decimal args", "scale(-1.5, 2.25)"],
+  ])("admits a well-formed transform: %s", (_label, value) => {
+    expect(() =>
+      assertAllowListed(`<path transform="${value}"></path>`, {
+        standIns: [],
+        vocabulary: new Set<string>(),
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["an identity", "Patrick Turner"],
+    ["an unknown function name", "evil(1,1)"],
+    ["a non-numeric argument", "translate(1,Turner)"],
+    ["trailing content after a valid function", "translate(1,1) Patrick Turner"],
+    ["an empty argument list", "translate()"],
+  ])("refuses a transform carrying %s", (_label, value) => {
+    expect(() =>
+      assertAllowListed(`<path transform="${value}"></path>`, {
+        standIns: [],
+        vocabulary: new Set<string>(),
+      }),
+    ).toThrow();
+  });
+});

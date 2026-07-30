@@ -245,14 +245,56 @@ function isIntegerValue(value: string): boolean {
   return /^\d+$/.test(value.trim());
 }
 
-const TRANSFORM_FUNCTION =
-  /(translate|translatex|translatey|scale|scalex|scaley|rotate|skewx|skewy|matrix)\(\s*-?\d+(\.\d+)?(\s*[,\s]\s*-?\d+(\.\d+)?)*\s*\)/;
+const TRANSFORM_FUNCTION_NAMES = new Set([
+  "translate",
+  "translatex",
+  "translatey",
+  "scale",
+  "scalex",
+  "scaley",
+  "rotate",
+  "skewx",
+  "skewy",
+  "matrix",
+]);
 
+/** One `name(...)` chunk. `[^()]*` cannot backtrack — see the ReDoS note on `isTransformValue`. */
+const TRANSFORM_CHUNK = /([a-z]+)\(([^()]*)\)/g;
+const TRANSFORM_NUMBER = /^-?\d+(?:\.\d+)?$/;
+
+/**
+ * Validate a `transform` value by walking its grammar rather than matching one regex against it.
+ *
+ * The single-regex form this replaced —
+ * `...\(\s*-?\d+(\.\d+)?(\s*[,\s]\s*-?\d+(\.\d+)?)*\s*\)` — was quadratic-to-exponential on input
+ * like `scale(0` followed by many repetitions of `\t\t0`, because `\s*[,\s]\s*` can consume the
+ * same whitespace run in many different ways and the surrounding `*` multiplies those parses
+ * (CodeQL `js/redos`, high). Both pieces here are linear: `[^()]*` cannot backtrack across a
+ * parenthesis, and the argument split is a plain string split. This also follows
+ * `rules/scripting.md` — implement the grammar rather than asserting a structured format's shape
+ * with a regex.
+ */
 function isTransformValue(value: string): boolean {
   const trimmed = value.trim().toLowerCase();
   if (trimmed === "") return false;
-  const withoutFunctions = trimmed.replace(new RegExp(TRANSFORM_FUNCTION, "g"), " ").trim();
-  return withoutFunctions === "";
+
+  TRANSFORM_CHUNK.lastIndex = 0;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = TRANSFORM_CHUNK.exec(trimmed)) !== null) {
+    // Anything between two function chunks (or before the first) must be separator-only.
+    if (trimmed.slice(cursor, match.index).trim() !== "") return false;
+    const [, name = "", args = ""] = match;
+    if (!TRANSFORM_FUNCTION_NAMES.has(name)) return false;
+    const numbers = args.split(/[\s,]+/).filter((part) => part !== "");
+    if (numbers.length === 0 || !numbers.every((part) => TRANSFORM_NUMBER.test(part))) return false;
+    cursor = TRANSFORM_CHUNK.lastIndex;
+  }
+
+  // No chunk matched at all, or trailing content after the last one.
+  if (cursor === 0) return false;
+  return trimmed.slice(cursor).trim() === "";
 }
 
 /** WAI-ARIA role tokens — a closed enumeration, same reasoning as `aria-*` names above. */
