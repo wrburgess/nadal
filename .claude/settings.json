@@ -1,5 +1,11 @@
 {
   "model": "opus",
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Merging a pull request in this repository with `gh pr merge` (including --squash). Whether a merge is permitted at all is governed by PROJECT.md -> Human Gates and ADR 0037, which require every Quality Checks row green, no open must-fix findings, and an external-model adversarial review attested to the exact SHA being merged. That policy is the gate; this rule only stops the command itself from being classified as an unreviewed destructive action."
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
