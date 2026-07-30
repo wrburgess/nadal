@@ -84,8 +84,15 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
           source.url,
         );
       }
+      const name = cells[0] ?? "";
+      // A structurally valid row with no name is a page change, not an empty roster slot.
+      // Filtering it away produced a plausible roster with a player quietly missing.
+      // (Provenance: Codex adversarial review round 7 on PR #26.)
+      if (name === "") {
+        throw new ParseError("roster row has no player name", `${ROSTER_SCOPE} tr td`, source.url);
+      }
       return {
-        name: cells[0] ?? "",
+        name,
         location: cells[1] ?? null,
         ntrp: parseNumber(cells[2]),
         seasonRecord: parseWinLoss(cells[3]),
@@ -95,8 +102,7 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
         dynamicRating: parseNumber(cells[7]),
       } satisfies TeamRosterEntry;
     })
-    .get()
-    .filter((entry) => entry.name !== "");
+    .get();
 
   return tennisRecordTeamSchema.parse({ ...header, roster });
 }

@@ -243,3 +243,17 @@ describe("parseMatchHistory", () => {
     expect(() => parseMatchHistory(truncated, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseMatchHistory — blank source match id", () => {
+  it("throws on an empty mid, not only a missing one", () => {
+    // `hrefParam` returns "" for `mid=`, and a null-only check let an EMPTY idempotency key
+    // through — as unusable for reconciliation as a missing one, and contradicting the comment
+    // sitting directly above the guard. The earlier test removed the parameter entirely, so it
+    // passed without ever exercising this case.
+    // (Provenance: Codex adversarial review round 7 on PR #26.)
+    const blankId = fixture.html.replace(/&mid=\d+/g, "&mid=");
+
+    expect(blankId).not.toBe(fixture.html);
+    expect(() => parseMatchHistory(blankId, fixture.source)).toThrow(ParseError);
+  });
+});

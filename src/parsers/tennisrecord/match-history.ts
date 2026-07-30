@@ -182,8 +182,11 @@ function parseRow(
   // The court-level idempotency key (spec § Ingestion's first discipline: re-run anytime, nothing
   // duplicates). A record without it looks usable and cannot be reconciled on the next pull, so
   // its absence is a structural failure rather than a missing optional field.
+  // `mid=` with no value yields an empty string, not null — an empty idempotency key is as
+  // unusable as a missing one, and the null-only check contradicted the comment above it.
+  // (Provenance: Codex adversarial review round 7 on PR #26.)
   const sourceMatchId = hrefParam(cell(7).find("a").attr("href"), "mid");
-  if (sourceMatchId === null) {
+  if (sourceMatchId === null || sourceMatchId === "") {
     throw new ParseError(
       `court on ${playedOn} has no source match id`,
       `${DESKTOP_TABLE} td:nth-child(8) a[href*='mid=']`,

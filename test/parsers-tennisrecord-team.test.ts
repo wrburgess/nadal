@@ -113,3 +113,19 @@ describe("parseTennisRecordTeam — body-row width", () => {
     expect(() => parseTennisRecordTeam(extraCell, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseTennisRecordTeam — blank roster name", () => {
+  it("throws rather than quietly returning a roster with a player missing", () => {
+    // A structurally valid row whose name cell is empty was converted to `{ name: "" }` and then
+    // filtered away, yielding a 17-player roster instead of a failure — a plausible roster with a
+    // player silently absent, which is exactly the shape a scout would never notice.
+    // (Provenance: Codex adversarial review round 7 on PR #26.)
+    const blankName = fixture.html.replace(
+      '<a class="link" href="/adult/profile.aspx?playername=Ellis Eastwick">Ellis Eastwick</a>',
+      "",
+    );
+
+    expect(blankName).not.toBe(fixture.html);
+    expect(() => parseTennisRecordTeam(blankName, fixture.source)).toThrow(ParseError);
+  });
+});

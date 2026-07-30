@@ -103,8 +103,18 @@ function parseRecentTeams($: CheerioAPI, source: SourceRef): RecentTeam[] {
           source.url,
         );
       }
+      const teamName = cells[0] ?? "";
+      // Same fail-open shape as the roster: filtering the row away silently loses a player's
+      // league/season affiliation while the rest of the profile still looks complete.
+      if (teamName === "") {
+        throw new ParseError(
+          "recent-team row has no team name",
+          `${RECENT_TEAM_LABEL} tr td`,
+          source.url,
+        );
+      }
       return {
-        teamName: cells[0] ?? "",
+        teamName,
         leagueType: cells[1] ?? null,
         section: cells[2] ?? null,
         gender: cells[3] ?? null,
@@ -112,8 +122,7 @@ function parseRecentTeams($: CheerioAPI, source: SourceRef): RecentTeam[] {
         matchStartOn: parseUsDate(cells[5]),
       };
     })
-    .get()
-    .filter((team) => team.teamName !== "");
+    .get();
 }
 
 /**
@@ -147,7 +156,11 @@ function parseSeasonRecords($: CheerioAPI, source: SourceRef): SeasonRecord[] {
       // The percentages are derived and deliberately dropped — recomputing them from the counts
       // is exact, whereas storing a rounded copy invites the two to disagree.
       const year = cells[0] ?? "";
-      if (year === "") return null;
+      // Same class again, found by applying the reviewer's finding to its siblings rather than
+      // waiting to be told: a structurally valid aggregate row with no year was dropped.
+      if (year === "") {
+        throw new ParseError("season row has no year", `${SEASON_LABEL} tr td`, source.url);
+      }
       // EXACT, not minimum: an inserted column keeps the row above any minimum while shifting
       // every offset after it.
       if (cells.length !== AGGREGATE_CELLS) {
@@ -165,8 +178,7 @@ function parseSeasonRecords($: CheerioAPI, source: SourceRef): SeasonRecord[] {
         defaults: count(cells, 13, year, source),
       };
     })
-    .get()
-    .filter((row): row is SeasonRecord => row !== null);
+    .get();
 }
 
 function counts(

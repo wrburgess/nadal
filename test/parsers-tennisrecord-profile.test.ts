@@ -99,3 +99,27 @@ describe("parseTennisRecordProfile — recent-team column contract", () => {
     expect(() => parseTennisRecordProfile(noSection, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseTennisRecordProfile — blank row identifiers", () => {
+  it("throws on a recent-team row with no team name", () => {
+    // Same fail-open filter as the roster: dropping the row silently loses a player's league and
+    // season affiliation while every other field on the profile still looks complete.
+    // (Provenance: Codex adversarial review round 7 on PR #26.)
+    const blankTeam = fixture.html.replace(
+      /<td[^>]*><a[^>]*teamprofile\.aspx[^>]*>[\s\S]*?<\/a><\/td>/,
+      "<td></td>",
+    );
+
+    expect(blankTeam).not.toBe(fixture.html);
+    expect(() => parseTennisRecordProfile(blankTeam, fixture.source)).toThrow(ParseError);
+  });
+
+  it("throws on a season row with no year", () => {
+    // Found by applying the reviewer's finding to its siblings rather than waiting to be told:
+    // the aggregate parser had the identical drop-the-row shape.
+    const blankYear = fixture.html.replace(">2026<", "><");
+
+    expect(blankYear).not.toBe(fixture.html);
+    expect(() => parseTennisRecordProfile(blankYear, fixture.source)).toThrow(ParseError);
+  });
+});
