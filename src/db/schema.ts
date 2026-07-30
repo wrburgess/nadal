@@ -57,6 +57,11 @@ export const teamMatches = sqliteTable("team_matches", {
   homeTeamId: integer("home_team_id").notNull().references(() => teams.id),
   visitingTeamId: integer("visiting_team_id").notNull().references(() => teams.id),
   playedOn: text("played_on"),
+  // Scheduled time + site, carried so an id-less fixture has a discriminator finer than its date.
+  // Without them, two same-day fixtures between the same two teams (a doubleheader) collapse into
+  // one row and the second is lost undetectably — `played_on` alone is not an identity.
+  scheduledTime: text("scheduled_time"),
+  site: text("site"),
   sourceMatchId: text("source_match_id"),         // TennisLink/TennisRecord match id when known
   homeCourtsWon: integer("home_courts_won"),
   visitingCourtsWon: integer("visiting_courts_won"),

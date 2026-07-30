@@ -338,3 +338,64 @@ describe("id-less team matches across opposing perspectives", () => {
     }
   });
 });
+
+// Codex adversarial review, PR #31 round 2 [high]: the unordered-pair key fixed the duplicate but
+// over-merged — date alone cannot tell two same-day fixtures apart, and the pipeline was discarding
+// the schedule's Time and Match Site columns that could.
+describe("id-less team matches — same-day doubleheader", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  it("REGRESSION: two id-less fixtures for the same pair on the same DAY stay two rows", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const base = {
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        playedOn: "2026-06-01",
+        site: "Westside Courts",
+        sourceMatchId: null,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      };
+
+      upsertTeamMatch(db, { ...base, scheduledTime: "9:00 AM" });
+      upsertTeamMatch(db, { ...base, scheduledTime: "5:00 PM" });
+
+      expect(db.select().from(teamMatches).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the SAME fixture re-pulled (same day, time and site) is still one row", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const row = {
+        eventId: null,
+        playedOn: "2026-06-01",
+        scheduledTime: "9:00 AM",
+        site: "Westside Courts",
+        sourceMatchId: null,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      };
+
+      upsertTeamMatch(db, { ...row, homeTeamId: a.id, visitingTeamId: b.id });
+      upsertTeamMatch(db, { ...row, homeTeamId: a.id, visitingTeamId: b.id });
+      // ...and still one when the same fixture arrives from the opposing team's page.
+      upsertTeamMatch(db, { ...row, homeTeamId: b.id, visitingTeamId: a.id });
+
+      expect(db.select().from(teamMatches).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+});

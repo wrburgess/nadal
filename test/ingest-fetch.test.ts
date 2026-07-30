@@ -178,3 +178,31 @@ describe("fetchPage — concurrency and non-2xx handling", () => {
     }
   }, 10_000);
 });
+
+// Codex adversarial review, PR #31 round 2 [medium]: throwing early without cancelling left the
+// response stream and its socket alive until the abort signal fired 20s later.
+describe("fetchPage — non-2xx body is cancelled, not just abandoned", () => {
+  it("REGRESSION: the server observes the connection close promptly after a non-2xx rejection", async () => {
+    let closed = false;
+    const server = createServer((_req, res) => {
+      res.on("close", () => {
+        closed = true;
+      });
+      res.writeHead(503, { "content-type": "text/plain" });
+      res.write("an error body that never ends");
+      // never res.end()
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      await expect(fetchPage(`http://127.0.0.1:${port}/`, { timeoutMs: 30_000 })).rejects.toThrow(FetchError);
+      // Promptly — i.e. long before the 30s abort would have fired.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(closed).toBe(true);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  }, 10_000);
+});

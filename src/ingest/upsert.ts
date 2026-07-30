@@ -8,6 +8,7 @@ import {
   teamMemberships,
   teams,
 } from "../db/schema.js";
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { Db } from "./db-types.js";
 
 type TeamRow = typeof teams.$inferSelect;
@@ -151,17 +152,22 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
     // a duplicate anyway — the first fix reproduced the very defect it was closing, one perspective
     // over. (Codex adversarial review, PR #31, rated high.) Home/visiting is page perspective, not
     // real home/away, so it cannot be part of an identity; the pair-as-a-set can.
-    const playedOnMatches =
-      values.playedOn === null || values.playedOn === undefined
-        ? isNull(teamMatches.playedOn)
-        : eq(teamMatches.playedOn, values.playedOn);
+    // Date alone is NOT an identity: two fixtures between the same pair on the same day (a
+    // doubleheader at 09:00 and 17:00) would collapse into one row and the second would be lost
+    // with nothing left to detect it by. (Codex adversarial review, PR #31, rated high.) Scheduled
+    // time and site are now persisted precisely so they can discriminate here.
+    const matchesColumn = (column: AnySQLiteColumn, value: string | null | undefined) =>
+      value === null || value === undefined ? isNull(column) : eq(column, value);
+
     const existing = db
       .select()
       .from(teamMatches)
       .where(
         and(
           isNull(teamMatches.sourceMatchId),
-          playedOnMatches,
+          matchesColumn(teamMatches.playedOn, values.playedOn),
+          matchesColumn(teamMatches.scheduledTime, values.scheduledTime),
+          matchesColumn(teamMatches.site, values.site),
           or(
             and(
               eq(teamMatches.homeTeamId, values.homeTeamId),

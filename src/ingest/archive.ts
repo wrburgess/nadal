@@ -169,7 +169,25 @@ export function archivePage(input: ArchivePageInput): string {
   // existing symlink at the target rather than writing through it, and the timestamped filenames
   // mean a genuine collision cannot happen in normal operation.
   assertNoSymlinkComponents(resolve(rawRoot()), resolve(htmlPath));
-  writeFileSync(htmlPath, input.body, { encoding: "utf8", flag: "wx" });
+
+  // Then write through the directory's REAL location, resolved here rather than trusting the
+  // path string built above. Rejecting symlinked components asks "is this a link?"; this asks the
+  // question that actually matters — "where does it point?" — so a component swapped for a link
+  // into the repo is refused by its target, not merely by its type.
+  //
+  // RESIDUAL, deliberately not claimed as closed: this is still check-then-use. An actor able to
+  // swap a component between this resolution and the write can still win the race, and pure Node
+  // has no `openat`/`O_NOFOLLOW` directory-handle write to close it (a native helper would be a new
+  // dependency the plan forbids). See the tracked follow-up and `docs/findings.md`.
+  const realDir = realpathOfNearestExisting(resolve(dir));
+  assertRawRootSafe(realDir);
+  const realRoot = realpathOfNearestExisting(resolve(rawRoot()));
+  if (!isWithin(realRoot, realDir)) {
+    throw new ArchivePathError(`refusing to write outside the resolved raw root "${realRoot}": ${realDir}`);
+  }
+  const realHtmlPath = join(realDir, basename(htmlPath));
+  const realProvenancePath = `${realHtmlPath}.provenance.json`;
+  writeFileSync(realHtmlPath, input.body, { encoding: "utf8", flag: "wx" });
 
   const provenance: ArchiveProvenance = {
     sourceUrl: input.url,
@@ -178,7 +196,11 @@ export function archivePage(input: ArchivePageInput): string {
     redacted: false,
     bytes: Buffer.byteLength(input.body, "utf8"),
   };
-  writeFileSync(provenancePath, JSON.stringify(provenance, null, 2), { encoding: "utf8", flag: "wx" });
+  writeFileSync(realProvenancePath, JSON.stringify(provenance, null, 2), { encoding: "utf8", flag: "wx" });
 
+  // The REAL path is what we wrote through (that is the containment property); the LOGICAL path is
+  // what we hand back. They differ whenever the root legitimately resolves elsewhere — on macOS a
+  // temp dir under /var realpaths to /private/var — and a caller that configured TN_RAW_PATH should
+  // be told where it asked for the file, not shown a path it never named. Both name the same bytes.
   return htmlPath;
 }

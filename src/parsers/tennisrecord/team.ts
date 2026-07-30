@@ -194,6 +194,7 @@ function parseSchedule($: CheerioAPI, source: SourceRef): TeamScheduleRow[] {
 
       return {
         playedOn,
+        scheduledTime: collapse(cell(1).text()) || null,
         opponentTeamName,
         site: collapse(cell(3).text()) || null,
         result: collapse(cell(4).text()) || null,

@@ -79,6 +79,14 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
   nextSlotByClock.set(clock, slot + politenessMs);
   if (slot > now) await sleep(slot - now);
 
+  // Re-anchored to the ACTUAL wake time, not the intended slot. A reservation says when a request
+  // was *meant* to go out; an event-loop stall can delay the wake-up past it, and a later caller
+  // reserving from the stale intended slot would then start too soon after this one — violating the
+  // interval exactly under load, when it matters most. (Codex adversarial review, PR #31, rated
+  // medium.) `Math.max` keeps this monotonic, so a re-anchor can only ever push slots later.
+  const sentAt = clock.now();
+  nextSlotByClock.set(clock, Math.max(nextSlotByClock.get(clock) ?? 0, sentAt + politenessMs));
+
   const response = await fetch(url, {
     headers: { "user-agent": USER_AGENT },
     signal: AbortSignal.timeout(timeoutMs),
@@ -90,6 +98,12 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
   // body on the way. (Codex adversarial review, PR #31, rated medium.) The body of a failed
   // response is not something this caller ever uses.
   if (!response.ok) {
+    // The body is cancelled, not merely left unread. Returning early without cancelling leaves the
+    // response stream and its socket alive until the abort signal fires 20s later, so a server that
+    // streams an endless error body accumulates one live stream per call even though every caller
+    // has already handled its error. (Codex adversarial review, PR #31, rated medium.) Cancellation
+    // is best-effort: a body that is already errored or locked must not mask the FetchError.
+    await response.body?.cancel().catch(() => undefined);
     throw new FetchError(`fetch failed with status ${response.status}: ${url}`, response.status, url);
   }
 

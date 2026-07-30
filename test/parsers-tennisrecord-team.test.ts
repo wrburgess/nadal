@@ -127,6 +127,9 @@ describe("parseTennisRecordTeam — local schedule", () => {
   it("parses a schedule row in full, with its source match id from mid=", () => {
     expect(team.schedule[0]).toEqual({
       playedOn: "2026-04-09",
+      // The Time column was read by the column contract but dropped from the emitted row, which
+      // left an id-less fixture with no discriminator finer than its date.
+      scheduledTime: "8:00 PM",
       opponentTeamName: "Granborough, Galen",
       site: "Clayview Country Club",
       result: "3-2",

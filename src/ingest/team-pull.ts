@@ -148,6 +148,8 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
           homeTeamId: upserted.id,
           visitingTeamId: opponent.row.id,
           playedOn: row.playedOn,
+          scheduledTime: row.scheduledTime,
+          site: row.site,
           sourceMatchId: row.sourceMatchId,
           homeCourtsWon,
           visitingCourtsWon,

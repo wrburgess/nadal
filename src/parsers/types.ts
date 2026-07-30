@@ -175,6 +175,11 @@ export type TeamRosterEntry = z.infer<typeof teamRosterEntrySchema>;
 /** One row of a team's local schedule — a team_matches candidate, not a court_matches one. */
 export const teamScheduleRowSchema = z.object({
   playedOn: z.string(),
+  // The schedule's own Time column. Read but previously DISCARDED, which left an id-less fixture
+  // with no discriminator finer than its date — so two same-day fixtures between the same two
+  // teams (a doubleheader, 09:00 and 17:00) deduplicated into one and the second was lost with no
+  // trace. (Codex adversarial review, PR #31, rated high.)
+  scheduledTime: z.union([z.string(), z.null()]),
   opponentTeamName: z.string().min(1),
   site: z.union([z.string(), z.null()]),
   result: z.union([z.string(), z.null()]),
