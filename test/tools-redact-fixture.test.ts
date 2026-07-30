@@ -101,6 +101,29 @@ describe("redactHtml", () => {
     expect(out.match(/Dana/g)).toHaveLength(3);
   });
 
+  it("stays aligned when a character's encoding starts with the character itself", () => {
+    // `&` is a prefix of `&#38;`, and `%` is a prefix of `%25`. A shortest-first alignment walk
+    // consumes one character of a five-character sequence and every subsequent offset is wrong —
+    // which corrupts the replacement rather than merely missing it. Team names really do contain
+    // `&` (`HOA/Thyagarajan/18&over4.0M`), so this is reachable on real markup.
+    // (Provenance: Codex adversarial review round 2 on PR #26.)
+    const ampersand = redactHtml("<a href='/t?teamname=A&#38;B Club'>x</a>", [
+      { from: "A&B Club", to: "C&D Club" },
+    ]);
+    expect(ampersand).toBe("<a href='/t?teamname=C&#38;D Club'>x</a>");
+
+    const percent = redactHtml("<a href='/t?teamname=A%25B Club'>x</a>", [
+      { from: "A%B Club", to: "C%D Club" },
+    ]);
+    expect(percent).toBe("<a href='/t?teamname=C%25D Club'>x</a>");
+  });
+
+  it("substitutes a named character reference", () => {
+    const out = redactHtml("<p>A&amp;B Club</p>", [{ from: "A&B Club", to: "C&D Club" }]);
+
+    expect(out).toBe("<p>C&amp;D Club</p>");
+  });
+
   it("catches an entity-encoded survivor in the forbidden sweep", () => {
     // The belt to the substitution's braces: verification also sweeps an entity-decoded copy, so
     // an encoding this module cannot yet SUBSTITUTE still cannot ship silently — the capture

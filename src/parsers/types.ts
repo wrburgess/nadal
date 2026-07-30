@@ -61,20 +61,28 @@ export const playerRefSchema = z.object({
 export type PlayerRef = z.infer<typeof playerRefSchema>;
 
 /**
- * One set, **winner-first** — and the field names say so on purpose.
+ * One set, oriented to **the winner of the match** — which is not the same as the winner of the
+ * set, and the field names are this long precisely so the two cannot be confused.
  *
  * TennisRecord prints every score from the match winner's side, not the profiled player's: an
  * `L` row reads `6-3 6-3` because the *opponent* won those games. A `[number, number]` tuple
  * would be read as player-first by anyone who did not check, silently inverting games-won for
- * every loss in every dossier. Pair these with `CourtMatchRecord.result` to recover the profiled
- * player's own games.
+ * every loss in every dossier.
+ *
+ * The match winner still **loses** sets in a three-set match, so `matchWinnerGames <
+ * matchLoserGames` is entirely normal for one set of a three-setter — `4-6 7-5 1-0` is a match
+ * won after dropping the first. An earlier revision of this type called these `winnerGames` /
+ * `loserGames`, which reads as *set* winner and is contradicted by exactly those rows.
+ *
+ * Pair with `CourtMatchRecord.result` to recover the profiled player's own games: on a `W` the
+ * player is the match winner, on an `L` the opponent is.
  *
  * `matchTiebreak` marks the 10-point tiebreak that replaces a deciding set, which the page prints
  * as a one-game set (`1-0`).
  */
 export const setScoreSchema = z.object({
-  winnerGames: z.number().int(),
-  loserGames: z.number().int(),
+  matchWinnerGames: z.number().int(),
+  matchLoserGames: z.number().int(),
   matchTiebreak: z.boolean(),
 });
 export type SetScore = z.infer<typeof setScoreSchema>;

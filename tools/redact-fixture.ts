@@ -99,12 +99,34 @@ function tolerantPattern(value: string): RegExp {
   return new RegExp(source, "gi");
 }
 
+const NAMED_FOR_CHAR: Record<string, string[]> = {
+  "&": ["&amp;"],
+  "<": ["&lt;"],
+  ">": ["&gt;"],
+  '"': ["&quot;"],
+  "'": ["&apos;"],
+};
+
+/**
+ * Every spelling one character can take, **longest first**.
+ *
+ * Order is load-bearing, not cosmetic. `&` is a prefix of `&#38;` and `%` is a prefix of `%25`,
+ * so a shortest-first walk consumes one character of a five-character sequence and every
+ * subsequent offset is wrong — which corrupts the replacement rather than merely missing it.
+ * Sorting by length means the longest spelling that actually matches is the one consumed.
+ * (Provenance: Codex adversarial review round 2 on PR #26.)
+ */
 function characterAlternatives(ch: string): string[] {
   const code = ch.codePointAt(0) ?? 0;
-  const alternatives = [escapeRegExp(ch), `&#${code};`, `&#x${code.toString(16)};`];
+  const alternatives = [
+    escapeRegExp(ch),
+    `&#${code};`,
+    `&#x${code.toString(16)};`,
+    ...(NAMED_FOR_CHAR[ch] ?? []),
+  ];
   if (!isAlnum(ch)) alternatives.push(escapeRegExp(encodeURIComponent(ch)));
   if (ch === " ") alternatives.push("\\+");
-  return alternatives;
+  return alternatives.sort((a, b) => unescapeAlternative(b).length - unescapeAlternative(a).length);
 }
 
 /**

@@ -132,10 +132,34 @@ function parseRow(
   const defaulted = opponentParts.some((part) => /^default/i.test(part));
   const rawMatchRating = collapse(cell(8).text());
 
+  const leagueContext = lines($, cell(1)).join(" ");
+  const teamName = teamParts[0];
+  // Same failure shape as an empty score cell: an emptied identity column would produce a record
+  // that still has a date, a slot and a result, and silently belongs to nobody.
+  if (leagueContext === "" || teamName === undefined || teamName === "") {
+    throw new ParseError(
+      `court on ${playedOn} has no ${leagueContext === "" ? "league context" : "team"}`,
+      `${DESKTOP_TABLE} td:nth-child(2) / td:nth-child(3)`,
+      source.url,
+    );
+  }
+
+  // The court-level idempotency key (spec § Ingestion's first discipline: re-run anytime, nothing
+  // duplicates). A record without it looks usable and cannot be reconciled on the next pull, so
+  // its absence is a structural failure rather than a missing optional field.
+  const sourceMatchId = hrefParam(cell(7).find("a").attr("href"), "mid");
+  if (sourceMatchId === null) {
+    throw new ParseError(
+      `court on ${playedOn} has no source match id`,
+      `${DESKTOP_TABLE} td:nth-child(8) a[href*='mid=']`,
+      source.url,
+    );
+  }
+
   return {
     playedOn,
-    leagueContext: lines($, cell(1)).join(" "),
-    teamName: teamParts[0] ?? "",
+    leagueContext,
+    teamName,
     teamSection: teamParts[1] ?? null,
     opponentTeamName: opponentTeam.name,
     opponentTeamSection: opponentTeam.section,
@@ -144,7 +168,7 @@ function parseRow(
     partner: parsePlayers(lines($, cell(4)), source)[0] ?? null,
     opponents: defaulted ? [] : parsePlayers(opponentParts, source),
     result: parseResult(collapse(cell(6).text()), source),
-    sets: parseSets(lines($, cell(7)), source),
+    sets: parseSets(lines($, cell(7)), defaulted, source),
     defaulted,
     matchRating: parseNumber(rawMatchRating),
     // "S" in the match column means the result was not rated because a participant was
@@ -152,7 +176,7 @@ function parseRow(
     // and one a dossier should be able to show rather than silently drop.
     selfRated: rawMatchRating.toUpperCase() === "S",
     resultingRating: parseNumber(collapse(cell(9).text())),
-    sourceMatchId: hrefParam(cell(7).find("a").attr("href"), "mid"),
+    sourceMatchId,
   };
 }
 
@@ -236,20 +260,25 @@ function assertCardinality(record: CourtMatchRecord, source: SourceRef): void {
 }
 
 /**
- * `4-6`, `7-5`, `1-0` → two sets and a match tiebreak, all **winner-first**.
+ * `4-6`, `7-5`, `1-0` → two sets and a match tiebreak, each oriented to the **match** winner.
  *
- * Winner-first is established by the fixture, not assumed: every `L` row prints the opponent
- * winning (`6-3 6-3` on a loss), which is only possible if the leading number is the winner's.
- * `SetScore` names its fields accordingly so no consumer can read them the other way round.
+ * The orientation is established from the fixture, not assumed: every straight-sets `L` row
+ * prints the opponent winning both (`6-3 6-3` on a loss), which is only possible if the leading
+ * number belongs to the match winner. It does **not** mean the leading number is larger in every
+ * set — the match winner drops one in any three-setter, which is why `4-6 7-5 1-0` is a win.
+ * `SetScore`'s field names carry that distinction so no consumer has to rediscover it.
  *
  * A 10-point match tiebreak replaces the deciding set and is printed as a one-game set, so only a
  * third-or-later `1-0` qualifies. Position is what distinguishes it from a short first set.
  *
- * **An unrecognised, non-empty score line throws.** Skipping it would let a changed score format
- * yield an empty or half-length set list on a record that still reports its W/L, which is a
- * plausible-looking match with the scores quietly removed.
+ * Two ways to fail, both loud:
+ * - **an unrecognised, non-empty score component** — a changed score format would otherwise leave
+ *   a half-length set list on a record that still reports its W/L;
+ * - **no score components at all** on a court that was actually played — an emptied cell would
+ *   otherwise produce a W/L record with `sets: []`, indistinguishable downstream from a match
+ *   that legitimately has no score. A defaulted court is exempt: nobody played it.
  */
-function parseSets(parts: string[], source: SourceRef): SetScore[] {
+function parseSets(parts: string[], defaulted: boolean, source: SourceRef): SetScore[] {
   const sets: SetScore[] = [];
   for (const part of parts) {
     const match = /^(\d+)\s*-\s*(\d+)$/.exec(part);
@@ -260,13 +289,17 @@ function parseSets(parts: string[], source: SourceRef): SetScore[] {
         source.url,
       );
     }
-    const winnerGames = Number(match[1]);
-    const loserGames = Number(match[2]);
+    const matchWinnerGames = Number(match[1]);
+    const matchLoserGames = Number(match[2]);
     sets.push({
-      winnerGames,
-      loserGames,
-      matchTiebreak: sets.length >= 2 && Math.max(winnerGames, loserGames) <= 1,
+      matchWinnerGames,
+      matchLoserGames,
+      matchTiebreak: sets.length >= 2 && Math.max(matchWinnerGames, matchLoserGames) <= 1,
     });
+  }
+
+  if (sets.length === 0 && !defaulted) {
+    throw new ParseError("played court has no score", `${DESKTOP_TABLE} td:nth-child(8)`, source.url);
   }
   return sets;
 }

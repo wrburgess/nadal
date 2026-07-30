@@ -24,8 +24,8 @@ describe("parseMatchHistory", () => {
       ],
       result: "W",
       sets: [
-        { winnerGames: 7, loserGames: 6, matchTiebreak: false },
-        { winnerGames: 6, loserGames: 3, matchTiebreak: false },
+        { matchWinnerGames: 7, matchLoserGames: 6, matchTiebreak: false },
+        { matchWinnerGames: 6, matchLoserGames: 3, matchTiebreak: false },
       ],
       defaulted: false,
       matchRating: 3.73,
@@ -51,9 +51,9 @@ describe("parseMatchHistory", () => {
     const tiebreak = matches[4];
 
     expect(tiebreak?.sets).toEqual([
-      { winnerGames: 4, loserGames: 6, matchTiebreak: false },
-      { winnerGames: 7, loserGames: 5, matchTiebreak: false },
-      { winnerGames: 1, loserGames: 0, matchTiebreak: true },
+      { matchWinnerGames: 4, matchLoserGames: 6, matchTiebreak: false },
+      { matchWinnerGames: 7, matchLoserGames: 5, matchTiebreak: false },
+      { matchWinnerGames: 1, matchLoserGames: 0, matchTiebreak: true },
     ]);
   });
 
@@ -64,7 +64,7 @@ describe("parseMatchHistory", () => {
     const shortened = fixture.html.replace(">4-6<br>7-5<br>1-0<", ">1-0<");
     const parsed = parseMatchHistory(shortened, fixture.source);
 
-    expect(parsed[4]?.sets).toEqual([{ winnerGames: 1, loserGames: 0, matchTiebreak: false }]);
+    expect(parsed[4]?.sets).toEqual([{ matchWinnerGames: 1, matchLoserGames: 0, matchTiebreak: false }]);
   });
 
   it("classifies the second real 1-0 row in the fixture, not just the mutated one", () => {
@@ -72,21 +72,54 @@ describe("parseMatchHistory", () => {
     // carries a second, differently-shaped `1-0` row (`6-7 3-1 1-0`, an unusual middle set), so
     // the rule is asserted against real markup here rather than only against a constructed case.
     expect(matches[11]?.sets).toEqual([
-      { winnerGames: 6, loserGames: 7, matchTiebreak: false },
-      { winnerGames: 3, loserGames: 1, matchTiebreak: false },
-      { winnerGames: 1, loserGames: 0, matchTiebreak: true },
+      { matchWinnerGames: 6, matchLoserGames: 7, matchTiebreak: false },
+      { matchWinnerGames: 3, matchLoserGames: 1, matchTiebreak: false },
+      { matchWinnerGames: 1, matchLoserGames: 0, matchTiebreak: true },
     ]);
   });
 
-  it("reports set scores winner-first, the way the page writes them", () => {
-    // Load-bearing and easy to get backwards. Every `L` row prints the OPPONENT winning — this
-    // match was lost 3-6, 3-6 and reads `6-3 6-3` — so a `[number, number]` tuple read as
-    // player-first would invert games-won for every loss in every dossier. The field names carry
-    // the orientation so no consumer has to know this.
-    const lost = matches[5];
+  it("orients set scores to the MATCH winner, including the set that winner lost", () => {
+    // Two claims, and the second is where a plausible-looking shortcut goes wrong.
+    //
+    // A straight-sets loss prints the opponent winning both: this match was lost 3-6, 3-6 and
+    // reads `6-3 6-3`, so the leading number is the match winner's, not the profiled player's.
+    const straightSetsLoss = matches[5];
+    expect(straightSetsLoss?.result).toBe("L");
+    expect(
+      straightSetsLoss?.sets.every((s) => s.matchWinnerGames > s.matchLoserGames),
+    ).toBe(true);
 
-    expect(lost?.result).toBe("L");
-    expect(lost?.sets.every((s) => s.winnerGames > s.loserGames)).toBe(true);
+    // But "match winner" is NOT "set winner": in a three-setter the match winner drops one. This
+    // loss reads `4-6 7-5 1-0` — the opponent lost the first set on the way to winning. Asserting
+    // matchWinnerGames > matchLoserGames for every set would be false here, which is exactly what
+    // makes the shorter field names `winnerGames`/`loserGames` wrong.
+    // (Provenance: Codex adversarial review round 2 on PR #26.)
+    const threeSetLoss = matches[4];
+    expect(threeSetLoss?.result).toBe("L");
+    expect(threeSetLoss?.sets[0]).toEqual({
+      matchWinnerGames: 4,
+      matchLoserGames: 6,
+      matchTiebreak: false,
+    });
+  });
+
+  it("throws when a played court has no score at all", () => {
+    // An emptied Result cell previously yielded a W/L record with `sets: []` — a match that reads
+    // as played and scoreless, indistinguishable downstream from one that genuinely has no score.
+    const scoreless = fixture.html.replace(
+      '<a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">7-6<br>6-3</a>',
+      '<a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336"></a>',
+    );
+
+    expect(() => parseMatchHistory(scoreless, fixture.source)).toThrow(ParseError);
+  });
+
+  it("throws when the result link no longer carries a match id", () => {
+    // `mid` is the court-level idempotency key (spec § Ingestion: re-run anytime, nothing
+    // duplicates). A record without it looks usable and cannot be reconciled on the next pull.
+    const noId = fixture.html.replace(/&mid=\d+/g, "");
+
+    expect(() => parseMatchHistory(noId, fixture.source)).toThrow(ParseError);
   });
 
   it("throws on an unrecognised score component instead of dropping it", () => {
