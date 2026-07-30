@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as client from "../src/db/client.js";
 import { runMigrations } from "../src/db/client.js";
 import { logRequest } from "../src/telemetry/request-log.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -83,6 +84,31 @@ describe("request telemetry", () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("telemetry: request_log write failed"));
     } finally {
       closeSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("sanitizes control and bidi characters in the telemetry failure diagnostic itself (Codex round-1 finding on PR #20)", async () => {
+    // The diagnostic added for the dropped-table test above wraps `err.message` — and that
+    // message can come from a real fs/SQLite error whose text embeds attacker-controlled
+    // TN_DB_PATH content, including newlines or bidi overrides. Same threat model as
+    // src/sanitize.ts's own doc comment: an unsanitized value here reintroduces terminal/log
+    // injection on the one path meant to make failures DISCOVERABLE.
+    const rtlOverride = String.fromCharCode(0x202e);
+    const openDbSpy = vi.spyOn(client, "openDb").mockImplementation(() => {
+      throw new Error(`bad\npath${rtlOverride}injected`);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await logRequest("cli", "db migrate", [], async () => 0);
+      expect(code).toBe(0);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const printed = errorSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toBe("telemetry: request_log write failed: bad path injected");
+      expect(printed).not.toContain(rtlOverride);
+      expect(printed).not.toContain("\n");
+    } finally {
+      openDbSpy.mockRestore();
       errorSpy.mockRestore();
     }
   });
