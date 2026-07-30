@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMigrations } from "../src/db/client.js";
 import { logRequest } from "../src/telemetry/request-log.js";
 
@@ -43,5 +43,26 @@ describe("request telemetry", () => {
     expect(code).toBe(1);
     const [row] = rows();
     expect(String(row?.outcome)).toMatch(/^error:/);
+  });
+
+  it("closes the sqlite handle even when the insert itself throws", async () => {
+    // Drop request_log after migration so openDb() still succeeds but the
+    // insert fails post-open — mirrors db-client-error-handling.test.ts's
+    // seed-a-conflict approach, exercising close-on-error rather than the
+    // before-first-migrate swallow path the other tests cover.
+    const seed = new Database(dbPath);
+    seed.exec("DROP TABLE request_log");
+    seed.close();
+
+    const closeSpy = vi.spyOn(Database.prototype, "close");
+    try {
+      const code = await logRequest("cli", "db migrate", [], async () => 0);
+      expect(code).toBe(0);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      const ctx = closeSpy.mock.contexts[0] as InstanceType<typeof Database>;
+      expect(ctx.open).toBe(false);
+    } finally {
+      closeSpy.mockRestore();
+    }
   });
 });

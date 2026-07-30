@@ -19,10 +19,13 @@ export async function logRequest(
   }
   try {
     const { db, sqlite } = openDb();
-    db.insert(requestLog)
-      .values({ surface, command, args: JSON.stringify(args), startedAt, endedAt: new Date().toISOString(), outcome })
-      .run();
-    sqlite.close();
+    try {
+      db.insert(requestLog)
+        .values({ surface, command, args: JSON.stringify(args), startedAt, endedAt: new Date().toISOString(), outcome })
+        .run();
+    } finally {
+      sqlite.close();
+    }
   } catch {
     // Telemetry must never break the request itself (e.g. before first migrate).
   }
