@@ -39,44 +39,58 @@ export function parseWtnWidget(html: string, source: SourceRef): WtnProfile | nu
   const widget = $(WIDGET).first();
   if (widget.length === 0) return null;
 
-  const singles = section($, widget, "SINGLES");
-  const doubles = section($, widget, "DOUBLES");
+  // Every section is inspected, not just the two we want. Asking only "is there a SINGLES
+  // section?" cannot tell a player who has no singles WTN from a page that renamed the singles
+  // title, and it misses that distinction *per discipline*: a top-level "both are null" guard
+  // stays quiet whenever the other discipline still parses, so a renamed SINGLES beside a working
+  // DOUBLES silently erases a rating. (Provenance: Codex adversarial review round 3 on PR #26.)
+  const sections = widget
+    .find(SECTION)
+    .map((_, el) => {
+      const $el = $(el);
+      return {
+        title: collapse($el.find(TITLE).first().text()).toUpperCase(),
+        rawValue: collapse($el.find(VALUE).first().text()),
+        el: $el,
+      };
+    })
+    .get();
 
-  // A widget that prints rating values but matches neither title is a page that changed its
-  // section labels, not a player without ratings — and the two are indistinguishable in the
-  // result, so the difference has to be made here or it is lost.
-  if (singles === null && doubles === null && widget.find(VALUE).length > 0) {
-    throw new ParseError("WTN widget present but no titled section matched", TITLE, source.url);
+  for (const { title, rawValue } of sections) {
+    const known = title === "WTN SINGLES" || title === "WTN DOUBLES";
+    // `rawValue === ""` is checked explicitly: `Number("")` is `0`, which is finite, so a
+    // finiteness test alone accepts an emptied value cell as a WTN of zero.
+    if (known && (rawValue === "" || !Number.isFinite(Number(rawValue)))) {
+      throw new ParseError(`"${title}" section has no numeric value`, VALUE, source.url);
+    }
+    if (!known && rawValue !== "") {
+      throw new ParseError(`unrecognised WTN section title "${title}"`, TITLE, source.url);
+    }
   }
 
-  return wtnProfileSchema.parse({ tennisId: tennisId($, widget), singles, doubles });
+  return wtnProfileSchema.parse({
+    tennisId: tennisId($, widget),
+    singles: ratingFrom($, sections, "WTN SINGLES"),
+    doubles: ratingFrom($, sections, "WTN DOUBLES"),
+  });
+}
+
+type WtnSection = { title: string; rawValue: string; el: Cheerio<AnyNode> };
+
+function ratingFrom($: CheerioAPI, sections: WtnSection[], title: string): WtnRating | null {
+  const found = sections.find((s) => s.title === title);
+  if (found === undefined) return null;
+  return {
+    value: Number(found.rawValue),
+    confidence: collapse(found.el.find(CONFIDENCE).first().text()) || null,
+    zone: parseZone(collapse(found.el.find(ZONE).first().text())),
+  };
 }
 
 function tennisId($: CheerioAPI, widget: Cheerio<AnyNode>): string | null {
   const fromLink = hrefParam(widget.find(ITF_LINK).first().attr("href"), "tennis-id");
   if (fromLink !== null) return fromLink;
   return /ITF Tennis ID\s+([A-Z0-9]+)/i.exec(collapse(widget.find(ITF_TEXT).first().text()))?.[1] ?? null;
-}
-
-function section(
-  $: CheerioAPI,
-  widget: Cheerio<AnyNode>,
-  discipline: "SINGLES" | "DOUBLES",
-): WtnRating | null {
-  const found = widget
-    .find(SECTION)
-    .filter((_, el) => collapse($(el).find(TITLE).text()).toUpperCase() === `WTN ${discipline}`)
-    .first();
-  if (found.length === 0) return null;
-
-  const value = Number(collapse(found.find(VALUE).first().text()));
-  if (!Number.isFinite(value)) return null;
-
-  return {
-    value,
-    confidence: collapse(found.find(CONFIDENCE).first().text()) || null,
-    zone: parseZone(collapse(found.find(ZONE).first().text())),
-  };
 }
 
 /** `GAME ZONE 30.87 TO 27.40` — printed high-to-low, since a lower WTN is a stronger player. */

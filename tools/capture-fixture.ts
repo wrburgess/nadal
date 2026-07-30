@@ -33,9 +33,23 @@ const DETECTOR_SETS: Record<string, Detector[]> = {
     { name: "playername", pattern: /playername=([^"&']+)/g },
     { name: "teamname", pattern: /teamname=([^"&']+)/g },
   ],
+  // The ID sweeps alone left the page's most exposed field uncovered: with a uaid in the map but
+  // the player's NAME omitted, the id was replaced, both sweeps passed, and the real displayed
+  // name shipped. A structural sweep has to cover what a human reading the page would recognise,
+  // not only what looks like an identifier.
+  // (Provenance: Codex adversarial review round 3 on PR #26.)
   usta: [
     { name: "uaid", pattern: /uaid[=:]([0-9]+)/g },
     { name: "tennis-id", pattern: /tennis-id=([A-Z0-9]+)/gi },
+    {
+      name: "displayed name",
+      pattern: /data-element-name="fullName"[\s\S]{0,400}?<h3[^>]*>([^<]+)<\/h3>/g,
+    },
+    {
+      name: "displayed location",
+      pattern:
+        /data-element-name="nameGenderAddress"[\s\S]{0,400}?<\/span>\s*\|\s*([^<|]+?)\s*<br/g,
+    },
   ],
   none: [],
 };

@@ -66,3 +66,30 @@ describe("parseWtnWidget", () => {
     expect(parseWtnWidget(mutated, doublesOnly.source)).toBeNull();
   });
 });
+
+describe("parseWtnWidget — partial section drift", () => {
+  it("throws when one discipline's title changes while the other still parses", () => {
+    // The dangerous shape, and the one a "both are null" guard cannot see: rename only SINGLES
+    // and the result is a valid-looking doubles-only profile, indistinguishable from a player who
+    // genuinely has no singles rating. The singles WTN is simply gone.
+    // (Provenance: Codex adversarial review round 3 on PR #26.)
+    const renamedSingles = both.html.replace("WTN SINGLES", "SINGLES WTN");
+
+    expect(() => parseWtnWidget(renamedSingles, both.source)).toThrow(ParseError);
+  });
+
+  it("throws when a recognised section loses its numeric value", () => {
+    const noValue = both.html.replace(
+      '<p class="v-form-wtn-widget__section-value">31.65</p>',
+      '<p class="v-form-wtn-widget__section-value"></p>',
+    );
+
+    expect(() => parseWtnWidget(noValue, both.source)).toThrow(ParseError);
+  });
+
+  it("still reads a genuine doubles-only profile without complaint", () => {
+    // The other side of the same guard: failing closed must not reject the real page that has one
+    // section because that player has one rating.
+    expect(parseWtnWidget(doublesOnly.html, doublesOnly.source)?.singles).toBeNull();
+  });
+});

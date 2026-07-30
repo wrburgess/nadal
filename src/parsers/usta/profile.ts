@@ -41,7 +41,7 @@ export function parseUstaProfile(html: string, source: SourceRef): UstaProfile {
     throw new ParseError("no uaid in the source URL", "source.url#uaid", source.url);
   }
 
-  const context = contextLines($);
+  const context = contextLines($, source);
 
   return ustaProfileSchema.parse({
     name,
@@ -66,19 +66,34 @@ function uaidFrom(url: string): string | null {
  * Gender is emitted exactly as printed (`MALE`), like every other identity-adjacent value here —
  * mapping the sources' different spellings onto one vocabulary is an ingest decision, made once
  * where both sources meet, not twice inside two parsers.
+ *
+ * The block is **required**, and so is its identity paragraph. Letting it go missing produced a
+ * record with a real name and uaid, an empty gender, and null location/section/district — a
+ * profile that looks usable and carries no context at all, which is worse than one that failed.
+ * (Provenance: Codex adversarial review round 3 on PR #26.)
  */
-function contextLines($: CheerioAPI): {
+function contextLines(
+  $: CheerioAPI,
+  source: SourceRef,
+): {
   gender: string | null;
   location: string | null;
   labelled: (label: string) => string | null;
 } {
-  const paragraphs = $(CONTEXT)
-    .first()
+  const block = $(CONTEXT).first();
+  if (block.length === 0) {
+    throw new ParseError("player context block not found", CONTEXT, source.url);
+  }
+
+  const paragraphs = block
     .find("p")
     .map((_, p) => collapse($(p).text()))
     .get();
 
   const identity = (paragraphs[0] ?? "").split("|").map(collapse);
+  if ((identity[0] ?? "") === "") {
+    throw new ParseError("player context block has no identity line", `${CONTEXT} p`, source.url);
+  }
   const fields = paragraphs
     .slice(1)
     .flatMap((line) => line.split("|"))

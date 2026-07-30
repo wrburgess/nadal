@@ -58,3 +58,16 @@ describe("parseTennisRecordProfile", () => {
     expect(() => parseTennisRecordProfile(mutated, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseTennisRecordProfile — aggregate integrity", () => {
+  it("throws when an aggregate cell stops being a number, rather than recording a zero", () => {
+    // Coercing a missing cell to 0 turns column drift into statistics: a season row claiming zero
+    // wins, zero losses and zero games reads as a player who did not play, and is
+    // indistinguishable from one who did.
+    // (Provenance: Codex adversarial review round 3 on PR #26.)
+    const blanked = fixture.html.replace(">13<", "><");
+
+    expect(blanked).not.toBe(fixture.html);
+    expect(() => parseTennisRecordProfile(blanked, fixture.source)).toThrow(ParseError);
+  });
+});

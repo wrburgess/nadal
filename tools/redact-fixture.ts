@@ -178,7 +178,34 @@ function applyStyle(value: string, style: Map<string, string>): string {
  * Spellings are applied longest-first so a longer identity ("Cory Hogan") is consumed before a
  * shorter one that is a prefix of it ("Cory") can carve it up.
  */
+/**
+ * Characters a replacement may not contain.
+ *
+ * Substitution runs over raw markup, so a stand-in carrying `'` would terminate a single-quoted
+ * href the moment it landed in one — corrupting the very markup the fixture exists to preserve,
+ * and doing it in whichever attribute happened to hold the name. Escaping per attribute context
+ * would mean parsing and re-serialising the document, which alters markup by itself; refusing the
+ * input is both stricter and non-destructive, and the operator picks the stand-ins anyway.
+ * `&` is permitted: it cannot terminate an attribute, and real team names contain it
+ * (`HOA/Fenwick/18&over4.0M`). (Provenance: Codex adversarial review round 3 on PR #26.)
+ */
+const UNSAFE_IN_REPLACEMENT = /["'<>]/;
+
+function assertSafeReplacements(substitutions: Substitution[]): void {
+  const unsafe = substitutions.filter((s) => UNSAFE_IN_REPLACEMENT.test(s.to));
+  if (unsafe.length > 0) {
+    throw new RedactionError(
+      `replacement values may not contain " ' < or > — they would break the markup they land in:\n${unsafe
+        .map((s) => `  ${s.to}`)
+        .join("\n")}`,
+      unsafe.map((s) => s.to),
+    );
+  }
+}
+
 export function redactHtml(html: string, substitutions: Substitution[]): string {
+  assertSafeReplacements(substitutions);
+
   let out = html.replace(SCRIPT_OR_STYLE, (match) => {
     const tag = match.slice(1, match.indexOf(">")).split(/\s/)[0];
     return `<${tag}></${tag}>`;

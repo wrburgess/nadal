@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
-import type { CheerioAPI } from "cheerio";
+import type { Cheerio, CheerioAPI } from "cheerio";
+import type { AnyNode } from "domhandler";
 import { collapse, parseNumber, parseWinLoss, tableWithCellText } from "../dom.js";
 import {
   ParseError,
@@ -11,6 +12,28 @@ import {
 
 const ROSTER_SCOPE = "div.large";
 const ROSTER_COLUMN = "NTRP";
+
+/**
+ * The roster's column contract, in order. Cells are decoded positionally, so the *order* is the
+ * contract — anchoring on a single `NTRP` header proves the right table was found and nothing
+ * about where anything is inside it. Drop the Location column and every field after it shifts by
+ * one: locations become ratings, ratings become win/loss records, and the nullable parsers absorb
+ * the mismatch into plausible-looking nulls without a single error.
+ * (Provenance: Codex adversarial review round 3 on PR #26.)
+ *
+ * Matched on whitespace-stripped, lower-cased header text, because the page writes these with
+ * `<br>` inside them (`Local<br>Singles`) and the season column carries a year (`2026<br>Record`).
+ */
+const ROSTER_COLUMNS: RegExp[] = [
+  /^name$/,
+  /^location$/,
+  /^ntrp$/,
+  /record$/,
+  /^localsingles$/,
+  /^localdoubles$/,
+  /^localrecord$/,
+  /^rating$/,
+];
 
 /**
  * Parse a TennisRecord team profile: the team's league context and its roster with ratings.
@@ -32,6 +55,7 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
     );
   }
   const header = parseHeader($, source);
+  assertRosterColumns($, table, source);
 
   const roster = table
     .find("tr")
@@ -41,6 +65,13 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
         .find("td")
         .map((_i, td) => collapse($(td).text()))
         .get();
+      if (cells.length < ROSTER_COLUMNS.length) {
+        throw new ParseError(
+          `roster row has ${cells.length} cells, expected at least ${ROSTER_COLUMNS.length}`,
+          `${ROSTER_SCOPE} tr`,
+          source.url,
+        );
+      }
       return {
         name: cells[0] ?? "",
         location: cells[1] ?? null,
@@ -56,6 +87,38 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
     .filter((entry) => entry.name !== "");
 
   return tennisRecordTeamSchema.parse({ ...header, roster });
+}
+
+/** Verify the ordered column contract before any positional decoding happens. */
+function assertRosterColumns(
+  $: CheerioAPI,
+  table: Cheerio<AnyNode>,
+  source: SourceRef,
+): void {
+  const headers = table
+    .find("tr")
+    .first()
+    .find("th")
+    .map((_, th) => collapse($(th).text()).replace(/\s+/g, "").toLowerCase())
+    .get();
+
+  if (headers.length !== ROSTER_COLUMNS.length) {
+    throw new ParseError(
+      `roster has ${headers.length} columns, expected ${ROSTER_COLUMNS.length} (${headers.join(", ")})`,
+      `${ROSTER_SCOPE} tr th`,
+      source.url,
+    );
+  }
+  ROSTER_COLUMNS.forEach((expected, index) => {
+    const actual = headers[index] ?? "";
+    if (!expected.test(actual)) {
+      throw new ParseError(
+        `roster column ${index} is "${actual}", expected ${String(expected)}`,
+        `${ROSTER_SCOPE} tr th:nth-child(${index + 1})`,
+        source.url,
+      );
+    }
+  });
 }
 
 /**

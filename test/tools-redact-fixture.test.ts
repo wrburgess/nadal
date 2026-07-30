@@ -224,3 +224,24 @@ function describeStructure(html: string): string[] {
   });
   return out;
 }
+
+describe("replacement safety", () => {
+  it("refuses a replacement that would break the markup it lands in", () => {
+    // Substitution runs over raw markup, so a stand-in carrying an apostrophe terminates the
+    // single-quoted href it lands in — corrupting the very markup the fixture exists to preserve.
+    // Refusing the input is stricter than escaping and, unlike parsing and re-serialising the
+    // document, does not alter markup by itself.
+    // (Provenance: Codex adversarial review round 3 on PR #26.)
+    expect(() =>
+      redactHtml("<a href='/p?playername=Cory Hogan'>x</a>", [
+        { from: "Cory Hogan", to: "Dana O'Brien" },
+      ]),
+    ).toThrow(RedactionError);
+  });
+
+  it("still allows an ampersand, which real team names contain", () => {
+    const out = redactHtml("<p>A&amp;B Club</p>", [{ from: "A&B Club", to: "C&D Club" }]);
+
+    expect(out).toBe("<p>C&amp;D Club</p>");
+  });
+});

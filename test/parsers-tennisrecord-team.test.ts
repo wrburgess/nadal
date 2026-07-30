@@ -71,3 +71,28 @@ describe("parseTennisRecordTeam", () => {
     expect(parsed.ratingLevel).toBe("4.0");
   });
 });
+
+describe("parseTennisRecordTeam — column contract", () => {
+  it("throws when a roster column is removed, rather than shifting every field", () => {
+    // Anchoring on a single NTRP header proves the right table was found and nothing about where
+    // anything sits inside it. Drop Location and every later field shifts by one: locations
+    // become ratings, ratings become win/loss records, and the nullable parsers absorb the
+    // mismatch into plausible nulls. A materially wrong roster, with no error.
+    // (Provenance: Codex adversarial review round 3 on PR #26.)
+    const noLocation = fixture.html
+      .replace('<th style="text-align:left;" class="hide">Location</th>', "")
+      .replace(/<td style="text-align:left;" class="hide">[^<]*<\/td>/g, "");
+
+    expect(() => parseTennisRecordTeam(noLocation, fixture.source)).toThrow(ParseError);
+  });
+
+  it("throws when a roster column is reordered", () => {
+    const location = '<th style="text-align:left;" class="hide">Location</th>';
+    const ntrp = '<th style="text-align:center; border-right:1px solid #ddd;">NTRP</th>';
+    const swapped = fixture.html.replace(location, "@@LOC@@").replace(ntrp, location).replace("@@LOC@@", ntrp);
+    // Only assert if the mutation applied; otherwise the header layout changed and this test
+    // would silently pass on an unmutated fixture.
+    expect(swapped).not.toBe(fixture.html);
+    expect(() => parseTennisRecordTeam(swapped, fixture.source)).toThrow(ParseError);
+  });
+});

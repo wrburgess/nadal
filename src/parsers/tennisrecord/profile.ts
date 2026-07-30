@@ -15,6 +15,9 @@ const PLAYING_AREAS_LABEL = "Current Playing Areas (Player Rating Lists)";
 const RECENT_TEAM_LABEL = "Recent Team";
 const SEASON_LABEL = "All Matches";
 
+/** year + (total, win, loss, pct) x 3 + defaults. Positional decoding, so the count is a contract. */
+const AGGREGATE_CELLS = 14;
+
 /**
  * Parse a TennisRecord player profile: where the player currently rates, which teams they have
  * appeared for, and their per-season aggregate record.
@@ -97,22 +100,57 @@ function parseSeasonRecords($: CheerioAPI, source: SourceRef): SeasonRecord[] {
       // Columns: year, then (total, win, loss, pct) for matches / sets / games, then defaults.
       // The percentages are derived and deliberately dropped — recomputing them from the counts
       // is exact, whereas storing a rounded copy invites the two to disagree.
+      const year = cells[0] ?? "";
+      if (year === "") return null;
+      if (cells.length < AGGREGATE_CELLS) {
+        throw new ParseError(
+          `season row "${year}" has ${cells.length} cells, expected ${AGGREGATE_CELLS}`,
+          `${SEASON_LABEL} tr`,
+          source.url,
+        );
+      }
       return {
-        year: cells[0] ?? "",
-        matches: counts(cells, 1),
-        sets: counts(cells, 5),
-        games: counts(cells, 9),
-        defaults: parseNumber(cells[13]) ?? 0,
+        year,
+        matches: counts(cells, 1, year, source),
+        sets: counts(cells, 5, year, source),
+        games: counts(cells, 9, year, source),
+        defaults: count(cells, 13, year, source),
       };
     })
     .get()
-    .filter((row) => row.year !== "");
+    .filter((row): row is SeasonRecord => row !== null);
 }
 
-function counts(cells: string[], at: number): { total: number; wins: number; losses: number } {
+function counts(
+  cells: string[],
+  at: number,
+  year: string,
+  source: SourceRef,
+): { total: number; wins: number; losses: number } {
   return {
-    total: parseNumber(cells[at]) ?? 0,
-    wins: parseNumber(cells[at + 1]) ?? 0,
-    losses: parseNumber(cells[at + 2]) ?? 0,
+    total: count(cells, at, year, source),
+    wins: count(cells, at + 1, year, source),
+    losses: count(cells, at + 2, year, source),
   };
+}
+
+/**
+ * Every aggregate cell must hold a real number.
+ *
+ * Coercing a missing or unparsable cell to `0` turns column drift into *statistics*: a season row
+ * claiming zero wins, zero losses and zero games reads as a player who did not play, and it is
+ * indistinguishable from one who did. That is a corrupted historical scouting signal delivered
+ * with no error at all — the exact shape this parser layer exists to refuse.
+ * (Provenance: Codex adversarial review round 3 on PR #26.)
+ */
+function count(cells: string[], at: number, year: string, source: SourceRef): number {
+  const value = parseNumber(cells[at]);
+  if (value === null) {
+    throw new ParseError(
+      `season row "${year}" column ${at} is not a number ("${cells[at] ?? ""}")`,
+      `${SEASON_LABEL} td:nth-child(${at + 1})`,
+      source.url,
+    );
+  }
+  return value;
 }

@@ -72,3 +72,14 @@ describe("parseUstaProfile", () => {
     expect(parseUstaProfile(mutated, fixture.source).name).toBe("Ulverton, Umber");
   });
 });
+
+describe("parseUstaProfile — context block", () => {
+  it("throws when the context block is gone, rather than emitting a context-free player", () => {
+    // Previously produced a record with a real name and uaid, an empty gender and null
+    // location/section/district: a profile that looks usable and carries no context at all.
+    // (Provenance: Codex adversarial review round 3 on PR #26.)
+    const noContext = fixture.html.replace(/nameGenderAddress/g, "somethingElse");
+
+    expect(() => parseUstaProfile(noContext, fixture.source)).toThrow(ParseError);
+  });
+});
