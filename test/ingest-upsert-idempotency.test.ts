@@ -288,3 +288,53 @@ describe("upsert idempotency — the headline test", () => {
     }
   });
 });
+
+// Codex adversarial review, PR #31 [high]: ordered (home, visiting, date) is not an identity for an
+// id-less fixture, because team-pull assigns the PULLED team to `home`. The first fix reproduced the
+// very defect it was closing, one perspective over.
+describe("id-less team matches across opposing perspectives", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  it("REGRESSION: the same unplayed fixture pulled from BOTH teams' pages stays one row", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const base = { eventId: null, playedOn: "2026-06-01", sourceMatchId: null };
+
+      // From A's page: A is home. From B's page: B is home. Same fixture.
+      upsertTeamMatch(db, { ...base, homeTeamId: a.id, visitingTeamId: b.id, homeCourtsWon: null, visitingCourtsWon: null });
+      upsertTeamMatch(db, { ...base, homeTeamId: b.id, visitingTeamId: a.id, homeCourtsWon: null, visitingCourtsWon: null });
+
+      expect(db.select().from(teamMatches).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("court counts arriving from the opposite perspective are stored in the STORED row's orientation", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const base = { eventId: null, playedOn: "2026-06-08", sourceMatchId: null };
+
+      // A's page: A won 3-2. Stored with A as home.
+      upsertTeamMatch(db, { ...base, homeTeamId: a.id, visitingTeamId: b.id, homeCourtsWon: 3, visitingCourtsWon: 2 });
+      // B's page describes the same fixture as B 2, A 3 — from B's perspective B is home.
+      upsertTeamMatch(db, { ...base, homeTeamId: b.id, visitingTeamId: a.id, homeCourtsWon: 2, visitingCourtsWon: 3 });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      // Still oriented to the stored row (A home), NOT silently inverted by the second write.
+      expect(rows[0]?.homeTeamId).toBe(a.id);
+      expect(rows[0]?.homeCourtsWon).toBe(3);
+      expect(rows[0]?.visitingCourtsWon).toBe(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+});

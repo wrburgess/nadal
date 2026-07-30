@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -164,5 +165,46 @@ describe("assertArchivePathSafe", () => {
       : [];
     expect(after).toEqual(before);
     expect(existsSync(resolve("escape.html"))).toBe(false);
+  });
+});
+
+// Codex adversarial review, PR #31 [critical]: a LEXICAL path check answers "what does this string
+// say", not "where do the bytes land". Every assertion below passes the string comparisons and must
+// still be refused, because the filesystem disagrees with the path.
+describe("archive guard vs the filesystem (symlinks)", () => {
+  useTnRawPath();
+
+  it("REGRESSION: refuses a raw root that is a symlink INTO the repo tree", () => {
+    const link = join(mkdtempSync(join(tmpdir(), "tn-link-")), "raw-link");
+    symlinkSync(resolve("src"), link, "dir");
+    process.env.TN_RAW_PATH = link;
+
+    // Lexically this root is outside the repo and every leaf is "inside rawRoot" — it must still fail.
+    expect(() => assertArchivePathSafe(join(link, "tennisrecord", "x.html"))).toThrow(ArchivePathError);
+    expect(() =>
+      archivePage({ sourceSet: "tennisrecord", slug: "x", url: "https://example.test", body: "leak", httpStatus: 200 }),
+    ).toThrow(ArchivePathError);
+    expect(existsSync(join(resolve("src"), "tennisrecord"))).toBe(false);
+  });
+
+  it("REGRESSION: refuses a symlinked component INSIDE the raw root", () => {
+    const root = rawRoot();
+    mkdirSync(root, { recursive: true });
+    symlinkSync(resolve("src"), join(root, "tennisrecord"), "dir");
+
+    expect(() =>
+      archivePage({ sourceSet: "tennisrecord", slug: "x", url: "https://example.test", body: "leak", httpStatus: 200 }),
+    ).toThrow(ArchivePathError);
+    expect(existsSync(join(resolve("src"), "x.html"))).toBe(false);
+  });
+
+  it("still allows a raw root that is a symlink to a directory OUTSIDE the repo", () => {
+    const target = mkdtempSync(join(tmpdir(), "tn-real-"));
+    const link = join(mkdtempSync(join(tmpdir(), "tn-link-")), "raw-link");
+    symlinkSync(target, link, "dir");
+    process.env.TN_RAW_PATH = link;
+
+    const written = archivePage({ sourceSet: "tennisrecord", slug: "x", url: "https://example.test", body: "ok", httpStatus: 200 });
+    expect(existsSync(written)).toBe(true);
   });
 });

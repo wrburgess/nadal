@@ -121,3 +121,60 @@ describe("fetchPage", () => {
     expect(sleeps).toEqual([]);
   });
 });
+
+// Codex adversarial review, PR #31 [medium x2]: the politeness pacing and the non-2xx path both had
+// failure modes the existing tests structurally could not observe.
+describe("fetchPage — concurrency and non-2xx handling", () => {
+  it("REGRESSION: concurrent callers are paced, not released together", async () => {
+    let virtualNow = 0;
+    const clock = { now: () => virtualNow };
+    // The property under test is WHEN each request is released, not how long any one caller slept —
+    // the fake clock advances as earlier callers wait, so the durations alone are ambiguous.
+    const startedAt: number[] = [0];
+    const sleep = async (ms: number) => {
+      virtualNow += ms;
+      startedAt.push(virtualNow);
+    };
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html>ok</html>");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/`;
+
+    try {
+      await Promise.all([
+        fetchPage(url, { clock, sleep, politenessMs: 1500 }),
+        fetchPage(url, { clock, sleep, politenessMs: 1500 }),
+        fetchPage(url, { clock, sleep, politenessMs: 1500 }),
+      ]);
+
+      // Caller 1 goes immediately; 2 and 3 each wait for their OWN reserved slot, 1500ms apart.
+      // Before the fix, callers 2 and 3 both observed the same "last call" timestamp — caller 3 saw
+      // 1500ms already elapsed and skipped its wait entirely — so the releases were [0, 1500, 1500]
+      // and two requests went out together.
+      expect(startedAt).toEqual([0, 1500, 3000]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("REGRESSION: a non-2xx whose body never ends still rejects with FetchError, not a timeout", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.write("start of an error body that never completes");
+      // deliberately never res.end() — the response body hangs open
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      await expect(fetchPage(`http://127.0.0.1:${port}/`, { timeoutMs: 30_000 })).rejects.toThrow(FetchError);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  }, 10_000);
+});

@@ -145,3 +145,40 @@ describe("tn team pull (end-to-end via dispatch)", () => {
     expect(rows.map((r) => r.outcome)).toEqual(expect.arrayContaining(["ok", "error:exit-1"]));
   });
 });
+
+// Codex adversarial review, PR #31 [high]: the team transaction commits BEFORE the --players
+// cascade, so a cascade that pulls zero players still returned `ok`. The CLI discarded
+// `skippedRosterEntries` entirely, so a caller reading only the exit code saw success.
+describe("tn team pull --players (partial cascade)", () => {
+  useTnDbPath("cmd-partial.db");
+  useTnRawPath();
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("REGRESSION: a cascade that fails for every roster entry reports status=partial and exits non-zero", async () => {
+    runMigrations();
+    // The team page parses; every cascaded player page is structurally broken, so each pullPlayer
+    // returns a non-ok result and is recorded as skipped.
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: url === team.source.url ? team.html : "<html><body>not a match history</body></html>",
+      fetchedAt: new Date().toISOString(),
+    }));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "pull", team.source.url, "--players"]);
+
+    expect(code).toBe(1);
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    const line = String(errSpy.mock.calls[0]?.[0]);
+    expect(line).toMatch(/^team pull status=partial /);
+    expect(line).toContain("skipped=18");
+    expect(line).toContain('skippedEntries="');
+  });
+});

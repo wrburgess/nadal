@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Anchored to this module's own location (repo root, two levels up from src/ingest/) rather than
@@ -38,6 +38,59 @@ function assertRawRootSafe(resolvedRoot: string): void {
   );
 }
 
+/**
+ * A LEXICAL path check answers "what does this string say", not "where do the bytes land" — and the
+ * filesystem is free to disagree. `resolve()` never consults the disk, so making `<repo>/raw` a
+ * symlink to `<repo>/src`, or pointing `TN_RAW_PATH` at an external symlink that targets the repo,
+ * satisfies every string comparison above while `writeFileSync` happily follows the link and drops
+ * un-redacted captures into tracked source. (Codex adversarial review, PR #31, rated critical.)
+ *
+ * So the root is re-validated at its REAL location whenever it already exists. A symlinked root is
+ * not itself forbidden — pointing the archive at an external disk is legitimate — what matters is
+ * where it actually resolves to.
+ */
+function assertRealRootSafe(resolvedRoot: string): void {
+  const real = realpathOfNearestExisting(resolvedRoot);
+  if (real !== resolvedRoot) assertRawRootSafe(real);
+}
+
+/**
+ * `realpathSync` throws ENOENT on a path that does not exist yet, and the archive root legitimately
+ * does not exist before the first capture — resolving it unconditionally would make every first run
+ * fail. Resolve the deepest EXISTING ancestor instead and re-append the rest: the symlink can only
+ * live in a component that exists, so this sees every link there is to see.
+ */
+function realpathOfNearestExisting(target: string): string {
+  const trailing: string[] = [];
+  let current = target;
+  for (;;) {
+    try {
+      return join(realpathSync.native(current), ...trailing);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return target;
+      trailing.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Inside the root, no path component may be a symlink at all. Unlike the root itself there is no
+ * legitimate reason for one, and allowing them would reintroduce the same escape one level down —
+ * `raw/tennisrecord` → `../../src` lands outside the root the check just validated.
+ */
+function assertNoSymlinkComponents(resolvedRoot: string, resolvedTarget: string): void {
+  const rel = relative(resolvedRoot, resolvedTarget);
+  let current = resolvedRoot;
+  for (const part of rel.split(sep).slice(0, -1)) {
+    current = join(current, part);
+    if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+      throw new ArchivePathError(`refusing to write through a symlinked archive component: ${current}`);
+    }
+  }
+}
+
 export type ArchivePageInput = {
   sourceSet: string;
   slug: string;
@@ -66,6 +119,7 @@ export class ArchivePathError extends Error {}
 export function assertArchivePathSafe(candidatePath: string, root: string = rawRoot()): void {
   const resolvedRoot = resolve(root);
   assertRawRootSafe(resolvedRoot);
+  assertRealRootSafe(resolvedRoot);
   const resolvedCandidate = resolve(candidatePath);
   const rel = relative(resolvedRoot, resolvedCandidate);
   const escapes = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
@@ -74,6 +128,7 @@ export function assertArchivePathSafe(candidatePath: string, root: string = rawR
       `refusing to write archive path outside raw root "${resolvedRoot}": ${resolvedCandidate}`,
     );
   }
+  assertNoSymlinkComponents(resolvedRoot, resolvedCandidate);
 }
 
 // Guarantees two archives of the same (sourceSet, slug) within one process get distinct
@@ -108,7 +163,13 @@ export function archivePage(input: ArchivePageInput): string {
   assertArchivePathSafe(provenancePath);
 
   mkdirSync(dir, { recursive: true });
-  writeFileSync(htmlPath, input.body, "utf8");
+  // Re-checked AFTER mkdir: `mkdirSync(..., { recursive: true })` treats an existing symlink-to-a-
+  // directory as "already there" and succeeds silently, so the pre-check alone leaves a
+  // check-then-use gap. `flag: "wx"` (O_CREAT|O_EXCL) closes the leaf half — it refuses to follow an
+  // existing symlink at the target rather than writing through it, and the timestamped filenames
+  // mean a genuine collision cannot happen in normal operation.
+  assertNoSymlinkComponents(resolve(rawRoot()), resolve(htmlPath));
+  writeFileSync(htmlPath, input.body, { encoding: "utf8", flag: "wx" });
 
   const provenance: ArchiveProvenance = {
     sourceUrl: input.url,
@@ -117,7 +178,7 @@ export function archivePage(input: ArchivePageInput): string {
     redacted: false,
     bytes: Buffer.byteLength(input.body, "utf8"),
   };
-  writeFileSync(provenancePath, JSON.stringify(provenance, null, 2), "utf8");
+  writeFileSync(provenancePath, JSON.stringify(provenance, null, 2), { encoding: "utf8", flag: "wx" });
 
   return htmlPath;
 }

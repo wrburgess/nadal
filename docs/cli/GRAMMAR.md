@@ -22,6 +22,14 @@ link through a player pull), and `--from <path>` / `--source-url <url>` (read a 
 page instead of fetching live — the two are required together). An unrecognized `--flag` on either
 command is an error, not silently ignored.
 
+`status=` carries a third value beyond `ok` and `error`: **`status=partial`**, emitted by
+`tn team pull --players` when the team itself was written but one or more requested roster cascades
+did not land. It prints to stderr and **exits non-zero**, and names the affected entries in
+`skipped=` / `skippedEntries=`. The team write has already committed and is not rolled back — that
+is precisely why the outcome is `partial` rather than `error`, and why it must not be reported as
+`ok`: a caller that reads only the exit code would otherwise record a success in which zero of the
+requested player pulls happened.
+
 The parity test (`test/cli-grammar-parity.test.ts`) fails CI when this table and the router's
 registry diverge — in either direction. `dispatch` treats `--help` ANYWHERE in argv as a request
 for help text (checked before the target is parsed), so a target literally spelled `--help` can

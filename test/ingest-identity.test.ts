@@ -170,3 +170,28 @@ describe("resolveTeam", () => {
     }
   });
 });
+
+// Codex adversarial review, PR #31 [medium]: tier 2 folded case in SQLite (`lower()`, ASCII-only)
+// while the canonical-name half of the SAME tier folded in JS (Unicode). One identity ladder cannot
+// run two different notions of "the same name" — the gap creates a SECOND row for someone on file.
+describe("identity ladder — Unicode case folding", () => {
+  useTnDbPath();
+
+  it("REGRESSION: a non-ASCII alias resolves case-insensitively instead of creating a split identity", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const created = resolvePlayer(db, { name: "Jane Smith" });
+      if (created.kind === "ambiguous") throw new Error("unexpected ambiguous");
+      db.insert(playerAliases).values({ playerId: created.row.id, alias: "Élodie Ünwin" }).run();
+
+      const resolved = resolvePlayer(db, { name: "élodie ünwin" });
+
+      expect(resolved.kind).toBe("matched");
+      if (resolved.kind === "matched") expect(resolved.row.id).toBe(created.row.id);
+      expect(db.select().from(players).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+});

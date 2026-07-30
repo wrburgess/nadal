@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   courtMatchPlayers,
   courtMatches,
@@ -143,29 +143,52 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
     // A row with no source id still has to be idempotent, and the partial index deliberately does
     // NOT cover it. An UNPLAYED fixture on a team page is exactly this case — its result cell has
     // no result link, so no `mid=` — and re-pulling that page weekly through a plain insert grew
-    // one duplicate row per unplayed fixture per pull. Fall back to the row's natural composite:
-    // the same two teams on the same date IS the same team match.
+    // one duplicate row per unplayed fixture per pull.
+    //
+    // The fallback key is the UNORDERED team pair plus the date. Ordered `(home, visiting, date)`
+    // is not an identity here: team-pull assigns the PULLED team to `home`, so the same fixture
+    // pulled from the opposing team's page searches `(B,A,date)`, misses `(A,B,date)`, and inserts
+    // a duplicate anyway — the first fix reproduced the very defect it was closing, one perspective
+    // over. (Codex adversarial review, PR #31, rated high.) Home/visiting is page perspective, not
+    // real home/away, so it cannot be part of an identity; the pair-as-a-set can.
+    const playedOnMatches =
+      values.playedOn === null || values.playedOn === undefined
+        ? isNull(teamMatches.playedOn)
+        : eq(teamMatches.playedOn, values.playedOn);
     const existing = db
       .select()
       .from(teamMatches)
       .where(
         and(
           isNull(teamMatches.sourceMatchId),
-          eq(teamMatches.homeTeamId, values.homeTeamId),
-          eq(teamMatches.visitingTeamId, values.visitingTeamId),
-          values.playedOn === null || values.playedOn === undefined
-            ? isNull(teamMatches.playedOn)
-            : eq(teamMatches.playedOn, values.playedOn),
+          playedOnMatches,
+          or(
+            and(
+              eq(teamMatches.homeTeamId, values.homeTeamId),
+              eq(teamMatches.visitingTeamId, values.visitingTeamId),
+            ),
+            and(
+              eq(teamMatches.homeTeamId, values.visitingTeamId),
+              eq(teamMatches.visitingTeamId, values.homeTeamId),
+            ),
+          ),
         ),
       )
       .all()[0];
     if (existing === undefined) return db.insert(teamMatches).values(values).returning().get();
+    // The stored row may hold the OPPOSITE orientation (it was first written from the other team's
+    // page). Court counts are orientation-bound, so they are swapped to match the stored row rather
+    // than written straight through — otherwise a re-pull from the other side would silently invert
+    // the score while leaving the team columns alone.
+    const reversed = existing.homeTeamId === values.visitingTeamId && existing.visitingTeamId === values.homeTeamId;
+    const incomingHome = values.homeCourtsWon ?? null;
+    const incomingVisiting = values.visitingCourtsWon ?? null;
     return db
       .update(teamMatches)
       .set({
         eventId: values.eventId ?? null,
-        homeCourtsWon: values.homeCourtsWon ?? null,
-        visitingCourtsWon: values.visitingCourtsWon ?? null,
+        homeCourtsWon: reversed ? incomingVisiting : incomingHome,
+        visitingCourtsWon: reversed ? incomingHome : incomingVisiting,
       })
       .where(eq(teamMatches.id, existing.id))
       .returning()

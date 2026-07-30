@@ -50,10 +50,16 @@ const realClock: Clock = { now: () => Date.now() };
 const realSleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Keyed by clock identity (not a single module-level number) so production's single shared
-// `realClock` accumulates one running "last call" timestamp across every real call, while each
-// test's own injected `clock` object gets its own independent state and tests never interfere
+// `realClock` accumulates one running "next permitted call" timestamp across every real call, while
+// each test's own injected `clock` object gets its own independent state and tests never interfere
 // with each other's politeness bookkeeping.
-const lastCallAtByClock = new WeakMap<Clock, number>();
+//
+// This stores a RESERVED slot, not a "last call at". A plain read-sleep-write sequence is not
+// serialized: `Promise.all([fetchPage(a), fetchPage(b)])` had both callers observe the same
+// timestamp, sleep the same duration, and then fire together — defeating the pacing at exactly the
+// moment it matters most. (Codex adversarial review, PR #31, rated medium.) Each caller instead
+// claims the next slot SYNCHRONOUSLY, before its first await, so claims cannot interleave.
+const nextSlotByClock = new WeakMap<Clock, number>();
 
 /**
  * Fetch a page: Node's global `fetch`, the shared capture user-agent, a request timeout, and a
@@ -66,23 +72,29 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
   const clock = options.clock ?? realClock;
   const sleep = options.sleep ?? realSleep;
 
-  const lastCallAt = lastCallAtByClock.get(clock);
-  if (lastCallAt !== undefined) {
-    const elapsed = clock.now() - lastCallAt;
-    if (elapsed < politenessMs) await sleep(politenessMs - elapsed);
-  }
-  lastCallAtByClock.set(clock, clock.now());
+  // Claimed synchronously — no `await` between reading and writing the slot, so two concurrent
+  // callers cannot both claim the same one.
+  const now = clock.now();
+  const slot = Math.max(now, nextSlotByClock.get(clock) ?? now);
+  nextSlotByClock.set(clock, slot + politenessMs);
+  if (slot > now) await sleep(slot - now);
 
   const response = await fetch(url, {
     headers: { "user-agent": USER_AGENT },
     signal: AbortSignal.timeout(timeoutMs),
   });
-  const body = await response.text();
-  const fetchedAt = new Date().toISOString();
 
+  // Checked BEFORE the body is read. Reading first meant a server that sent 404/500 headers and
+  // then streamed an endless body left the caller blocked until the abort timeout, surfacing a
+  // timeout error instead of the documented FetchError — and buffering an arbitrarily large error
+  // body on the way. (Codex adversarial review, PR #31, rated medium.) The body of a failed
+  // response is not something this caller ever uses.
   if (!response.ok) {
     throw new FetchError(`fetch failed with status ${response.status}: ${url}`, response.status, url);
   }
+
+  const body = await response.text();
+  const fetchedAt = new Date().toISOString();
 
   return { url, status: response.status, body, fetchedAt };
 }

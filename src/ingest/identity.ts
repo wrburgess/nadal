@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { playerAliases, players, teams } from "../db/schema.js";
 import type { Db } from "./db-types.js";
 
@@ -139,11 +139,16 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
 
   const allPlayers = db.select().from(players).all();
 
+  // Case-folded in JS, NOT in SQL. SQLite's `lower()` is ASCII-only, while the canonical-name half
+  // of this same tier uses JavaScript's Unicode-aware `toLowerCase()` — so an alias `Élodie` would
+  // never match a source spelling `élodie`, the tier-2 lookup would miss, and a SECOND player row
+  // would be created for someone already on file. One identity ladder cannot run two different
+  // notions of "the same name". (Codex adversarial review, PR #31, rated medium.)
   const exactByAlias = db
-    .select({ playerId: playerAliases.playerId })
+    .select({ playerId: playerAliases.playerId, alias: playerAliases.alias })
     .from(playerAliases)
-    .where(sql`lower(${playerAliases.alias}) = lower(${input.name})`)
     .all()
+    .filter((r) => namesEqual(r.alias, input.name))
     .map((r) => r.playerId);
   const exactByCanonicalName = allPlayers
     .filter((p) => namesEqual(p.canonicalName, input.name))
@@ -166,23 +171,20 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
     return { kind: "ambiguous", candidates: fuzzyCandidates };
   }
 
-  db.insert(players)
+  // `.returning()` rather than a read-back query: the old read-back matched on
+  // `lower(canonical_name)`, which is SQLite's ASCII-only `lower()` and so shared the defect fixed
+  // in tier 2 above, and it had to disambiguate the freshly-inserted row from prior ones by id.
+  // The insert can just hand back the row it wrote.
+  const created = db
+    .insert(players)
     .values({
       canonicalName: input.name,
       ustaUaid: input.ustaUaid ?? null,
       wtnTennisId: input.wtnTennisId ?? null,
       tennisrecordUrl: input.tennisrecordUrl ?? null,
     })
-    .run();
-  const created = db
-    .select()
-    .from(players)
-    .where(sql`lower(${players.canonicalName}) = lower(${input.name})`)
-    .all()
-    .find((p) => !allPlayers.some((existing) => existing.id === p.id));
-  if (created === undefined) {
-    throw new Error("resolvePlayer: failed to read back the just-created player row");
-  }
+    .returning()
+    .get();
   // Recorded as its own first alias so a second pull of the same name resolves here via tier 2
   // rather than re-running (and risking a different verdict from) the fuzzy tier.
   db.insert(playerAliases).values({ playerId: created.id, alias: input.name }).run();
@@ -217,17 +219,11 @@ export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution
     return { kind: "ambiguous", candidates: fuzzyCandidates };
   }
 
-  db.insert(teams)
-    .values({ name: input.name, tennisrecordUrl: input.tennisrecordUrl ?? null })
-    .run();
+  // `.returning()` for the same reason as `resolvePlayer` above.
   const created = db
-    .select()
-    .from(teams)
-    .where(sql`lower(${teams.name}) = lower(${input.name})`)
-    .all()
-    .find((t) => !allTeams.some((existing) => existing.id === t.id));
-  if (created === undefined) {
-    throw new Error("resolveTeam: failed to read back the just-created team row");
-  }
+    .insert(teams)
+    .values({ name: input.name, tennisrecordUrl: input.tennisrecordUrl ?? null })
+    .returning()
+    .get();
   return { kind: "created", row: created };
 }
