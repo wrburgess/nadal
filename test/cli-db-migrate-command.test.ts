@@ -4,6 +4,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { quoteSummaryValue, sanitizeSummaryValue } from "../src/cli/commands/db-migrate.js";
+import * as client from "../src/db/client.js";
+
+// Unicode line-break characters that are NOT ASCII C0 controls: NEL, Line
+// Separator, Paragraph Separator. Some terminals/log consumers render or
+// index these as a new line, so they must be stripped too, not just \n/\r.
+const NEL = String.fromCharCode(0x85);
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
 
 /**
  * A correct escape-aware scan of a `key="..."` field: on a backslash, the NEXT
@@ -71,6 +79,29 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
     logSpy.mockRestore();
     errorSpy.mockRestore();
   });
+
+  it("strips Unicode line-break characters from a real error message end-to-end", async () => {
+    // A cross-module spy on client.ts's runMigrations() — as seen by
+    // db-migrate.ts, a different module — lets us force a controlled error
+    // message, unlike a real fs failure whose message text we don't control.
+    const runMigrationsSpy = vi.spyOn(client, "runMigrations").mockImplementation(() => {
+      throw new Error(`line one${LINE_SEPARATOR}line two${PARAGRAPH_SEPARATOR}line three${NEL}end`);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate"]);
+
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const printed = errorSpy.mock.calls[0]?.[0] as string;
+    expect(printed).toMatch(/^db migrate status=error message=".+"$/);
+    expect(printed).not.toContain(LINE_SEPARATOR);
+    expect(printed).not.toContain(PARAGRAPH_SEPARATOR);
+    expect(printed).not.toContain(NEL);
+
+    runMigrationsSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
 });
 
 describe("sanitizeSummaryValue()", () => {
@@ -90,6 +121,15 @@ describe("sanitizeSummaryValue()", () => {
     // Quote-escaping belongs only to quoteSummaryValue(), for the quoted
     // `message="..."` field.
     expect(sanitizeSummaryValue('a"b.db')).toBe('a"b.db');
+  });
+
+  it("strips Unicode line-break characters (NEL, Line Separator, Paragraph Separator), not just ASCII controls", () => {
+    // \n/\r/other C0 controls aren't the only characters that can render or be
+    // indexed as a line break — some terminals and log consumers treat U+0085,
+    // U+2028, and U+2029 the same way, which would let them forge an apparent
+    // second summary line despite not being ASCII control characters.
+    const withUnicodeBreaks = `a${NEL}b${LINE_SEPARATOR}c${PARAGRAPH_SEPARATOR}d`;
+    expect(sanitizeSummaryValue(withUnicodeBreaks)).toBe("a b c d");
   });
 });
 

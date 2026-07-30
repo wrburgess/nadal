@@ -2,11 +2,16 @@ import type { Command } from "../router.js";
 import { dbPath, runMigrations } from "../../db/client.js";
 
 const CONTROL_CHARS = new RegExp(
-  `[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}]`,
+  `[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}` +
+    // NEL, Line Separator, Paragraph Separator: not ASCII C0 controls, but some
+    // terminals/log consumers still render or index them as a line break, so a
+    // range that only covers 0x00-0x1F/0x7F would still let a message forge an
+    // apparent second summary line.
+    `${String.fromCharCode(0x85)}${String.fromCharCode(0x2028)}${String.fromCharCode(0x2029)}]`,
   "g",
 );
 
-/** Strip control characters (including newlines) so a value stays safe inside a one-line summary. */
+/** Strip control characters (including newlines and Unicode line separators) so a value stays safe inside a one-line summary. */
 export function sanitizeSummaryValue(value: string): string {
   return value.replace(CONTROL_CHARS, " ").trim();
 }
