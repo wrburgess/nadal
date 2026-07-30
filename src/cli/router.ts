@@ -1,3 +1,5 @@
+import { dbMigrate } from "./commands/db-migrate.js";
+
 export type Command = {
   noun: string;
   verb: string;
@@ -5,7 +7,7 @@ export type Command = {
   run: (args: string[]) => Promise<number>;
 };
 
-export const COMMANDS: Command[] = [];
+export const COMMANDS: Command[] = [dbMigrate];
 
 export function helpText(): string {
   const lines = ["tn <noun> <verb> <target> [payload] [flags]", ""];

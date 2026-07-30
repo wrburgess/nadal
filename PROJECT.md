@@ -32,16 +32,13 @@ not something an "effective gate" caveat in prose can override.
 | Typecheck | `npm run typecheck` |
 | Lint | `npm run lint` |
 | CLI grammar parity | `npm test -- test/cli-grammar-parity.test.ts` |
+| Tests + coverage floor | `npm run test:coverage` |
 
-**Pending — Task 6 of the Foundation plan adds these rows once the commands exist and pass**,
-nadal's real command set for a JS/TS host: Tests + coverage floor `npm run test:coverage` (script
-exists as of Task 4, but the global v8 thresholds do not yet pass — 72% lines / 66.66% functions
-against the 75% floor — because `src/cli/main.ts`'s top-level `process.exit` call cannot be exercised
-in-process by a unit test, and two `src/cli/router.ts` branches are structurally required by the
-`Command` interface but stay dead until a later task registers a real entry in `COMMANDS`; not padded
-with tautological tests to force it green — see the Task 4 report); CLI grammar parity
-`npm test -- test/cli-grammar-parity.test.ts` (Task 5). Whichever task turns a pending row green adds
-it as a live row above, not here.
+All rows are live: Task 6 turned the coverage floor green (98.01% lines / 85.71% functions against
+the 75% floor, `src/cli/main.ts` included, no vitest coverage exclusion needed) by adding real tests
+that exercise `src/db/schema.ts` and `src/cli/commands/db-migrate.ts` end-to-end via `openDb`/
+`runMigrations` and `dispatch(["db", "migrate"])`, rather than padding with tautological tests — see
+the Task 6 report.
 
 A check whose command runs but has nothing applicable to inspect (e.g. no application code to lint) is
 reported `pass`/`not_run` with a stated reason — checks are **not applicable, not skipped**, so rigor

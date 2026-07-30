@@ -11,6 +11,10 @@ registry diverge — in either direction.
 
 ## Commands
 
+| Command | Summary |
+|---------|---------|
+| `tn db migrate` | Apply pending schema migrations |
+
 Planned (spec § Interfaces; rows move up as commands land): `team pull/show/list`,
 `player pull/show/note/list`, `match add`, `event show`, `lineup plan`, `report build`,
 `db backup/restore`.
