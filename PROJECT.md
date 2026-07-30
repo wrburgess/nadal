@@ -29,12 +29,18 @@ not something an "effective gate" caveat in prose can override.
 | Purpose | Command |
 |---------|---------|
 | Structural parity | `ruby scripts/parity_check.rb` |
+| Typecheck | `npm run typecheck` |
+| Lint | `npm run lint` |
 
-**Pending — Tasks 4–6 of the Foundation plan add these rows once `package.json` and the scripts
-exist**, nadal's real command set for a JS/TS host: Typecheck `npm run typecheck`; Lint
-`npm run lint`; Tests + coverage floor `npm run test:coverage`; CLI grammar parity
-`npm test -- test/cli-grammar-parity.test.ts`. Whichever task adds the first one adds it as a live row
-above, not here.
+**Pending — Tasks 5–6 of the Foundation plan add these rows once the commands exist and pass**,
+nadal's real command set for a JS/TS host: Tests + coverage floor `npm run test:coverage` (script
+exists as of Task 4, but the global v8 thresholds do not yet pass — 72% lines / 66.66% functions
+against the 75% floor — because `src/cli/main.ts`'s top-level `process.exit` call cannot be exercised
+in-process by a unit test, and two `src/cli/router.ts` branches are structurally required by the
+`Command` interface but stay dead until a later task registers a real entry in `COMMANDS`; not padded
+with tautological tests to force it green — see the Task 4 report); CLI grammar parity
+`npm test -- test/cli-grammar-parity.test.ts` (Task 5). Whichever task turns a pending row green adds
+it as a live row above, not here.
 
 A check whose command runs but has nothing applicable to inspect (e.g. no application code to lint) is
 reported `pass`/`not_run` with a stated reason — checks are **not applicable, not skipped**, so rigor
