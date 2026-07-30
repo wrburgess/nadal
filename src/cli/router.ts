@@ -19,7 +19,7 @@ export function helpText(): string {
 }
 
 export async function dispatch(argv: string[]): Promise<number> {
-  if (argv.length === 0 || argv[0] === "--help") {
+  if (argv.length === 0 || argv.includes("--help")) {
     console.log(helpText());
     return 0;
   }
