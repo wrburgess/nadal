@@ -1,4 +1,5 @@
 import { dbMigrate } from "./commands/db-migrate.js";
+import { logRequest } from "../telemetry/request-log.js";
 
 export type Command = {
   noun: string;
@@ -29,5 +30,5 @@ export async function dispatch(argv: string[]): Promise<number> {
     console.error(`error: unknown command "tn ${noun} ${verb ?? ""}".`.trim() + ` Run tn --help`);
     return 2;
   }
-  return cmd.run(rest);
+  return logRequest("cli", `${cmd.noun} ${cmd.verb}`, rest, () => cmd.run(rest));
 }
