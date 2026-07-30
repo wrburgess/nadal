@@ -1,5 +1,6 @@
 import { openDb } from "../db/client.js";
 import { requestLog } from "../db/schema.js";
+import { sanitizeValue } from "../sanitize.js";
 
 export async function logRequest(
   surface: "cli" | "mcp",
@@ -21,7 +22,14 @@ export async function logRequest(
     const { db, sqlite } = openDb();
     try {
       db.insert(requestLog)
-        .values({ surface, command, args: JSON.stringify(args), startedAt, endedAt: new Date().toISOString(), outcome })
+        .values({
+          surface,
+          command,
+          args: JSON.stringify(args.map(sanitizeValue)),
+          startedAt,
+          endedAt: new Date().toISOString(),
+          outcome,
+        })
         .run();
     } finally {
       sqlite.close();
