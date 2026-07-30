@@ -1,0 +1,9 @@
+{
+  "sourceUrl": "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Norbury%2c%20Nova&year=2026&s=4",
+  "fetchedAt": "2026-07-30T16:39:50.647Z",
+  "httpStatus": 200,
+  "redacted": true,
+  "bytesBefore": 73652,
+  "bytesAfter": 71933,
+  "note": "Identities substituted in both the page and this sourceUrl; script/style bodies and base64 payloads stripped. Element tree, classes and attributes are unchanged — see tools/redact-fixture.ts."
+}

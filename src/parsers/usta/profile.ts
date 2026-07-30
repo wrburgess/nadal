@@ -1,0 +1,149 @@
+import * as cheerio from "cheerio";
+import type { CheerioAPI } from "cheerio";
+import { collapse, hrefParam } from "../dom.js";
+import {
+  ParseError,
+  ntrpRatingTypeSchema,
+  ustaProfileSchema,
+  type RatingObservation,
+  type SourceRef,
+  type UstaProfile,
+} from "../types.js";
+
+const NAME = '[data-element-name="fullName"] .readonly-text__text h3';
+const CONTEXT = '[data-element-name="nameGenderAddress"] .readonly-text__text';
+const NTRP = '[data-element-name="ntrpSummary"]';
+const WTN_LINK = "a.v-form-wtn-widget__navigation-link";
+
+/**
+ * Parse a USTA player-search profile: identity, league context, and the dated NTRP rating.
+ *
+ * The page is a client-rendered SPA; these fixtures are its post-render DOM, which is what the
+ * login-assisted scraper captures. Fields are read from `data-element-name` anchors — the page's
+ * own semantic hooks — rather than from a page-wide text scrape, so a value can never be supplied
+ * by unrelated chrome that happens to contain the right word.
+ *
+ * The WTN half of the same page has its own parser (`src/parsers/wtn/widget.ts`): one fetch,
+ * two records. Spec § Ingestion lists WTN as a separate source, which it is organisationally —
+ * but not as a separate fetch.
+ */
+export function parseUstaProfile(html: string, source: SourceRef): UstaProfile {
+  const $ = cheerio.load(html);
+
+  const name = collapse($(NAME).first().text());
+  if (name === "") throw new ParseError("player name not found", NAME, source.url);
+
+  // The uaid lives in the URL fragment and nowhere in the document. Without it the record cannot
+  // be resolved to a player at ingest, and spec § Ingestion forbids a silent merge — so this is
+  // a refusal to build the record, not a null field.
+  const uaid = uaidFrom(source.url);
+  if (uaid === null) {
+    throw new ParseError("no uaid in the source URL", "source.url#uaid", source.url);
+  }
+
+  const context = contextLines($, source);
+
+  return ustaProfileSchema.parse({
+    name,
+    uaid,
+    gender: context.gender,
+    location: context.location,
+    section: context.labelled("Section"),
+    district: context.labelled("District"),
+    wtnTennisId: hrefParam($(WTN_LINK).first().attr("href"), "tennis-id"),
+    ntrp: parseNtrp($, source),
+  });
+}
+
+function uaidFrom(url: string): string | null {
+  return /[#&?]uaid=(\d+)/.exec(url)?.[1] ?? null;
+}
+
+/**
+ * The context block is two paragraphs: `MALE | Rivermont, MO` and
+ * `Section: Missouri Valley | District: Heart of America | Nationality: USA`.
+ *
+ * Gender is emitted exactly as printed (`MALE`), like every other identity-adjacent value here —
+ * mapping the sources' different spellings onto one vocabulary is an ingest decision, made once
+ * where both sources meet, not twice inside two parsers.
+ *
+ * The block is **required**, and so is its identity paragraph. Letting it go missing produced a
+ * record with a real name and uaid, an empty gender, and null location/section/district — a
+ * profile that looks usable and carries no context at all, which is worse than one that failed.
+ * (Provenance: Codex adversarial review round 3 on PR #26.)
+ */
+function contextLines(
+  $: CheerioAPI,
+  source: SourceRef,
+): {
+  gender: string | null;
+  location: string | null;
+  labelled: (label: string) => string | null;
+} {
+  const block = $(CONTEXT).first();
+  if (block.length === 0) {
+    throw new ParseError("player context block not found", CONTEXT, source.url);
+  }
+
+  const paragraphs = block
+    .find("p")
+    .map((_, p) => collapse($(p).text()))
+    .get();
+
+  const identity = (paragraphs[0] ?? "").split("|").map(collapse);
+  if ((identity[0] ?? "") === "") {
+    throw new ParseError("player context block has no identity line", `${CONTEXT} p`, source.url);
+  }
+  const fields = paragraphs
+    .slice(1)
+    .flatMap((line) => line.split("|"))
+    .map(collapse);
+
+  return {
+    gender: identity[0] ?? null,
+    location: identity[1] ?? null,
+    labelled: (label) => {
+      const found = fields.find((field) => field.startsWith(`${label}:`));
+      return found === undefined ? null : collapse(found.slice(label.length + 1));
+    },
+  };
+}
+
+/**
+ * `3.5 C` plus `Updated Date 12/31/24` → a dated NTRP observation.
+ *
+ * The year is two digits. Read literally it is the year 24; read as what it is — an NTRP
+ * effective date, always a 31 December — it is 2024, and that date is the axis a rating
+ * trajectory is plotted on.
+ */
+function parseNtrp($: CheerioAPI, source: SourceRef): RatingObservation | null {
+  const block = $(NTRP).first();
+  if (block.length === 0) return null;
+
+  const rating = /^([0-9](?:\.[05])?)(?:\s+([A-Za-z]))?$/.exec(
+    collapse(block.find(".readonly-text__text").text()),
+  );
+  if (rating === null) return null;
+
+  const date = /(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})/.exec(
+    collapse(block.find(".readonly-text__subtext").text()),
+  );
+  if (date === null) return null;
+  const year = (date[3] ?? "").length === 2 ? `20${date[3]}` : date[3];
+
+  let ratingType: string | null = null;
+  if (rating[2] !== undefined) {
+    const letter = rating[2].toUpperCase();
+    if (!ntrpRatingTypeSchema.safeParse(letter).success) {
+      throw new ParseError(`unrecognised NTRP rating type "${letter}"`, NTRP, source.url);
+    }
+    ratingType = letter;
+  }
+
+  return {
+    source: "ntrp",
+    value: Number(rating[1]),
+    ratingType,
+    observedOn: `${year}-${date[1]?.padStart(2, "0")}-${date[2]?.padStart(2, "0")}`,
+  } as RatingObservation;
+}

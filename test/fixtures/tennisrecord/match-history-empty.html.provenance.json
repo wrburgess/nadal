@@ -1,0 +1,9 @@
+{
+  "sourceUrl": "https://www.tennisrecord.com/adult/matchhistory.aspx?year=2014&playername=Avery%20Ashby&mt=0&lt=0&yr=0",
+  "fetchedAt": "2026-07-30T16:39:44.323Z",
+  "httpStatus": 200,
+  "redacted": true,
+  "bytesBefore": 16307,
+  "bytesAfter": 14594,
+  "note": "Identities substituted in both the page and this sourceUrl; script/style bodies and base64 payloads stripped. Element tree, classes and attributes are unchanged — see tools/redact-fixture.ts."
+}
