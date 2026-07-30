@@ -35,8 +35,14 @@ module HumanGates
   # The Generic Baseline's strict policy, and the answer for any absent section/row.
   DEFAULTS = { plan_approval: "required", merge: "required" }.freeze
 
-  # `merge` allows exactly one value: no Host App may express self-merge (ADR 0025).
-  ALLOWED = { plan_approval: %w[required auto].freeze, merge: %w[required].freeze }.freeze
+  # `merge` allows `required` (a human merges the delivered PR) and `attested` (the AC merges it, but
+  # ONLY once an independent external-model adversarial review is on record and bound to the SHA being
+  # merged). It still refuses `auto` — UNCONDITIONAL self-merge stays the one thing no Host App may
+  # express, because that is the claim ADR 0025 decision 3 actually forbade: a host certifying its own
+  # work. `attested` is not that claim; `## Reviewer` already guarantees the reviewer is external (the
+  # acting harness is filtered out of the chain) and that a run which cannot obtain a review must
+  # stop-and-ask rather than self-certify (ADR 0026 decision 3). See ADR 0037.
+  ALLOWED = { plan_approval: %w[required auto].freeze, merge: %w[required attested].freeze }.freeze
 
   # First-cell labels that identify each gate's row.
   ROW_LABELS = { plan_approval: "Plan approval", merge: "Merge" }.freeze

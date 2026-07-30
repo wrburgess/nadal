@@ -237,15 +237,17 @@ of hardcoding a policy a host would otherwise have to fork the file to change
 the host-platform value in [ADR 0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)).
 The Generic Baseline now ships **ungated to merge**: plan approval is `auto`, so a hands-off run drives
 itself to the one standing human gate, and every Skill body states that default inline
-([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). **Merge stays `required` and is never
-configurable** — it is the sole human gate. (A vendored `PROJECT.md` that predates this section still
-parses to the strict fail-safe — plan approval `required` — through the parser default; the flip lives
-in the shipped file, not in that default.)
+([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). **The baseline ships merge `required`**;
+**nadal sets it to `attested`** — the AC merges the delivered PR, but only against an independent
+external-model adversarial review bound to the SHA being merged
+([ADR 0037](docs/adr/0037-merge-gate-accepts-attested.md)). (A vendored `PROJECT.md` that predates this
+section still parses to the strict fail-safe — plan approval `required`, merge `required` — through the
+parser default; the flip lives in the shipped file, not in that default.)
 
 | Gate | Setting | Allowed values |
 |------|---------|----------------|
 | **Plan approval** — covers both the Stage-1 option pick and the Stage-2 plan approval | `auto` | `required` · `auto` |
-| **Merge** — the HC merges the delivered PR | `required` | `required` (not configurable) |
+| **Merge** — who merges the delivered PR | `attested` | `required` · `attested` |
 
 - **`auto`** (shipped default) — the AC proceeds on **its own stated recommendation** rather than
   waiting. It still **posts** the assessment and the plan to the lifecycle host — under `auto` those
@@ -256,12 +258,27 @@ in the shipped file, not in that default.)
 - **`required`** — a host may set the **plan-approval** row (and only that row) back to `required`. The
   AC then stops and waits for the HC: it does not proceed past the assessment without a chosen option,
   and it does not write code without an approved plan.
-- **Merge is not configurable.** `required` is the only allowed value: **no Host App may express
-  self-merge.** The parity check hard-fails any other value. `final` posts the SOW; a human merges.
+- **Merge — nadal runs `attested`.** `final` posts the SOW and then **may merge, but only on evidence**:
+  every *Quality Checks* row green and the required checks green **at the delivered head**, no open
+  must-fix findings, an independent external-model adversarial review on record (see *Reviewer*), and
+  that review **bound to a literal SHA equal to the PR head**. Any one of those failing means no merge —
+  post the SOW, name the condition that failed, and stop. **`auto` remains forbidden** and the parity
+  check hard-fails it: unconditional self-merge is the claim [ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
+  refused, and `attested` is not that claim. What makes the difference real rather than semantic is
+  *Reviewer* below, which filters the acting harness out of its own review chain and forces
+  `stop-and-ask` when no independent review can be obtained — so the AC still cannot certify its own
+  work ([ADR 0037](docs/adr/0037-merge-gate-accepts-attested.md)).
+- **`attested` does not reach the intake and authoring PRs.** `scout` / `clip` / `follow` / `restock` /
+  `create-skill` still end with **a human disposing on the PR** ([ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
+  decision 6, unchanged). Those gates exist for *content judgment*, not code correctness.
+- **The harness must also permit it.** Repo policy and agent-runtime permission are independent layers:
+  `attested` authorizes the merge, it does not make the runtime allow the command. If the runtime denies
+  it, `final` stops and says so rather than treating the denial as a gate failure.
 
 **Unconditional, whatever this section says:**
 
-- **Merge is always human** (above).
+- **Merge is never unconditional** (above). Under `attested` the AC merges only against a SHA-bound
+  external review; there is no setting under which a PR merges on the AC's own say-so.
 - **The plan gate is also a context boundary, and the reset survives the pause being waived.**
   "Plan posted" forces a context reset under either setting — a session boundary under `required` (the
   human crosses), `ship`'s own context reset under `auto`
@@ -283,23 +300,6 @@ in the shipped file, not in that default.)
   ([ADR 0014](docs/adr/0014-manual-drop-inbox-for-unfetchable-sources.md),
   [ADR 0016](docs/adr/0016-interactive-sequential-disposition-scout.md)) — are out of scope too.
   `auto` is **not** licence to auto-merge any of their review PRs.
-
-### nadal merge-autonomy intent (recorded, not machine-enforced)
-
-The HC's stated intent for nadal (decision 2026-07-29): **AC merges after green Quality Checks +
-adversarial second-model review (SHA-bound). No human merge gate.** This paragraph **records** that
-intent; it does **not** change the *Merge* row above, and could not — `merge: required` is the only
-value `scripts/human_gates.rb` accepts (`ALLOWED = { merge: %w[required] }`), and the parity check
-hard-fails any other value **on every vendored host**, per the "Merge is not configurable" /
-"Merge is always human" invariants this same section states above ([ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
-decision, reaffirmed unconditionally at the end of this section). This is a **known delta**: nadal's
-stated operating intent is autonomous merge on green + attested review, while the vendored floor this
-repo runs today still requires a human to merge every PR, including this one. Closing that delta —
-if the HC still wants it after weighing the "no Host App may express self-merge" rationale — is a
-framework-level change (an ADR amending or overriding `scripts/human_gates.rb`'s `ALLOWED` set), out
-of scope for a `PROJECT.md`-only Customization task; it is not something this file can express on its
-own. Until such a change lands, `final` posts the SOW and **a human merges**, exactly as the table
-above requires.
 
 ### Rule-suggestion disposition
 

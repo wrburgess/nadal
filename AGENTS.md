@@ -60,9 +60,12 @@ the first sub-PR merges, orphaning the remaining phases — close the specific p
 
 The lifecycle is issue/PR-shaped: **Assess → Plan → Implement → Verify → Deliver**, plus a
 review-response step. `assess`/`devise` post to an issue; `invoke` opens a PR; `verify`/`listen`/`final`
-operate on that PR. Two human gates: **plan approval** — `auto` by default, a host may set it back to
-`required` in [`PROJECT.md`](PROJECT.md) → *Human Gates* — and **merge**, which is always human and **never
-configurable**. Either way "plan posted" stays a context boundary: `invoke` re-reads the posted plan
+operate on that PR. Two gates: **plan approval** — `auto` by default, a host may set it back to
+`required` in [`PROJECT.md`](PROJECT.md) → *Human Gates* — and **merge**, which ships `required` (a human
+merges) and which a host may set to `attested`, letting the AC merge **only** against an independent
+external-model adversarial review bound to the merged SHA; `auto` stays forbidden, so no setting lets a
+PR merge on the AC's own say-so ([ADR 0037](docs/adr/0037-merge-gate-accepts-attested.md)). Either way
+"plan posted" stays a context boundary: `invoke` re-reads the posted plan
 rather than trusting memory. GitHub is the default lifecycle host, set in `PROJECT.md` and remappable
 ([ADR 0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)). The full stage
 spec — stages, roles, gates, and terminal artifacts — is
@@ -93,7 +96,7 @@ gates are identical on every tool, and only tool-specific execution enhancements
 | **invoke** | Lifecycle 3 — execute the approved plan, run checks to green, open the PR. | [SKILL.md](skills/invoke/SKILL.md) | [0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md) |
 | **verify** | Lifecycle 4 — self-review the PR against its plan before the Reviewer. | [SKILL.md](skills/verify/SKILL.md) | [0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md) |
 | **listen** | Review-response — classify review threads by severity, then fix and reply. | [SKILL.md](skills/listen/SKILL.md) | [0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md) |
-| **final** | Lifecycle 5 — re-verify green, post the SOW, link it from the issue (never self-merges). | [SKILL.md](skills/final/SKILL.md) | [0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md) |
+| **final** | Lifecycle 5 — re-verify green, post the SOW, link it from the issue (merges only under `attested`, and only on a SHA-bound external review). | [SKILL.md](skills/final/SKILL.md) | [0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md) |
 | **ship** | Hands-off orchestrator sequencing the six lifecycle Skills, protecting the two human gates. | [SKILL.md](skills/ship/SKILL.md) | [0005](docs/adr/0005-ship-hybrid-delegation-offload-retrieval-protect-judgment.md) |
 | **scout** | Intake sweep — read the Watchlist, draft dated Learnings-Log entries (`stance` + `touches`), open a PR to dispose. | [SKILL.md](skills/scout/SKILL.md) | [0012](docs/adr/0012-intake-pipeline-placement.md), [0013](docs/adr/0013-scheduled-intake-sweep-and-empty-sweep-policy.md), [0016](docs/adr/0016-interactive-sequential-disposition-scout.md) |
 | **clip** | Intake **push** front door — turn handed-over field output into a stance-less inbox drop, then delegate to `scout`. | [SKILL.md](skills/clip/SKILL.md) | [0015](docs/adr/0015-intake-front-door-drop-skill.md) |

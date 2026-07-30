@@ -136,6 +136,7 @@ class ParityCheck
     "docs/adr/0034-rename-bundle-ai-config-to-ace.md",
     "docs/adr/0035-codex-summons-is-the-local-cli-runtime.md",
     "docs/adr/0036-async-reviewer-sha-binding-requires-artifact-attestation.md",
+    "docs/adr/0037-merge-gate-accepts-attested.md",
     # Standards
     "docs/standards/development-lifecycle.md",
     # Out-of-band research (the per-tool discovery re-verification AGENTS.md cites) and Stack Overlays
@@ -308,10 +309,20 @@ class ParityCheck
   # policy a host overrode, and Copilot (which does not follow links) still receives the instruction.
   GATE_AWARE_SKILLS = %w[assess devise invoke ship final].freeze
   GATE_REFERENCE = "Human Gates"
-  # The one merge value that literally expresses self-merge, and so the only one that earns the
-  # policy-boundary message. Every other out-of-set value - `Required`, `optional`, a typo - is a
-  # mistake, not a claim, and gets the generic allowed-values message instead of an accusation.
+  # The one merge value that literally expresses UNCONDITIONAL self-merge, and so the only one that
+  # earns the policy-boundary message. `attested` is a legal value and never lands here: it is merge
+  # on EVIDENCE (an external-model adversarial review bound to the merged SHA), which is the opposite
+  # of self-certification (ADR 0037). Every other out-of-set value - `Required`, `optional`, a typo -
+  # is a mistake, not a claim, and gets the generic allowed-values message instead of an accusation.
   SELF_MERGE_VALUE = "auto"
+
+  # A Project Config that ANNOUNCES a rule it cannot enforce is worse than one that omits it: agents
+  # read the prose as authoritative while the checker reads only the value, so the two drift silently
+  # and the build stays green the whole time. This is exactly how the nadal merge-autonomy delta went
+  # unnoticed across ten PRs. Any heading that markets itself as recorded-but-inert is therefore an
+  # ERROR, not a permitted escape hatch: express the rule as a value this checker parses, or track it
+  # as an issue - never as a section of PROJECT.md that looks binding and is not (ADR 0037).
+  UNENFORCED_HEADING = /not machine-enforced|recorded, not enforced|non-binding/i.freeze
 
   # Reviewer declaration (ADR 0026). Same pattern as the gate policy above: the value is a Project
   # Config value read through Reviewer, which returns the shipped defaults when `## Reviewer` is
@@ -371,6 +382,7 @@ class ParityCheck
     check_rendered_regions
     check_project_sections
     check_human_gates
+    check_unenforced_headings
     check_reviewer
     check_rules
     check_skills
@@ -483,11 +495,11 @@ class ParityCheck
   # Human-gate policy (ADR 0025). PROJECT.md declares which lifecycle pauses require a human; the
   # generic Skill bodies read it instead of hardcoding a policy. Two invariants, both value-level (the
   # per-body "does it NAME the value" invariant lives in check_skills, behind the skills/ gate):
-  #   (1) MERGE IS NOT CONFIGURABLE - `required` is its only legal value, so no Host App can express
-  #       self-merge. Declaring `auto` gets its own message because it is a policy boundary, not a
-  #       typo. Any OTHER bad merge value - including a case slip like `Required` - is a typo, so it
-  #       takes the generic message below: a capitalization mistake must never be reported as if the
-  #       host had claimed the right to self-merge.
+  #   (1) UNCONDITIONAL SELF-MERGE IS STILL FORBIDDEN - `auto` gets its own message because it is a
+  #       policy boundary, not a typo. `required` (a human merges) and `attested` (the AC merges on a
+  #       SHA-bound external review) are both legal. Any OTHER bad merge value - including a case slip
+  #       like `Required` - is a typo, so it takes the generic message below: a capitalization mistake
+  #       must never be reported as if the host had claimed the right to self-merge.
   #   (2) Any other out-of-set value is reported with the allowed set, never coerced to a default.
   # A PROJECT.md with no `## Human Gates` section parses to the shipped strict defaults and passes.
   def check_human_gates
@@ -497,9 +509,10 @@ class ParityCheck
     self_merge = gates[:merge] == SELF_MERGE_VALUE
 
     if self_merge
-      err("Human-gate policy: the merge gate is NOT configurable - #{PROJECT_CONFIG} declares " \
-          "`merge: #{gates[:merge]}` but `#{HumanGates::DEFAULTS[:merge]}` is its only allowed value " \
-          "(no Host App may express self-merge; a human always merges)")
+      allowed = HumanGates::ALLOWED[:merge].map { |v| "`#{v}`" }.join(", ")
+      err("Human-gate policy: #{PROJECT_CONFIG} declares `merge: #{gates[:merge]}` - allowed values " \
+          "are #{allowed} (no Host App may express UNCONDITIONAL self-merge; use `attested` to let " \
+          "the AC merge on a SHA-bound external-model adversarial review, or `required` for a human)")
     end
 
     HumanGates.invalid(gates).each do |key, value|
@@ -508,6 +521,23 @@ class ParityCheck
       allowed = HumanGates::ALLOWED[key].map { |v| "`#{v}`" }.join(", ")
       err("Human-gate policy: #{PROJECT_CONFIG} declares an unknown value `#{value}` for " \
           "`#{key.to_s.tr('_', '-')}` - allowed values are #{allowed}")
+    end
+  end
+
+  # A rule announced in PROJECT.md prose but not expressed as a value this checker parses is not a
+  # rule - it is drift with a green build. Agents read the section as authoritative; the checker reads
+  # only the table; nothing reconciles them. Ban the escape hatch outright rather than trusting each
+  # author to notice, because the whole point of the failure is that it LOOKS handled (ADR 0037).
+  def check_unenforced_headings
+    return unless exist?(PROJECT_CONFIG)
+
+    read(PROJECT_CONFIG).lines.each_with_index do |line, i|
+      next unless line.start_with?("#")
+      next unless line.match?(UNENFORCED_HEADING)
+
+      err("Project Config #{PROJECT_CONFIG}:#{i + 1} declares a rule it cannot enforce: " \
+          "`#{line.strip}`. A rule that only exists as prose is read as binding by every agent and " \
+          "by nothing else - express it as a value this checker parses, or track it as an issue")
     end
   end
 
