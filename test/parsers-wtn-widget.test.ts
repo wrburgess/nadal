@@ -108,3 +108,19 @@ describe("parseWtnWidget — duplicate sections", () => {
     expect(() => parseWtnWidget(duplicated, doublesOnly.source)).toThrow(ParseError);
   });
 });
+
+describe("parseWtnWidget — duplicate widgets", () => {
+  it("throws when the page carries more than one WTN widget", () => {
+    // The section-level duplicate guard only sees inside the FIRST widget. A second one — stale,
+    // or a responsive variant like the identity block this page already duplicates — would be
+    // silently ignored, and which rating a dossier showed would depend on DOM order.
+    // (Provenance: Codex adversarial review round 5 on PR #26.)
+    const cloned = doublesOnly.html.replace(
+      '<div id="wtnwidget-',
+      '<div class="v-form-wtn-widget"></div><div id="wtnwidget-',
+    );
+
+    expect(cloned).not.toBe(doublesOnly.html);
+    expect(() => parseWtnWidget(cloned, doublesOnly.source)).toThrow(ParseError);
+  });
+});

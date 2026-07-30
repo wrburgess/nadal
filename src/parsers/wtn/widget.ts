@@ -36,8 +36,16 @@ const ITF_LINK = "a.v-form-wtn-widget__navigation-link";
  */
 export function parseWtnWidget(html: string, source: SourceRef): WtnProfile | null {
   const $ = cheerio.load(html);
-  const widget = $(WIDGET).first();
-  if (widget.length === 0) return null;
+  const widgets = $(WIDGET);
+  if (widgets.length === 0) return null;
+  // Guarding duplicate section titles inside the first widget says nothing about a SECOND widget:
+  // `.first()` would silently pick one by DOM order and drop a conflicting rating in the other.
+  // Same reasoning as the section-level guard, one level up.
+  // (Provenance: Codex adversarial review round 5 on PR #26.)
+  if (widgets.length > 1) {
+    throw new ParseError(`${widgets.length} WTN widgets on one profile`, WIDGET, source.url);
+  }
+  const widget = widgets.first();
 
   // Every section is inspected, not just the two we want. Asking only "is there a SINGLES
   // section?" cannot tell a player who has no singles WTN from a page that renamed the singles

@@ -86,3 +86,16 @@ describe("parseTennisRecordProfile — aggregate column contract", () => {
     expect(() => parseTennisRecordProfile(inserted, fixture.source)).toThrow(ParseError);
   });
 });
+
+describe("parseTennisRecordProfile — recent-team column contract", () => {
+  it("throws when a recent-team column is removed, rather than shifting every field", () => {
+    // The same defect as the roster and the aggregate table, in the third positionally-decoded
+    // table on the page. Remove Section and league/gender/rating/date all shift one place left,
+    // and the nullable string fields accept every one of them.
+    // (Provenance: Codex adversarial review round 5 on PR #26.)
+    const noSection = fixture.html.replace(/<th[^>]*>Section<\/th>/, "");
+
+    expect(noSection).not.toBe(fixture.html);
+    expect(() => parseTennisRecordProfile(noSection, fixture.source)).toThrow(ParseError);
+  });
+});

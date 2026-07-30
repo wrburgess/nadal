@@ -1,7 +1,6 @@
 import * as cheerio from "cheerio";
-import type { Cheerio, CheerioAPI } from "cheerio";
-import type { AnyNode } from "domhandler";
-import { collapse, parseNumber, parseWinLoss, tableWithCellText } from "../dom.js";
+import type { CheerioAPI } from "cheerio";
+import { assertColumns, collapse, parseNumber, parseWinLoss, tableWithCellText } from "../dom.js";
 import {
   ParseError,
   tennisRecordTeamSchema,
@@ -55,7 +54,7 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
     );
   }
   const header = parseHeader($, source);
-  assertRosterColumns($, table, source);
+  assertColumns($, table, ROSTER_COLUMNS, "team roster", source);
 
   const roster = table
     .find("tr")
@@ -87,38 +86,6 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
     .filter((entry) => entry.name !== "");
 
   return tennisRecordTeamSchema.parse({ ...header, roster });
-}
-
-/** Verify the ordered column contract before any positional decoding happens. */
-function assertRosterColumns(
-  $: CheerioAPI,
-  table: Cheerio<AnyNode>,
-  source: SourceRef,
-): void {
-  const headers = table
-    .find("tr")
-    .first()
-    .find("th")
-    .map((_, th) => collapse($(th).text()).replace(/\s+/g, "").toLowerCase())
-    .get();
-
-  if (headers.length !== ROSTER_COLUMNS.length) {
-    throw new ParseError(
-      `roster has ${headers.length} columns, expected ${ROSTER_COLUMNS.length} (${headers.join(", ")})`,
-      `${ROSTER_SCOPE} tr th`,
-      source.url,
-    );
-  }
-  ROSTER_COLUMNS.forEach((expected, index) => {
-    const actual = headers[index] ?? "";
-    if (!expected.test(actual)) {
-      throw new ParseError(
-        `roster column ${index} is "${actual}", expected ${String(expected)}`,
-        `${ROSTER_SCOPE} tr th:nth-child(${index + 1})`,
-        source.url,
-      );
-    }
-  });
 }
 
 /**

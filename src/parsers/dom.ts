@@ -76,6 +76,53 @@ export function tableWithCellText(
 }
 
 /**
+ * Assert a table's ordered column contract before anything is decoded by position.
+ *
+ * Positional decoding makes the column *order* the contract. Locating the right table proves
+ * nothing about where its fields sit inside it, and neither does a minimum cell count: insert one
+ * column and every later offset shifts while nullable parsers absorb the mismatch into
+ * plausible-looking values. Every positionally-decoded table in this layer routes through here, so
+ * the guarantee is uniform rather than remembered per parser.
+ *
+ * Headers are compared with whitespace stripped and lower-cased, because these pages put `<br>`
+ * inside header cells (`Local<br>Singles`) and some carry a year (`2026<br>Record`).
+ * (Provenance: Codex adversarial review rounds 3-5 on PR #26, which found this same defect in
+ * four separate tables.)
+ */
+export function assertColumns(
+  $: CheerioAPI,
+  table: Cheerio<AnyNode>,
+  expected: RegExp[],
+  what: string,
+  source: { url: string },
+): void {
+  const headers = table
+    .find("tr")
+    .first()
+    .find("th, td")
+    .map((_, cell) => collapse($(cell).text()).replace(/\s+/g, "").toLowerCase())
+    .get();
+
+  if (headers.length !== expected.length) {
+    throw new ParseError(
+      `${what} has ${headers.length} columns, expected ${expected.length} (${headers.join(", ")})`,
+      `${what} tr th`,
+      source.url,
+    );
+  }
+  expected.forEach((pattern, index) => {
+    const actual = headers[index] ?? "";
+    if (!pattern.test(actual)) {
+      throw new ParseError(
+        `${what} column ${index} is "${actual}", expected ${String(pattern)}`,
+        `${what} tr th:nth-child(${index + 1})`,
+        source.url,
+      );
+    }
+  });
+}
+
+/**
  * A number, or `null` for every way these pages spell "no value".
  *
  * `-----` (unrated / not yet calculated), `S` (self-rated), `------` (no projection) and an empty

@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import type { CheerioAPI } from "cheerio";
-import { collapse, parseNumber, parseUsDate, tableWithCellText } from "../dom.js";
+import { assertColumns, collapse, parseNumber, parseUsDate, tableWithCellText } from "../dom.js";
 import { parseHeaderFrom } from "./header.js";
 import {
   ParseError,
@@ -14,6 +14,16 @@ import {
 const PLAYING_AREAS_LABEL = "Current Playing Areas (Player Rating Lists)";
 const RECENT_TEAM_LABEL = "Recent Team";
 const SEASON_LABEL = "All Matches";
+
+/** The recent-team table's ordered contract — positionally decoded, so order is the contract. */
+const RECENT_TEAM_COLUMNS: RegExp[] = [
+  /^recentteam$/,
+  /^type$/,
+  /^section$/,
+  /^gender$/,
+  /^rating$/,
+  /^matchstart$/,
+];
 
 /**
  * The aggregate table's ordered column contract: year + (total, win, loss, pct) for matches, sets
@@ -57,7 +67,7 @@ export function parseTennisRecordProfile(html: string, source: SourceRef): Tenni
   return tennisRecordProfileSchema.parse({
     header: parseHeaderFrom($, source),
     playingAreas: parsePlayingAreas($),
-    recentTeams: parseRecentTeams($),
+    recentTeams: parseRecentTeams($, source),
     seasonRecords: parseSeasonRecords($, source),
   });
 }
@@ -73,9 +83,11 @@ function parsePlayingAreas($: CheerioAPI): string[] {
     .filter((value) => value !== "");
 }
 
-function parseRecentTeams($: CheerioAPI): RecentTeam[] {
+function parseRecentTeams($: CheerioAPI, source: SourceRef): RecentTeam[] {
   const table = tableWithCellText($, RECENT_TEAM_LABEL);
   if (table === null) return [];
+  assertColumns($, table, RECENT_TEAM_COLUMNS, "recent-team table", source);
+
   return table
     .find("tr")
     .slice(1)
@@ -84,6 +96,13 @@ function parseRecentTeams($: CheerioAPI): RecentTeam[] {
         .find("td")
         .map((_i, td) => collapse($(td).text()))
         .get();
+      if (cells.length !== RECENT_TEAM_COLUMNS.length) {
+        throw new ParseError(
+          `recent-team row has ${cells.length} cells, expected exactly ${RECENT_TEAM_COLUMNS.length}`,
+          `${RECENT_TEAM_LABEL} tr`,
+          source.url,
+        );
+      }
       return {
         teamName: cells[0] ?? "",
         leagueType: cells[1] ?? null,
@@ -114,29 +133,7 @@ function parseSeasonRecords($: CheerioAPI, source: SourceRef): SeasonRecord[] {
     );
   }
 
-  const headers = table
-    .find("tr")
-    .first()
-    .find("th, td")
-    .map((_, th) => collapse($(th).text()).replace(/\s+/g, "").toLowerCase())
-    .get();
-  if (headers.length !== AGGREGATE_COLUMNS.length) {
-    throw new ParseError(
-      `season table has ${headers.length} columns, expected ${AGGREGATE_COLUMNS.length}`,
-      `${SEASON_LABEL} tr th`,
-      source.url,
-    );
-  }
-  AGGREGATE_COLUMNS.forEach((expected, index) => {
-    const actual = headers[index] ?? "";
-    if (!expected.test(actual)) {
-      throw new ParseError(
-        `season column ${index} is "${actual}", expected ${String(expected)}`,
-        `${SEASON_LABEL} tr th:nth-child(${index + 1})`,
-        source.url,
-      );
-    }
-  });
+  assertColumns($, table, AGGREGATE_COLUMNS, "season table", source);
 
   return table
     .find("tr")

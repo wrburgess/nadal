@@ -1,7 +1,15 @@
 import * as cheerio from "cheerio";
 import type { Cheerio, CheerioAPI } from "cheerio";
 import type { AnyNode } from "domhandler";
-import { collapse, hrefParam, lines, parseNumber, parseUsDate, requireOne } from "../dom.js";
+import {
+  assertColumns,
+  collapse,
+  hrefParam,
+  lines,
+  parseNumber,
+  parseUsDate,
+  requireOne,
+} from "../dom.js";
 import {
   ParseError,
   courtMatchRecordSchema,
@@ -13,6 +21,24 @@ import {
 
 const DESKTOP_TABLE = "div.large table";
 const MOBILE_MATCH = "div.small div.container496";
+
+/**
+ * The desktop table's ordered column contract. This is the highest-value table in the project and
+ * it is decoded entirely by index, so it gets the same guarantee as every other positional table
+ * here — locating the table proves nothing about where its fields sit inside it.
+ */
+const MATCH_COLUMNS: RegExp[] = [
+  /^matchdate$/,
+  /^league$/,
+  /^team$/,
+  /^court$/,
+  /^partner$/,
+  /^opponent\(s\)$/,
+  /^w\/l$/,
+  /^result$/,
+  /^match$/,
+  /^rating$/,
+];
 
 /**
  * Parse a TennisRecord player match history into one record per court played.
@@ -31,6 +57,8 @@ const MOBILE_MATCH = "div.small div.container496";
 export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRecord[] {
   const $ = cheerio.load(html);
   const table = requireOne($, DESKTOP_TABLE, "match history table", source.url);
+  assertColumns($, table, MATCH_COLUMNS, "match history table", source);
+
   const rows = table.find("tr").filter((_, tr) => $(tr).find("td").length > 0);
   if (rows.length === 0) return [];
 
@@ -108,6 +136,13 @@ function parseRow(
   source: SourceRef,
 ): CourtMatchRecord {
   const cells = row.find("td");
+  if (cells.length !== MATCH_COLUMNS.length) {
+    throw new ParseError(
+      `match row has ${cells.length} cells, expected exactly ${MATCH_COLUMNS.length}`,
+      `${DESKTOP_TABLE} tr`,
+      source.url,
+    );
+  }
   const cell = (index: number): Cheerio<AnyNode> => $(cells.get(index));
 
   const playedOn = parseUsDate(cell(0).text());
