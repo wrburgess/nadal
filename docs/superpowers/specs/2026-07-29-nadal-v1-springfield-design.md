@@ -103,6 +103,26 @@ TypeScript / Node 22, SQLite (better-sqlite3 + drizzle), vitest, Playwright for 
 - **Merge gate:** green CI (typecheck, lint, vitest, coverage floor) **plus adversarial review by a different model** (default: GPT via Codex runtime for Claude-authored PRs), review bound to the PR SHA. Then **AC merges — no human gate.**
 - **Planning process:** wayfinder map issue on the nadal repo (decision tickets as sub-issues, one resolved per session) with ace's distill as the grilling method inside HITL tickets, capturing terminology to CONTEXT.md and sparing ADRs.
 
+### Model routing (execution profile)
+
+**Ceiling rule: Opus at high effort is the maximum for nadal work.** Fable runs only when the HC explicitly invokes it (as in the kickoff session); routine work never does.
+
+Enforcement, stated honestly (per ace [#143](https://github.com/wrburgess/ace/issues/143)'s framing):
+- **Executable** — project settings pin the repo's default session model (Opus); role agents in `.claude/agents/*.md` carry model + reasoning effort, honored at every delegation boundary; the Codex reviewer's effort is runtime config.
+- **Advisory** — step-level routing inside one session. A session cannot hot-swap its own model; finer granularity than delegation boundaries is prose, and is labeled as such.
+
+Profile v0 (step → model/effort):
+
+| Step | Model / effort |
+|---|---|
+| Driver sessions: grilling, planning, judgment, lineup analysis | Opus / high |
+| SOW execution (TDD implement) | Sonnet / high; escalate to Opus when stuck, escalation noted on the issue |
+| Mechanical steps: scaffolding, fixture capture, report/SOW writeups, findings appends | Haiku or Sonnet / low |
+| Adversarial PR review | GPT family via Codex (model diversity is the requirement), high |
+| AFK research tickets | Sonnet / medium |
+
+nadal is the **proving ground for ace #143**: observations about this table (what under-thought, what over-spent) go to the findings log and upstream into the #143 assessment. The table's durable home is ace's `PROJECT.md § Execution Profile` once #143 lands; until then it lives in nadal's project-config layer — config values, not vendored-file edits, so no drift.
+
 ## Operating loop
 
 **Prime rule: GitHub is the only memory between sessions.** Sessions open by reading the map/queue and end by writing state back. Nothing load-bearing lives only in chat context.
