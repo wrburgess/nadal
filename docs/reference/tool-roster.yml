@@ -1,0 +1,147 @@
+# tool-roster.yml — the Tool Roster: a current-state snapshot of the AI coding harnesses and models
+# worth weighing for software development (issue #83, ADR 0023).
+#
+# ILLUSTRATIVE REFERENCE — NOT part of the Generic Baseline guarantee. This is curated content a Host
+# App is expected to replace or extend during Customization; only the *schema* (the legend below) is
+# business-neutral mechanism. Placement mirrors the Watchlist (ADR 0012); see docs/reference/README.md.
+#
+# The Tool Roster is a SNAPSHOT, not a log: entries are overwritten in place, and git history is the record
+# of what changed. It is a SIBLING to the Learnings Log (voices/opinions); this tracks tools/facts. The
+# `restock` refresh skill (issue #83, later phase) maintains it; a human disposes on the refresh PR.
+#
+# Two top-level categories, each a flat list (add/remove an entry freely; a new tier is a new key):
+#   harnesses: the coding tools that carry config (a model-agnostic picker, or a model-married agent)
+#   models:    the reasoning models a harness runs
+#
+# Shared fields (every entry):
+#   name           : display name — the product *line* (version is an attribute, not the identity)
+#   vendor         : parent company / org
+#   stable_version : current tracked version string (see `maturity` when it is not yet GA)
+#   verified       : YYYY-MM-DD — the last date on which EVERY fact in this entry was confirmed against
+#                    its `sources:`. An entry with any unconfirmable fact keeps its older `verified` so it
+#                    ages honestly (a YAML date).
+#   status         : active | in-flux | dormant
+#   sources        : [ real vendor/authoritative URLs the facts came from ]   # never a placeholder string
+#   version_date   : YYYY-MM-DD the current version shipped   # OPTIONAL — omit (let `verified` age) if unknown; never guess
+#   maturity       : ga | preview                            # OPTIONAL — absent means GA; mark `preview` for a not-yet-GA release
+#
+# Harness-only:
+#   house_model     : the model `name` it is built around (must resolve to a `models:` entry), or `varies`
+#                     for a model-agnostic picker (Camp B). This one field carries the Camp A/B distinction.
+#   config_features : subset of [ hooks, skill-shims, mcp, subagents, plugins, agents-md ]   # OPTIONAL
+#
+# Model-only (all OPTIONAL — present only when known; an absent field ages honestly rather than guesses):
+#   effort_tiers       : subset of [ low, medium, high, xhigh, max ]           # reasoning-effort options
+#   api_cost           : { input: <USD/Mtok>, output: <USD/Mtok> }             # vendor-fact
+#   swe_bench_verified : { score: <0-100>, source: <URL>, as_of: <YYYY-MM-DD> }  # benchmark — dated + sourced
+#   dumb_zone          : { value: "<free text>", estimated: true }             # SUBJECTIVE estimate — HC-authored, always flagged
+#
+# Provenance discipline (the honesty rule, enforced by test/tool_roster_test.rb):
+#   - vendor-facts (version, price) come from a real `sources:` URL; an unconfirmable value AGES (its
+#     `verified` date falls behind) rather than being fabricated — the voices.yml `feeds: []` philosophy.
+#   - a `dumb_zone` is a guess and ALWAYS carries `estimated: true`; it can never render as a vendor fact.
+#   - a `swe_bench_verified` always carries its `source` + `as_of` so a stale/contested score is self-dating.
+#   - when a model's version bumps past an estimate's date, the `restock` skill flags that estimate stale.
+#
+# Seed note (2026-07-10): a deliberately SPARSE, honest starter — identity/version/sources are filled;
+# prices only where cleanly sourced; benchmarks and `dumb_zone` estimates are left for `restock` and the
+# HC. GitHub Copilot (no clean version string yet) and the open-weight model tier are known seed gaps,
+# not omissions of principle.
+
+harnesses:
+  - name: Claude Code
+    vendor: Anthropic
+    stable_version: "2.1.206"
+    version_date: 2026-07-10
+    house_model: Claude Opus
+    config_features: [hooks, skill-shims, mcp, subagents]
+    sources: [https://github.com/anthropics/claude-code/releases, https://code.claude.com/docs/en/changelog]
+    verified: 2026-07-10
+    status: active
+  - name: Codex CLI
+    vendor: OpenAI
+    stable_version: "0.144.1"
+    version_date: 2026-07-09
+    house_model: GPT
+    config_features: [mcp, plugins, agents-md]
+    sources: [https://github.com/openai/codex/releases, https://developers.openai.com/codex/changelog]
+    verified: 2026-07-10
+    status: active
+  - name: Antigravity CLI
+    vendor: Google
+    stable_version: "1.1.1"
+    version_date: 2026-07-10
+    house_model: Gemini Pro
+    config_features: [mcp, agents-md]
+    sources: [https://antigravity.google/, https://github.com/google-antigravity/antigravity-cli]
+    verified: 2026-07-10
+    status: active
+  - name: Cursor
+    vendor: Anysphere
+    stable_version: "3.11"
+    version_date: 2026-07-10
+    house_model: varies
+    config_features: [mcp]
+    sources: [https://cursor.com/changelog]
+    verified: 2026-07-10
+    status: active
+  - name: Grok Build
+    vendor: xAI
+    stable_version: "0.2.94"
+    version_date: 2026-07-09
+    maturity: preview                # pre-1.0 (0.2.x) line, ships ~daily
+    house_model: Grok
+    config_features: [hooks, mcp, plugins, agents-md]
+    sources: [https://x.ai/cli, https://x.ai/news/grok-build-cli, https://x.ai/build/changelog]
+    verified: 2026-07-10
+    status: active
+
+models:
+  - name: Claude Opus
+    vendor: Anthropic
+    stable_version: "4.8"
+    effort_tiers: [low, medium, high, xhigh, max]
+    api_cost: { input: 5, output: 25 }
+    swe_bench_verified: { score: 88.6, source: https://www.benchlm.ai/benchmarks/sweVerified, as_of: 2026-07-08 }
+    sources: [https://platform.claude.com/docs/en/about-claude/pricing]
+    verified: 2026-07-10
+    status: active
+  - name: Claude Sonnet
+    vendor: Anthropic
+    stable_version: "5"
+    effort_tiers: [low, medium, high, xhigh, max]
+    api_cost: { input: 2, output: 10 }   # introductory through 2026-08-31; rises to 3/15 on 2026-09-01
+    sources: [https://platform.claude.com/docs/en/about-claude/pricing]
+    verified: 2026-07-10
+    status: active
+  - name: Claude Haiku
+    vendor: Anthropic
+    stable_version: "4.5"
+    version_date: 2025-10-01
+    api_cost: { input: 1, output: 5 }
+    sources: [https://platform.claude.com/docs/en/about-claude/pricing]
+    verified: 2026-07-10
+    status: active
+  - name: GPT
+    vendor: OpenAI
+    stable_version: "5.5"
+    effort_tiers: [low, medium, high]
+    api_cost: { input: 5, output: 30 }
+    sources: [https://developers.openai.com/api/docs/pricing]
+    verified: 2026-07-10
+    status: active
+  - name: Gemini Pro
+    vendor: Google
+    stable_version: "3.1"
+    maturity: preview                    # 3.1 Pro is Preview, not GA (GA-stable Gemini is 3.5 Flash) — see sources
+    api_cost: { input: 2, output: 12 }   # base tier (<=200K context); tiered above — see source
+    sources: [https://ai.google.dev/gemini-api/docs/pricing, https://ai.google.dev/gemini-api/docs/models]
+    verified: 2026-07-10
+    status: active
+  - name: Grok
+    vendor: xAI
+    stable_version: "4.5"
+    version_date: 2026-07-08
+    sources: [https://x.ai/cli, https://x.ai/news/grok-4-5]
+    verified: 2026-07-10
+    status: active
