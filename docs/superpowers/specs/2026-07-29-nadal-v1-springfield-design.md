@@ -88,6 +88,10 @@ Same services; tool names mirror the grammar (`team_pull`, `player_show`, `lineu
 
 Deterministic markdown from DB state: per-opponent dossier, own-team book, matchup sheets.
 
+### Request telemetry
+
+Every CLI command and MCP tool call writes a **RequestLog** row via service-layer middleware: surface (cli|mcp), command/tool name, sanitized args, start/end time, outcome. Operational table, not a domain entity. **Capture ships in v1** — it cannot be retrofitted onto requests that were never logged. Analysis is deferred to triage sessions, where the log answers two questions: what does usage actually look like, and which repeated ad-hoc agent patterns (hand-rolled analysis, rendering, etc.) deserve promotion to named `tn` commands or MCP tools. Token/cost attribution is harness-side knowledge (Claude Code OTEL/cost export), not app-visible; wiring it to the request log is a logged finding for post-Springfield.
+
 ## Stack
 
 TypeScript / Node 22, SQLite (better-sqlite3 + drizzle), vitest, Playwright for scraping, Hono for the MCP server. Zero-ops on a hotel laptop. courtview/courtgrab2 are mined for domain knowledge and scraping know-how, not code.
