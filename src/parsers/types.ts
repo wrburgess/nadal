@@ -164,8 +164,25 @@ export const teamRosterEntrySchema = z.object({
   localDoubles: z.union([winLossSchema, z.null()]),
   localRecord: z.union([winLossSchema, z.null()]),
   dynamicRating: z.union([z.number(), z.null()]),
+  // The roster row's own href, unmodified — Phase 3's re-pull handle and the target the team
+  // pipeline cascades through when pulling each rostered player. `null` when the row has no link
+  // (a player with no TennisRecord profile of their own), which the pipeline reports rather than
+  // silently skipping.
+  profilePath: z.union([z.string(), z.null()]),
 });
 export type TeamRosterEntry = z.infer<typeof teamRosterEntrySchema>;
+
+/** One row of a team's local schedule — a team_matches candidate, not a court_matches one. */
+export const teamScheduleRowSchema = z.object({
+  playedOn: z.string(),
+  opponentTeamName: z.string().min(1),
+  site: z.union([z.string(), z.null()]),
+  result: z.union([z.string(), z.null()]),
+  // The `mid=` id on the result link — the same idempotency key `court_matches.source_match_id`
+  // uses, one level up: it identifies the TEAM match rather than a single court within it.
+  sourceMatchId: z.union([z.string(), z.null()]),
+});
+export type TeamScheduleRow = z.infer<typeof teamScheduleRowSchema>;
 
 export const tennisRecordTeamSchema = z.object({
   teamName: z.string().min(1),
@@ -175,6 +192,7 @@ export const tennisRecordTeamSchema = z.object({
   ratingLevel: z.union([z.string(), z.null()]),
   seasonName: z.union([z.string(), z.null()]),
   roster: z.array(teamRosterEntrySchema),
+  schedule: z.array(teamScheduleRowSchema),
 });
 export type TennisRecordTeam = z.infer<typeof tennisRecordTeamSchema>;
 

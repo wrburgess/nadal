@@ -28,7 +28,12 @@ describe("parseTennisRecordTeam", () => {
       localDoubles: { wins: 0, losses: 3 },
       localRecord: { wins: 0, losses: 3 },
       dynamicRating: 4.06,
+      profilePath: "/adult/profile.aspx?playername=Ellis Eastwick",
     });
+  });
+
+  it("carries the roster row's per-player profile link unmodified", () => {
+    expect(team.roster[1]?.profilePath).toBe("/adult/profile.aspx?playername=EMORY ELLERBY&s=5");
   });
 
   it("leaves an ALL-CAPS name exactly as the page spelled it", () => {
@@ -111,6 +116,27 @@ describe("parseTennisRecordTeam — body-row width", () => {
 
     expect(extraCell).not.toBe(fixture.html);
     expect(() => parseTennisRecordTeam(extraCell, fixture.source)).toThrow(ParseError);
+  });
+});
+
+describe("parseTennisRecordTeam — local schedule", () => {
+  it("parses every schedule row, hand-verified against the fixture", () => {
+    expect(team.schedule).toHaveLength(10);
+  });
+
+  it("parses a schedule row in full, with its source match id from mid=", () => {
+    expect(team.schedule[0]).toEqual({
+      playedOn: "2026-04-09",
+      opponentTeamName: "Granborough, Galen",
+      site: "Clayview Country Club",
+      result: "3-2",
+      sourceMatchId: "181505",
+    });
+  });
+
+  it("throws when the schedule table is absent", () => {
+    const mutated = fixture.html.replace(">Local Schedule<", ">Gone<");
+    expect(() => parseTennisRecordTeam(mutated, fixture.source)).toThrow(ParseError);
   });
 });
 
