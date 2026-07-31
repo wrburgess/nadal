@@ -15,7 +15,7 @@
 // slowness, not signal): flag/`--` delimiter parsing, output-root guards, `event add` range
 // narrowing, `player avail` multi-event ambiguity.
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,6 +81,10 @@ const HOME_ROSTER_PLAYERS = [...HOME_SCORECARD_PLAYERS, HOME_ENRICHED_PLAYER];
 const HOME_SOURCE_URL = "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=IA%2fVersteeg&year=2026";
 const OPPONENT_SOURCE_URL =
   "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=OK%2fTulsa+Ironwood&year=2026";
+
+/** The stub's message, named once so scenario 2b can assert the stub is what actually fired rather
+ * than matching on some other error that happened to reach stderr. */
+const NETWORK_STUB_MESSAGE = "dry run must never touch the network — fetchPage was called";
 
 const EVENT_NAME = "Springfield Sectionals";
 const AVAIL_DAY = "2026-08-28";
@@ -151,7 +155,7 @@ describe("dry run: 2025 Tulsa data through the whole tn pipeline (issue #19)", (
     // this should never fire — `expect(fetchSpy).not.toHaveBeenCalled()` in the tests below is the
     // explicit, positive assertion of that; this mock is what makes a violation IMPOSSIBLE to miss.
     fetchSpy = vi.spyOn(fetchModule, "fetchPage").mockImplementation(async () => {
-      throw new Error("dry run must never touch the network — fetchPage was called");
+      throw new Error(NETWORK_STUB_MESSAGE);
     });
   });
 
@@ -345,12 +349,46 @@ describe("dry run: 2025 Tulsa data through the whole tn pipeline (issue #19)", (
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  // The guard's own guard. `expect(fetchSpy).not.toHaveBeenCalled()` is the one assertion shape that
+  // passes just as happily when the stub is NOT wired at all — if `vi.spyOn` ever stopped
+  // intercepting (the CLI moving to a different fetch seam, an injected fetcher, a module-mocking
+  // change), every "zero network calls" claim above would keep passing while real requests went out.
+  // That is the exact false green rules/testing.md asks about: "if this passed but the feature were
+  // broken, would I know?" — for a bare negative assertion the answer is no. So prove the negative is
+  // meaningful by showing the stub DOES fire on a step that genuinely fetches: a `team pull` with no
+  // `--from` must reach the seam and fail with the stub's own message. Without this test the
+  // credibility guard is unfalsifiable, which for the phase's central deliverable is worse than
+  // having no guard, because it reads as one.
+  it("scenario 2b (the guard's own guard): the network stub genuinely intercepts — a pull WITHOUT --from hits it", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(await dispatch(["db", "migrate"])).toBe(0);
+
+    // No `--from`/`--source-url`, so this is the live-fetch path — the only path in the file that
+    // should ever reach `fetchPage`.
+    const code = await dispatch(["team", "pull", HOME_SOURCE_URL]);
+
+    expect(code).not.toBe(0);
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(NETWORK_STUB_MESSAGE));
+  });
+
   it("scenario 3 (determinism): report build sectionals is byte-identical on a rerun over the same DB", async () => {
     await runSpineThroughNote();
     expect(await dispatch(["match", "add", SCORECARD_PATH])).toBe(0);
 
     expect(await dispatch(["report", "build", "sectionals"])).toBe(0);
     const firstSnapshot = snapshotDir(reportsDir);
+    expect(Object.keys(firstSnapshot).length).toBeGreaterThan(0);
+
+    // Empty the output root between the two builds. Comparing two snapshots of a directory the
+    // second build merely wrote INTO would pass even if that build produced nothing at all — the
+    // first build's files would still be sitting there, and the exit code alone cannot tell a real
+    // rebuild from a silent no-op. Clearing first means every file in the second snapshot was
+    // genuinely written by the second run, so equality is a real byte-identity claim.
+    rmSync(reportsDir, { recursive: true, force: true });
+    mkdirSync(reportsDir, { recursive: true });
 
     expect(await dispatch(["report", "build", "sectionals"])).toBe(0);
     const secondSnapshot = snapshotDir(reportsDir);

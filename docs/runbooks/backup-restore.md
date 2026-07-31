@@ -57,7 +57,7 @@ in `-wal`; copy while `tn` (or anything else) is mid-write and the copy can land
 nothing to stop it. `sqlite3 "$DB" ".backup …"` instead drives SQLite's Backup API: it takes the
 same lock a normal connection would, walks the live page set (WAL included), and produces one
 self-contained file at `$BAK` — safe to run while `tn` is running, and safe against a concurrent
-write landing mid-copy. Verified directly: `tn db migrate` + one live `player pull --from` seed,
+write landing mid-copy. Verified directly: `tn db migrate` + one `player pull --from` fixture-replay seed,
 backed up with `.backup` while WAL sidecars were present, round-tripped every row through steps 2–5
 below.
 
