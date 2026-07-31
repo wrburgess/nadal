@@ -12,7 +12,9 @@ sees the photo; `tn` validates and writes.
 ## Before you start
 
 - The database is migrated (`tn db migrate`).
-- **Both teams are already on file, with their rosters pulled** (`tn team pull "<team>" --players`
+- **Both teams are already on file, with their rosters pulled** (the prompt form in
+  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2 — never paste a scraped team
+  name between quotes
   for each side, or the equivalent `team_pull`/`player_pull` MCP calls). `tn match add` / `match_add`
   never creates a team, and every player name resolves ONLY against the named team's own roster
   (never a global lookup) — a team or a roster that does not exist yet cannot be matched into, no

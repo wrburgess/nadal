@@ -6,7 +6,7 @@ Any time you want the courtside binder: before Sectionals, after a fresh pull, o
 results land in the system. `tn report build` renders **from whatever is in the database right
 now** — it never fetches. If the data is stale, the dossier is stale; pull first
 ([pre-tournament-full-pull.md](pre-tournament-full-pull.md) for the full team-by-team refresh, or
-`tn team pull "<team>" --players` for one team).
+a single-team pull for one team).
 
 Spec § Deliverables #5 is the destination: *printable reports → courtside binder; no laptop
 required at the venue.*
@@ -14,7 +14,14 @@ required at the venue.*
 ## Before you start
 
 - The database has been migrated: `tn db migrate`
-- At least one team has been pulled: `tn team pull "<team name or URL>" --players`
+- At least one team has been pulled. **Read the name at a prompt rather than typing it into the
+  command** — a team name is scraped data, and pasting one between quotes lets a `"` or `'` in it
+  close the argument and run whatever follows (see
+  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2 for the full reasoning):
+  ```sh
+  printf 'team name (or its TennisRecord URL): '; IFS= read -r team
+  tn team pull "$team" --players
+  ```
 
 ## Steps
 
@@ -96,7 +103,8 @@ about an opponent since last time (useful mid-event).
 ## Known limitations in v1
 
 - **"Prior meetings vs our players" renders as unavailable until a home team is designated.**
-  Run `tn team home "<your team>"` first (#37 / nadal ADR 0001) — once a home team is set, `report
+  Designate one first (#37 / nadal ADR 0001) — `printf 'our team: '; IFS= read -r team` then
+  `tn team home "$team"`, per the prompt rule in *Before you start* — once a home team is set, `report
   build` automatically populates this section for every OTHER team's dossier. It stays unavailable
   on the home team's own dossier (comparing a team against itself is not a meaningful section) and
   on any dossier built before a home team is designated at all. **The two cases now say which one
@@ -114,7 +122,7 @@ about an opponent since last time (useful mid-event).
   section says how many were excluded as belonging elsewhere. The rule itself, and how to read it
   critically, is in [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md).
 - **A team with no court matches of its own renders the lineup section as an explicit absence**
-  rather than an empty table. Pull it with `tn team pull "<team>" --players` and rebuild.
+  rather than an empty table. Pull it (the prompt form in *Before you start*) and rebuild.
 - **`events` has no player-scoped writer yet** — hence the "Not collected yet" block for that
   section. `tn event add` (#17 PR B) creates events, but nothing yet associates a *player* with one
   (`tn team pull` writes a null `event_id`), so a dossier cannot say which events a player is on.

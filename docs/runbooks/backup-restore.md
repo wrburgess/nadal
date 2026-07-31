@@ -37,14 +37,16 @@ case "$BAK" in
   /*) : ;;
   *) echo "STOP: need an ABSOLUTE path for the backup; got '$BAK'" >&2; exit 1 ;;
 esac
-# The dot-command below re-parses its argument with SQLite's OWN tokenizer, which the outer shell
-# quoting cannot protect. Refuse the two characters that tokenizer would read as syntax rather than
-# as pathname, BEFORE writing anything. Without this the backup silently lands somewhere other than
-# $BAK (or nowhere), and step 2's verification then opens a path with no file at it — where sqlite3
-# helpfully creates an empty database whose `integrity_check` cheerfully answers `ok`.
+# There are THREE parsers between you and this file, not one. (1) The shell, handled by quoting.
+# (2) The dot-command below, which re-parses its argument with SQLite's OWN tokenizer — a `"` there
+# is syntax, not pathname, so the backup lands somewhere other than $BAK, or nowhere. (3) The
+# `file:…?mode=ro` URI form step 2 verifies through, where `?` starts the query string, `#` starts a
+# fragment and `%` starts a percent-escape — so a legal path like /tmp/good?x=1 would be VERIFIED as
+# /tmp/good, certifying a different database than the one you backed up. Refuse all of them here,
+# once, before anything is written, rather than trying to escape correctly for three parsers.
 case "$BAK" in
-  *'"'*|*'
-'*) echo "STOP: backup path must not contain a double quote or newline; got '$BAK'" >&2; exit 1 ;;
+  *'"'*|*'?'*|*'#'*|*'%'*|*'
+'*) echo "STOP: backup path must not contain a double quote, ? , # , % or newline; got '$BAK'" >&2; exit 1 ;;
 esac
 # And the SOURCE must already exist. `sqlite3 "$DB"` on a path with no file CREATES an empty
 # database, which `.backup` then faithfully copies — producing a real, structurally valid, EMPTY
@@ -117,6 +119,13 @@ rows:
 # the query fails, and the empty file it leaves behind then satisfies step 3's `[ -f "$BAK" ]`
 # check: a missed error here becomes an empty database restored over your live one.
 [ -f "$BAK" ] || { echo "STOP: no backup file at $BAK" >&2; exit 1; }
+# The URI form below is a THIRD parser (after the shell and the dot-command): `?` starts its query
+# string, `#` a fragment, `%` an escape. /tmp/good?x=1 would open /tmp/good and silently drop
+# mode=ro — certifying a DIFFERENT database than the one you backed up. Step 1 refuses these, but
+# this fence is pasteable on its own, so it refuses them again rather than assuming step 1 ran.
+case "$BAK" in
+  *'?'*|*'#'*|*'%'*) echo "STOP: backup path must not contain ? , # or % ; got '$BAK'" >&2; exit 1 ;;
+esac
 # Read-only, so this verification cannot create or modify anything even if the path is wrong.
 sqlite3 -header -column "file:$BAK?mode=ro" "select count(*) as teams from teams;
 select count(*) as players from players;
@@ -139,8 +148,8 @@ esac
 # tokenizer, and the operation on the other side of it overwrites `$TARGET`. Refuse before the
 # destructive step, never after it.
 case "$BAK" in
-  *'"'*|*'
-'*) echo "STOP: backup path must not contain a double quote or newline; got '$BAK'" >&2; exit 1 ;;
+  *'"'*|*'?'*|*'#'*|*'%'*|*'
+'*) echo "STOP: backup path must not contain a double quote, ? , # , % or newline; got '$BAK'" >&2; exit 1 ;;
 esac
 # And the backup must exist before it overwrites anything. Without this, `.restore` on a missing
 # `$BAK` opens/creates an empty database and restores THAT over `$TARGET` — a silent wipe dressed as
@@ -178,7 +187,15 @@ migration itself then fails, that is an ordinary `tn db migrate` failure and
 Don't stop at exit 0 above — confirm the counts from step 2 survived the round trip:
 
 ```sh
-sqlite3 -header -column "$TARGET" "select count(*) as teams from teams;
+# Own guards, because this fence is pasteable on its own too — and because a readback is the last
+# place that should be able to CREATE what it claims to be checking. Without these, a typo'd
+# $TARGET leaves an empty decoy database behind and the query fails with "no such table: teams",
+# which is easy to misread as a restore problem rather than a path problem.
+[ -f "$TARGET" ] || { echo "STOP: no restored database at $TARGET" >&2; exit 1; }
+case "$TARGET" in
+  *'?'*|*'#'*|*'%'*) echo "STOP: path must not contain ? , # or % ; got '$TARGET'" >&2; exit 1 ;;
+esac
+sqlite3 -header -column "file:$TARGET?mode=ro" "select count(*) as teams from teams;
 select count(*) as players from players;
 select count(*) as court_matches from court_matches;"
 ```

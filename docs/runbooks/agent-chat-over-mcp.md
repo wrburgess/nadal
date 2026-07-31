@@ -17,7 +17,8 @@ built via `report_build` over MCP is byte-identical to one built via `tn report 
 - The database is migrated (`tn db migrate`, or call the `db_migrate` tool as your first message —
   see *Steps* below; server construction never opens the database, so this is always safe as the
   first call on a brand-new machine).
-- A home team is designated (`tn team home "<your team>"`, or the `team_home` tool) — availability
+- A home team is designated (the prompt form in
+  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2, or the `team_home` tool) — availability
   and captain notes both refuse until one is (nadal ADR 0001, #37): they are "our team only, by
   design" (spec § Domain model), and there is no "our team" to scope them to otherwise.
 

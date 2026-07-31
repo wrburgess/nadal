@@ -46,8 +46,14 @@ current."
   # Refuse before touching anything: sqlite3 CREATES an empty database for a path that does not
   # exist, so a typo in TN_DB_PATH would otherwise print "no teams", read as "nothing to refresh",
   # and leave a decoy file that a later `tn db migrate` happily migrates. Check first.
-  [ -f "$DB" ] || { echo "no database at $DB — check TN_DB_PATH" >&2; return 2>/dev/null || exit 1; }
-  sqlite3 "$DB" "select name, tennisrecord_url, is_home from teams order by name"
+  [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
+  # `?`/`#`/`%` are syntax to the `file:` URI parser below, which would silently open a different
+  # file with mode=ro dropped. Refuse rather than escape for a third parser.
+  case "$DB" in
+    *'?'*|*'#'*|*'%'*) echo "STOP: database path must not contain ? , # or % ; got '$DB'" >&2; exit 1 ;;
+  esac
+  # Read-only: an enumeration should never be able to create the thing it is enumerating.
+  sqlite3 "file:$DB?mode=ro" "select name, tennisrecord_url, is_home from teams order by name"
   ```
 - You know which players' dossiers need NTRP/WTN specifically (step 4 below), since that path is
   manual per player, not a blanket re-pull.
@@ -91,6 +97,12 @@ anything it skipped rather than silently dropping it:
 ```sh
 DB="${TN_DB_PATH:-data/nadal.db}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
+# The reads below use SQLite's `file:` URI form (so they cannot create or modify anything), and that
+# form is its own parser: `?` starts the query string, `#` a fragment, `%` an escape. A database path
+# containing one would silently open a DIFFERENT file with `mode=ro` dropped.
+case "$DB" in
+  *'?'*|*'#'*|*'%'*) echo "STOP: database path must not contain ? , # or % ; got '$DB'" >&2; exit 1 ;;
+esac
 
 # Anything stored that is NOT a TennisRecord URL — shown, never auto-pulled. Investigate before
 # refreshing: a row here means some earlier pull targeted another host.
@@ -103,6 +115,10 @@ sqlite3 "file:$DB?mode=ro" "select name, tennisrecord_url from teams
 # unreadable or corrupt database emits no rows, the loop body never runs, and the pipeline exits 0 —
 # a total enumeration failure that reads exactly like "no teams to refresh".
 urls="$(mktemp)" || exit 1
+# Clean up on EVERY exit path, not just the happy one. Without a trap, a Ctrl-C or a terminated
+# session part-way through the pulls below leaves this file — which lists every refresh target —
+# lying in the temp directory.
+trap 'rm -f "$urls"' EXIT HUP INT TERM
 sqlite3 "file:$DB?mode=ro" "select tennisrecord_url from teams
   where tennisrecord_url like 'https://www.tennisrecord.com/%'
      or tennisrecord_url like 'https://tennisrecord.com/%'
