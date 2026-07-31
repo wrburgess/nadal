@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -90,7 +90,62 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     expect(message).not.toContain("data/nadal.db");
     // No destructive command anywhere in the guidance.
     expect(message).not.toMatch(/\brm\b/);
-    expect(message).toMatch(/\bmv\b/);
+    // `--` is the argument terminator, and it is what makes a dash-prefixed path safe. Codex round
+    // 2 (rated high): single-quoting protects shell METACHARACTERS but not `mv`'s own OPTION
+    // parsing, so a legitimate `TN_DB_PATH=-db` emitted as `mv '-db' …` is read as a flag, not a
+    // pathname. `-i` is the second, independent guard — see the clobber test below.
+    expect(message).toMatch(/mv -i -- /);
+    // Pins the PLAIN backup name for the "nothing taken yet" case. Without this the disambiguating
+    // branch in `untakenBackupPath` is half-unkillable: a mutant that ALWAYS disambiguates still
+    // satisfies every other assertion here, and `rules/testing.md` does not allow a branch side no
+    // test can kill. The clobber test below pins the other side.
+    expect(message).toContain(`${dbPath}.pre-0006.bak'`);
+  });
+
+  // Codex round 2, rated HIGH: the round-1 fix replaced `rm` with a bare `mv` to a FIXED backup
+  // name, so a SECOND migration failure would overwrite the FIRST backup — silently destroying the
+  // captain notes and availability that the very same message promises are safe. A fix that
+  // introduced the failure mode it was written to remove.
+  //
+  // Closed by construction rather than by warning: the backup name is chosen only after checking
+  // what is already on disk, so the command never names an existing file. `mv -i` then covers the
+  // residual TOCTOU (a backup appearing between this message and the user running it).
+  it("REGRESSION: a second failure never names an existing backup as its target", () => {
+    const dbPath = freshDbPath();
+    const legacyDir = buildLegacyMigrationsFolder(5);
+    const sqlite = new Database(dbPath);
+    try {
+      migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
+      sqlite.exec(
+        `INSERT INTO teams (name, tennisrecord_url) VALUES ('Springfield A', 'https://tr/team?a')`,
+      );
+      sqlite.exec(
+        `INSERT INTO teams (name, tennisrecord_url) VALUES ('Springfield A 4.0', 'https://tr/team?a')`,
+      );
+    } finally {
+      sqlite.close();
+    }
+
+    // Stand in for "a previous recovery already produced a backup" — with real content, so an
+    // overwrite would be real data loss.
+    const takenBackup = `${dbPath}.pre-0006.bak`;
+    writeFileSync(takenBackup, "a previous backup holding captain notes");
+
+    let caught: unknown;
+    try {
+      runMigrations(dbPath);
+    } catch (err) {
+      caught = err;
+    }
+    const message = (caught as Error).message;
+
+    // The emitted command must not target the file that already exists...
+    expect(message).not.toContain(`${takenBackup}'`);
+    // ...but must still propose a backup derived from this database.
+    expect(message).toMatch(/mv -i -- /);
+    expect(message).toContain(`${dbPath}.pre-0006.`);
+    // And the untouched prior backup still holds its content.
+    expect(readFileSync(takenBackup, "utf8")).toBe("a previous backup holding captain notes");
   });
 
   it("the same legacy database WITHOUT duplicates upgrades cleanly and the index exists", () => {

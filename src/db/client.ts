@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { backfillNameKeys } from "./name-key.js";
@@ -72,6 +72,23 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * A backup path for `dbPath` that is **not already taken**. The first draft of the recovery moved
+ * the database to a FIXED `<path>.pre-0006.bak`, which meant a SECOND failure overwrote the FIRST
+ * backup — silently destroying the captain notes and availability the same message promises are
+ * safe (Codex adversarial review round 2, rated high: the fix for a data-loss hazard reintroducing
+ * one). Checking what is on disk closes it by construction rather than by warning the reader.
+ *
+ * Both sides of the branch are reachable and test-pinned (`test/db-teams-url-unique-upgrade.test.ts`):
+ * the plain name on a first failure, the disambiguated one when a backup already exists. The
+ * residual TOCTOU — a backup appearing between this message and the human running it — is covered
+ * separately by `mv -i`, which is why that flag is not redundant with this function.
+ */
+function untakenBackupPath(dbPath: string): string {
+  const preferred = `${dbPath}.pre-0006.bak`;
+  return existsSync(preferred) ? `${dbPath}.pre-0006.${Date.now()}.bak` : preferred;
+}
+
 function messageChain(err: unknown): string {
   const messages: string[] = [];
   let current: unknown = err;
@@ -94,8 +111,10 @@ export function runMigrations(path: string = dbPath()): void {
           `${chain}\n\n` +
             `This database (${path}) has two team rows sharing the same tennisrecord_url ` +
             "(issue #46) — migration 0006's unique index cannot apply until that is resolved.\n\n" +
-            "Recovery — moves the database aside rather than deleting it, so nothing is lost:\n" +
-            `  mv ${shellQuote(path)} ${shellQuote(`${path}.pre-0006.bak`)} && tn db migrate\n\n` +
+            "Recovery — moves the database aside rather than deleting it, so nothing is lost.\n" +
+            "`--` keeps a dash-prefixed path from being read as an option; `-i` refuses to " +
+            "overwrite silently if a backup appeared since this message:\n" +
+            `  mv -i -- ${shellQuote(path)} ${shellQuote(untakenBackupPath(path))} && tn db migrate\n\n` +
             "Then re-pull. Rosters, ratings and match history are all re-derivable from the " +
             "archived raw/ pages, but captain notes and availability exist ONLY in this file — " +
             "extract those from the backup first if you recorded any " +
