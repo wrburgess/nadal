@@ -327,10 +327,11 @@ parser default; the flip lives in the shipped file, not in that default.)
 
 How [`final`](skills/final/SKILL.md) handles the Rules-Layer / config improvements it learns during
 implementation, now that a hands-off run reaches the merge gate on its own
-([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). Its shipped default is
-`autonomous-fold`; allowed values `autonomous-fold | present-to-hc`. This is a **documentary** value —
-prose, **not** a row in the gate table above (the parser reads a two-row table and must stay two-row),
-so a host changes it by editing this paragraph.
+([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). The shipped default is
+`autonomous-fold`; the shipped values are `autonomous-fold | present-to-hc`. **nadal sets it to
+`log-and-continue`, which is deliberately neither of them** — see *How nadal reads it* below. This is a
+**documentary** value — prose, **not** a row in the gate table above (the parser reads a two-row table
+and must stay two-row), so a host changes it by editing this paragraph.
 
 - **`autonomous-fold`** (shipped default) — `final` **folds** well-scoped, low-risk Rules-Layer/config
   improvements into the **same PR a human merges**, so the merge gate stays the backstop for them, and
@@ -339,10 +340,251 @@ so a host changes it by editing this paragraph.
 - **`present-to-hc`** — `final` **presents** the suggestions to the HC and waits, editing no Rules
   Layer or config without approval (the pre-ungated behavior).
 
+#### How nadal reads it
+
+**Both branches of `autonomous-fold` are forbidden here, which is why nadal does not run it.** *Fold*
+would mean editing the vendored Rules Layer, and this project writes **zero** local rules files
+(spec § *Factory model and SDLC*). *Defer to a follow-up issue* is the move
+[*Findings-Log Discipline*](#findings-log-discipline) below prohibits outright. That is not theoretical:
+[#34](https://github.com/wrburgess/nadal/issues/34) was opened by the `/ship 15` run as exactly such a
+Rules-Layer follow-up, and was closed `not planned` and converted back into findings entries in
+`59a34c3`. The setting produced the violation, so the setting changes.
+
+**`present-to-hc` is not the answer either, and nadal does not claim it.** That value means `final`
+presents the suggestions **and waits**. nadal does not wait: its operating loop states that *nothing
+waits on the HC* outside the six enumerated HC steps, so a blocking wait would contradict the same spec
+this section enforces.
+
+**So nadal declares a third value: `log-and-continue`.** The findings log **is** this project's
+HC-presentation surface — the HC's own enumerated steps include *"triage the findings log at will"*, and
+that triage, not `final`, is where a suggestion becomes work.
+
+##### What `final` does at Step 1 under `log-and-continue` — the instruction, not a value to match
+
+**Read this as `final`'s Step 1 procedure for this repo. It replaces both bullets of that step; do not
+run either of them.**
+
+1. **On a run that posts a plan, the plan must carry a standing task:** *"append this run's
+   process/config learnings to `docs/findings.md`."* This is a **host requirement on the plan the AC
+   authors**, and it is declared *here* because this file is where [`devise`](skills/devise/SKILL.md)
+   reads its host values. **Stated plainly so it is not mistaken for shipped behavior: the vendored
+   `devise` body does not name this task, and nadal cannot add it there** — whoever authors the plan
+   includes it because *this line* requires it, exactly as the Step-1 procedure above is the branch
+   `final`'s body does not contain. A plan posted without the task is incomplete: add it and re-post
+   before implementing, rather than appending later and calling it unplanned.
+   **This is deliberately not an exemption:** the append is *inside the approved plan*, so
+   [`verify`](skills/verify/SKILL.md)'s normal drift test passes on it **truthfully** — its self-review
+   can still assert *"only files in the final approved plan changed"* without that record being false.
+   Everything else in the same commit gets the ordinary drift review; nothing is suppressed by
+   filename, so an unplanned change cannot ride along beside a findings line.
+
+   **On a run with no plan, the append inherits the authorization the run itself has.** The lifecycle
+   expressly permits compressing a **trivial fix** past Plan and a **documentation-only change** past
+   both Assess and Plan, and that compression is *the HC's call, not the AC's*. On such a run there is
+   no approved plan for **anything** in the diff — not for the findings line and not for the fix it
+   accompanies — so `verify` has no plan-alignment baseline to assert against in either direction. The
+   findings line is therefore **exactly as sanctioned as the change it rides with, and no more**: it
+   claims no exemption the rest of that diff does not already have, and it is not "unplanned drift"
+   relative to a plan that does not exist. What a compressed run does **not** change is the
+   *disposition*: the learning is still one line in [`docs/findings.md`](docs/findings.md), and still
+   never an Issue, PR, rule, or ADR.
+2. **Append as you learn** — in the phase that learned it, committed with that phase's own work, rather
+   than batched at delivery. This mirrors the durable-as-it-arrives rule
+   [`ship`](skills/ship/SKILL.md) already applies to its asks-ledger. **A learning from `assess`,
+   `devise`, or the orchestrator has no branch yet**: record it in that stage's durable artifact (the
+   assessment or plan comment on the issue, where `ship` already records its stops and asks) and
+   transcribe it into `docs/findings.md` in the first phase that has a branch — `invoke`.
+
+   **A learning is only safe once it is on `main`, and two endings prevent that.** Committing the line
+   with its phase is not sufficient on its own:
+
+   - **The run never reaches `invoke`** — an emergency stop, an abandoned option, an issue closed
+     without implementation. No branch ever exists.
+   - **The run reaches `invoke`, but its PR is closed unmerged** — the branch is discarded, and with it
+     every findings line committed onto it. (This PR would demonstrate it: closing it unmerged would
+     throw away all of its own entries.)
+
+   In both, *"it is in an issue comment"* or *"it was committed on the branch"* is **not** an
+   acceptable terminal disposition: neither is the triage artifact, and a learning left in either fails
+   **open**, silently — precisely what *"one findings line, always"* must not permit.
+
+   **So whoever ends the run — stopping it, or closing the PR unmerged — must post a block headed with
+   the literal string `Untranscribed findings:`, quoting each line that would have been written, as a
+   comment on the issue.** On the **issue**, always, even when a closed PR is what triggered it: a
+   closed PR is not where the next run will look.
+
+   That single canonical location makes discovery **deterministic rather than lucky**, which is the
+   other half of the requirement: **the next run that reaches `invoke` on that issue reads the issue's
+   comments for `Untranscribed findings:` blocks and transcribes every one not already in
+   [`docs/findings.md`](docs/findings.md)**, as part of the standing plan task above. That is the whole
+   search scope — no other is implied, and none is needed. **This is the one path on which a line lands
+   late or by the HC's hand, and it is labelled rather than hidden**: the label is what turns a silent
+   loss into a visible debt.
+3. **At `final` Step 1: append nothing, commit nothing.** Confirm the run's learnings are already in
+   the log, and that is the whole step. Fold nothing (edit no Rules Layer, no skill body, no
+   `docs/standards/` file — all vendored). File nothing: no Issue, no PR, no ADR. Wait for nothing —
+   there is no HC pause here.
+4. **Record it in the SOW** where Step 5's *Folded Rule/Config Changes* section expects a fold and a
+   deferral: write `Folded: None — nadal runs log-and-continue` and
+   `Deferred (follow-up): None — N suggestion(s) appended to docs/findings.md during the run`, so the
+   section is answered rather than left blank or filled with a follow-up link.
+
+**What this does *not* claim, because two drafts claimed it and were wrong.** A learning that arrives
+**after the Reviewer has responded** — during [`listen`](skills/listen/SKILL.md), or at `final` — moves
+the head when it is committed, and [*Human Gates*](#human-gates) → `attested` then requires a fresh
+review bound to the new head. **That cost is real and is not avoided by anything on this page.** It is
+also not special: it is the standing lifecycle behavior for **any** post-review change, and a `listen`
+round that fixes a finding already pays it. A findings line gets **no** distinct mechanism, no exemption
+from it, and no promise of a free ride. Appending early is a *preference* that usually avoids the extra
+round — not a guarantee that it will.
+
+**And the residual is named rather than papered over.** The lifecycle has no cheap, terminating path for
+a durable append that arrives after the PR-gate summons; `verify` owns the summons
+([ADR 0026](docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)) and
+re-entering it is a full stage, not a summon. **That is a gap in the lifecycle, not something a host
+config can legislate**, and trying to legislate it here produced three successive Reviewer findings on
+[PR #55](https://github.com/wrburgess/nadal/pull/55) — a delivery-time append that was never committed,
+then one that mandated an unowned `verify` re-entry, then a drift exemption that would have made
+`verify`'s own self-review untrue. It belongs upstream with the rest of this section, at
+[wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159). **This section settles the
+*disposition* — where a process learning goes, and where it does not. It does not settle the
+*mechanism*, and no longer pretends to.**
+
+**A learning that genuinely arrives during `final` is an ordinary late change**, handled by the rule
+this project already runs on: make it, re-run *Quality Checks*, and obtain a fresh SHA-bound review
+before merging, because [*Human Gates*](#human-gates) → `attested` requires the review to bind the head
+being merged. That is the gate working as designed, not a special re-attestation mode — **and no such
+mode is invented here.** Appending per phase is what keeps that case rare.
+
+**If you looked for `log-and-continue` in [`final`](skills/final/SKILL.md) Step 1 and found no matching
+branch: that is expected, and it is not a reason to skip the step.** That body is vendored and ships
+only the two baseline values, so it cannot name this one. **This block is the branch.** A Reviewer
+finding on [PR #55](https://github.com/wrburgess/nadal/pull/55) raised precisely this risk — that an
+agent meeting an unrecognized value performs *neither* documented branch and silently does nothing,
+which at this step is how the prohibited follow-up got created in the first place. The remedy is that
+the disposition is written here as an **imperative procedure** rather than as a token requiring a
+matching conditional: there is nothing to match, so there is nothing to fall through.
+
+**Why a new name instead of redefining `present-to-hc`** — this was a Reviewer finding on
+[PR #55](https://github.com/wrburgess/nadal/pull/55), and it changed the answer. An earlier draft set
+`present-to-hc` and redefined its "and waits" clause, on the reasoning that staying inside the shipped
+value set avoided drift. That reasoning was wrong: `final`'s canonical body defines `present-to-hc` as
+*present and wait*, so an agent executing `final` would hold **two authoritative, mutually exclusive
+meanings for one token** — and the in-set name would make the divergence look like conformance instead
+of announcing it. Nothing parses this value (`grep -rn "autonomous-fold" scripts/` → 0), so being
+"in the set" bought no mechanical safety at all; it bought only the appearance of it. A token `final`
+does **not** recognize forces a reader to this paragraph, which is the correct outcome.
+
+**This value is nadal-local and wants canonicalizing upstream** — the same destination as the rest of
+this section, tracked at [wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159) and recorded
+in [`docs/ace-sync-manifest.md`](docs/ace-sync-manifest.md). Until an upstream value exists, the
+divergence is stated here in the open rather than hidden inside a redefined word. Everything else the
+shipped values require — **edit no Rules Layer or config without approval** — holds unchanged, and that
+is the part doing the work.
+
 This value governs only `final`'s rule-suggestion step. It does **not** touch the intake/authoring
 "a human disposes" gates — [`scout`](skills/scout/SKILL.md), [`clip`](skills/clip/SKILL.md),
 [`follow`](skills/follow/SKILL.md), [`restock`](skills/restock/SKILL.md),
 [`create-skill`](skills/create-skill/SKILL.md) — whose review PRs a human still disposes.
+
+## Findings-Log Discipline
+
+Where an **operational or process learning** goes in nadal, and — more importantly — where it does
+**not**. This is a Project Config value in the same sense as *Human Gates* above: the spec
+(§ *Factory model and SDLC*) is its origin, and this is the copy an agent actually reaches, since the
+instruction chain is `CLAUDE.md` → [`AGENTS.md`](AGENTS.md) → this file and reaches no spec directory.
+
+**The artifact** is [`docs/findings.md`](docs/findings.md) — append-only, one line per finding. Its
+header states the line format and the type vocabulary; read the format there rather than from a second
+copy here, so the two cannot drift.
+
+**The disposition set is `do-now` / `upstream-to-ace` / `drop`, and only the HC applies one.** Findings
+become work **only** at an explicit HC-triggered triage session — one of the HC's own enumerated steps
+is *"triage the findings log at will."*
+
+> **No Issues, PRs, rules, or ADRs spawn directly from findings.**
+
+That sentence is the rule. An agent that has just learned something process-shaped writes **one line**
+and continues.
+
+### Precedence — this overrides four instructions that say otherwise
+
+The instruction chain does not merely omit the rule above; in four places it **directs the opposite** —
+and each sits where an agent is standing at the moment it decides. All four are **vendored** — nadal
+never edits `rules/`, `skills/`, or `docs/standards/` — so they are overridden here, from the host's own
+config layer, which is what that layer exists for. For a **process/operational** finding in nadal, none
+of the following applies:
+
+| Vendored instruction | What it says | Here |
+|---|---|---|
+| [`rules/self-review.md`](rules/self-review.md) → *Anti-Patterns* (Tier-1 Lean Core, resident on every run) | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
+| [`rules/self-review.md`](rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and executable in [`ship`](skills/ship/SKILL.md)'s `asks_ledger` contract as `status: "handed-off"` with a `ref` | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
+| [`final`](skills/final/SKILL.md) Step 1 (executed at every delivery) | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`. |
+| [`scout`](skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
+
+Two of these are easy to miss for opposite reasons. The **last** row is the trained reflex: the only
+logging pattern the bundle ships has the opposite disposition, so an agent pattern-matching on "I
+learned something, I should log it" lands on "…and open a PR." The **second** row is the completion
+rule: it fires at the moment an agent is trying to *finish*, and "handed to a tracked follow-up" reads
+as the responsible option precisely when dropping something feels like the alternative. Naming the
+findings line as **delivery** removes that pressure — there is no third state to be anxious about.
+
+### What this does not cover — and how to tell
+
+The override is scoped to **process/operational findings**. It is not a rule against filing work, and it
+never withholds a work path from something that is **broken**. Ask the two questions in order:
+
+| Ask, in this order | Disposition |
+|---|---|
+| **1. Is something broken** — does it not work as it must? This covers nadal the product (schema, CLI, parsers, queries, reports, MCP surface, its data) **and the repo's own infrastructure** (CI workflows, `scripts/`, git hooks, a config value that does not do what it says). | **It is a defect, and defects get fixed.** Fix it in the running PR when the fix is in hand (the standing fold rule); a tracked Issue when it is not. Filing that Issue is **correct**, not a violation — nothing on this page forbids it. |
+| **2. Otherwise — is it a learning, or a proposal about how agents should work?** Process, rules, config, skills, the lifecycle, review practice, tooling discipline. | **One findings line. Always** — including when the learning arose *from* a bug, and including when you are certain the proposal is right. |
+| **Both** (a real defect that also taught a lesson — the common case) | **Split it.** The fix is work; the lesson is a line. If they genuinely cannot be separated, the fix is still work and the lesson **still** goes to the log. |
+
+Question 1 comes first deliberately. Asking "is this process-shaped?" first is what would strand a
+broken CI workflow or a broken script in a log that nothing spawns from — the rule is about
+**learnings and proposals**, never about things that are simply broken. "Being process-shaped" is not a
+reason to leave something broken, and a defect does not become a findings line by being located in the
+toolchain.
+
+This is how the log has actually been kept, which is the check on the rule rather than a restatement of
+it: measured at `03c577d`, `bug` is the **largest single type** in
+[`docs/findings.md`](docs/findings.md) — **95 of 222 entries**, a plurality rather than a majority —
+and those are overwhelmingly defects **fixed in the run that found them**, whose *lesson* was then
+logged. A `bug` type on a findings line is not an instruction to file an Issue, and nothing here changes
+that.
+
+The **HC may promote** any finding at triage — that is the `do-now` disposition, and it is the only path
+from this log to tracked work. [#35](https://github.com/wrburgess/nadal/issues/35) is itself an
+instance: opened at explicit HC direction, and therefore **not precedent** for an agent doing the same.
+
+### The limits of this statement, stated plainly
+
+**Nothing in *Quality Checks* parses this section.** Stated exactly, since a limit stated loosely is the
+failure this whole section is about: `scripts/parity_check.rb` asserts structure — the required `##`
+sections, skill frontmatter, resolvable links, and the gate/reviewer **values**. It does read a little
+prose, but only three fixed patterns: any heading advertising itself as unenforceable (this file's
+headings included), and whether a skill body names the `Human Gates` and *Reviewer* host values. None of
+that reads the rule stated here.
+
+Nor could a check fully replace it, though **the honest answer is "partly", not "no"**: of the four
+banned spawn targets, a new file under `rules/` or a new ADR would leave an in-repo trace a check
+*could* catch — but an **Issue** and a **PR** live on GitHub, and the decision that produces them lives
+in an agent's judgment, so the two targets that have actually been violated are the two nothing in the
+tree can see. That asymmetry is why a mechanical check is logged in
+[`docs/findings.md`](docs/findings.md) as a real idea worth triage rather than dismissed — and also why
+it was not shipped as *this* rule's remedy, since it would have gone green against every violation on
+record.
+
+This section's force therefore comes from being read, not from being checked; do not mistake it for a
+guardrail. What it removes is the **conflicting instruction** an agent was previously following, which
+is the failure the record actually shows: #34 was created by an agent obeying the `autonomous-fold`
+setting, not by one that had failed to find this rule.
+
+The canonical fix is upstream — [wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159), which
+names the process-findings log in the Config Bundle and enforces its disposition discipline. When it
+lands and is re-synced, **this section collapses into the canonical statement rather than drifting from
+it**; the re-vendor obligation is recorded in [`docs/ace-sync-manifest.md`](docs/ace-sync-manifest.md)
+under *Known local deltas*, which is where a re-sync reconciler looks.
 
 ## Intake Pipeline
 
