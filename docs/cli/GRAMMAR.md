@@ -16,6 +16,13 @@ diagnostic. `--json` replaces the `key=value` line with `JSON.stringify` of the 
 backslash-escaping — JSON's own string encoding applies instead). Passing both together: **`--quiet`
 wins**, suppressing all stdout regardless of `--json`.
 
+**`tn mcp serve` is the one exception, and it takes no arguments at all.** Its stdout *is* the
+JSON-RPC stream, so a `--json` payload and a `--quiet`-suppressed summary line are both meaningless
+there and writing either would corrupt the protocol. It therefore **rejects** every argument
+(exit 1, diagnostic on stderr) rather than ignoring them — so a typo like `tn mcp serve --jsno`
+surfaces instead of silently starting a server. `--help` still works, handled by `dispatch` before
+the command runs.
+
 Every value field in that summary line is double-quoted (e.g. `status=ok path="..."`), so a value
 can safely contain spaces or `=` without being mistaken for a field boundary. Within a quoted
 value: backslashes are escaped first (`\` becomes `\\`), then double quotes (`"` becomes `\"`) —

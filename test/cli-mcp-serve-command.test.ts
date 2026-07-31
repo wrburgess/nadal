@@ -1,5 +1,5 @@
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMcpServeRunner, mcpServe } from "../src/cli/commands/mcp-serve.js";
 
 /** A minimal fake `Transport` — just enough surface for `McpServer#connect` to attach its handlers
@@ -88,5 +88,47 @@ describe("tn mcp serve", () => {
 
     await expect(resultPromise).resolves.toBe(0);
     expect(transport.closed).toBe(true);
+  });
+});
+
+// Independent-reviewer finding, ROUND 4 of #17 PR A (Codex, medium) — a doc/behavior mismatch.
+// GRAMMAR.md promises every command accepts `--quiet/-q` and `--json` and rejects undeclared flags,
+// but `dispatch` hands trailing argv to every command and this runner ignored it entirely, so
+// `tn mcp serve --jsno` silently STARTED THE SERVER instead of surfacing the typo. `mcp serve` is
+// the one command that genuinely cannot honor the global flags — its stdout IS the JSON-RPC stream
+// — so it now rejects arguments rather than ignoring them, which makes the grammar's promise true
+// by construction instead of exempting it in prose.
+describe("tn mcp serve — argument rejection (round-4 reviewer finding)", () => {
+  it.each([["--jsno"], ["--json"], ["--quiet"], ["-q"], ["extra"]])(
+    "rejects %s with exit 1 and never starts a transport",
+    async (arg) => {
+      const transport = new FakeTransport();
+      const runner = createMcpServeRunner(
+        () => transport,
+        { once: () => undefined },
+      );
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const code = await runner([arg]);
+        expect(code).toBe(1);
+        // The property that matters is that the server did NOT start. Asserting only the exit code
+        // would still pass against a runner that rejected the flag after opening stdio.
+        expect(transport.started).toBe(false);
+        expect(err.mock.calls.flat().join(" ")).toContain("takes no arguments");
+      } finally {
+        err.mockRestore();
+      }
+    },
+  );
+
+  it("still starts normally with no arguments", async () => {
+    const transport = new FakeTransport();
+    const runner = createMcpServeRunner(
+      () => transport,
+      { once: (_event: "end", listener: () => void) => setTimeout(listener, 0) },
+    );
+    const code = await runner([]);
+    expect(code).toBe(0);
+    expect(transport.started).toBe(true);
   });
 });

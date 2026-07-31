@@ -1,5 +1,6 @@
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { sanitizeValue } from "../../sanitize.js";
 import type { Command } from "../router.js";
 import { createMcpServer } from "../../mcp/server.js";
 
@@ -29,7 +30,25 @@ export function createMcpServeRunner(
   createTransport: () => Transport = () => new StdioServerTransport(),
   stdin: StdinLike = process.stdin,
 ): Command["run"] {
-  return async () => {
+  return async (args) => {
+    // `mcp serve` takes NO arguments. It is the one command that cannot honor the global flags:
+    // its stdout IS the JSON-RPC stream, so a `--json` payload or a `--quiet`-suppressed summary
+    // line are both meaningless here, and writing either would corrupt the protocol.
+    //
+    // Rejecting rather than ignoring is the point. `dispatch` hands trailing argv to every
+    // command, and this runner previously ignored it entirely — so `tn mcp serve --jsno` silently
+    // started the server instead of surfacing the typo, while GRAMMAR.md promised every command
+    // accepts the global flags and rejects undeclared ones. That promise is now true by
+    // construction here rather than exempted in prose: an unrecognized flag is very likely a
+    // typo'd real one (src/cli/args.ts's own stated stance), and silently accepting it makes the
+    // typo invisible. `--help` never reaches this path — `dispatch` handles it first.
+    // Found by the independent reviewer in round 4 of #17 PR A.
+    if (args.length > 0) {
+      console.error(
+        `error: tn mcp serve takes no arguments (got ${args.map(sanitizeValue).join(" ")}). Run tn mcp serve --help`,
+      );
+      return 1;
+    }
     const server = createMcpServer();
     const transport = createTransport();
     return new Promise<number>((resolve, reject) => {
