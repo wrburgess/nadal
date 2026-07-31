@@ -1,7 +1,8 @@
+import * as fsModule from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ArchivePathError,
   archivePage,
@@ -9,6 +10,23 @@ import {
   rawRoot,
 } from "../src/ingest/archive.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
+
+// `writeFileSync`/`openSync` are named ESM exports of a Node built-in, and Node's built-in module
+// namespaces are not configurable — `vi.spyOn` cannot redefine a property on either directly. The
+// supported way to inject a deterministic race is a partial `vi.mock` that CALLS THROUGH to the real
+// implementation by default (`vi.fn(actual.fn)`), so every other test in this file — and every other
+// call either function makes — is completely unaffected; only a test that explicitly arms a custom
+// implementation observes different behavior, for exactly the duration it holds that override. Same
+// technique `test/fs-output-root.test.ts` already established for its own "SECOND no-follow check…
+// not dead code" regression (that file's line ~523).
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    writeFileSync: vi.fn(actual.writeFileSync),
+    openSync: vi.fn(actual.openSync),
+  };
+});
 
 describe("rawRoot", () => {
   it("defaults to 'raw' when TN_RAW_PATH is unset", () => {
@@ -238,5 +256,73 @@ describe("archivePage under the DOCUMENTED DEFAULT (TN_RAW_PATH unset)", () => {
     expect(resolve(htmlPath).startsWith(join(resolve("raw"), "tennisrecord"))).toBe(true);
     expect(readFileSync(htmlPath, "utf8")).toBe("<html>default</html>");
     expect(existsSync(`${htmlPath}.provenance.json`)).toBe(true);
+  });
+});
+
+// Issue #33. `archivePage` resolves the real, validated destination and then hands that path STRING
+// to a write call — check-then-use. A directory component swapped for a symlink AFTER resolution and
+// BEFORE the write redirects the sensitive, un-redacted capture bytes outside `rawRoot`. Driven
+// deterministically via the `node:fs` spy above (never a wall-clock sleep — `rules/testing.md`): the
+// swap fires inside whichever low-level write call the implementation actually uses (`writeFileSync`
+// today; `openSync` once the fd-anchored fix routes the write through `openNewOutputFileSafely`), so
+// this single test stays meaningful — and keeps exercising the real mechanism — on both sides of the
+// fix, rather than only reproducing the defect once and going quiet afterward.
+describe("archivePage race window: a directory swapped for a symlink between resolution and the write", () => {
+  useTnRawPath();
+
+  it("REGRESSION: the capture body must never land outside rawRoot, even when the parent directory is replaced by a symlink after resolution", async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "tn-race-outside-"));
+    const { writeFileSync: realWriteFileSync, openSync: realOpenSync } =
+      await vi.importActual<typeof import("node:fs")>("node:fs");
+
+    let swapped = false;
+    const maybeSwapDirectoryForSymlink = (targetPath: string) => {
+      if (swapped) return;
+      const dir = dirname(targetPath);
+      if (!existsSync(dir)) return;
+      swapped = true;
+      // The race: this is the window between `resolveRealOutputPath` proving `dir` real and safe,
+      // and the write that trusts the path string it returned. Nothing about the write call itself
+      // re-checks the filesystem, so replacing `dir` with a symlink to somewhere outside `rawRoot`
+      // right here — immediately before the write actually happens — reproduces the race with no
+      // timing dependency at all.
+      rmSync(dir, { recursive: true, force: true });
+      symlinkSync(outsideDir, dir, "dir");
+    };
+
+    vi.mocked(fsModule.writeFileSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+      if (typeof target === "string") maybeSwapDirectoryForSymlink(target);
+      return (realWriteFileSync as (...a: unknown[]) => void)(target, ...rest);
+    }) as unknown as typeof fsModule.writeFileSync);
+    vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+      if (typeof target === "string") maybeSwapDirectoryForSymlink(target);
+      return (realOpenSync as (...a: unknown[]) => number)(target, ...rest);
+    }) as unknown as typeof fsModule.openSync);
+
+    let thrown: unknown;
+    try {
+      archivePage({
+        sourceSet: "tennisrecord",
+        slug: "race",
+        url: "https://example.test",
+        body: "SENSITIVE CAPTURE BODY THAT MUST NEVER LEAK",
+        httpStatus: 200,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      vi.mocked(fsModule.writeFileSync).mockImplementation(realWriteFileSync);
+      vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+    }
+
+    try {
+      // The property under test: no matter what archivePage returns or throws, the sensitive body
+      // must never have landed in outsideDir — that is exactly where the swapped symlink would have
+      // redirected it.
+      expect(readdirSync(outsideDir)).toEqual([]);
+      expect(thrown).toBeInstanceOf(ArchivePathError);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });
