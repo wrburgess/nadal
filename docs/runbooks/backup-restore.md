@@ -103,7 +103,11 @@ avoidable by not choosing a backup destination that contains one.
 # database, and the very next command would then certify that fresh emptiness as `ok`. Verifying a
 # backup by opening it is only meaningful once you know you are opening the backup.
 [ -f "$BAK" ] || { echo "STOP: no backup file at $BAK — step 1 did not produce one" >&2; exit 1; }
-sqlite3 "$BAK" "PRAGMA integrity_check;"
+# `immutable=1` on top of `mode=ro`: a finished backup is not being written by anyone, and telling
+# SQLite so is what makes this open genuinely side-effect-free. `mode=ro` ALONE still lets SQLite
+# create `-wal`/`-shm` sidecars beside the file when they are absent and the directory is writable —
+# so "read-only" is a promise about your DATA, not about the filesystem, unless you add this.
+sqlite3 "file:$BAK?mode=ro&immutable=1" "PRAGMA integrity_check;"
 ```
 
 Expect the single line `ok`. This proves the file is not corrupt; it does **not** prove your data is
@@ -126,8 +130,9 @@ rows:
 case "$BAK" in
   *'?'*|*'#'*|*'%'*) echo "STOP: backup path must not contain ? , # or % ; got '$BAK'" >&2; exit 1 ;;
 esac
-# Read-only, so this verification cannot create or modify anything even if the path is wrong.
-sqlite3 -header -column "file:$BAK?mode=ro" "select count(*) as teams from teams;
+# `mode=ro&immutable=1` for the same reason as the integrity check above: nothing is writing this
+# finished backup, so this verification touches nothing at all — not the database, not a sidecar.
+sqlite3 -header -column "file:$BAK?mode=ro&immutable=1" "select count(*) as teams from teams;
 select count(*) as players from players;
 select count(*) as court_matches from court_matches;"
 ```

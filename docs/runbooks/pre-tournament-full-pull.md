@@ -97,7 +97,9 @@ anything it skipped rather than silently dropping it:
 ```sh
 DB="${TN_DB_PATH:-data/nadal.db}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
-# The reads below use SQLite's `file:` URI form (so they cannot create or modify anything), and that
+# The reads below use SQLite's `file:` URI form (`mode=ro`, so they cannot modify the DATABASE —
+# note SQLite may still create `-wal`/`-shm` sidecars for a read-only connection, so this is a
+# no-change guarantee about your data, not a no-file-touched one), and that
 # form is its own parser: `?` starts the query string, `#` a fragment, `%` an escape. A database path
 # containing one would silently open a DIFFERENT file with `mode=ro` dropped.
 case "$DB" in
@@ -115,10 +117,13 @@ sqlite3 "file:$DB?mode=ro" "select name, tennisrecord_url from teams
 # unreadable or corrupt database emits no rows, the loop body never runs, and the pipeline exits 0 —
 # a total enumeration failure that reads exactly like "no teams to refresh".
 urls="$(mktemp)" || exit 1
-# Clean up on EVERY exit path, not just the happy one. Without a trap, a Ctrl-C or a terminated
-# session part-way through the pulls below leaves this file — which lists every refresh target —
-# lying in the temp directory.
-trap 'rm -f "$urls"' EXIT HUP INT TERM
+# Two traps, deliberately, because they do different jobs. EXIT only CLEANS UP — and it preserves
+# whatever exit status was already set. The signal traps clean up AND exit: a handler that merely
+# tidies up returns control to the next command, so Ctrl-C part-way through the pulls below would
+# delete the file and then calmly keep issuing the remaining network pulls. Cancelling a batch has
+# to actually cancel it.
+trap 'rm -f "$urls"' EXIT
+trap 'rm -f "$urls"; echo "ABORTED — refresh is PARTIAL" >&2; exit 130' HUP INT TERM
 sqlite3 "file:$DB?mode=ro" "select tennisrecord_url from teams
   where tennisrecord_url like 'https://www.tennisrecord.com/%'
      or tennisrecord_url like 'https://tennisrecord.com/%'
