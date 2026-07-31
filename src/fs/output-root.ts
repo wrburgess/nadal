@@ -369,6 +369,13 @@ function closeQuietly(fd: number): void {
  * it completely alone and let the original error propagate. The worst case is a stray empty file we
  * created inside a directory the attacker already controls, which is strictly better than deleting
  * someone else's data.
+ *
+ * SCOPE (Codex adversarial review, PR #48 round 2): the `lstat`-then-`unlink` pair is itself two path
+ * operations, so an actor who swaps the leaf in the interval BETWEEN them can still have the
+ * replacement deleted. This narrows the window rather than closing it — `unlinkat` on a trusted
+ * directory handle is not reachable from pure Node — and the failure direction is the safe one:
+ * anything that is not a confirmed inode match is skipped, so the guard errs toward leaving files
+ * alone. Stated here rather than left to read as a closure.
  */
 function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): void {
   try {
@@ -471,18 +478,27 @@ export function openNewOutputFileSafely(
 
     // The HARD-LINK bypass, and the reason inode identity alone is not containment (Codex
     // adversarial review, PR #48, [critical]). Everything above proves "the fd is what this path
-    // names" — it does NOT prove "this path is the ONLY name the fd has". An attacker who wins the
+    // names AT THIS INSTANT" — it does NOT prove "this path is the ONLY name the fd has", and cannot
+    // prove it for the whole write (see the scope note below). An attacker who wins the
     // pre-open window (so the file is created through a symlinked component, OUTSIDE the root) can
     // then restore the real parent directory and hard-link that outside file back to `realPath`.
     // Every check above now passes honestly: no component is a symlink any more, and `{dev, ino}`
     // genuinely match — because it is the same inode, reachable under two names, one of them outside
     // the root. Writing through the fd would publish un-redacted content at the outside name.
     //
-    // `nlink` is the exact discriminator, and it is exact rather than heuristic: `openSync(..., "wx")`
-    // is `O_CREAT | O_EXCL`, so it only ever succeeds by CREATING the file, and a newly created
-    // regular file has exactly one link. Any additional name therefore appeared after our open and is
-    // by definition not ours. There is no legitimate configuration in which a file this function just
-    // created already has a second link, so this refuses no real usage.
+    // `nlink` discriminates exactly, and refuses no legitimate usage: `openSync(..., "wx")` is
+    // `O_CREAT | O_EXCL`, so it only ever succeeds by CREATING the file, and a newly created regular
+    // file has exactly one link. Any additional name therefore appeared after our open.
+    //
+    // SCOPE, narrower than it first reads (Codex adversarial review, PR #48 round 2): this is a
+    // point-in-time observation. It catches a second name that exists WHEN THE CHECK RUNS — the
+    // restored-parent relink described above, which otherwise passes every check honestly. It does
+    // NOT make "this inode has one name" true for the DURATION of the write, and a link created after
+    // this check returns is not caught. Keeping that property across the write would require writing
+    // somewhere the actor cannot reach at all (a private staging directory) or `linkat`-level control
+    // pure Node does not expose. Recorded as a residual in `docs/findings.md` rather than papered
+    // over: a check whose comment claims a durable property it merely samples is the exact failure
+    // this module has now shipped twice.
     if (fdStat.nlink !== 1) {
       throw new OutputPathError(
         `refusing to write through a file descriptor with ${fdStat.nlink} links — the file this call created ` +

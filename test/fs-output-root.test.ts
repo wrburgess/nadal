@@ -737,7 +737,15 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
   // can restore the real parent and hard-link that outside file back to the in-root path. Every
   // other check then passes honestly: no component is a symlink any more, and {dev, ino} match,
   // because it IS the same inode under two names. Only the link count reveals the second name.
-  it("REGRESSION: refuses when the created file has been given a SECOND name (hard link), even though every component is clean and the inode matches", async () => {
+  // The link is planted inside `openSync` here, i.e. BEFORE verification runs — which is the case
+  // this check actually covers. See the scope note above.
+  // SCOPE, stated precisely because the first version of this comment overstated it (Codex
+  // adversarial review round 2, PR #48): this proves the check catches a second name that exists AT
+  // VERIFICATION TIME. It does NOT prove the file has only one name for the whole write — a link
+  // created AFTER the check passes is not caught by anything here, and cannot be, since pure Node
+  // offers no way to make "no other name exists" durable across the write. That residual is
+  // documented in `openNewOutputFileSafely` and `docs/findings.md`, not asserted away here.
+  it("refuses when, AT VERIFICATION TIME, the created file already has a SECOND name (hard link) — every component clean and the inode matching", async () => {
     const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
     const outside = mkdtempSync(join(tmpdir(), "tn-fd-outside-"));
     try {
@@ -799,8 +807,11 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
   });
 
   // Codex adversarial review, PR #48, [medium]. A `writeSync` that reports zero progress would make
-  // the retry loop re-issue the same request forever — a hung CLI rather than a failed one. This
-  // test would HANG (not fail) without the guard, which is exactly why the guard has to exist.
+  // the retry loop re-issue the same request forever — a hung CLI rather than a failed one. Removing
+  // the guard does NOT make this test hang and does NOT fail an assertion: the vitest worker dies of
+  // an OUT-OF-MEMORY crash (`ERR_IPC_CHANNEL_CLOSED`, v8 `OOMErrorHandler`), because the `vi.fn()`
+  // wrapper records every call's arguments and the loop exhausts the heap recording them. Verified by
+  // running it, after an earlier version of this comment asserted "it hangs" from reasoning.
   it("REGRESSION: a write that reports ZERO progress fails loudly instead of spinning forever", async () => {
     const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
     const { writeSync: realWriteSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
