@@ -51,9 +51,13 @@ is precisely why the outcome is `partial` rather than `error`, and why it must n
 requested player pulls happened.
 
 The parity test (`test/cli-grammar-parity.test.ts`) fails CI when this table and the router's
-registry diverge — in either direction. `dispatch` treats `--help` ANYWHERE in argv as a request
-for help text (checked before the target is parsed), so a target literally spelled `--help` can
-never be reached by any command.
+registry diverge — in either direction. `dispatch` treats `--help` anywhere **before the `--`
+delimiter** as a request for help text (checked before the target is parsed), so `tn player note
+--help` and `tn --help` both print help. Past the delimiter it is ordinary text: `tn player note
+Randy -- --help` records a note reading `--help`. That exception exists because the help check runs
+ahead of every command's parser, and without it the check would silently outrank the delimiter for
+exactly one token — leaving `--help` the single payload the CLI could not record while the MCP
+`player_note` tool accepted it, i.e. the same lossless-escape gap the delimiter exists to close.
 
 ## Commands
 

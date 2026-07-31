@@ -127,3 +127,56 @@ describe("tn player note (end-to-end via dispatch)", () => {
     expect(logSpy).not.toHaveBeenCalled();
   });
 });
+
+// Independent-reviewer finding, ROUND 2 of #17 PR A (Codex, medium, category A) — a defect LEFT BY
+// the round-1 fix, which is this repo's documented recurring shape. `dispatch()` checked
+// `argv.includes("--help")` across the whole of argv before any command parser ran, so it silently
+// outranked the `--` end-of-flags delimiter round 1 had just added: `tn player note Randy -- --help`
+// printed help and exited 0 instead of recording the note, for exactly one token — while the MCP
+// `player_note` tool accepted the identical text, leaving the two surfaces disagreeing. Help
+// detection is now delimiter-aware.
+describe("tn player note — `--help` as literal note text (round-2 reviewer finding)", () => {
+  useTnDbPath();
+
+  function seedFixture() {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const fixture = seedHomeTeamFixture(db);
+    sqlite.close();
+    return fixture;
+  }
+
+  it("records a note that is literally `--help` when it follows the delimiter", async () => {
+    const fixture = seedFixture();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await dispatch(["player", "note", String(fixture.playerName), "--", "--help"]);
+      expect(code).toBe(0);
+      // The property that matters is the stored note, not the exit code: printing help ALSO exits 0,
+      // so asserting only the code would pass against the very defect this test exists for.
+      const { db, sqlite } = openDb();
+      const notes = db.select().from(captainNotes).all();
+      sqlite.close();
+      expect(notes).toHaveLength(1);
+      expect(notes[0]!.note).toBe("--help");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("still prints help for `--help` BEFORE any delimiter, and writes nothing", async () => {
+    seedFixture();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await dispatch(["player", "note", "--help"]);
+      expect(code).toBe(0);
+      expect(log.mock.calls.flat().join("\n")).toContain("tn <noun> <verb>");
+      const { db, sqlite } = openDb();
+      const notes = db.select().from(captainNotes).all();
+      sqlite.close();
+      expect(notes).toHaveLength(0);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
