@@ -5,7 +5,8 @@
 Any time you want the courtside binder: before Sectionals, after a fresh pull, or after Friday's
 results land in the system. `tn report build` renders **from whatever is in the database right
 now** — it never fetches. If the data is stale, the dossier is stale; pull first
-([pre-tournament-full-pull.md](README.md) once it exists, or `tn team pull --players` per team).
+([pre-tournament-full-pull.md](pre-tournament-full-pull.md) for the full team-by-team refresh, or
+`tn team pull "<team>" --players` for one team).
 
 Spec § Deliverables #5 is the destination: *printable reports → courtside binder; no laptop
 required at the venue.*
@@ -23,10 +24,22 @@ required at the venue.*
 tn team show "IA/Versteeg/40&Over3.5M"
 ```
 
-Read the roster block. Every player should carry an age range and at least a TennisRecord dynamic
-rating. **NTRP and WTN come only from the login-assisted path** — if those are missing for
-everyone, run [login-assisted-scrape.md](login-assisted-scrape.md) before printing, or the binder
-ships with a third of each rating row blank.
+Read the roster block: every scouted player should be listed (someone missing here is a pull
+problem, not a report problem), with an age range wherever the team page carried one and a real
+singles/doubles record once matches are on file. **`tn team show` does not print ratings at all** —
+its `RosterMemberProfile` (`src/query/team-profile.ts`) carries no rating field by design; ratings
+live on the player, not this team-level read. To spot-check ratings before building, read a player
+directly:
+
+```
+tn player show "Avery Ashby"
+```
+
+The `ratings: …` line (e.g. `ratings: NTRP 4.0C, TR-Dyn 3.67`, or `ratings: none on file`) is what
+the dossier will actually print for that player. **NTRP and WTN come only from the login-assisted
+path** — if a player's line carries only TennisRecord's dynamic rating (or nothing at all), run
+[login-assisted-scrape.md](login-assisted-scrape.md) before printing, or the binder ships with a
+third of each rating row blank.
 
 ### 2. Build
 
@@ -86,7 +99,14 @@ about an opponent since last time (useful mid-event).
   Run `tn team home "<your team>"` first (#37 / nadal ADR 0001) — once a home team is set, `report
   build` automatically populates this section for every OTHER team's dossier. It stays unavailable
   on the home team's own dossier (comparing a team against itself is not a meaningful section) and
-  on any dossier built before a home team is designated at all.
+  on any dossier built before a home team is designated at all. **Read the on-page wording loosely
+  here**: both cases print the identical sentence *"Not available in this build (no home team
+  configured)"* (`src/report/html.ts`/`markdown.ts`), even on the home team's own dossier where a
+  home team plainly IS configured — it is one message doing duty for two different reasons
+  (`versusTeamId` is `undefined` in both, `src/report/write.ts`), not a sign the designation failed
+  to take. Verified against a real build: `IA/Versteeg/40&Over3.5M`'s own dossier printed that exact
+  sentence immediately after `tn team home "IA/Versteeg/40&Over3.5M"` had already run successfully,
+  while `OK/Tulsa Ironwood/40&Over3.5M`'s dossier in the same build populated the section in full.
 - **The predicted lineup is a guess, and the dossier says so.** Every dossier now carries a
   *"Predicted lineup (a guess)"* section (#17 PR B). Read the confidence and the "Based on" column
   before planning against it: a row reading `placed by rating — no shared history` is not a
