@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMMANDS, dispatch, helpText } from "../src/cli/router.js";
 import { runMigrations } from "../src/db/client.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -115,5 +115,33 @@ describe("tn router", () => {
       expect(JSON.parse(String(rows[0]?.args))).toEqual([]);
       expect(JSON.parse(String(rows[1]?.args))).toEqual(["--quiet"]);
     });
+  });
+});
+
+
+// Found by the independent Codex review of PR #47 (rated medium). This diagnostic runs BEFORE any
+// command is resolved, so no command formatter exists to sanitize it — which made it the last
+// unguarded terminal sink in the codebase, echoing raw argv straight to stderr.
+describe("dispatch's unknown-command diagnostic is sanitized", () => {
+  const ESC = String.fromCharCode(0x1b);
+  const RTL_OVERRIDE = String.fromCharCode(0x202e);
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["an ANSI escape", `bo${ESC}[2Jgus`],
+    ["a bidi override", `bo${RTL_OVERRIDE}gus`],
+  ])("strips %s from the echoed command", async (_label, hostile) => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch([hostile, "verb"]);
+
+    expect(code).toBe(2);
+    const line = errSpy.mock.calls.at(-1)?.[0] as string;
+    expect(line).not.toContain(ESC);
+    expect(line).not.toContain(RTL_OVERRIDE);
+    // Still names what the caller typed, just neutralized — the diagnostic stays useful.
+    expect(line).toContain("bo");
+    expect(line).toContain("Run tn --help");
   });
 });

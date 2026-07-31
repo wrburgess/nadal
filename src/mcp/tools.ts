@@ -15,6 +15,8 @@ import { pullPlayer } from "../ingest/player-pull.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
+import { addEvent } from "../query/events.js";
+import { NoCourtMatchHistoryError, getLineupPlan } from "../query/lineup.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
@@ -216,14 +218,90 @@ export const MCP_TOOLS: McpToolDef[] = [
     name: "player_avail",
     cliCommand: "player avail",
     description: "Record a home-team player's availability for an event day",
-    inputShape: { target: z.string().min(1), day: z.string().min(1), status: z.string().min(1) },
+    inputShape: {
+      target: z.string().min(1),
+      day: z.string().min(1),
+      status: z.string().min(1),
+      // Optional, and needed only when the day falls inside more than one event's range — the
+      // ordinary case once a league season and a tournament both exist.
+      event: z.string().optional(),
+    },
     handler: async (rawArgs) => {
-      const { target, day, status } = rawArgs as { target: string; day: string; status: string };
+      const { target, day, status, event } = rawArgs as {
+        target: string;
+        day: string;
+        status: string;
+        event?: string;
+      };
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
-        const result = setAvailability(db, { playerId: resolution.playerId, day, status });
+        const result = setAvailability(db, { playerId: resolution.playerId, day, status, eventName: event });
         return { player: target, day, availability: result.status, event: result.eventName };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "lineup_plan",
+    cliCommand: "lineup plan",
+    description: "Predict an opponent's lineup from court-assignment history and ratings",
+    inputShape: { target: z.string().min(1) },
+    handler: async (rawArgs) => {
+      const { target } = rawArgs as { target: string };
+      const { db, sqlite } = openDb();
+      try {
+        const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
+        try {
+          // The structured plan, not the CLI's rendered text: agent chat is where the pairings get
+          // worked (spec § Deliverables 3), and it needs the confidence/basis/support fields to
+          // reason with. The "this is a guess" framing rides in the fields themselves rather than
+          // in prose a model might drop.
+          return getLineupPlan(db, resolution.teamId);
+        } catch (err) {
+          if (!(err instanceof NoCourtMatchHistoryError)) throw err;
+          throw new McpToolError(
+            `no court-match history on file for "${target}" — run the team_pull tool with players: true first`,
+          );
+        }
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "event_add",
+    cliCommand: "event add",
+    description: "Create or update an event and its inclusive date range",
+    inputShape: {
+      target: z.string().min(1),
+      kind: z.string().min(1),
+      startsOn: z.string().min(1),
+      endsOn: z.string().min(1),
+    },
+    handler: async (rawArgs) => {
+      const { target, kind, startsOn, endsOn } = rawArgs as {
+        target: string;
+        kind: string;
+        startsOn: string;
+        endsOn: string;
+      };
+      const { db, sqlite } = openDb();
+      try {
+        // No `requireResolved` here, unlike every other target-taking tool: this is the writer that
+        // CREATES events, so resolving the name against existing rows first would make it
+        // impossible to add the first one.
+        const result = addEvent(db, { name: target, kind, startsOn, endsOn });
+        return {
+          event: result.name,
+          kind: result.kind,
+          startsOn: result.startsOn,
+          endsOn: result.endsOn,
+          created: result.created,
+        };
       } finally {
         sqlite.close();
       }

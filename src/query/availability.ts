@@ -10,6 +10,7 @@ import { z } from "zod";
 import { availability, events, teamMemberships } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoHomeTeamError, requireHomeTeam } from "./home-team.js";
+import { isIsoDay } from "./iso-day.js";
 
 type EventRow = typeof events.$inferSelect;
 type AvailabilityRow = typeof availability.$inferSelect;
@@ -23,6 +24,8 @@ export class InvalidAvailabilityStatusError extends Error {}
 export class InvalidAvailabilityDayError extends Error {}
 export class PlayerNotOnHomeRosterError extends Error {}
 export class NoEventForDayError extends Error {}
+export class UnknownEventError extends Error {}
+export class EventDoesNotCoverDayError extends Error {}
 export class AmbiguousEventForDayError extends Error {
   constructor(
     message: string,
@@ -34,33 +37,24 @@ export class AmbiguousEventForDayError extends Error {
 
 const availabilityStatusSchema = z.enum(["available", "unavailable", "uncertain"]);
 
-const ISO_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
 /**
  * Rejects anything that is not a real `YYYY-MM-DD` calendar date.
  *
  * `day` is half of this table's `(player_id, event_id, day)` upsert key, and `eventsForDay`
  * compares it as TEXT — so before this guard existed, any malformed string that merely SORTED
- * inside an event's range matched that event and was stored verbatim. `"2026-08-28 "`,
- * `"2026-08-28xyz"` and `"2026-08-2900"` each wrote a SEPARATE row alongside the real
- * `"2026-08-28"`, which defeats the idempotent upsert the unique index exists to give and invents
- * days that no per-event-day read will ever match. That is the `upsertTeamMatch` shape
- * docs/findings.md records four review rounds on — a key assembled without normalizing its input
- * domain — so it is closed at the write service, where BOTH presenters (CLI `tn player avail` and
- * the MCP `player_avail` tool) inherit it, rather than in either presenter.
+ * inside an event's range matched that event and was stored verbatim, defeating the idempotent
+ * upsert the unique index exists to give and inventing days that no per-event-day read will ever
+ * match. It is closed at the write service, where BOTH presenters (CLI `tn player avail` and the
+ * MCP `player_avail` tool) inherit it, rather than in either presenter.
  *
- * The pattern alone is not enough: `"2026-02-31"` matches it and is not a date. Round-tripping
- * through `Date` is what rejects that — a value JS either refuses outright (NaN) or silently rolls
- * forward into a different day, and a silent roll-forward is precisely the kind of quiet
- * substitution this guard exists to prevent.
+ * The *rule* now lives in `iso-day.ts`, shared with `events.ts` — whose `starts_on`/`ends_on` are
+ * the other half of the same TEXT comparison, so the two must agree on what a day is or a range
+ * written by one could never be matched by the other. The error CLASS stays local: callers assert
+ * on class, never on message text.
  */
 function requireIsoDay(day: string): string {
-  if (!ISO_DAY_PATTERN.test(day)) {
-    throw new InvalidAvailabilityDayError(`invalid day "${day}" (expected YYYY-MM-DD)`);
-  }
-  const parsed = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
-    throw new InvalidAvailabilityDayError(`invalid day "${day}" (not a real calendar date)`);
+  if (!isIsoDay(day)) {
+    throw new InvalidAvailabilityDayError(`invalid day "${day}" (expected a real YYYY-MM-DD date)`);
   }
   return day;
 }
@@ -70,6 +64,21 @@ export type SetAvailabilityInput = {
   /** ISO date, e.g. "2026-08-29". */
   day: string;
   status: string;
+  /**
+   * Which event this day belongs to, by name — required only when the day falls inside more than
+   * one event's range, and rejected if the named event does not actually cover the day.
+   *
+   * This exists because overlapping ranges are a NORMAL domain state, not a misconfiguration: a
+   * district league season runs Mar-Jun and a districts tournament sits inside it in May, so every
+   * day in that window resolves to two events and day-only lookup can only refuse. Before #17 PR B
+   * nothing wrote the `events` table at all, so the overlap was unreachable and the refusal looked
+   * theoretical; `addEvent` made it the first thing a real setup hits. (Found by the independent
+   * Codex review of PR #47, rated high.)
+   *
+   * A disambiguator rather than a guess, matching how every other ambiguous target in this CLI is
+   * resolved — GRAMMAR.md: "Ambiguous names error with candidates listed — never guess."
+   */
+  eventName?: string;
 };
 
 export type SetAvailabilityResult = {
@@ -95,6 +104,45 @@ function eventsForDay(db: Db, day: string): EventRow[] {
 }
 
 /**
+ * Picks which of the day's candidate events this write belongs to.
+ *
+ * Unambiguous day (exactly one candidate) → that event, and a supplied `eventName` still has to
+ * match it: silently ignoring a name the caller went out of their way to give would be the same
+ * "accepted but not honored" failure the grammar's unrecognized-flag rule exists to prevent.
+ *
+ * Ambiguous day → the caller must name the event. That is a disambiguator, never a guess: picking
+ * the narrowest range, or the tournament over the league, would be inventing a domain rule nobody
+ * stated, and GRAMMAR.md's standing answer for an ambiguous target is to error with the candidates
+ * listed. The refusal message now names the fix rather than only the problem.
+ *
+ * Matching is exact on the trimmed name, the same key `addEvent` writes on — no fuzzy fallback, so
+ * a near-miss refuses loudly instead of resolving to a neighbouring event.
+ */
+function selectEvent(db: Db, day: string, candidates: EventRow[], eventName?: string): EventRow {
+  if (eventName !== undefined) {
+    const wanted = eventName.trim();
+    const chosen = candidates.find((e) => e.name === wanted);
+    if (chosen !== undefined) return chosen;
+    // Distinguish "no such event at all" from "that event exists but not on this day" — they call
+    // for different corrections, and collapsing them would send the caller hunting the wrong one.
+    const existsElsewhere = db.select().from(events).where(eq(events.name, wanted)).all().length > 0;
+    if (existsElsewhere) {
+      throw new EventDoesNotCoverDayError(`event "${wanted}" does not cover day "${day}"`);
+    }
+    throw new UnknownEventError(`no event named "${wanted}"`);
+  }
+
+  if (candidates.length > 1) {
+    throw new AmbiguousEventForDayError(
+      `day "${day}" falls within more than one event: ${candidates.map((e) => e.name).join(", ")}` +
+        ` — name the one you mean`,
+      candidates.map((e) => ({ id: e.id, name: e.name })),
+    );
+  }
+  return candidates[0]!;
+}
+
+/**
  * Records `playerId`'s availability for the event day resolved from `input.day`, upserting on the
  * schema's existing `(player_id, event_id, day)` unique index — idempotent per spec § Ingestion
  * discipline: a second call with the same (player, day) updates the status in place rather than
@@ -104,8 +152,9 @@ function eventsForDay(db: Db, day: string): EventRow[] {
  * testing strategy: assert on class, never on message text), when: the status is not one of the
  * three known values; the day is not a real `YYYY-MM-DD` calendar date (see `requireIsoDay` — it is
  * half the upsert key, so an unnormalized one silently splits a single day across rows); no home
- * team is designated at all; the day resolves to zero or more than one
- * event; or the player is not on the home team's roster. "On the roster" is ANY
+ * team is designated at all; the day resolves to zero events, or to more than one with no
+ * `eventName` given to choose between them, or to an `eventName` that is unknown or does not cover
+ * the day; or the player is not on the home team's roster. "On the roster" is ANY
  * `team_memberships` row for (playerId, homeTeamId) regardless of `event_id` — including a NULL
  * `event_id`, which is what every roster `tn team pull` actually writes (docs/findings.md, #15) —
  * not a row scoped to the SAME event `day` resolved to; requiring that exact match would refuse
@@ -122,39 +171,52 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
   const status = statusResult.data;
   const day = requireIsoDay(input.day);
 
-  const homeTeam = requireHomeTeam(db);
+  // Every DB read and the write run in ONE `BEGIN IMMEDIATE` transaction — the OTHER half of the
+  // event-range invariant, and it has to be here as well as in `addEvent` because the race runs in
+  // both directions.
+  //
+  // `addEvent` serializing its own check-then-update closes the ordering where the event moves
+  // second. This closes the one where it moves FIRST: without it, this function resolves an event
+  // (and its range), another process narrows that event — finding no availability to strand,
+  // because none is committed yet — and this upsert then lands a row outside the range that now
+  // exists. Same stranded row, opposite order, and `addEvent`'s guard cannot see it. Two
+  // `IMMEDIATE` writers cannot overlap, so whichever commits first, the second observes the
+  // committed state and validates against reality rather than a snapshot it already lost.
+  // (Found by the independent Codex review of PR #47, rounds 12-13, rated high.)
+  //
+  // NOTE for a future caller: this takes a connection, not a transaction handle. Nesting would
+  // become a savepoint and the `immediate` behavior would not apply — if this ever needs to compose
+  // inside a larger transaction, that outer transaction must itself be `IMMEDIATE`.
+  return db.transaction((tx) => {
+    const homeTeam = requireHomeTeam(tx);
 
-  const onRoster =
-    db
-      .select({ id: teamMemberships.id })
-      .from(teamMemberships)
-      .where(and(eq(teamMemberships.playerId, input.playerId), eq(teamMemberships.teamId, homeTeam.id)))
-      .all().length > 0;
-  if (!onRoster) {
-    throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);
-  }
+    const onRoster =
+      tx
+        .select({ id: teamMemberships.id })
+        .from(teamMemberships)
+        .where(and(eq(teamMemberships.playerId, input.playerId), eq(teamMemberships.teamId, homeTeam.id)))
+        .all().length > 0;
+    if (!onRoster) {
+      throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);
+    }
 
-  const candidateEvents = eventsForDay(db, day);
-  if (candidateEvents.length === 0) {
-    throw new NoEventForDayError(`no event on file covers day "${day}"`);
-  }
-  if (candidateEvents.length > 1) {
-    throw new AmbiguousEventForDayError(
-      `day "${day}" falls within more than one event: ${candidateEvents.map((e) => e.name).join(", ")}`,
-      candidateEvents.map((e) => ({ id: e.id, name: e.name })),
-    );
-  }
-  const event = candidateEvents[0]!;
+    const candidateEvents = eventsForDay(tx, day);
+    if (candidateEvents.length === 0) {
+      throw new NoEventForDayError(`no event on file covers day "${day}"`);
+    }
 
-  const row = db
-    .insert(availability)
-    .values({ playerId: input.playerId, eventId: event.id, day, status })
-    .onConflictDoUpdate({
-      target: [availability.playerId, availability.eventId, availability.day],
-      set: { status },
-    })
-    .returning()
-    .get();
+    const event = selectEvent(tx, day, candidateEvents, input.eventName);
 
-  return { availabilityId: row.id, eventId: event.id, eventName: event.name, status: row.status };
+    const row = tx
+      .insert(availability)
+      .values({ playerId: input.playerId, eventId: event.id, day, status })
+      .onConflictDoUpdate({
+        target: [availability.playerId, availability.eventId, availability.day],
+        set: { status },
+      })
+      .returning()
+      .get();
+
+    return { availabilityId: row.id, eventId: event.id, eventName: event.name, status: row.status };
+  }, { behavior: "immediate" });
 }

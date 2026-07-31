@@ -50,7 +50,7 @@ server reads the identical env vars via the identical `src/db/client.ts`/`src/re
 
 Every tool mirrors a `tn` command 1:1 (`test/mcp-tool-parity.test.ts` enforces this both directions):
 `db_migrate`, `team_pull`, `team_show`, `team_home`, `player_pull`, `player_show`, `player_avail`,
-`player_note`, `report_build`. `player_note` additionally accepts an MCP-only `pairTarget` argument
+`player_note`, `event_add`, `lineup_plan`, `report_build`. `player_note` additionally accepts an MCP-only `pairTarget` argument
 for a pairing note (`src/cli/commands/player-note.ts`'s own doc comment explains why that stays
 MCP-only rather than a third CLI positional) — this is the one deliberate CLI/MCP argument-shape
 difference, and it is *additive*: every other argument matches the CLI grammar's target/payload
@@ -73,11 +73,15 @@ positionals by name.
    The agent should end up calling `player_avail` twice (`day: "2026-08-30"`, `status:
    "unavailable"`; `day: "2026-08-31"`, `status: "uncertain"`) and `player_note` twice — once plain,
    once with `pairTarget: "Kai Kestrel"`. **Read back what it recorded** rather than assuming intent
-   translated correctly — `player_show` or `report build` shows exactly what landed.
+   translated correctly — the tool results themselves are the readback (`player_avail` returns the
+   stored status *and the event it resolved to*; `player_note` returns the stored text). Not
+   `player_show` or `report build`: those report only a data-gap *status*, never the values, so they
+   cannot tell you whether the right day or the right event was written. See *Verifying what a write
+   actually recorded* below for the row-level SQL when you need it.
 5. **Re-render and check.** Call `report_build` again and re-open the dossier; the "prior meetings vs
    our players" section (populated once a home team is designated — Task 5, #17) and the "not
-   collected yet" block (now truthful about which sections actually have writers — Task 5's other
-   fix) are both worth a second look here, not just the availability you just added.
+   collected yet" block (truthful about which sections actually have writers — it should now list
+   `events` alone) are both worth a second look here, not just the availability you just added.
 
 ## Verifying it landed
 
@@ -85,8 +89,26 @@ positionals by name.
   surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
   from either surface, interleaved, which is the whole point of one shared telemetry table (spec §
   Request telemetry).
-- `tn player show "<name>"` (the CLI, not MCP) reads back availability/notes recorded via MCP — same
-  database, same service functions, so there is nothing surface-specific to reconcile.
+- **Verifying what a write actually recorded.** The tool's own result is the readback: `player_avail`
+  returns the stored `availability` and the `event` it resolved to, `player_note` returns the stored
+  note text. Check those rather than assuming a successful call means the intended value landed —
+  the event a day resolves to is the part most worth confirming.
+
+  `tn player show` is **not** a readback for these. It reports availability and captain notes only as
+  a `dataGaps` status (`not-collected` / `empty` / `has-data`) — a count, never the rows — so it can
+  tell you *that* something was recorded and never *what*. (This runbook previously said otherwise;
+  corrected on #17 PR B after an independent review, since an HC following it would have treated
+  "the section is no longer empty" as confirmation of a specific value.)
+
+  For the rows themselves there is no command yet, so read the table directly:
+
+  ```
+  sqlite3 data/nadal.db "select p.canonical_name, e.name, a.day, a.status
+    from availability a
+    join players p on p.id = a.player_id
+    join events  e on e.id = a.event_id
+    order by a.day"
+  ```
 
 ## If `tn db migrate` fails with "duplicate column name: is_home"
 
@@ -110,10 +132,29 @@ that branch, in which case copy them out first (`sqlite3 data/nadal.db "select *
 No permanent repair path is shipped for it, deliberately: that would mean carrying
 migration-reconciliation machinery in production forever to serve a window that closed on merge.
 
-## Known limitations
+### The two tools added by #17 PR B
 
-- **No predicted lineup or `lineup_plan` tool yet.** That is PR B of #17 (the predicted-lineup
-  heuristic + `tn lineup plan`); #17 stays open until it lands.
+- **`lineup_plan`** takes a `target` (a team) and returns that team's **predicted lineup, which is a
+  guess** — spec § Deliverables 1. The structured result is deliberately richer than the CLI's
+  rendered text, because agent chat is where the pairings actually get worked: every slot carries a
+  `confidence`, a `basis` (`history` or `rating`) and a `support` count, and the payload names the
+  rating scale it ranked within, where the court set came from, who went unplaced, and how many of
+  the roster's matches were excluded as belonging to other teams. Reason with those fields; do not
+  present the slots as a lineup card.
+
+  It **refuses** for a team with no court matches of its own on file. A roster whose players have
+  long histories for *other* teams still refuses, and correctly so — see the
+  [lineup runbook](predict-an-opponent-lineup.md) for why, and for the rule itself.
+
+- **`event_add`** takes `target` (the event name), `kind` (`league` or `tournament`), `startsOn` and
+  `endsOn`. It is idempotent on the name. It exists because `player_avail` resolves its event from
+  the day, so without an event on file that tool cannot succeed at all.
+
+  `player_avail` accordingly gained an **optional `event`** argument, needed only when a day falls
+  inside more than one event's range — a league season and a tournament inside it, which is ordinary.
+  Without it that day refuses and lists the candidates rather than guessing which you meant.
+
+## Known limitations
 - **`team_pull`/`player_pull` still make real, live HTTP requests** when given a live target — an
   agent chat calling them mid-conversation hits the real network exactly like the CLI does. Prefer
   `--from`/`sourceUrl` (a previously-saved page) when testing against fixture data instead.

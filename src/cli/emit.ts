@@ -1,4 +1,4 @@
-import { sanitizeValue } from "../sanitize.js";
+import { sanitizeJson, sanitizeValue } from "../sanitize.js";
 import { quoteSummaryValue } from "./summary.js";
 
 /**
@@ -39,6 +39,29 @@ export type SummaryField = [string, string | number];
  * contract is "exit code and stderr unchanged", so a caller piping stdout to /dev/null must still
  * see (and be able to parse, under `--json`) a diagnostic on failure.
  */
+/**
+ * `JSON.stringify` of a whole result object, with every string leaf sanitized first.
+ *
+ * `emitSummary` below has sanitized its `--json` payload since PR A, but the three commands that
+ * dump an entire profile object (`team show`, `player show`, `lineup plan`) called
+ * `JSON.stringify` directly and bypassed it — and `JSON.stringify` escapes the C0 controls while
+ * leaving RIGHT-TO-LEFT OVERRIDE and U+2028/U+2029 intact, so a scraped player name carrying a bidi
+ * override reached the terminal unchanged and could visually reorder what a human was reading.
+ * Found by the independent Codex review of PR #47 (rated medium).
+ *
+ * Yes, this modifies data a machine consumer receives. That trade was already made deliberately for
+ * the summary-line payload below, and it is the right one here for the same reason: these are
+ * display names, the identifiers (`playerId`, `teamId`) travel in their own fields untouched, and a
+ * character that cannot be rendered safely has no business being echoed to a terminal to protect a
+ * fidelity nobody is relying on.
+ *
+ * The traversal itself lives in `src/sanitize.ts` because the MCP server needs the identical guard
+ * on its own tool results — a second output boundary, the same scraped strings.
+ */
+export function emitJson(value: unknown): string {
+  return JSON.stringify(sanitizeJson(value));
+}
+
 export function emitSummary(command: string, status: string, fields: SummaryField[], opts: EmitOpts = {}): void {
   const toStderr = status !== "ok";
   if (opts.quiet && !toStderr) return;

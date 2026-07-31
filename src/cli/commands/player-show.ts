@@ -3,14 +3,8 @@ import { openDb } from "../../db/client.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../../query/player-profile.js";
 import type { PlayerProfile } from "../../query/player-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
-import { emitSummary } from "../emit.js";
-import {
-  formatDataGapsLine,
-  formatPartnerFrequency,
-  formatRatingTrajectory,
-  formatRecord,
-  formatSlotTendencies,
-} from "../format-profile.js";
+import { emitJson, emitSummary } from "../emit.js";
+import { formatDataGapsLine, formatName, formatPartnerFrequency, formatRatingTrajectory, formatRecord, formatSlotTendencies } from "../format-profile.js";
 import { sixMonthsAgo } from "../window.js";
 
 /**
@@ -24,18 +18,18 @@ import { sixMonthsAgo } from "../window.js";
  */
 function formatPlayerProfileText(profile: PlayerProfile): string {
   const id = profile.identity;
-  const aliasSuffix = id.aliases.length > 0 ? ` (aka ${id.aliases.join(", ")})` : "";
+  const aliasSuffix = id.aliases.length > 0 ? ` (aka ${id.aliases.map(formatName).join(", ")})` : "";
   const gapsLine = formatDataGapsLine(profile.dataGaps);
 
   const lines = [
-    `${id.canonicalName}${aliasSuffix}`,
-    `  age: ${id.ageRange ?? "unknown"}   gender: ${id.gender ?? "unknown"}`,
+    `${formatName(id.canonicalName)}${aliasSuffix}`,
+    `  age: ${formatName(id.ageRange ?? "unknown")}   gender: ${formatName(id.gender ?? "unknown")}`,
     `  ratings: ${formatRatingTrajectory(profile.ratingTrajectory)}`,
     `  singles: ${formatRecord(profile.singlesRecord.sixMonth)} (6mo) / ${formatRecord(profile.singlesRecord.allTime)} (all-time)`,
     `  doubles: ${formatRecord(profile.doublesRecord.sixMonth)} (6mo) / ${formatRecord(profile.doublesRecord.allTime)} (all-time)`,
     `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
     `  partners: ${formatPartnerFrequency(profile.partnerFrequency)}`,
-    `  teams: ${profile.teamMemberships.map((m) => m.teamName).join(", ") || "none"}`,
+    `  teams: ${profile.teamMemberships.map((m) => formatName(m.teamName)).join(", ") || "none"}`,
   ];
   if (gapsLine !== null) lines.push(`  not collected yet: ${gapsLine}`);
   return lines.join("\n");
@@ -79,7 +73,7 @@ export const playerShow: Command = {
       // `--quiet` wins over `--json` (GRAMMAR.md), same as `emitSummary` — checked here rather
       // than routed through `emitSummary` itself, since neither success form is a `key=value` line.
       if (!opts.quiet) {
-        console.log(opts.json ? JSON.stringify(profile) : formatPlayerProfileText(profile));
+        console.log(opts.json ? emitJson(profile) : formatPlayerProfileText(profile));
       }
       return 0;
     } finally {

@@ -87,9 +87,17 @@ about an opponent since last time (useful mid-event).
   build` automatically populates this section for every OTHER team's dossier. It stays unavailable
   on the home team's own dossier (comparing a team against itself is not a meaningful section) and
   on any dossier built before a home team is designated at all.
-- **No predicted lineup.** Spec § Deliverables #1 wants one labeled a guess; the heuristic is
-  unspecified and the court-assignment history it needs stays thin until TennisLink (#27). It moves
-  to lineup planning, PR B of #17.
-- **Tournament results have no writer anywhere yet** — hence the "Not collected yet" block for that
-  section. Availability and captain notes DO have writers now (`tn player avail`, `tn player note`
-  — see [agent-chat-over-mcp.md](agent-chat-over-mcp.md)), scoped to the designated home team only.
+- **The predicted lineup is a guess, and the dossier says so.** Every dossier now carries a
+  *"Predicted lineup (a guess)"* section (#17 PR B). Read the confidence and the "Based on" column
+  before planning against it: a row reading `placed by rating — no shared history` is not a
+  prediction about pairings at all. The courts listed are the ones this team has been *seen* to
+  field, not the event's format, and only matches belonging to **this team** count as evidence — the
+  section says how many were excluded as belonging elsewhere. The rule itself, and how to read it
+  critically, is in [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md).
+- **A team with no court matches of its own renders the lineup section as an explicit absence**
+  rather than an empty table. Pull it with `tn team pull "<team>" --players` and rebuild.
+- **`events` has no player-scoped writer yet** — hence the "Not collected yet" block for that
+  section. `tn event add` (#17 PR B) creates events, but nothing yet associates a *player* with one
+  (`tn team pull` writes a null `event_id`), so a dossier cannot say which events a player is on.
+  Availability and captain notes DO have writers (`tn player avail`, `tn player note` — see
+  [agent-chat-over-mcp.md](agent-chat-over-mcp.md)), scoped to the designated home team only.

@@ -5,6 +5,7 @@
 // each with its own escaping/layout rules — reusing THIS module for the report renderers would
 // couple two audiences (a terminal, a printed binder) that should stay free to diverge.
 
+import { sanitizeValue } from "../sanitize.js";
 import type {
   DataGapsResult,
   PartnerFrequencyEntry,
@@ -12,6 +13,29 @@ import type {
   SlotTendency,
   WindowedRecordResult,
 } from "../query/types.js";
+
+/**
+ * Every scraped, human-facing string that reaches the terminal goes through here first.
+ *
+ * A player or team name comes from a fetched page, so it is attacker-influenced, and these
+ * formatters write it straight to a TTY. A name carrying ANSI/OSC controls or bidi overrides can
+ * clear the screen, rewrite earlier lines, or visually reorder a roster — the same Trojan-Source
+ * spoofing class `src/sanitize.ts` was written for. Until now that sanitizer was applied only to
+ * `key=value` summary lines (`emit.ts`, `summary.ts`), so every multi-line human-readable
+ * presenter — `team show`, `player show`, and #17 PR B's `lineup plan` — interpolated names raw.
+ *
+ * Found by the independent Codex review of PR #47 against the new formatter (rated medium). It is
+ * fixed for all three rather than only the one flagged: fixing the reported instance and leaving
+ * its siblings is this repo's most-recorded failure mode (docs/findings.md), and the two older
+ * presenters are exposed by exactly the same input.
+ *
+ * The HTML and markdown dossier renderers are NOT routed through this — they have their own,
+ * stronger escapes (`escapeHtml`, `escapeMarkdownCell`) for a different threat in a different
+ * medium.
+ */
+export function formatName(value: string): string {
+  return sanitizeValue(value);
+}
 
 /** `wins-losses`, with `undecided` appended only when nonzero — `excludedUndated` is a data-quality
  * footnote (rows with no `playedOn`), not part of the record itself, so it never renders here. */
@@ -29,7 +53,7 @@ export function formatPartnerFrequency(
   partners: (PartnerFrequencyEntry & { canonicalName: string })[],
 ): string {
   if (partners.length === 0) return "none";
-  return partners.map((p) => `${p.canonicalName} ×${p.count}`).join(", ");
+  return partners.map((p) => `${formatName(p.canonicalName)} ×${p.count}`).join(", ");
 }
 
 // Human labels for the four known rating sources (spec § Domain model: "NTRP + type, WTN S, WTN D,
@@ -42,6 +66,14 @@ const RATING_SOURCE_LABELS: Record<string, string> = {
   wtn_doubles: "WTN-D",
   tr_dynamic: "TR-Dyn",
 };
+
+/** The one place a rating source becomes human-readable, exported so `tn lineup plan` and the two
+ * dossier renderers name a scale the same way this module already does — a printed binder reading
+ * "ranked within ntrp" beside a roster row reading "NTRP" is the drift this prevents. An unknown
+ * source falls through to its raw string, per the open-vocabulary rule above. */
+export function ratingSourceLabel(source: string): string {
+  return RATING_SOURCE_LABELS[source] ?? source;
+}
 
 /**
  * Every rating source renders at a FIXED precision, never a variable one — these are scouting
@@ -72,9 +104,10 @@ export function formatRatingTrajectory(trajectory: RatingTrajectoryResult): stri
     .join(", ");
 }
 
-// Human labels for the three sections with no writer anywhere in the codebase (docs/findings.md,
-// #15) — `dataGaps`' keys are the camelCase field names `getPlayerProfile` builds
-// (`captainNotes`), which read awkwardly bare in prose.
+// Human labels for the three `dataGaps` sections — `dataGaps`' keys are the camelCase field names
+// `getPlayerProfile` builds (`captainNotes`), which read awkwardly bare in prose. `availability`
+// and `captain_notes` gained writers in #17 PR A; `events` still has none that associates a PLAYER
+// with an event, so it remains the one standing "not collected" section.
 const DATA_GAP_LABELS: Record<string, string> = {
   events: "events",
   availability: "availability",

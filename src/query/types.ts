@@ -147,3 +147,64 @@ export type TeamMatchRecordResult = {
   undecided: number;
   excludedUndated: number;
 };
+
+// ---------------------------------------------------------------------------
+// Predicted lineup (#17 PR B) — spec § Deliverables 1's "predicted lineup honestly labeled a
+// guess". Every field below exists to keep the *guess* legible: a caller can render confidence,
+// say what the placement was based on, name the rating scale it ranked within, and show who was
+// left over. A shape that returned only `slot -> players` would read as fact.
+// ---------------------------------------------------------------------------
+
+/** From the count of observations behind a placement: `high` >= 5, `medium` 2-4, `low` <= 1. */
+export type LineupConfidence = "high" | "medium" | "low";
+
+/** Whether the placement came from observed history or from the rating fallback that fills gaps.
+ * Distinct from `confidence`, because a `low`-confidence historical placement (two shared matches)
+ * and a `low`-confidence invented one (no shared matches at all) are different claims. */
+export type LineupBasis = "history" | "rating";
+
+export type PredictedLineupSlot = {
+  slot: string;
+  /** Read from the observed rows for this slot, never inferred from the slot's spelling. */
+  discipline: Discipline;
+  /** One id for a singles slot, two for doubles — FEWER when the roster ran out, which is reported
+   * as a short/empty slot rather than by omitting the slot. */
+  playerIds: number[];
+  confidence: LineupConfidence;
+  basis: LineupBasis;
+  /** Observations behind this placement: the player's singles court-match count for a singles
+   * slot, the pair's shared-match count for a doubles slot, `0` for a rating-only placement. */
+  support: number;
+};
+
+export type UnplacedPlayer = {
+  playerId: number;
+  /** Their evidence volume, so "not placed" can be read as "thin history" rather than "cut". */
+  courtMatches: number;
+};
+
+export type PredictedLineupInput = {
+  /** Court matches involving this team's players. Rows nobody on the roster took part in are
+   * ignored rather than rejected — a caller may legitimately hand over a wider row set. */
+  rows: CourtMatchRow[];
+  rosterPlayerIds: number[];
+  ratings: { playerId: number; observations: RatingObservationRow[] }[];
+};
+
+export type PredictedLineupResult = {
+  slots: PredictedLineupSlot[];
+  unplaced: UnplacedPlayer[];
+  /** The single source every comparison was made within, or `null` when nobody is rated. Ranking
+   * across sources is not sound — a `tr_dynamic` value and an `ntrp` value are not the same axis. */
+  ratingSource: RatingSource | null;
+  /** Roster players ranked within `ratingSource`, strongest first. */
+  rankedPlayerIds: number[];
+  /** Roster players with no observation in `ratingSource` — ranked last, and named so the gap is
+   * visible rather than implicit in the ordering. */
+  unrankedPlayerIds: number[];
+  /** Where the slot set came from. `observed` is the only v1 value: nothing links a team to an
+   * event, so `events.format` cannot be reached from a team. See `predictedLineup`'s doc comment. */
+  slotSource: "observed";
+  /** How many court matches the whole guess rests on. */
+  observedCourtMatches: number;
+};

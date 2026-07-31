@@ -12,8 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { events, players, teamMemberships, teams } from "../src/db/schema.js";
+import { events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
@@ -180,6 +181,170 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     });
     expect(noteResult.isError).not.toBe(true);
     expect(JSON.parse(textOf(noteResult))).toMatchObject({ note: "Big serve on big points." });
+  });
+
+  it("event_add creates the event over MCP, then player_avail resolves against it", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+    const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
+    sqlite.close();
+
+    const client = await connectedClient();
+    await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+    const addResult = await client.callTool({
+      name: "event_add",
+      arguments: {
+        target: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+      },
+    });
+    expect(addResult.isError).not.toBe(true);
+    expect(JSON.parse(textOf(addResult))).toEqual({
+      event: "Springfield Sectionals 2026",
+      kind: "tournament",
+      startsOn: "2026-08-28",
+      endsOn: "2026-08-30",
+      created: true,
+    });
+
+    // The point of the tool: the availability writer now has an event to resolve against, over the
+    // same surface, with no out-of-band SQL in between.
+    const availResult = await client.callTool({
+      name: "player_avail",
+      arguments: { target: player.canonicalName, day: "2026-08-29", status: "available" },
+    });
+    expect(availResult.isError).not.toBe(true);
+    expect(JSON.parse(textOf(availResult))).toMatchObject({
+      availability: "available",
+      event: "Springfield Sectionals 2026",
+    });
+  });
+
+  it("event_add refuses an invalid kind as a tool error rather than crashing the server", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "event_add",
+      arguments: { target: "Springfield", kind: "sectionals", startsOn: "2026-08-28", endsOn: "2026-08-30" },
+    });
+
+    expect(result.isError).toBe(true);
+    const { db, sqlite } = openDb();
+    try {
+      expect(db.select().from(events).all(), "a refusal must write nothing").toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Found by the independent Codex review of PR #47 (rated medium). MCP tool results carry scraped
+  // player and team names and were passed through a bare `JSON.stringify`, which escapes the C0
+  // controls but leaves RIGHT-TO-LEFT OVERRIDE and U+2028/U+2029 intact — so the guard the CLI's
+  // `--json` path had gained did not cover the second transport over the same services.
+  it("sanitizes control and bidi characters out of tool results, matching the CLI --json path", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: `Team${RTL_OVERRIDE}Versteeg` }).returning().get();
+    const p1 = db.insert(players).values({ canonicalName: `Ada${RTL_OVERRIDE}Ashby` }).returning().get();
+    const p2 = db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    for (const p of [p1, p2]) {
+      db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
+    }
+    // Linked to a real team match for this team — court matches must belong to the team to count
+    // as its history (see `getLineupPlan`).
+    const opponent = db.insert(teams).values({ name: "MCP Opponent" }).returning().get();
+    const tm = db
+      .insert(teamMatches)
+      .values({ homeTeamId: team.id, visitingTeamId: opponent.id, sourceMatchId: "mcp-tm-1" })
+      .returning()
+      .get();
+    const cm = upsertCourtMatch(db, {
+      teamMatchId: tm.id,
+      slot: "D1",
+      discipline: "doubles",
+      winnerSide: "home",
+      score: "6-3 6-4",
+      leagueContext: "40+ 3.5",
+      playedOn: "2026-05-01",
+      sourceMatchId: "mcp-hostile-1",
+    });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p1.id, side: "home" });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p2.id, side: "home" });
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "lineup_plan", arguments: { target: team.name } });
+
+    expect(result.isError).not.toBe(true);
+    const text = textOf(result);
+    expect(text, "a bidi override must not reach an MCP client").not.toContain(RTL_OVERRIDE);
+    // Still valid JSON of the same shape — sanitizing is not mangling.
+    const payload = JSON.parse(text) as { slots: { players: { canonicalName: string }[] }[] };
+    expect(payload.slots[0]!.players.some((pl) => pl.canonicalName.startsWith("Ada"))).toBe(true);
+  });
+
+  // The other half of the MCP boundary (Codex review of PR #47 round 5, rated medium): refusal
+  // messages quote scraped data — `unknown target "<name>"`, `ambiguous target: <candidates>` — so
+  // sanitizing only the success path left a hostile name one failed lookup away from an MCP client.
+  it("sanitizes control and bidi characters out of tool ERROR results too, not only successes", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    const ESC = String.fromCharCode(0x1b);
+    runMigrations();
+    const client = await connectedClient();
+
+    // An unknown target, whose message echoes the caller's string back.
+    const unknown = await client.callTool({
+      name: "team_show",
+      arguments: { target: `No${RTL_OVERRIDE}Such${ESC}[2JTeam` },
+    });
+    expect(unknown.isError).toBe(true);
+    expect(textOf(unknown)).not.toContain(RTL_OVERRIDE);
+    expect(textOf(unknown)).not.toContain(ESC);
+    expect(textOf(unknown), "the diagnostic stays useful").toContain("No");
+  });
+
+  it("sanitizes an ambiguous-target refusal, whose message quotes several scraped names", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    // Both names sit within FUZZY_MAX_DISTANCE (2) of the search term, so the lookup lands on the
+    // AMBIGUOUS tier and its message quotes both candidates — which is the point: here the hostile
+    // characters come from stored rows, not from the caller's own input. The override goes last
+    // because `nameKey` does not strip category-Cf characters (findings-log note), so a mid-name
+    // one would change the key and the test would pass on an "unknown target" refusal instead.
+    db.insert(teams).values({ name: `VersteegA${RTL_OVERRIDE}` }).run();
+    db.insert(teams).values({ name: `VersteegB${RTL_OVERRIDE}` }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "team_show", arguments: { target: "Versteeg" } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).not.toContain(RTL_OVERRIDE);
+    expect(textOf(result)).toContain("ambiguous");
+  });
+
+  it("still records the ORIGINAL error class in telemetry — sanitizing the message must not blur it", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    await client.callTool({ name: "team_show", arguments: { target: `Ghost${String.fromCharCode(0x202e)}Team` } });
+
+    const rows = requestLogRows(dbFixture.path()).filter((r) => r.surface === "mcp" && r.command === "team_show");
+    expect(rows).toHaveLength(1);
+    // `error:McpToolError`, not `error:Error` — the sanitizing catch sits OUTSIDE logMcpTool so the
+    // telemetry row still names the real class.
+    expect(String(rows[0]?.outcome)).toBe("error:McpToolError");
   });
 
   it("report_build over MCP writes real files via the hardened output-root guard", async () => {
