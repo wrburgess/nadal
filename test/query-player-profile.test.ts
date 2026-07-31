@@ -1,0 +1,286 @@
+import { describe, expect, it } from "vitest";
+import { openDb, runMigrations } from "../src/db/client.js";
+import {
+  courtMatchPlayers,
+  courtMatches,
+  players,
+  playerAliases,
+  ratingObservations,
+  teamMemberships,
+  teams,
+} from "../src/db/schema.js";
+import { getPlayerProfile, resolvePlayerTarget } from "../src/query/player-profile.js";
+import { useTnDbPath } from "./helpers/tn-db.js";
+
+type Db = ReturnType<typeof openDb>["db"];
+
+function freshDb() {
+  runMigrations();
+  return openDb();
+}
+
+function seedPlayer(db: Db, values: Partial<typeof players.$inferInsert> & { canonicalName: string }) {
+  return db.insert(players).values(values).returning().get();
+}
+
+function seedCourtMatch(
+  db: Db,
+  values: Partial<typeof courtMatches.$inferInsert> & { slot: string; discipline: string },
+  participants: { playerId: number; side: "home" | "visiting" }[],
+) {
+  const row = db.insert(courtMatches).values({ winnerSide: null, playedOn: null, ...values }).returning().get();
+  for (const p of participants) {
+    db.insert(courtMatchPlayers).values({ courtMatchId: row.id, playerId: p.playerId, side: p.side }).run();
+  }
+  return row;
+}
+
+describe("getPlayerProfile", () => {
+  useTnDbPath();
+
+  it("full data across all four rating sources renders every section", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Nova Norbury" });
+      const opponent = seedPlayer(db, { canonicalName: "Rowan Rushworth" });
+      const partner = seedPlayer(db, { canonicalName: "Kai Kestrel" });
+      const team = db.insert(teams).values({ name: "Team A" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      db.insert(ratingObservations)
+        .values([
+          { playerId: player.id, source: "ntrp", value: 4.0, ratingType: "C", observedOn: "2026-01-01" },
+          { playerId: player.id, source: "wtn_singles", value: 21.5, observedOn: "2026-01-01" },
+          { playerId: player.id, source: "wtn_doubles", value: 19.2, observedOn: "2026-01-01" },
+          { playerId: player.id, source: "tr_dynamic", value: 4.1, observedOn: "2026-06-01" },
+        ])
+        .run();
+
+      // Singles win inside the window.
+      seedCourtMatch(
+        db,
+        { slot: "S1", discipline: "singles", winnerSide: "home", playedOn: "2026-06-10" },
+        [{ playerId: player.id, side: "home" }, { playerId: opponent.id, side: "visiting" }],
+      );
+      // Doubles loss inside the window, with a partner.
+      seedCourtMatch(
+        db,
+        { slot: "D1", discipline: "doubles", winnerSide: "visiting", playedOn: "2026-06-11" },
+        [
+          { playerId: player.id, side: "home" },
+          { playerId: partner.id, side: "home" },
+          { playerId: opponent.id, side: "visiting" },
+        ],
+      );
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-06-01" });
+
+      expect(profile.identity.canonicalName).toBe("Nova Norbury");
+      expect(profile.ratingTrajectory).toHaveLength(4);
+      const bySource = new Map(profile.ratingTrajectory.map((r) => [r.source, r]));
+      expect(bySource.get("ntrp")!.latest.ratingType).toBe("C");
+      expect(bySource.get("tr_dynamic")!.latest.value).toBe(4.1);
+
+      expect(profile.singlesRecord.sixMonth).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
+      expect(profile.doublesRecord.sixMonth).toEqual({ wins: 0, losses: 1, undecided: 0, excludedUndated: 0 });
+      expect(profile.slotTendencies).toEqual(
+        expect.arrayContaining([{ slot: "S1", count: 1 }, { slot: "D1", count: 1 }]),
+      );
+      expect(profile.partnerFrequency).toEqual([{ partnerId: partner.id, count: 1, canonicalName: "Kai Kestrel" }]);
+      expect(profile.teamMemberships).toEqual([{ teamId: team.id, teamName: "Team A", eventId: null }]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("TennisRecord-only (realistic pre-login state): WTN/NTRP sections report absent, not zero", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Ira Inglewood" });
+      db.insert(ratingObservations)
+        .values({ playerId: player.id, source: "tr_dynamic", value: 3.8, observedOn: "2026-01-01" })
+        .run();
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+
+      expect(profile.ratingTrajectory).toHaveLength(1);
+      expect(profile.ratingTrajectory[0]!.source).toBe("tr_dynamic");
+      expect(profile.ratingTrajectory.find((r) => r.source === "ntrp")).toBeUndefined();
+      expect(profile.ratingTrajectory.find((r) => r.source === "wtn_singles")).toBeUndefined();
+      expect(profile.ratingTrajectory.find((r) => r.source === "wtn_doubles")).toBeUndefined();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a player with no match history: zero records, no crash, every section present", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Blake Bramwell" });
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+
+      expect(profile.singlesRecord.allTime).toEqual({ wins: 0, losses: 0, undecided: 0, excludedUndated: 0 });
+      expect(profile.doublesRecord.allTime).toEqual({ wins: 0, losses: 0, undecided: 0, excludedUndated: 0 });
+      expect(profile.slotTendencies).toEqual([]);
+      expect(profile.partnerFrequency).toEqual([]);
+      expect(profile.ratingTrajectory).toEqual([]);
+      expect(profile.teamMemberships).toEqual([]);
+      // dataGaps still reports even with nothing else on file.
+      expect(profile.dataGaps.events).toBe("not-collected");
+      expect(profile.dataGaps.availability).toBe("not-collected");
+      expect(profile.dataGaps.captainNotes).toBe("not-collected");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("dataGaps reports events/availability/captain_notes as not-collected — no writer anywhere writes them (docs/findings.md #15)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Casey Calder" });
+      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      expect(profile.dataGaps).toEqual({
+        events: "not-collected",
+        availability: "not-collected",
+        captainNotes: "not-collected",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+describe("resolvePlayerTarget", () => {
+  useTnDbPath();
+
+  it("resolves a bare canonical name", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Yuma Yarrowby" });
+      const result = resolvePlayerTarget(db, "Yuma Yarrowby");
+      expect(result).toEqual({ kind: "ok", playerId: player.id });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("resolves a usta: prefixed target by usta_uaid", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Hollis Hartwell", ustaUaid: "UAID-1" });
+      const result = resolvePlayerTarget(db, "usta:UAID-1");
+      expect(result).toEqual({ kind: "ok", playerId: player.id });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("resolves a wtn: prefixed target by wtn_tennis_id", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Delaney Duxbury", wtnTennisId: "WTN-1" });
+      const result = resolvePlayerTarget(db, "wtn:WTN-1");
+      expect(result).toEqual({ kind: "ok", playerId: player.id });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("resolves a tr: prefixed target by tennisrecord_url", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, {
+        canonicalName: "Juniper Jarrow",
+        tennisrecordUrl: "https://tennisrecord.com/profile.aspx?playername=Juniper%20Jarrow",
+      });
+      const result = resolvePlayerTarget(db, "tr:https://tennisrecord.com/profile.aspx?playername=Juniper%20Jarrow");
+      expect(result).toEqual({ kind: "ok", playerId: player.id });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("an unknown usta:/wtn:/tr: prefixed target is not-found", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      expect(resolvePlayerTarget(db, "usta:no-such-uaid")).toEqual({ kind: "not-found" });
+      expect(resolvePlayerTarget(db, "wtn:no-such-id")).toEqual({ kind: "not-found" });
+      expect(resolvePlayerTarget(db, "tr:https://nope")).toEqual({ kind: "not-found" });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("an exact alias collision (two distinct players share the same alias spelling) is ambiguous, not a silent pick", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const first = seedPlayer(db, { canonicalName: "Marek Melbourne" });
+      const second = seedPlayer(db, { canonicalName: "Orin Oakhurst" });
+      // Both players independently picked up the same alias spelling — e.g. two rosters each
+      // recording a shared nickname. The exact tier must not guess which one "Nickname" means.
+      db.insert(playerAliases).values([
+        { playerId: first.id, alias: "Nickname" },
+        { playerId: second.id, alias: "Nickname" },
+      ]).run();
+
+      const result = resolvePlayerTarget(db, "Nickname");
+      expect(result.kind).toBe("ambiguous");
+      if (result.kind === "ambiguous") {
+        expect(result.candidates.sort()).toEqual(["Marek Melbourne", "Orin Oakhurst"]);
+      }
+      // Never creates or modifies anything while resolving.
+      expect(db.select().from(players).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("an alias-only spelling resolves to the SAME profile as the canonical name — the Unicode case-folding path (#15)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      // Player was originally pulled under an accented canonical spelling; an alias captures a
+      // different casing of the SAME accented characters — the exact shape #15 fixed (SQLite's
+      // `lower()` is ASCII-only; JS's `toLowerCase()` is Unicode-aware).
+      const player = seedPlayer(db, { canonicalName: "Élodie Fontaine" });
+      db.insert(playerAliases).values({ playerId: player.id, alias: "ÉLODIE FONTAINE" }).run();
+
+      const byAlias = resolvePlayerTarget(db, "élodie fontaine");
+      const byCanonical = resolvePlayerTarget(db, "Élodie Fontaine");
+      expect(byAlias).toEqual({ kind: "ok", playerId: player.id });
+      expect(byAlias).toEqual(byCanonical);
+
+      const profileByAlias = getPlayerProfile(db, (byAlias as { kind: "ok"; playerId: number }).playerId, {
+        since: "2026-01-01",
+      });
+      expect(profileByAlias.identity.canonicalName).toBe("Élodie Fontaine");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("an unknown target is not-found, not an error and not a create", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const result = resolvePlayerTarget(db, "Nobody Atall");
+      expect(result).toEqual({ kind: "not-found" });
+      expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("an ambiguous fuzzy name lists every candidate", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      db.insert(players).values([{ canonicalName: "Alex Stone" }, { canonicalName: "Alex Stove" }]).run();
+      const result = resolvePlayerTarget(db, "Alex Ston");
+      expect(result.kind).toBe("ambiguous");
+      if (result.kind === "ambiguous") {
+        expect(result.candidates.sort()).toEqual(["Alex Stone", "Alex Stove"]);
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+});
