@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { players, ratingObservations, teamMemberships, teams } from "../src/db/schema.js";
+import { players, ratingObservations, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -17,11 +17,25 @@ type Db = ReturnType<typeof openDb>["db"];
 
 let nextMid = 0;
 
-function play(db: Db, slot: string, discipline: "singles" | "doubles", ours: number[], times: number): void {
+/** A `team_matches` row for `teamId` plus a throwaway opponent — court matches must be linked to
+ * one of this team's matches to count as its history (see `getLineupPlan`), which is exactly what
+ * production produces once `tn team pull` has written the schedule. */
+let nextOpponent = 0;
+function linkTeamMatch(db: Db, teamId: number, sourceMatchId: string) {
+  nextOpponent += 1;
+  const opponent = db.insert(teams).values({ name: `CLI Opponent ${nextOpponent}` }).returning().get();
+  return db
+    .insert(teamMatches)
+    .values({ homeTeamId: teamId, visitingTeamId: opponent.id, sourceMatchId })
+    .returning()
+    .get();
+}
+
+function play(db: Db, slot: string, discipline: "singles" | "doubles", ours: number[], times: number, linked?: { id: number }): void {
   for (let i = 0; i < times; i++) {
     nextMid += 1;
     const cm = upsertCourtMatch(db, {
-      teamMatchId: null,
+      teamMatchId: linked?.id ?? null,
       slot,
       discipline,
       winnerSide: "home",
@@ -48,10 +62,11 @@ function seedVersteeg(options: { withRatings?: boolean; extraPlayers?: string[] 
     db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
   }
 
-  play(db, "S1", "singles", [ids["Ada Ashby"]!], 6);
-  play(db, "D1", "doubles", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 5);
-  play(db, "D2", "doubles", [ids["Del Duxbury"]!, ids["Emory Ellerby"]!], 3);
-  play(db, "D3", "doubles", [ids["Ira Inglewood"]!, ids["Juno Jarrow"]!], 1);
+  const ourMatch = linkTeamMatch(db, team.id, "cli-seed");
+  play(db, "S1", "singles", [ids["Ada Ashby"]!], 6, ourMatch);
+  play(db, "D1", "doubles", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 5, ourMatch);
+  play(db, "D2", "doubles", [ids["Del Duxbury"]!, ids["Emory Ellerby"]!], 3, ourMatch);
+  play(db, "D3", "doubles", [ids["Ira Inglewood"]!, ids["Juno Jarrow"]!], 1, ourMatch);
 
   if (options.withRatings === true) {
     for (const [name, value] of [
@@ -125,6 +140,25 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
     expect(output).toContain("not placed: Kit Kestrel (0 court matches)");
   });
 
+  it("names the matches it excluded as belonging to other teams", async () => {
+    const ids = seedVersteeg({ withRatings: true });
+    // The same roster's history for a different club. It must not become evidence, and the count
+    // must be visible so a thin prediction is explicable rather than mysterious.
+    const { db, sqlite } = openDb();
+    const other = db.insert(teams).values({ name: "Some Other Club/18&Over4.0M" }).returning().get();
+    play(db, "D1", "doubles", [ids["Ada Ashby"]!, ids["Bo Bramwell"]!], 4, linkTeamMatch(db, other.id, "cli-other"));
+    backfillNameKeys(db); // #32: every team row needs a key or resolution asserts
+    sqlite.close();
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M"]);
+    const output = logSpy.mock.calls.at(-1)?.[0] as string;
+
+    expect(output).toContain("excluded: 4 court matches these players played for other teams");
+    // And the guess itself is unchanged — Ada still at S1, not paired with Bo on borrowed evidence.
+    expect(output).toMatch(/S1\s+Ada Ashby/);
+  });
+
   it("says so plainly when nobody on the roster is rated", async () => {
     seedVersteeg({ withRatings: false });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -174,7 +208,7 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
     for (const p of [p1, p2]) {
       db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
     }
-    play(db, "D1", "doubles", [p1.id, p2.id], 3);
+    play(db, "D1", "doubles", [p1.id, p2.id], 3, linkTeamMatch(db, team.id, "cli-hostile"));
     backfillNameKeys(db);
     sqlite.close();
 

@@ -8,8 +8,8 @@
 // module resolves exists so a presenter can print a person rather than a database id — the exact
 // defect #16 shipped and #17 PR A fixed one layer over.
 
-import { eq, inArray } from "drizzle-orm";
-import { players, ratingObservations, teamMemberships, teams } from "../db/schema.js";
+import { eq, inArray, or } from "drizzle-orm";
+import { courtMatches, players, ratingObservations, teamMatches, teamMemberships, teams } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoCourtMatchHistoryError, predictedLineup } from "./derive.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
@@ -47,6 +47,11 @@ export type LineupPlan = {
   unranked: LineupPlanPlayer[];
   slotSource: PredictedLineupResult["slotSource"];
   observedCourtMatches: number;
+  /** Court matches these players appeared in that belong to some OTHER team (or to no team match
+   * on file) and were therefore not used as evidence. Reported rather than silently dropped: a
+   * thin-looking prediction for a roster with long individual histories is otherwise inexplicable,
+   * and this number is the explanation. */
+  excludedOtherTeamMatches: number;
   rosterSize: number;
 };
 
@@ -54,9 +59,11 @@ export type LineupPlan = {
  * Builds a team's predicted lineup: the roster from `team_memberships`, that roster's court-match
  * history, and every rating observation for those players, run through `predictedLineup`.
  *
- * Throws `NoCourtMatchHistoryError` when the team has no court matches on file — a caller renders
- * that as an honest absence rather than an empty lineup, which would read as "we predict nobody
- * plays". `report build` catches it for exactly that reason.
+ * Throws `NoCourtMatchHistoryError` when the team has no court matches of its OWN on file — a
+ * caller renders that as an honest absence rather than an empty lineup, which would read as "we
+ * predict nobody plays". `report build` catches it for exactly that reason. Note that a roster
+ * whose members have extensive individual histories can still refuse here, and correctly so: those
+ * matches belong to other teams and say nothing about how THIS team fields courts.
  *
  * A player on the roster more than once (one `team_memberships` row per event — the schema allows
  * it, and a district roster plus a travel roster is the normal case) is counted ONCE here: the
@@ -79,7 +86,45 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
   // above (see the doc comment: one person, however many event-scoped membership rows).
   const rosterPlayerIds = Array.from(nameById.keys()).sort((a, b) => a - b);
 
-  const courtRows = courtMatchRowsForPlayers(db, rosterPlayerIds);
+  // Evidence must be THIS TEAM's court matches, not merely court matches its players appear in.
+  //
+  // Spec § Ingestion ingests a player's full history "including their other leagues (18+ etc.)",
+  // so a roster member's matches are mostly NOT this team's matches. Selecting by player id alone
+  // let one team's predicted lineup be built from partnerships those players formed elsewhere — a
+  // confident "8 matches together" for a pair that has never once played together for this team,
+  // and a lineup for a newly assembled roster that should have refused outright. Found by the
+  // independent Codex review of PR #47 (rated high).
+  //
+  // The association is `court_matches.team_match_id` -> `team_matches`, which `player-pull` sets
+  // whenever a `team_matches` row already exists for the same `mid=` (i.e. whenever `tn team pull`
+  // has seen this team's schedule). Both sides are checked: home/visiting are pull-perspective
+  // labels, not venue, so a team is as likely to sit in one column as the other.
+  //
+  // An UNLINKED court match (`team_match_id IS NULL`) is excluded rather than assumed to belong
+  // here. That is the conservative direction on purpose: including it is how the defect above
+  // happened, and the cost of excluding it is a refusal that says "pull this team first", which is
+  // true and actionable. The count of what was set aside is reported rather than silently dropped.
+  const ownTeamMatchIds = db
+    .select({ id: teamMatches.id })
+    .from(teamMatches)
+    .where(or(eq(teamMatches.homeTeamId, teamId), eq(teamMatches.visitingTeamId, teamId)))
+    .all()
+    .map((r) => r.id);
+
+  const ownCourtMatchIds = new Set<number>(
+    ownTeamMatchIds.length === 0
+      ? []
+      : db
+          .select({ id: courtMatches.id })
+          .from(courtMatches)
+          .where(inArray(courtMatches.teamMatchId, ownTeamMatchIds))
+          .all()
+          .map((r) => r.id),
+  );
+
+  const allPlayerRows = courtMatchRowsForPlayers(db, rosterPlayerIds);
+  const courtRows = allPlayerRows.filter((row) => ownCourtMatchIds.has(row.id));
+  const excludedOtherTeamMatches = allPlayerRows.length - courtRows.length;
 
   const observationRows =
     rosterPlayerIds.length === 0
@@ -132,6 +177,7 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
     unranked: prediction.unrankedPlayerIds.map(named),
     slotSource: prediction.slotSource,
     observedCourtMatches: prediction.observedCourtMatches,
+    excludedOtherTeamMatches,
     rosterSize: rosterPlayerIds.length,
   };
 }

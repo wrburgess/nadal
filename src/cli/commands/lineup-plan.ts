@@ -62,7 +62,13 @@ export const lineupPlan: Command = {
         emitSummary(
           "lineup plan",
           "error",
-          [["message", `no court-match history on file for "${parsed.target}" — run tn team pull --players first`]],
+          [
+            [
+              "message",
+              `no court-match history on file for "${parsed.target}" — only this team's own matches count, ` +
+                "so run tn team pull --players for it first",
+            ],
+          ],
           opts,
         );
         return 1;

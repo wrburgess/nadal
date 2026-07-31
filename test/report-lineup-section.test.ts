@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { players, teamMemberships, teams } from "../src/db/schema.js";
+import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
 import { renderDossier } from "../src/report/html.js";
 import { renderDossierMarkdown } from "../src/report/markdown.js";
@@ -192,9 +192,15 @@ describe("buildTeamDossier wires the real prediction in", () => {
       }
       backfillNameKeys(db);
 
+      const opponent = db.insert(teams).values({ name: "Report Opponent" }).returning().get();
+      const tm = db
+        .insert(teamMatches)
+        .values({ homeTeamId: team.id, visitingTeamId: opponent.id, sourceMatchId: "report-tm-1" })
+        .returning()
+        .get();
       for (let i = 0; i < 3; i++) {
         const cm = upsertCourtMatch(db, {
-          teamMatchId: null,
+          teamMatchId: tm.id,
           slot: "D1",
           discipline: "doubles",
           winnerSide: "home",

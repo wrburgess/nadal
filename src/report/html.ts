@@ -214,6 +214,12 @@ function renderPredictedLineupHtml(dossier: TeamDossier): string {
     `<strong>Courts:</strong> ${lineup.slots.length}, taken from this team's observed match history — ` +
       "not from the event format.",
   );
+  if (lineup.excludedOtherTeamMatches > 0) {
+    footnotes.push(
+      `<strong>Excluded:</strong> ${lineup.excludedOtherTeamMatches} court match` +
+        `${lineup.excludedOtherTeamMatches === 1 ? "" : "es"} these players played for other teams.`,
+    );
+  }
 
   return (
     open +

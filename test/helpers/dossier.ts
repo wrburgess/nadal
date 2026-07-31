@@ -114,6 +114,7 @@ export function buildLineupPlan(overrides: Partial<LineupPlan> = {}): LineupPlan
     unranked: [{ playerId: 6, canonicalName: "Ira Inglewood" }],
     slotSource: "observed",
     observedCourtMatches: 12,
+    excludedOtherTeamMatches: 0,
     rosterSize: 6,
     ...overrides,
   };

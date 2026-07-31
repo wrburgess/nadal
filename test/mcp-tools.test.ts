@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { events, players, teamMemberships, teams } from "../src/db/schema.js";
+import { events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
@@ -258,8 +258,16 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     for (const p of [p1, p2]) {
       db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
     }
+    // Linked to a real team match for this team — court matches must belong to the team to count
+    // as its history (see `getLineupPlan`).
+    const opponent = db.insert(teams).values({ name: "MCP Opponent" }).returning().get();
+    const tm = db
+      .insert(teamMatches)
+      .values({ homeTeamId: team.id, visitingTeamId: opponent.id, sourceMatchId: "mcp-tm-1" })
+      .returning()
+      .get();
     const cm = upsertCourtMatch(db, {
-      teamMatchId: null,
+      teamMatchId: tm.id,
       slot: "D1",
       discipline: "doubles",
       winnerSide: "home",

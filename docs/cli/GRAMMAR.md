@@ -125,6 +125,14 @@ the team's **observed** court-match history, not from `events.format` — nothin
 event today — so a team whose league history has five courts is predicted across five even at a
 four-court event; the output says so rather than hiding it.
 
+**Only this team's own matches count as evidence.** A roster member's history includes every league
+they play in (spec § Ingestion ingests "their other leagues (18+ etc.)"), and a partnership formed
+on a different team says nothing about how *this* team fields courts — so evidence is restricted to
+court matches linked to one of this team's `team_matches` rows, and anything else is excluded and
+reported as a count. A team whose roster has long individual histories but no matches of its own
+therefore **refuses**, which is the honest answer rather than a confident guess built on borrowed
+evidence.
+
 `tn report build [sectionals|<team>] [--json]` — `<team>` renders that one team's dossier;
 `sectionals`, and bare (no target), render one dossier per team on file plus a top-level
 `index.html`/`index.md`. Output root: `TN_REPORTS_PATH`, defaulting to repo-relative `reports/` —

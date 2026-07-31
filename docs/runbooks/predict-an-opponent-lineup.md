@@ -28,7 +28,13 @@ Stated once here so the output can be argued with rather than merely read:
 4. **Nobody is dropped.** Players who did not fit are listed with their match counts, and a court
    with nobody left reads `unfilled`.
 
-Two limits worth knowing before you rely on it:
+Three limits worth knowing before you rely on it:
+
+- **Only this team's own matches count.** Your opponents play in other leagues too, and a pairing
+  they formed on an 18+ team tells you nothing about how *this* team fields courts — so anything not
+  linked to one of this team's matches is excluded, and the output tells you how many were set
+  aside. If a prediction looks thinner than the roster's experience suggests, read that line: it is
+  usually the explanation.
 
 - **The courts predicted are the courts this team has been seen to field**, not the courts the
   event fields. A team with a five-court league history is predicted across five even at
@@ -162,6 +168,6 @@ tn lineup plan "IA/Versteeg/40&Over3.5M"
 
 | Message | What it means |
 |---|---|
-| `no court-match history on file for "<team>"` | The team exists but no court matches were ingested. Re-run `tn team pull "<team>" --players`. |
+| `no court-match history on file for "<team>"` | No court matches belonging to **this team** were ingested — its players may still have plenty of history for other teams, which does not count. Re-run `tn team pull "<team>" --players`, which writes the schedule the player pulls then link against. |
 | `unknown target "<team>"` | No team by that name. `tn team show` with a partial name to find the spelling. |
 | `ambiguous target: A, B` | More than one team matches. Use the full name, or `tr:<url>`. |

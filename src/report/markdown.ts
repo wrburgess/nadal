@@ -155,6 +155,10 @@ function renderPredictedLineupMarkdown(dossier: TeamDossier): string {
           ? "."
           : `; unrated: ${lineup.unranked.map((p) => escapeMarkdownCell(p.canonicalName)).join(", ")}.`),
     `**Courts:** ${lineup.slots.length}, taken from this team's observed match history — not from the event format.`,
+    lineup.excludedOtherTeamMatches === 0
+      ? null
+      : `**Excluded:** ${lineup.excludedOtherTeamMatches} court match` +
+        `${lineup.excludedOtherTeamMatches === 1 ? "" : "es"} these players played for other teams.`,
   ].filter((line): line is string => line !== null);
 
   return [

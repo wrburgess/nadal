@@ -75,6 +75,14 @@ export function formatLineupPlan(plan: LineupPlan): string {
   // Named on every run, because it is the standing limitation of the v1 rule: the courts predicted
   // are the courts this team has been SEEN to field, which may not be the courts the event fields.
   lines.push(`  courts: ${plan.slots.length}, from this team's observed match history (not the event format)`);
+  // Only when there is something to say. Without this line a prediction built on 7 matches, for a
+  // roster whose members have played 200, reads as missing data rather than as correct scoping.
+  if (plan.excludedOtherTeamMatches > 0) {
+    lines.push(
+      `  excluded: ${plan.excludedOtherTeamMatches} court match` +
+        `${plan.excludedOtherTeamMatches === 1 ? "" : "es"} these players played for other teams`,
+    );
+  }
 
   return lines.join("\n");
 }
