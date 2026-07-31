@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatDataGapsLine,
-  formatPartnerFrequency,
-  formatRatingTrajectory,
-  formatRecord,
-  formatSlotTendencies,
-} from "../src/cli/format-profile.js";
+import { formatDataGapsLine, formatName, formatPartnerFrequency, formatRatingTrajectory, formatRecord, formatSlotTendencies } from "../src/cli/format-profile.js";
 import type { DataGapsResult, PartnerFrequencyEntry, RatingTrajectoryResult, SlotTendency, WindowedRecordResult } from "../src/query/types.js";
 
 describe("formatRecord", () => {
@@ -117,5 +111,44 @@ describe("formatDataGapsLine", () => {
   it("a key with no human label falls back to the raw key rather than dropping it", () => {
     const gaps: DataGapsResult = { someFutureSection: "not-collected" };
     expect(formatDataGapsLine(gaps)).toBe("someFutureSection");
+  });
+});
+
+// Found by the independent Codex review of PR #47 (rated medium), against the new `lineup plan`
+// formatter — fixed for all three terminal presenters, since the two older ones are exposed by
+// exactly the same input and fixing only the reported instance is this repo's most-recorded
+// failure mode (docs/findings.md).
+//
+// A player name comes from a scraped page. `src/sanitize.ts` was written for this class but was
+// only ever wired into `key=value` summary lines, so the multi-line human-readable output wrote
+// names raw to the terminal.
+describe("formatName — scraped names never reach the terminal with control characters", () => {
+  // Built from character codes rather than literal escapes, so this source file does not itself
+  // contain an ANSI sequence (the same reasoning src/sanitize.ts records for its own constants).
+  const ESC = String.fromCharCode(0x1b);
+  const OSC = `${ESC}]0;pwned${String.fromCharCode(0x07)}`;
+  const CSI_CLEAR = `${ESC}[2J`;
+  const RTL_OVERRIDE = String.fromCharCode(0x202e);
+
+  it.each([
+    ["an ANSI CSI screen-clear", `Dan${CSI_CLEAR}Kestrel`],
+    ["an OSC window-title sequence", `Dan${OSC}Kestrel`],
+    ["a bidi right-to-left override", `Dan${RTL_OVERRIDE}Kestrel`],
+    ["a raw newline", "Dan\nKestrel"],
+    ["a carriage return", "Dan\rKestrel"],
+  ])("strips %s", (_label, hostile) => {
+    const out = formatName(hostile);
+    expect(out).not.toContain(ESC);
+    expect(out).not.toContain(RTL_OVERRIDE);
+    expect(out).not.toMatch(/[\r\n]/);
+    // Replaced with a space, not deleted — the name stays legible rather than silently merging
+    // into a different-looking one.
+    expect(out.startsWith("Dan")).toBe(true);
+    expect(out.endsWith("Kestrel")).toBe(true);
+  });
+
+  it("leaves an ordinary name, including non-ASCII, untouched", () => {
+    expect(formatName("Élodie Örström")).toBe("Élodie Örström");
+    expect(formatName("JT Martin")).toBe("JT Martin");
   });
 });

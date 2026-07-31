@@ -131,6 +131,50 @@ describe("pullTeam", () => {
     }
   });
 
+  // Found by the independent Codex review of PR #47 (rated medium). `entry.name` is parsed from a
+  // fetched roster page and went straight into `console.warn` — a raw stderr write with no summary
+  // formatter in front of it, so ANSI, bidi and line controls bypassed the terminal-boundary guard
+  // every other CLI output path has.
+  it("sanitizes a hostile roster entry name before warning about it", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    const ESC = String.fromCharCode(0x1b);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Same shape as the skip case below — a roster entry whose profile link is missing — but with
+      // a name the source page could genuinely carry.
+      const hostileName = `Ellis${RTL_OVERRIDE}${ESC}[2J Eastwick`;
+      const mutated = team.html.replace(
+        '<a class="link" href="/adult/profile.aspx?playername=Ellis Eastwick">Ellis Eastwick</a>',
+        hostileName,
+      );
+      expect(mutated).not.toBe(team.html);
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const stubFetcher = createStubFetcher({
+        [team.source.url]: { body: mutated },
+        ...Object.fromEntries(
+          ROSTER_NAMES.filter((n) => n !== "Ellis Eastwick").map((name) => [
+            matchHistoryUrlFor(name, hrefParam(team.source.url, "year") ?? "2026"),
+            { body: syntheticEmptyMatchHistory(name) },
+          ]),
+        ),
+      });
+
+      await pullTeam({ db, fetchPage: stubFetcher, target: team.source.url, cascadePlayers: true });
+
+      const warned = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(warned, "a roster page must not be able to write control codes to stderr").not.toContain(ESC);
+      expect(warned).not.toContain(RTL_OVERRIDE);
+      // Still names the entry, so the warning stays actionable.
+      expect(warned).toContain("Ellis");
+
+      warnSpy.mockRestore();
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("skips a roster entry with no profile link (warns, non-fatal) instead of crashing or silently dropping the player", async () => {
     runMigrations();
     const { db, sqlite } = openDb();

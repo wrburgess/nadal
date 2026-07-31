@@ -9,6 +9,7 @@ import type { PageFetcher } from "./fetch.js";
 import { findTeamByName, resolvePlayer, resolveTeam } from "./identity.js";
 import { matchHistoryUrlFor, pullPlayer, slugFromUrl } from "./player-pull.js";
 import { upsertMembership, upsertTeam, upsertTeamMatch } from "./upsert.js";
+import { sanitizeValue } from "../sanitize.js";
 
 type Db = ReturnType<typeof openDb>["db"];
 type TeamRow = typeof teams.$inferSelect;
@@ -170,14 +171,17 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       const playername = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
       if (playername === null || playername === "") {
         skippedRosterEntries.push(entry.name);
-        console.warn(`team pull: roster entry "${entry.name}" has no profile link — skipped`);
+        // `entry.name` is parsed from a fetched roster page, so it is attacker-influenced and this
+        // is a raw stderr write with no summary formatter in front of it (`emitSummary` sanitizes;
+        // a bare `console.warn` does not). Found by the independent Codex review of PR #47.
+        console.warn(`team pull: roster entry "${sanitizeValue(entry.name)}" has no profile link — skipped`);
         continue;
       }
       const playerUrl = matchHistoryUrlFor(playername, year);
       const result = await pullPlayer({ db, fetchPage, url: playerUrl });
       if (result.kind !== "ok") {
         skippedRosterEntries.push(entry.name);
-        console.warn(`team pull: cascading "${entry.name}" failed (${result.kind}) — skipped`);
+        console.warn(`team pull: cascading "${sanitizeValue(entry.name)}" failed (${result.kind}) — skipped`);
       }
     }
   }

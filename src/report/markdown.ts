@@ -11,7 +11,9 @@ import {
   formatRatingTrajectory,
   formatRecord,
   formatSlotTendencies,
+  ratingSourceLabel,
 } from "../cli/format-profile.js";
+import { sanitizeValue } from "../sanitize.js";
 import type { TeamDossier } from "./types.js";
 
 /**
@@ -33,12 +35,21 @@ import type { TeamDossier } from "./types.js";
  * a bare heading. Backslash-escaping is CommonMark's own mechanism for "this character, literally"
  * — not a bespoke scheme — so the output survives being re-parsed by any standard renderer, not
  * just displayed as raw text by accident.
+ *
+ * **Markdown escaping is not the whole job**, which is why `sanitizeValue` runs FIRST. Backslashing
+ * CommonMark's syntax characters says nothing about control, format, or line-separator characters:
+ * a RIGHT-TO-LEFT OVERRIDE inside a name survives every escape above and visually reorders the
+ * rendered table — including, in a scouting dossier, which player sits on which court. That matters
+ * more here than in a terminal, because this file is printed and carried to a court where nobody
+ * can check it against the source. `sanitizeValue` also subsumes the newline handling this function
+ * used to do itself (CR and LF are both category Cc), so the explicit `\r?\n` replace it carried
+ * was removed rather than left as a branch no input can reach.
+ * (Found by the independent Codex review of PR #47, rated medium.)
  */
 export function escapeMarkdownCell(value: string): string {
-  return value
+  return sanitizeValue(value)
     .replace(/\\/g, "\\\\")
-    .replace(/[|`<>[\]_*]/g, (ch) => `\\${ch}`)
-    .replace(/\r?\n/g, " ");
+    .replace(/[|`<>[\]_*]/g, (ch) => `\\${ch}`);
 }
 
 function renderRosterTableMarkdown(dossier: TeamDossier): string {
@@ -94,6 +105,75 @@ function renderPriorMeetingsSectionMarkdown(dossier: TeamDossier): string {
   return `## Prior meetings vs our players\n\n${body}`;
 }
 
+/**
+ * Spec § Deliverables #1's "predicted lineup honestly labeled a guess", rendered into the dossier
+ * itself. The heading says "predicted", the sentence under it says "a guess", and every row carries
+ * its own confidence and basis — a table of names with no such framing is the failure mode this
+ * whole section is written against, and it would be read as a lineup card in a courtside binder.
+ *
+ * `lineup === null` prints an explicit absence rather than omitting the section: a missing section
+ * is indistinguishable from one nobody added.
+ */
+function renderPredictedLineupMarkdown(dossier: TeamDossier): string {
+  const heading = "## Predicted lineup (a guess)";
+  const lineup = dossier.lineup;
+  if (lineup === null) {
+    return `${heading}\n\n_No court-match history on file for this team, so there is nothing to predict from._`;
+  }
+
+  const preamble =
+    `_A guess, not a lineup card — inferred from ${lineup.observedCourtMatches} observed court ` +
+    `match${lineup.observedCourtMatches === 1 ? "" : "es"} across a roster of ${lineup.rosterSize}._`;
+
+  const rows = lineup.slots.map((slot) => {
+    const names =
+      slot.players.length === 0
+        ? "_(unfilled — roster exhausted)_"
+        : slot.players.map((p) => escapeMarkdownCell(p.canonicalName)).join(" / ");
+    const evidence =
+      slot.basis === "rating"
+        ? "placed by rating — no shared history"
+        : slot.discipline === "singles"
+          ? `${slot.support} singles match${slot.support === 1 ? "" : "es"}`
+          : `${slot.support} match${slot.support === 1 ? "" : "es"} together`;
+    return `| ${escapeMarkdownCell(slot.slot)} | ${names} | ${slot.confidence} | ${evidence} |`;
+  });
+
+  const footnotes = [
+    lineup.unplaced.length === 0
+      ? null
+      : `**Not placed:** ${lineup.unplaced
+          .map(
+            (p) =>
+              `${escapeMarkdownCell(p.canonicalName)} (${p.courtMatches} court match${p.courtMatches === 1 ? "" : "es"})`,
+          )
+          .join(", ")}`,
+    lineup.ratingSource === null
+      ? "**Ratings:** none on file — ties fell through to a stable ordering, not to strength."
+      : `**Ratings:** ranked within ${escapeMarkdownCell(ratingSourceLabel(lineup.ratingSource))}` +
+        (lineup.unranked.length === 0
+          ? "."
+          : `; unrated: ${lineup.unranked.map((p) => escapeMarkdownCell(p.canonicalName)).join(", ")}.`),
+    `**Courts:** ${lineup.slots.length}, taken from this team's observed match history — not from the event format.`,
+    lineup.excludedOtherTeamMatches === 0
+      ? null
+      : `**Excluded:** ${lineup.excludedOtherTeamMatches} court match` +
+        `${lineup.excludedOtherTeamMatches === 1 ? "" : "es"} these players played for other teams.`,
+  ].filter((line): line is string => line !== null);
+
+  return [
+    heading,
+    "",
+    preamble,
+    "",
+    "| Court | Players | Confidence | Based on |",
+    "|---|---|---|---|",
+    ...rows,
+    "",
+    footnotes.join("  \n"),
+  ].join("\n");
+}
+
 function renderPlayerBlockMarkdown(player: PlayerProfile): string {
   return [
     `### ${escapeMarkdownCell(player.identity.canonicalName)}`,
@@ -140,6 +220,8 @@ export function renderDossierMarkdown(dossier: TeamDossier): string {
     renderRosterTableMarkdown(dossier) +
     "\n\n" +
     renderTeamRecordMarkdown(dossier) +
+    "\n\n" +
+    renderPredictedLineupMarkdown(dossier) +
     "\n\n## Player detail\n\n" +
     renderPlayersSectionMarkdown(dossier) +
     "\n\n" +

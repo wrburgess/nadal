@@ -3,11 +3,13 @@ import { openDb } from "../../db/client.js";
 import { resolvePlayerTarget } from "../../query/player-profile.js";
 import {
   AmbiguousEventForDayError,
+  EventDoesNotCoverDayError,
   InvalidAvailabilityDayError,
   InvalidAvailabilityStatusError,
   NoEventForDayError,
   NoHomeTeamError,
   PlayerNotOnHomeRosterError,
+  UnknownEventError,
   setAvailability,
 } from "../../query/availability.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
@@ -23,14 +25,18 @@ function isAvailabilityRefusal(
   | NoHomeTeamError
   | PlayerNotOnHomeRosterError
   | NoEventForDayError
-  | AmbiguousEventForDayError {
+  | AmbiguousEventForDayError
+  | UnknownEventError
+  | EventDoesNotCoverDayError {
   return (
     err instanceof InvalidAvailabilityStatusError ||
     err instanceof InvalidAvailabilityDayError ||
     err instanceof NoHomeTeamError ||
     err instanceof PlayerNotOnHomeRosterError ||
     err instanceof NoEventForDayError ||
-    err instanceof AmbiguousEventForDayError
+    err instanceof AmbiguousEventForDayError ||
+    err instanceof UnknownEventError ||
+    err instanceof EventDoesNotCoverDayError
   );
 }
 
@@ -46,7 +52,10 @@ export const playerAvail: Command = {
   verb: "avail",
   summary: "Record a home-team player's availability for an event day",
   run: async (args) => {
-    const parsed = parsePayloadArgs(args, 2);
+    // Three payload positionals, the last OPTIONAL: `<day> <status> [event]`. The event name is
+    // needed only when the day falls inside more than one event's range, which overlapping league
+    // and tournament seasons make ordinary — see `setAvailability`'s `eventName` doc comment.
+    const parsed = parsePayloadArgs(args, 3);
     const opts = globalFlags(parsed.flags);
     if (parsed.error !== undefined) {
       emitSummary("player avail", "error", [["message", parsed.error]], opts);
@@ -56,12 +65,12 @@ export const playerAvail: Command = {
       emitSummary("player avail", "error", [["message", "missing target"]], opts);
       return 1;
     }
-    const [day, status] = parsed.payload;
+    const [day, status, eventName] = parsed.payload;
     if (day === undefined || status === undefined) {
       emitSummary(
         "player avail",
         "error",
-        [["message", "usage: tn player avail <name> <YYYY-MM-DD> <status>"]],
+        [["message", "usage: tn player avail <name> <YYYY-MM-DD> <status> [event]"]],
         opts,
       );
       return 1;
@@ -85,7 +94,7 @@ export const playerAvail: Command = {
       }
 
       try {
-        const result = setAvailability(db, { playerId: resolution.playerId, day, status });
+        const result = setAvailability(db, { playerId: resolution.playerId, day, status, eventName });
         emitSummary(
           "player avail",
           "ok",

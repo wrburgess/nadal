@@ -9,10 +9,17 @@ import type {
   CourtMatchRow,
   DataGapsInput,
   DataGapsResult,
+  Discipline,
   HeadToHeadResult,
+  LineupBasis,
+  LineupConfidence,
   PartnerFrequencyEntry,
+  PredictedLineupInput,
+  PredictedLineupResult,
+  PredictedLineupSlot,
   RatingObservationRow,
   RatingSeriesPoint,
+  RatingSource,
   RatingTrajectoryResult,
   Side,
   SlotTendency,
@@ -232,4 +239,414 @@ export function teamMatchRecord(
   }
 
   return { wins, losses, undecided, excludedUndated };
+}
+
+// ---------------------------------------------------------------------------
+// The predicted-lineup heuristic (#17 PR B).
+//
+// Spec § Deliverables 1 asks for "a predicted lineup honestly labeled a guess"; spec § Open
+// questions listed "how court-assignment history + ratings become a labeled guess" as unsettled.
+// The HC settled it on issue #17: **pair-first, then tendency, with ratings breaking every tie and
+// filling every gap.** Doubles partnerships are the sticky unit on a 40+ league team, so a
+// per-player tendency rule can invent a pairing that has never played together even when the roster
+// has obvious regular pairs — see the load-bearing test in `test/query-derive-lineup.test.ts`.
+//
+// There is no real data on this project yet (#27 is still blocked, no pull has ever run), so the
+// rule is *stated* here and in the tests rather than tuned against observation. When Springfield
+// data lands, the rule can be judged against it and revised as a documented change.
+//
+// Everything below is deterministic: every ordering ends in an explicit tie-breaker on `playerId`
+// or slot name, so the result never depends on the input array's order.
+// ---------------------------------------------------------------------------
+
+/** A team with no court-match history at all: refused, rather than given an empty guess that would
+ * read as "we predict nobody plays". */
+export class NoCourtMatchHistoryError extends Error {}
+
+/** Ranked ahead of one another when coverage ties. Ordering across DIFFERENT sources is never
+ * attempted — see `rankRoster`. */
+const RATING_SOURCE_PRECEDENCE: RatingSource[] = ["tr_dynamic", "ntrp", "wtn_doubles", "wtn_singles"];
+
+/** WTN runs the other way from NTRP and TennisRecord's dynamic rating: a LOWER World Tennis Number
+ * is the stronger player. Sorting every source descending would silently rank a WTN roster
+ * backwards — the strongest player would be predicted last. */
+const INVERTED_RATING_SOURCES = new Set<RatingSource>(["wtn_singles", "wtn_doubles"]);
+
+const HIGH_CONFIDENCE_SUPPORT = 5;
+const MEDIUM_CONFIDENCE_SUPPORT = 2;
+/** A pairing seen once is a coincidence, not a partnership. */
+const MIN_PARTNERSHIP_COUNT = 2;
+
+function confidenceFor(support: number): LineupConfidence {
+  if (support >= HIGH_CONFIDENCE_SUPPORT) return "high";
+  if (support >= MEDIUM_CONFIDENCE_SUPPORT) return "medium";
+  return "low";
+}
+
+/** `"D3"` -> 3; a slot with no trailing number sorts after the numbered ones rather than throwing
+ * (derive.ts's standing rule: an unenumerated slot is data we do not understand, not data to
+ * discard — see `slotTendencies`). */
+function slotNumber(slot: string): number {
+  const match = /(\d+)$/.exec(slot);
+  return match === null ? Number.POSITIVE_INFINITY : Number(match[1]);
+}
+
+/** Singles slots first, then doubles, then anything else; within a group by trailing number, then
+ * lexically. Grouped by the observed DISCIPLINE rather than by the slot's spelling, so the order
+ * survives a source that names its courts something other than S1/D1. */
+function disciplineRank(discipline: Discipline): number {
+  if (discipline === "singles") return 0;
+  if (discipline === "doubles") return 1;
+  return 2;
+}
+
+/** An unordered pair of player ids, normalized so (3,2) and (2,3) are the same key. */
+function pairKey(a: number, b: number): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+type PairCandidate = {
+  low: number;
+  high: number;
+  count: number;
+  /** Shared-match counts per slot, descending by count then by slot order. */
+  bySlot: { slot: string; count: number }[];
+};
+
+/**
+ * Ranks the roster within a SINGLE rating source — the one covering the most roster players, ties
+ * broken by `RATING_SOURCE_PRECEDENCE`.
+ *
+ * Ranking across sources is not sound: a `tr_dynamic` of 3.67 and an `ntrp` of 4.0 are not points
+ * on the same axis, and mixing them would silently order players by which source happened to be
+ * scraped for them. Players with no observation in the chosen source are not guessed at — they all
+ * share the rank immediately after the ranked players, and are named in `unrankedPlayerIds`.
+ */
+function rankRoster(input: PredictedLineupInput): {
+  source: RatingSource | null;
+  rankOf: Map<number, number>;
+  ranked: number[];
+  unranked: number[];
+} {
+  const roster = new Set(input.rosterPlayerIds);
+  /** playerId -> source -> the latest observation's value. */
+  const latest = new Map<number, Map<RatingSource, RatingObservationRow>>();
+  for (const entry of input.ratings) {
+    if (!roster.has(entry.playerId)) continue;
+    const bySource = latest.get(entry.playerId) ?? new Map<RatingSource, RatingObservationRow>();
+    for (const obs of entry.observations) {
+      const current = bySource.get(obs.source);
+      // Same "latest observation, ties by id ascending" rule `ratingTrajectory` uses, so the two
+      // functions cannot disagree about which observation is current.
+      const newer =
+        current === undefined ||
+        obs.observedOn > current.observedOn ||
+        (obs.observedOn === current.observedOn && obs.id > current.id);
+      if (newer) bySource.set(obs.source, obs);
+    }
+    latest.set(entry.playerId, bySource);
+  }
+
+  const coverage = new Map<RatingSource, number>();
+  for (const bySource of latest.values()) {
+    for (const source of bySource.keys()) coverage.set(source, (coverage.get(source) ?? 0) + 1);
+  }
+
+  const sources = Array.from(coverage.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    const ai = RATING_SOURCE_PRECEDENCE.indexOf(a[0]);
+    const bi = RATING_SOURCE_PRECEDENCE.indexOf(b[0]);
+    // A source outside the declared precedence list still sorts deterministically, after the known
+    // ones, rather than landing at index -1 and jumping to the front.
+    const aRank = ai === -1 ? RATING_SOURCE_PRECEDENCE.length : ai;
+    const bRank = bi === -1 ? RATING_SOURCE_PRECEDENCE.length : bi;
+    if (aRank !== bRank) return aRank - bRank;
+    return a[0].localeCompare(b[0]);
+  });
+
+  const source = sources[0]?.[0] ?? null;
+  const sortedRoster = [...input.rosterPlayerIds].sort((a, b) => a - b);
+  if (source === null) {
+    // Nobody is rated: everyone shares one rank, so every downstream comparison falls through to
+    // the playerId tie-breaker. Still deterministic, just uninformed.
+    return { source: null, rankOf: new Map(sortedRoster.map((id) => [id, 0])), ranked: [], unranked: sortedRoster };
+  }
+
+  const inverted = INVERTED_RATING_SOURCES.has(source);
+  const rated = sortedRoster.filter((id) => latest.get(id)?.has(source) === true);
+  const unranked = sortedRoster.filter((id) => latest.get(id)?.has(source) !== true);
+
+  const ranked = [...rated].sort((a, b) => {
+    const av = latest.get(a)!.get(source)!.value;
+    const bv = latest.get(b)!.get(source)!.value;
+    if (av !== bv) return inverted ? av - bv : bv - av;
+    return a - b;
+  });
+
+  const rankOf = new Map<number, number>();
+  ranked.forEach((id, index) => rankOf.set(id, index));
+  // One shared rank for everyone unrated, placed after every ranked player — not a per-player
+  // guess, and finite so pair sums stay comparable.
+  for (const id of unranked) rankOf.set(id, ranked.length);
+
+  return { source, rankOf, ranked, unranked };
+}
+
+/**
+ * Predicts how a team will field its courts, from court-assignment history plus ratings.
+ *
+ * The rule, in order:
+ *  1. **Singles slots** go to the roster player with the most singles court matches; ties to the
+ *     better rating rank, then to the lower `playerId`.
+ *  2. **Pairs** are every unordered pair of roster players seen together on the same side of a
+ *     doubles court at least `MIN_PARTNERSHIP_COUNT` times. Each contends for the slot it most
+ *     often shared; a contested slot goes to the **better combined rating rank**, and the loser
+ *     cascades to its own next-most-shared open slot, then to any open slot.
+ *  3. **Leftovers** are paired by rating rank (best two remaining together) and placed in the
+ *     remaining open slots, best pair to the earliest slot. These slots read `basis: "rating"`.
+ *  4. Anyone still unplaced is **listed**, with their court-match count, never dropped; a slot with
+ *     nobody left is reported short or empty rather than omitted.
+ *
+ * The **slot set is derived from observed history**, not from `events.format`: nothing links a team
+ * to an event today (`team_memberships.event_id` and `team_matches.event_id` are null on every real
+ * pull), so a team's event format is not reachable from a team. A team whose league history has
+ * five courts is therefore predicted across five even at a four-court event — `slotSource` says
+ * where the set came from so a presenter can state that rather than hide it.
+ *
+ * Undated rows COUNT here, unlike in `windowedRecord` — a date window is meaningless without a
+ * date, but court-assignment tendency has no window, so excluding them would discard real evidence.
+ */
+export function predictedLineup(input: PredictedLineupInput): PredictedLineupResult {
+  const roster = new Set(input.rosterPlayerIds);
+  if (roster.size === 0) {
+    throw new NoCourtMatchHistoryError("no roster players to predict a lineup for");
+  }
+
+  // Only rows a roster player actually took part in, each reduced to that team's own participants.
+  // A caller may hand over a wider row set (e.g. every court match touching any of these players'
+  // opponents); rows belonging to nobody here are ignored rather than rejected.
+  const ourRows = input.rows
+    .map((r) => ({ row: r, ours: r.participants.filter((p) => roster.has(p.playerId)) }))
+    .filter((r) => r.ours.length > 0);
+  if (ourRows.length === 0) {
+    throw new NoCourtMatchHistoryError("no court-match history on file for this roster");
+  }
+
+  const { source, rankOf, ranked, unranked } = rankRoster(input);
+  const rankFor = (playerId: number): number => rankOf.get(playerId) ?? Number.MAX_SAFE_INTEGER;
+
+  // --- the slot set, and each slot's discipline -----------------------------------------------
+  const disciplineCounts = new Map<string, Map<Discipline, number>>();
+  const courtMatchesByPlayer = new Map<number, number>();
+  const singlesCounts = new Map<number, number>();
+  const pairCounts = new Map<string, Map<string, number>>(); // pairKey -> slot -> count
+
+  for (const { row, ours } of ourRows) {
+    const perSlot = disciplineCounts.get(row.slot) ?? new Map<Discipline, number>();
+    perSlot.set(row.discipline, (perSlot.get(row.discipline) ?? 0) + 1);
+    disciplineCounts.set(row.slot, perSlot);
+
+    for (const p of ours) {
+      courtMatchesByPlayer.set(p.playerId, (courtMatchesByPlayer.get(p.playerId) ?? 0) + 1);
+    }
+
+    if (row.discipline === "singles") {
+      for (const p of ours) singlesCounts.set(p.playerId, (singlesCounts.get(p.playerId) ?? 0) + 1);
+      continue;
+    }
+
+    // Every pair of roster players on the SAME side counts as a partnership for this row — pairwise
+    // rather than [0]/[1], because `upsertCourtMatchPlayers` never deletes and a side can carry
+    // three or more participants after a source correction (docs/findings.md, #15).
+    for (const side of ["home", "visiting"] as Side[]) {
+      const sameSide = ours.filter((p) => p.side === side).map((p) => p.playerId);
+      for (let i = 0; i < sameSide.length; i++) {
+        for (let j = i + 1; j < sameSide.length; j++) {
+          const key = pairKey(sameSide[i]!, sameSide[j]!);
+          const bySlot = pairCounts.get(key) ?? new Map<string, number>();
+          bySlot.set(row.slot, (bySlot.get(row.slot) ?? 0) + 1);
+          pairCounts.set(key, bySlot);
+        }
+      }
+    }
+  }
+
+  const slotDiscipline = new Map<string, Discipline>();
+  for (const [slot, counts] of disciplineCounts) {
+    const [best] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+    slotDiscipline.set(slot, best![0]);
+  }
+
+  const slotOrder = Array.from(disciplineCounts.keys()).sort((a, b) => {
+    const da = disciplineRank(slotDiscipline.get(a)!);
+    const db = disciplineRank(slotDiscipline.get(b)!);
+    if (da !== db) return da - db;
+    const na = slotNumber(a);
+    const nb = slotNumber(b);
+    if (na !== nb) return na - nb;
+    return a.localeCompare(b);
+  });
+  const slotIndex = new Map(slotOrder.map((slot, i) => [slot, i]));
+
+  // --- placement -------------------------------------------------------------------------------
+  const placed = new Map<string, { playerIds: number[]; support: number; basis: LineupBasis }>();
+  const taken = new Set<number>();
+
+  const place = (slot: string, playerIds: number[], support: number, basis: LineupBasis): void => {
+    placed.set(slot, { playerIds, support, basis });
+    for (const id of playerIds) taken.add(id);
+  };
+
+  // 1. Singles slots, in slot order.
+  for (const slot of slotOrder) {
+    if (slotDiscipline.get(slot) !== "singles") continue;
+    const candidates = [...roster]
+      .filter((id) => !taken.has(id))
+      .sort((a, b) => {
+        const ca = singlesCounts.get(a) ?? 0;
+        const cb = singlesCounts.get(b) ?? 0;
+        if (ca !== cb) return cb - ca;
+        const ra = rankFor(a);
+        const rb = rankFor(b);
+        if (ra !== rb) return ra - rb;
+        return a - b;
+      });
+    const pick = candidates[0];
+    if (pick === undefined) continue; // roster exhausted — reported as an empty slot below
+    const support = singlesCounts.get(pick) ?? 0;
+    place(slot, [pick], support, support > 0 ? "history" : "rating");
+  }
+
+  // 2. Candidate partnerships, contending for the slot each most often shared.
+  const candidatePairs: PairCandidate[] = Array.from(pairCounts.entries())
+    .map(([key, bySlot]) => {
+      const [low, high] = key.split(":").map(Number) as [number, number];
+      const total = Array.from(bySlot.values()).reduce((sum, n) => sum + n, 0);
+      const slots = Array.from(bySlot.entries())
+        .map(([slot, count]) => ({ slot, count }))
+        .sort((a, b) => b.count - a.count || slotIndex.get(a.slot)! - slotIndex.get(b.slot)!);
+      return { low, high, count: total, bySlot: slots };
+    })
+    .filter((p) => p.count >= MIN_PARTNERSHIP_COUNT);
+
+  const combinedRank = (p: PairCandidate): number => rankFor(p.low) + rankFor(p.high);
+  /** Better combined rating rank first; then the more-seen partnership; then by ids. */
+  const byStrength = (a: PairCandidate, b: PairCandidate): number => {
+    const ra = combinedRank(a);
+    const rb = combinedRank(b);
+    if (ra !== rb) return ra - rb;
+    if (a.count !== b.count) return b.count - a.count;
+    return a.low - b.low || a.high - b.high;
+  };
+
+  const pairAvailable = (p: PairCandidate): boolean => !taken.has(p.low) && !taken.has(p.high);
+  const remainingPairs = new Set(candidatePairs);
+
+  // 2a. Two orderings are in play and they are NOT the same one:
+  //
+  //   * WITHIN a slot, a collision is decided by the better combined rating rank — the rule the HC
+  //     picked ("higher combined rating takes the better slot").
+  //   * ACROSS slots, the more-established partnership goes first — "pair-first" means the strongest
+  //     partnership gets first claim on its players, not that the earliest slot does.
+  //
+  // Walking `slotOrder` once conflates them, and gets the headline case wrong: a 4-match pairing
+  // whose modal slot is D1 would claim a player out from under an 8-match pairing whose modal slot
+  // is D2, purely because D1 sorts first — splitting exactly the partnership the pair-first rule
+  // exists to protect (the load-bearing test in test/query-derive-lineup.test.ts).
+  //
+  // So each round asks every still-available pair for its CURRENT preference — its highest-count
+  // slot among those still open — resolves each contested slot by combined rating rank, commits
+  // only the single strongest proposal (partnership count decides which slot settles first), and
+  // re-asks.
+  //
+  // "Current preference", not "modal slot", is the load-bearing part, and it is the second bug this
+  // loop has had (found by the independent Codex review of PR #47, rated high). An earlier version
+  // let each pair contend only for its MODAL slot and cascaded the losers afterwards, into whatever
+  // was left, contesting nobody. That silently exempted cascaders from the collision rule: a pair
+  // that lost D1 could not contend for D2 against D2's own claimant however much better its
+  // combined rating, so a weaker pair kept a slot a stronger one had real history at. Re-deriving
+  // the preference each round is what makes a cascade a genuine re-entry into contention rather
+  // than a consolation placement.
+  //
+  // Terminates: every iteration either commits one pair (shrinking `remainingPairs`) or breaks.
+  // The roster is at most a couple of dozen players, so the repeated pass is free.
+  for (;;) {
+    const openDoubles = new Set(
+      slotOrder.filter((slot) => !placed.has(slot) && slotDiscipline.get(slot) !== "singles"),
+    );
+    const contendersBySlot = new Map<string, PairCandidate[]>();
+    for (const pair of remainingPairs) {
+      if (!pairAvailable(pair)) continue;
+      // `bySlot` is already ordered by shared count descending, so the first still-open entry IS
+      // this pair's best remaining historical slot.
+      const preference = pair.bySlot.find((entry) => openDoubles.has(entry.slot));
+      if (preference === undefined) continue; // nowhere it has ever played is open — handled below
+      const list = contendersBySlot.get(preference.slot) ?? [];
+      list.push(pair);
+      contendersBySlot.set(preference.slot, list);
+    }
+
+    const proposals = Array.from(contendersBySlot.entries()).map(([slot, contenders]) => ({
+      slot,
+      pair: [...contenders].sort(byStrength)[0]!,
+    }));
+    if (proposals.length === 0) break;
+
+    proposals.sort(
+      (a, b) =>
+        b.pair.count - a.pair.count || byStrength(a.pair, b.pair) || slotIndex.get(a.slot)! - slotIndex.get(b.slot)!,
+    );
+    const { slot, pair } = proposals[0]!;
+    place(slot, [pair.low, pair.high], pair.count, "history");
+    remainingPairs.delete(pair);
+  }
+
+  // 2b. Pairs with no open slot they have ever shared. They are still real partnerships, so they
+  // take an open court ahead of the rating-built pairings below, and keep `basis: "history"`.
+  for (const pair of Array.from(remainingPairs).sort(byStrength)) {
+    if (!pairAvailable(pair)) {
+      remainingPairs.delete(pair);
+      continue;
+    }
+    const fallback = slotOrder.find((s) => !placed.has(s) && slotDiscipline.get(s) !== "singles");
+    if (fallback === undefined) continue; // every slot filled — this pair falls through to `unplaced`
+    place(fallback, [pair.low, pair.high], pair.count, "history");
+    remainingPairs.delete(pair);
+  }
+
+  // 3. Leftovers, paired by rating rank: best two remaining together, best pair to the earliest
+  // open slot.
+  const leftovers = [...roster].filter((id) => !taken.has(id)).sort((a, b) => rankFor(a) - rankFor(b) || a - b);
+  for (const slot of slotOrder) {
+    if (placed.has(slot)) continue;
+    const width = slotDiscipline.get(slot) === "singles" ? 1 : 2;
+    const group = leftovers.splice(0, width);
+    // An empty group still places the slot, so an unfilled court is reported rather than omitted.
+    place(slot, group, 0, "rating");
+  }
+
+  const slots: PredictedLineupSlot[] = slotOrder.map((slot) => {
+    const entry = placed.get(slot)!;
+    return {
+      slot,
+      discipline: slotDiscipline.get(slot)!,
+      playerIds: entry.playerIds,
+      confidence: confidenceFor(entry.support),
+      basis: entry.basis,
+      support: entry.support,
+    };
+  });
+
+  return {
+    slots,
+    unplaced: leftovers
+      .slice()
+      .sort((a, b) => a - b)
+      .map((playerId) => ({ playerId, courtMatches: courtMatchesByPlayer.get(playerId) ?? 0 })),
+    ratingSource: source,
+    rankedPlayerIds: ranked,
+    unrankedPlayerIds: unranked,
+    slotSource: "observed",
+    observedCourtMatches: ourRows.length,
+  };
 }

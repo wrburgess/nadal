@@ -1,8 +1,11 @@
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { availability, events, players, teamMemberships, teams } from "../src/db/schema.js";
 import {
   AmbiguousEventForDayError,
+  EventDoesNotCoverDayError,
+  UnknownEventError,
   InvalidAvailabilityDayError,
   InvalidAvailabilityStatusError,
   NoEventForDayError,
@@ -315,5 +318,209 @@ describe("setAvailability", () => {
         sqlite.close();
       }
     });
+  });
+});
+
+// Found by the independent Codex review of PR #47 (rated high). Overlapping event ranges are a
+// NORMAL domain state — a district league season runs Mar-Jun and a districts tournament sits
+// inside it in May — so every day in that window resolves to two events. Before #17 PR B nothing
+// wrote the `events` table, so day-only resolution could never hit the overlap and its refusal
+// looked theoretical; `addEvent` made it the first thing a real setup hits, and availability was
+// simply unusable on those days.
+describe("setAvailability with overlapping events", () => {
+  useTnDbPath();
+
+  function seedOverlap() {
+    const { db, sqlite } = freshDb();
+    const team = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    setHomeTeam(db, team.id);
+    const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    const league = db
+      .insert(events)
+      .values({ name: "HOA 40&over3.5M Spring 2026", kind: "league", startsOn: "2026-03-01", endsOn: "2026-06-30" })
+      .returning()
+      .get();
+    const districts = db
+      .insert(events)
+      .values({ name: "Heart of America Districts", kind: "tournament", startsOn: "2026-05-15", endsOn: "2026-05-17" })
+      .returning()
+      .get();
+    return { db, sqlite, playerId: player.id, league, districts };
+  }
+
+  it("still refuses an overlapping day with no event named, and says to name one", () => {
+    const { db, sqlite, playerId } = seedOverlap();
+    try {
+      expect(() => setAvailability(db, { playerId, day: "2026-05-16", status: "available" })).toThrow(
+        AmbiguousEventForDayError,
+      );
+      expect(rows(db)).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("writes against the named event when the day is ambiguous — the case that was impossible", () => {
+    const { db, sqlite, playerId, districts } = seedOverlap();
+    try {
+      const result = setAvailability(db, {
+        playerId,
+        day: "2026-05-16",
+        status: "available",
+        eventName: "Heart of America Districts",
+      });
+      expect(result.eventId).toBe(districts.id);
+      expect(rows(db)).toHaveLength(1);
+      expect(rows(db)[0]).toMatchObject({ eventId: districts.id, day: "2026-05-16" });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("can name the OTHER overlapping event and get that one — not a fixed preference", () => {
+    const { db, sqlite, playerId, league } = seedOverlap();
+    try {
+      const result = setAvailability(db, {
+        playerId,
+        day: "2026-05-16",
+        status: "available",
+        eventName: "HOA 40&over3.5M Spring 2026",
+      });
+      expect(result.eventId).toBe(league.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("keeps the two events' rows separate for the same player and day", () => {
+    const { db, sqlite, playerId, league, districts } = seedOverlap();
+    try {
+      setAvailability(db, { playerId, day: "2026-05-16", status: "available", eventName: league.name });
+      setAvailability(db, { playerId, day: "2026-05-16", status: "unavailable", eventName: districts.name });
+      const all = rows(db);
+      expect(all, "the unique index is (player, event, day) — two events, two rows").toHaveLength(2);
+      expect(all.find((r) => r.eventId === league.id)?.status).toBe("available");
+      expect(all.find((r) => r.eventId === districts.id)?.status).toBe("unavailable");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses a named event that exists but does not cover the day — distinctly from an unknown one", () => {
+    const { db, sqlite, playerId } = seedOverlap();
+    try {
+      expect(() =>
+        setAvailability(db, {
+          playerId,
+          day: "2026-06-20",
+          status: "available",
+          eventName: "Heart of America Districts",
+        }),
+      ).toThrow(EventDoesNotCoverDayError);
+      expect(() =>
+        setAvailability(db, { playerId, day: "2026-05-16", status: "available", eventName: "No Such Event" }),
+      ).toThrow(UnknownEventError);
+      expect(rows(db)).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Silently ignoring a name the caller went out of their way to supply is the same
+  // "accepted but not honored" failure the grammar's unrecognized-flag rule exists to prevent.
+  it("honors the event name even when the day is unambiguous, rather than ignoring it", () => {
+    const { db, sqlite, playerId, league } = seedOverlap();
+    try {
+      // 2026-04-01 is inside the league only.
+      expect(setAvailability(db, { playerId, day: "2026-04-01", status: "available", eventName: league.name }).eventId).toBe(
+        league.id,
+      );
+      expect(() =>
+        setAvailability(db, {
+          playerId,
+          day: "2026-04-01",
+          status: "available",
+          eventName: "Heart of America Districts",
+        }),
+      ).toThrow(EventDoesNotCoverDayError);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+
+// The OPPOSITE ordering from `query-events.test.ts`'s atomicity test, and the reason the invariant
+// needs serializing on both sides (Codex review of PR #47 round 13, rated high). `addEvent` holding
+// a lock closes the race where the event moves SECOND. This closes the one where it moves FIRST:
+// resolve an event here, let another process narrow it — finding nothing to strand, because nothing
+// is committed yet — and the upsert lands a row outside the range that now exists.
+describe("setAvailability is atomic against a concurrent event-range change", () => {
+  const dbFixture = useTnDbPath();
+
+  it("holds the write lock from event resolution through the upsert", () => {
+    runMigrations();
+    {
+      const { db, sqlite } = openDb(dbFixture.path());
+      const team = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+      setHomeTeam(db, team.id);
+      const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      db.insert(events)
+        .values({ name: "Springfield Sectionals 2026", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .run();
+      sqlite.close();
+    }
+
+    const other = new Database(dbFixture.path());
+    other.pragma("journal_mode = WAL");
+    other.pragma("busy_timeout = 0"); // fail fast rather than hang
+
+    let sawBegin = false;
+    let attempted = false;
+    let narrowingSucceeded: boolean | null = null;
+
+    // Same seam and the same off-by-one care as the events-side test: `verbose` fires JUST BEFORE a
+    // statement runs, so the lock is not held while `BEGIN IMMEDIATE` itself is announced — the
+    // interleaving has to be attempted on the following statement.
+    const { db, sqlite } = openDb(dbFixture.path(), {
+      verbose: (message) => {
+        if (attempted || typeof message !== "string") return;
+        if (!sawBegin) {
+          sawBegin = message.toLowerCase().includes("begin immediate");
+          return;
+        }
+        attempted = true;
+        try {
+          // The narrowing that would strand the row this transaction is about to write.
+          other.prepare("update events set ends_on = ? where name = ?").run("2026-08-28", "Springfield Sectionals 2026");
+          narrowingSucceeded = true;
+        } catch {
+          narrowingSucceeded = false;
+        }
+      },
+    });
+
+    try {
+      const playerId = db.select().from(players).all()[0]!.id;
+      const result = setAvailability(db, { playerId, day: "2026-08-30", status: "available" });
+
+      expect(sawBegin, "the transaction must be BEGIN IMMEDIATE, not deferred").toBe(true);
+      expect(attempted, "the interleaving must actually have been attempted mid-transaction").toBe(true);
+      expect(
+        narrowingSucceeded,
+        "another process must not be able to narrow the event while this write is resolving it",
+      ).toBe(false);
+
+      // The row landed against an event that still covers its day — the invariant held.
+      const event = db.select().from(events).all()[0]!;
+      expect(result.eventId).toBe(event.id);
+      expect(event.endsOn).toBe("2026-08-30");
+      expect(rows(db)[0]).toMatchObject({ day: "2026-08-30", eventId: event.id });
+    } finally {
+      sqlite.close();
+      other.close();
+    }
   });
 });

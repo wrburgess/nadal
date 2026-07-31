@@ -131,10 +131,12 @@ describe("getPlayerProfile", () => {
       expect(profile.partnerFrequency).toEqual([]);
       expect(profile.ratingTrajectory).toEqual([]);
       expect(profile.teamMemberships).toEqual([]);
-      // dataGaps still reports even with nothing else on file. `events` still has no writer
-      // anywhere in the codebase; `availability`/`captainNotes` (Tasks 3-4) now DO have writers, so
-      // an empty table for THIS player reads as "empty", never "not-collected" — the exact
-      // distinction Task 5 exists to keep truthful (docs/findings.md's "silent-lie risk").
+      // dataGaps still reports even with nothing else on file. `availability`/`captainNotes` have
+      // writers (#17 PR A), so an empty table for THIS player reads as "empty". `events` does NOT:
+      // #17 PR B's `addEvent` writes the events table, but nothing writes the event-scoped
+      // `team_memberships` row that would associate a PLAYER with an event, so the section is
+      // genuinely not collected. Both directions of that distinction are the silent-lie risk
+      // docs/findings.md records.
       expect(profile.dataGaps.events).toBe("not-collected");
       expect(profile.dataGaps.availability).toBe("empty");
       expect(profile.dataGaps.captainNotes).toBe("empty");
@@ -143,7 +145,7 @@ describe("getPlayerProfile", () => {
     }
   });
 
-  it("dataGaps reports events as not-collected (no writer anywhere) but availability/captainNotes as merely empty (Task 5: they have writers now — docs/findings.md #15's silent-lie risk)", () => {
+  it("dataGaps separates the two sections with writers from events, which still has no player-scoped one", () => {
     const { db, sqlite } = freshDb();
     try {
       const player = seedPlayer(db, { canonicalName: "Casey Calder" });
@@ -185,6 +187,33 @@ describe("getPlayerProfile", () => {
       const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
       expect(profile.dataGaps.availability).toBe("has-data");
       expect(profile.dataGaps.captainNotes).toBe("has-data");
+      // `events` does NOT join them, even though this fixture inserted an event-scoped membership
+      // by hand: no production path writes one, so reporting anything but "not-collected" would
+      // claim collection support the codebase does not have. This assertion is deliberately about
+      // the CODEBASE, not about the rows this test happens to have created — the distinction the
+      // review of PR #47 caught an earlier revision getting backwards.
+      expect(profile.dataGaps.events).toBe("not-collected");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The realistic case, and the reason `events` cannot claim a writer: a roster pulled outside an
+  // event writes `event_id: null` (docs/findings.md, #15 — the normal path for every real
+  // `tn team pull`), so no production player ever acquires an event association at all, however
+  // many events `tn event add` has created.
+  it("dataGaps reports events as not-collected for a player whose only membership is not event-scoped", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = db.insert(teams).values({ name: "Some Team" }).returning().get();
+      db.insert(events)
+        .values({ name: "Event", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .run();
+      const player = seedPlayer(db, { canonicalName: "Elin Eventless" });
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      expect(profile.dataGaps.events).toBe("not-collected");
     } finally {
       sqlite.close();
     }

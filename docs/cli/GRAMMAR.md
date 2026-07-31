@@ -86,12 +86,56 @@ exactly one token — leaving `--help` the single payload the CLI could not reco
 | `tn player show` | Show a player's full profile: ratings trajectory, history, records |
 | `tn player avail` | Record a home-team player's availability for an event day |
 | `tn player note` | Append a captain note about a home-team player or pairing |
+| `tn event add` | Create or update an event and its inclusive date range |
+| `tn lineup plan` | Predict an opponent's lineup from court-assignment history and ratings |
 | `tn report build` | Render per-opponent scouting dossiers (HTML + markdown) to disk |
 | `tn mcp serve` | Run the MCP server over stdio, mirroring the CLI grammar as tools |
 
 Planned (spec § Interfaces; rows move up as commands land): `team list`,
-`player list`, `match add`, `event show`, `lineup plan`,
+`player list`, `match add`, `event show`,
 `db backup/restore`.
+
+`tn player avail <name> <YYYY-MM-DD> <status> [event]` — the fourth positional is **optional** and
+names which event the day belongs to. It is needed only when the day falls inside more than one
+event's range, which is ordinary rather than exceptional: a district league season runs Mar–Jun and
+a districts tournament sits inside it in May, so every day in that window resolves to two events.
+Without a name that day refuses (listing the candidates and saying to name one) rather than guessing
+which event you meant — the same answer this grammar gives for every other ambiguous target. A name
+supplied for an **unambiguous** day is still checked, not ignored: if it does not cover the day, the
+command refuses. Availability is stored per (player, event, day), so the same player and day can
+legitimately carry a different status for each overlapping event.
+
+`tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` — payload positionals, the same
+shape `tn player avail` uses, so this adds no flags. The date range is **inclusive at both ends**,
+matching the day lookup `tn player avail` resolves its event through, and a single-day event
+(`starts-on` equal to `ends-on`) is legal. A repeat under the same name **updates in place** rather
+than duplicating (`events.name` is unique) — except that an update whose new range no longer covers
+a day this event already has availability recorded for is **refused**, naming those days. Moving or
+narrowing a range is otherwise a silent way to strand availability on an event that no longer
+contains it, and which the operator meant — widen the range, or drop that availability — is not
+something the command should decide. This is the one target-taking command that does not
+resolve its target against existing rows — it is the writer that creates them. It exists because
+nothing in production wrote an `events` row before it, which made `tn player avail` unreachable: the
+availability writer resolves its event from the day, and there were never any events to find.
+
+`tn lineup plan <team>` — renders that team's **predicted lineup, which is a guess** (spec §
+Deliverables 1), from court-assignment history plus ratings. The rule is pair-first: the most
+frequent doubles partnerships are placed at the slot they most often shared, S1 goes to the player
+with the most singles court matches, and ratings break every tie and fill every gap. Each slot
+carries a confidence (`high`/`medium`/`low`, from the count of supporting observations) and a basis
+(`history` or `rating`), unplaced players are listed rather than dropped, and the output names both
+the rating source it ranked within and where the slot set came from. The slot set is derived from
+the team's **observed** court-match history, not from `events.format` — nothing links a team to an
+event today — so a team whose league history has five courts is predicted across five even at a
+four-court event; the output says so rather than hiding it.
+
+**Only this team's own matches count as evidence.** A roster member's history includes every league
+they play in (spec § Ingestion ingests "their other leagues (18+ etc.)"), and a partnership formed
+on a different team says nothing about how *this* team fields courts — so evidence is restricted to
+court matches linked to one of this team's `team_matches` rows, and anything else is excluded and
+reported as a count. A team whose roster has long individual histories but no matches of its own
+therefore **refuses**, which is the honest answer rather than a confident guess built on borrowed
+evidence.
 
 `tn report build [sectionals|<team>] [--json]` — `<team>` renders that one team's dossier;
 `sectionals`, and bare (no target), render one dossier per team on file plus a top-level

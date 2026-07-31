@@ -7,6 +7,8 @@ exercises, and runbooks double as HC post-merge checklists.
 - [build-and-print-dossiers.md](build-and-print-dossiers.md) — `tn report build` → browser → courtside binder
 - [agent-chat-over-mcp.md](agent-chat-over-mcp.md) — point an agent chat at `tn mcp serve`; capture
   availability and captain notes conversationally
+- [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md) — `tn lineup plan` → read the guess
+  critically; record availability behind `tn event add`
 
 Planned (spec § Testing):
 
