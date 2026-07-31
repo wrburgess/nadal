@@ -230,31 +230,40 @@ recovery you ran — this block is shared by both:
 So `BAK` is read rather than computed. A *wrong* path is worse than a broken one here: `sqlite3`
 **creates** an empty database at a path that does not exist, so a mistyped or wrong-suffix backup
 name yields four empty CSVs and no error — which reads as "there was nothing to restore" at the
-exact moment that conclusion is most costly. This guard took three attempts, and the two failures are worth naming because each *looked* right:
+exact moment that conclusion is most costly. This guard took **four** attempts, and every failed one looked right. They are listed because the
+progression is the actual lesson:
 
 1. `test -s "$BAK" || { echo …; }` — prints its warning and **exits 0**, so execution continued
    straight into the sqlite3 calls it existed to stop (round 4).
-2. Wrapping those calls in `if test -s "$BAK"` — better, but `test -s` only proves "a non-empty
-   filesystem object". It is true for a **directory**, and for any text file. A wrong-but-present
-   `BAK` sailed into the export branch, and since a shell redirection **truncates its target before
-   the command runs**, four empty CSVs appeared even though every query failed (round 5).
+2. Wrapping those calls in `if test -s "$BAK"` — but `test -s` only proves "a non-empty filesystem
+   object": it is true for a **directory** and for any text file. And since a shell redirection
+   **truncates its target before the command runs**, four empty CSVs appeared even though every
+   query failed (round 5).
+3. Probing with `sqlite3 "$BAK" 'select count(*) from sqlite_master'` — which **creates** a database
+   at a path that does not exist, then reports the empty one it just made as perfectly readable. The
+   guard against a false-empty export had become a way to manufacture one. It survived a round of
+   testing because the missing-backup case used a path whose *parent directory* did not exist, so it
+   failed for a reason other than the one under test (round 6).
+4. `test -f` **first**, then the SQLite probe, then publish into a directory of its own.
 
-What actually works is asking SQLite whether it can read the file, and publishing the CSVs only
-after all four queries succeed — below.
+Two general shapes worth carrying off this page. A guard that *opens* the thing it is validating is
+not a read-only guard, and SQLite in particular treats "open" as "create". And a fixture that makes
+the case fail for the wrong reason will pass a guard that does not work.
 
 ```sh
 printf 'backup path: '; IFS= read -r BAK || BAK=   # verbatim — quotes/apostrophes need no escaping
 
-# `test -s` is NOT enough: it is true for a directory, for a text file, for anything non-empty.
-# Ask SQLite itself whether it can read the thing.
-if ! sqlite3 "$BAK" 'select count(*) from sqlite_master' >/dev/null 2>&1; then
+# `test -f` FIRST, and it is load-bearing: sqlite3 CREATES a database at a path that does not
+# exist, so probing a missing backup would manufacture an empty one and then happily accept it.
+# `test -s` alone is not enough either — it is true for a directory and for any text file.
+if ! test -f "$BAK" || ! sqlite3 "$BAK" 'select count(*) from sqlite_master' >/dev/null 2>&1; then
   echo "STOP: '$BAK' is not a readable SQLite database. Nothing below would work." >&2
 else
-  # Written to a temp directory and published only if ALL FOUR succeed. A shell redirection opens
-  # (and truncates) its target BEFORE the command runs, so exporting straight into the working
-  # directory leaves four empty CSVs behind when a query fails — the exact false-empty outcome this
-  # whole guard exists to prevent.
-  OUT=$(mktemp -d) &&
+  # Everything is written into a fresh directory of its own and NOTHING is moved into the working
+  # directory. Publishing with `mv "$OUT"/*.csv .` would silently overwrite the CSVs of an EARLIER
+  # recovery — destroying exactly the data this procedure exists to preserve, which is the same
+  # clobber hazard #46 round 2 found in the error message itself.
+  OUT=$(mktemp -d "${TMPDIR:-/tmp}/nadal-export.XXXXXX") &&
   sqlite3 -header -csv "$BAK" "
     select name from teams where is_home = 1" > "$OUT/home-team-backup.csv" &&
   sqlite3 -header -csv "$BAK" "
@@ -279,8 +288,8 @@ else
     join players p on p.id = a.player_id
     join events  e on e.id = a.event_id
     order by a.day" > "$OUT/availability-backup.csv" &&
-  mv "$OUT"/*.csv . && echo "exported 4 CSVs into $(pwd)" ||
-  echo "STOP: an export failed — nothing was published. Partial files: $OUT" >&2
+  echo "exported 4 CSVs into $OUT — COPY THEM SOMEWHERE DURABLE, this is a temp directory" ||
+  echo "STOP: an export failed. Nothing was published; partial files are in $OUT" >&2
 fi
 ```
 
