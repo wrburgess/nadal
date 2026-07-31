@@ -85,24 +85,28 @@ positionals by name.
 
 ## Verifying it landed
 
-> **Every direct `sqlite3` read below must target the same database the MCP server writes.** Set it
-> once and use the variable — a literal `data/nadal.db` inspects the wrong file the moment
-> `TN_DB_PATH` is set, and worse, `sqlite3` *creates* an empty database at a path that does not
-> exist, so you get a confident empty answer rather than an error. That is a false verification
-> arriving exactly when you are trying to confirm a write landed. (Hardcoded literals here were
-> found by the Codex adversarial review of #56, the fourth instance of this class in two runbooks.)
+> **Every direct `sqlite3` read below must target the database the MCP SERVER writes — and the
+> server has its own environment.** `TN_DB_PATH` set for the server is not `TN_DB_PATH` set in your
+> shell, and defaulting to `data/nadal.db` when your shell lacks it is exactly how you end up
+> inspecting a file the server never touched. Worse, `sqlite3` **creates** a database at a path that
+> does not exist, so the wrong path returns a confident empty answer rather than an error — a false
+> verification arriving precisely when you are checking whether a write landed.
+>
+> So: name it explicitly and prove it exists before reading it.
 >
 > ```sh
-> DB="${TN_DB_PATH:-data/nadal.db}"      # double-quoted everywhere below, so a space or an
->                                         # apostrophe in the path is safe
+> DB="${TN_DB_PATH:-data/nadal.db}"   # must match the SERVER's TN_DB_PATH, not just your shell's
+> test -f "$DB" || echo "STOP: no database at '$DB' — sqlite3 would create an empty one" >&2
 > ```
 >
-> The relative default is correct *here* — unlike the recovery above — because you are inspecting a
-> running server's database from the repo root, not identifying a file a failed process named from
-> some other directory.
+> Run that check first and do not continue if it prints STOP. Every read below is written
+> `test -f "$DB" && sqlite3 "$DB" …` so a wrong path fails closed rather than fabricating an empty
+> database. (Four rounds of the Codex adversarial review of #56 landed on this same class in three
+> different files; the last of them was this block, where an earlier draft of this very warning still
+> let the default through.)
 
-- Every tool call writes a `request_log` row with `surface="mcp"` — `sqlite3 "$DB" "select
-  surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
+- Every tool call writes a `request_log` row with `surface="mcp"` — `test -f "$DB" && sqlite3 "$DB"
+  "select surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
   from either surface, interleaved, which is the whole point of one shared telemetry table (spec §
   Request telemetry).
 - **Verifying what a write actually recorded.** The tool's own result is the readback: `player_avail`
@@ -119,7 +123,7 @@ positionals by name.
   For the rows themselves there is no command yet, so read the table directly:
 
   ```sh
-  sqlite3 "$DB" "select p.canonical_name, e.name, a.day, a.status
+  test -f "$DB" && sqlite3 "$DB" "select p.canonical_name, e.name, a.day, a.status
     from availability a
     join players p on p.id = a.player_id
     join events  e on e.id = a.event_id
