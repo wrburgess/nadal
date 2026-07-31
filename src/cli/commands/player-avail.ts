@@ -3,6 +3,7 @@ import { openDb } from "../../db/client.js";
 import { resolvePlayerTarget } from "../../query/player-profile.js";
 import {
   AmbiguousEventForDayError,
+  InvalidAvailabilityDayError,
   InvalidAvailabilityStatusError,
   NoEventForDayError,
   NoHomeTeamError,
@@ -18,12 +19,14 @@ function isAvailabilityRefusal(
   err: unknown,
 ): err is
   | InvalidAvailabilityStatusError
+  | InvalidAvailabilityDayError
   | NoHomeTeamError
   | PlayerNotOnHomeRosterError
   | NoEventForDayError
   | AmbiguousEventForDayError {
   return (
     err instanceof InvalidAvailabilityStatusError ||
+    err instanceof InvalidAvailabilityDayError ||
     err instanceof NoHomeTeamError ||
     err instanceof PlayerNotOnHomeRosterError ||
     err instanceof NoEventForDayError ||

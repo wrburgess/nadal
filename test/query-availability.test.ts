@@ -3,6 +3,7 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { availability, events, players, teamMemberships, teams } from "../src/db/schema.js";
 import {
   AmbiguousEventForDayError,
+  InvalidAvailabilityDayError,
   InvalidAvailabilityStatusError,
   NoEventForDayError,
   NoHomeTeamError,
@@ -243,5 +244,76 @@ describe("setAvailability", () => {
     } finally {
       sqlite.close();
     }
+  });
+
+  // `status` was validated from the start; `day` was not — and `day` is half of this table's
+  // upsert key. The event lookup compares TEXT, so a malformed day that merely SORTS inside the
+  // event's range matched and was persisted verbatim: "2026-08-28 ", "2026-08-28xyz" and
+  // "2026-08-2900" each stored a SEPARATE row alongside the real "2026-08-28", defeating the
+  // idempotent upsert the unique index exists to provide and inventing days that no per-event-day
+  // read (lineup planning, #17 PR B) will ever match. Byte-for-byte the `upsertTeamMatch` shape
+  // docs/findings.md records four review rounds on: a key assembled without normalizing its input
+  // domain. Reproduced against a real DB before being fixed.
+  describe("day validation", () => {
+    const malformed = [
+      ["a trailing space", "2026-08-28 "],
+      ["a trailing suffix", "2026-08-28xyz"],
+      ["extra digits", "2026-08-2900"],
+      ["a leading space", " 2026-08-28"],
+      ["a non-padded month", "2026-8-28"],
+      ["a datetime rather than a day", "2026-08-28T00:00:00Z"],
+      ["not a date at all", "tuesday"],
+      ["empty", ""],
+    ] as const;
+
+    for (const [label, day] of malformed) {
+      it(`rejects ${label} (${JSON.stringify(day)}) and writes nothing`, () => {
+        const { db, sqlite } = freshDb();
+        try {
+          const fixture = seedHomeTeamFixture(db);
+          expect(() => setAvailability(db, { playerId: fixture.playerId, day, status: "available" })).toThrow(
+            InvalidAvailabilityDayError,
+          );
+          expect(rows(db)).toHaveLength(0);
+        } finally {
+          sqlite.close();
+        }
+      });
+    }
+
+    it("rejects a well-shaped day that is not a real calendar date", () => {
+      // Regex-shaped but nonexistent — the guard has to be a real date check, not just a pattern.
+      const { db, sqlite } = freshDb();
+      try {
+        const fixture = seedHomeTeamFixture(db);
+        expect(() =>
+          setAvailability(db, { playerId: fixture.playerId, day: "2026-02-31", status: "available" }),
+        ).toThrow(InvalidAvailabilityDayError);
+        expect(rows(db)).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("the same real day cannot be split across rows by respelling it", () => {
+      // The defect this whole block exists for, asserted end to end: before the fix these four
+      // calls produced FOUR rows for one day.
+      const { db, sqlite } = freshDb();
+      try {
+        const fixture = seedHomeTeamFixture(db);
+        setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+        for (const respelling of ["2026-08-29 ", "2026-08-29xyz", "2026-08-2900"]) {
+          expect(() =>
+            setAvailability(db, { playerId: fixture.playerId, day: respelling, status: "unavailable" }),
+          ).toThrow(InvalidAvailabilityDayError);
+        }
+        const all = rows(db);
+        expect(all).toHaveLength(1);
+        expect(all[0]!.day).toBe("2026-08-29");
+        expect(all[0]!.status).toBe("available");
+      } finally {
+        sqlite.close();
+      }
+    });
   });
 });

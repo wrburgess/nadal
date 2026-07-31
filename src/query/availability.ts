@@ -20,6 +20,7 @@ type AvailabilityRow = typeof availability.$inferSelect;
 export { NoHomeTeamError };
 
 export class InvalidAvailabilityStatusError extends Error {}
+export class InvalidAvailabilityDayError extends Error {}
 export class PlayerNotOnHomeRosterError extends Error {}
 export class NoEventForDayError extends Error {}
 export class AmbiguousEventForDayError extends Error {
@@ -32,6 +33,37 @@ export class AmbiguousEventForDayError extends Error {
 }
 
 const availabilityStatusSchema = z.enum(["available", "unavailable", "uncertain"]);
+
+const ISO_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Rejects anything that is not a real `YYYY-MM-DD` calendar date.
+ *
+ * `day` is half of this table's `(player_id, event_id, day)` upsert key, and `eventsForDay`
+ * compares it as TEXT — so before this guard existed, any malformed string that merely SORTED
+ * inside an event's range matched that event and was stored verbatim. `"2026-08-28 "`,
+ * `"2026-08-28xyz"` and `"2026-08-2900"` each wrote a SEPARATE row alongside the real
+ * `"2026-08-28"`, which defeats the idempotent upsert the unique index exists to give and invents
+ * days that no per-event-day read will ever match. That is the `upsertTeamMatch` shape
+ * docs/findings.md records four review rounds on — a key assembled without normalizing its input
+ * domain — so it is closed at the write service, where BOTH presenters (CLI `tn player avail` and
+ * the MCP `player_avail` tool) inherit it, rather than in either presenter.
+ *
+ * The pattern alone is not enough: `"2026-02-31"` matches it and is not a date. Round-tripping
+ * through `Date` is what rejects that — a value JS either refuses outright (NaN) or silently rolls
+ * forward into a different day, and a silent roll-forward is precisely the kind of quiet
+ * substitution this guard exists to prevent.
+ */
+function requireIsoDay(day: string): string {
+  if (!ISO_DAY_PATTERN.test(day)) {
+    throw new InvalidAvailabilityDayError(`invalid day "${day}" (expected YYYY-MM-DD)`);
+  }
+  const parsed = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
+    throw new InvalidAvailabilityDayError(`invalid day "${day}" (not a real calendar date)`);
+  }
+  return day;
+}
 
 export type SetAvailabilityInput = {
   playerId: number;
@@ -70,7 +102,9 @@ function eventsForDay(db: Db, day: string): EventRow[] {
  *
  * Refuses, naming the reason via a distinct error class (never a shared generic error — Task 3's
  * testing strategy: assert on class, never on message text), when: the status is not one of the
- * three known values; no home team is designated at all; the day resolves to zero or more than one
+ * three known values; the day is not a real `YYYY-MM-DD` calendar date (see `requireIsoDay` — it is
+ * half the upsert key, so an unnormalized one silently splits a single day across rows); no home
+ * team is designated at all; the day resolves to zero or more than one
  * event; or the player is not on the home team's roster. "On the roster" is ANY
  * `team_memberships` row for (playerId, homeTeamId) regardless of `event_id` — including a NULL
  * `event_id`, which is what every roster `tn team pull` actually writes (docs/findings.md, #15) —
@@ -86,6 +120,7 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
     );
   }
   const status = statusResult.data;
+  const day = requireIsoDay(input.day);
 
   const homeTeam = requireHomeTeam(db);
 
@@ -99,13 +134,13 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
     throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);
   }
 
-  const candidateEvents = eventsForDay(db, input.day);
+  const candidateEvents = eventsForDay(db, day);
   if (candidateEvents.length === 0) {
-    throw new NoEventForDayError(`no event on file covers day "${input.day}"`);
+    throw new NoEventForDayError(`no event on file covers day "${day}"`);
   }
   if (candidateEvents.length > 1) {
     throw new AmbiguousEventForDayError(
-      `day "${input.day}" falls within more than one event: ${candidateEvents.map((e) => e.name).join(", ")}`,
+      `day "${day}" falls within more than one event: ${candidateEvents.map((e) => e.name).join(", ")}`,
       candidateEvents.map((e) => ({ id: e.id, name: e.name })),
     );
   }
@@ -113,7 +148,7 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
 
   const row = db
     .insert(availability)
-    .values({ playerId: input.playerId, eventId: event.id, day: input.day, status })
+    .values({ playerId: input.playerId, eventId: event.id, day, status })
     .onConflictDoUpdate({
       target: [availability.playerId, availability.eventId, availability.day],
       set: { status },
