@@ -1,6 +1,6 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { assertOutputPathSafe, resolveRealOutputPath } from "../fs/output-root.js";
+import { assertOutputPathSafe, writeNewOutputFile } from "../fs/output-root.js";
 
 const DEFAULT_RAW_DIR = "raw";
 
@@ -79,23 +79,29 @@ export function archivePage(input: ArchivePageInput): string {
   assertArchivePathSafe(provenancePath);
 
   mkdirSync(dir, { recursive: true });
-  // Re-checked AFTER mkdir, and resolved to the directory's REAL location, rather than trusting the
-  // path string built above: `mkdirSync(..., { recursive: true })` treats an existing symlink-to-a-
-  // directory as "already there" and succeeds silently, so the pre-check alone leaves a
-  // check-then-use gap. `resolveRealOutputPath` (src/fs/output-root.ts — shared with
-  // `src/report/write.ts` so this hardening lives in exactly one place) re-runs the symlink-component
-  // check now that the directory genuinely exists, then re-resolves ROOT and the directory to their
-  // real filesystem locations and re-confirms containment there. Rejecting symlinked components asks
-  // "is this a link?"; resolving to the real path asks the question that actually matters — "where
-  // does it point?" — so a component swapped for a link into the repo is refused by its target, not
-  // merely by its type. `flag: "wx"` (O_CREAT|O_EXCL) below closes the leaf half of the same gap — it
-  // refuses to follow an existing symlink at the target rather than writing through it, and the
-  // timestamped filenames mean a genuine collision cannot happen in normal operation.
+  // `writeNewOutputFile` (src/fs/output-root.ts — shared with `src/report/write.ts` so this
+  // hardening lives in exactly one place) resolves the REAL destination the same way
+  // `resolveRealOutputPath` always did — re-running the symlink-component check now that the
+  // directory genuinely exists (`mkdirSync(..., { recursive: true })` treats an existing
+  // symlink-to-a-directory as "already there" and succeeds silently, so the pre-check alone would
+  // leave a gap here) and re-resolving ROOT and the directory to their real filesystem locations —
+  // and then, unlike a plain path-based write, OPENS that destination (`wx`: `O_CREAT | O_EXCL`,
+  // which refuses outright to follow an existing symlink or file at the leaf) and writes the bytes
+  // THROUGH the resulting file descriptor rather than through the path string. Immediately after the
+  // open it re-verifies, against the fd, that (1) no directory component is a symlink and (2) the
+  // fd's inode still matches what the path names right now — see `openNewOutputFileSafely`'s own doc
+  // comment in `src/fs/output-root.ts` for why BOTH checks are required and neither is sufficient
+  // alone. Once both hold, a component swapped in AFTER the open cannot redirect the write: the fd is
+  // a handle bound to one inode, not a lookup that gets repeated.
   //
-  // RESIDUAL, deliberately not claimed as closed: this is still check-then-use. An actor able to
-  // swap a component between this resolution and the write can still win the race, and pure Node
-  // has no `openat`/`O_NOFOLLOW` directory-handle write to close it (a native helper would be a new
-  // dependency the plan forbids). See the tracked follow-up and `docs/findings.md`.
+  // CLOSED (#33): un-redacted capture content can no longer be written outside the validated real
+  // root via a directory-component swap between resolution and the write — the bytes go through a
+  // proven fd, not a re-resolved path string.
+  // REMAINING: an actor who wins the PRE-OPEN window — before `writeNewOutputFile` ever calls
+  // `openSync` — can still cause an EMPTY file to be created at a location of their choosing; the
+  // call then fails closed on the post-open verification and writes no CONTENT there. Pure Node has
+  // no `openat`/`O_NOFOLLOW` directory-handle write, so closing that narrower window would need a
+  // native helper — a new dependency the plan forbids. See `docs/findings.md`.
   //
   // NOTE on why the root check happens at the ROOT and not the descendant: with TN_RAW_PATH unset
   // the root is `<repo>/raw`, the directory is `<repo>/raw/tennisrecord`, and an allowlist checked
@@ -104,9 +110,7 @@ export function archivePage(input: ArchivePageInput): string {
   // set TN_RAW_PATH to a temp dir, so nothing exercised the one configuration the README describes.
   // (Codex adversarial review, PR #31 round 3.) `resolveRealOutputPath` checks the root, not the
   // directory, preserving that fix.
-  const realHtmlPath = resolveRealOutputPath(rawRoot(), htmlPath, DEFAULT_RAW_DIR);
-  const realProvenancePath = `${realHtmlPath}.provenance.json`;
-  writeFileSync(realHtmlPath, input.body, { encoding: "utf8", flag: "wx" });
+  writeNewOutputFile(rawRoot(), htmlPath, DEFAULT_RAW_DIR, input.body);
 
   const provenance: ArchiveProvenance = {
     sourceUrl: input.url,
@@ -115,7 +119,7 @@ export function archivePage(input: ArchivePageInput): string {
     redacted: false,
     bytes: Buffer.byteLength(input.body, "utf8"),
   };
-  writeFileSync(realProvenancePath, JSON.stringify(provenance, null, 2), { encoding: "utf8", flag: "wx" });
+  writeNewOutputFile(rawRoot(), provenancePath, DEFAULT_RAW_DIR, JSON.stringify(provenance, null, 2));
 
   // The REAL path is what we wrote through (that is the containment property); the LOGICAL path is
   // what we hand back. They differ whenever the root legitimately resolves elsewhere — on macOS a

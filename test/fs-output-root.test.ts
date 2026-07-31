@@ -9,12 +9,19 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertOutputPathSafe, overwriteOutputFile, OutputPathError } from "../src/fs/output-root.js";
+import {
+  assertOutputPathSafe,
+  openNewOutputFileSafely,
+  overwriteOutputFile,
+  OutputPathError,
+  writeNewOutputFile,
+} from "../src/fs/output-root.js";
 
 // `spawnSync`/`writeFileSync`/`renameSync` are all named ESM exports, and Node's built-in module
 // namespaces are not configurable — `vi.spyOn` cannot redefine a property on either directly
@@ -35,6 +42,10 @@ vi.mock("node:fs", async (importOriginal) => {
     writeFileSync: vi.fn(actual.writeFileSync),
     renameSync: vi.fn(actual.renameSync),
     lstatSync: vi.fn(actual.lstatSync),
+    openSync: vi.fn(actual.openSync),
+    writeSync: vi.fn(actual.writeSync),
+    closeSync: vi.fn(actual.closeSync),
+    unlinkSync: vi.fn(actual.unlinkSync),
   };
 });
 
@@ -553,6 +564,305 @@ describe("overwriteOutputFile never has a window where the destination is missin
       expect(readdirSync(dir)).toEqual([basename(path)]);
     } finally {
       rmSync(escapeTarget, { recursive: true, force: true });
+    }
+  });
+
+  // REGRESSION (#33). The rename-time directory re-verification added beside the second
+  // `assertLeafWritable` above: `renameSync` is a path operation with no `renameat`, so — exactly
+  // like `writeFileSync` before it — it re-resolves `dir` from a bare string rather than trusting
+  // anything already proven. Without a dedicated test forcing this window to matter, the check is a
+  // branch no test can kill (every OTHER test's directory is untouched throughout the call), same
+  // shape as the "SECOND no-follow check" regression directly above. This test swaps `dir` itself for
+  // a symlink to somewhere else in the window between the temp-file write and the rename, and asserts
+  // the rename is refused rather than carried out through a directory that is no longer the one this
+  // call started in.
+  it("REGRESSION: the rename-time directory re-verification refuses when the directory is swapped for a symlink during the write — not dead code", async () => {
+    dir = mkdtempSync(join(tmpdir(), "tn-atomic-write-"));
+    const path = join(dir, "index.html");
+    const escapeTarget = mkdtempSync(join(tmpdir(), "tn-escape-dir-"));
+
+    const { writeFileSync: realWriteFileSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.mocked(fsModule.writeFileSync).mockImplementationOnce(((target: string, content: string, opts: unknown) => {
+      const result = realWriteFileSync(target, content, opts as never);
+      // The temp file's content write is not instantaneous, and `renameSync` re-resolves `dir` from
+      // scratch just like `writeFileSync` did — so replacing `dir` with a symlink RIGHT NOW, after
+      // the write and before the rename, reproduces the exact window the new check exists to close.
+      rmSync(dir, { recursive: true, force: true });
+      symlinkSync(escapeTarget, dir, "dir");
+      return result;
+    }) as unknown as typeof fsModule.writeFileSync);
+
+    try {
+      expect(() => overwriteOutputFile(path, "NEW CONTENT")).toThrow(OutputPathError);
+      expect(vi.mocked(fsModule.renameSync)).not.toHaveBeenCalled();
+      // Nothing must have landed where the symlink pointed.
+      expect(readdirSync(escapeTarget)).toEqual([]);
+    } finally {
+      // `dir` is now a symlink; remove the link itself rather than recursing through its target.
+      rmSync(dir, { force: true });
+      rmSync(escapeTarget, { recursive: true, force: true });
+    }
+  });
+});
+
+// REGRESSION (#33). `openNewOutputFileSafely`/`writeNewOutputFile` are the fd-anchored write
+// primitives `src/ingest/archive.ts` now routes through: open the real, validated destination FIRST,
+// then trust it only once TWO independent post-open checks both agree it is safe — see
+// `openNewOutputFileSafely`'s own doc comment in `src/fs/output-root.ts` for why neither check alone
+// is sufficient. Each branch below is killed by its OWN test, not asserted to cover several, per
+// `rules/testing.md`.
+describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)", () => {
+  afterEach(() => {
+    vi.mocked(fsModule.openSync).mockClear();
+    vi.mocked(fsModule.writeSync).mockClear();
+    vi.mocked(fsModule.closeSync).mockClear();
+    vi.mocked(fsModule.unlinkSync).mockClear();
+  });
+
+  // Isolates the COMPONENT-WALK check from the root-containment check (`isWithin(realRootNow,
+  // realDirNow)`): the symlink planted after the open points to a DECOY directory INSIDE the same
+  // root, not outside it. `isWithin` alone would happily accept that — the real resolved directory
+  // genuinely sits under the real root — so this scenario can only be refused by the component walk
+  // itself noticing that a SYMLINK sits where a plain directory should be, regardless of where it
+  // points. A test whose symlink points outside the root would still pass if this check were deleted
+  // entirely, since the root-containment check would catch it too; this is the one that proves the
+  // component walk is doing independent work, not merely reproducing the other check.
+  it("REGRESSION: refuses when a directory component is swapped for a symlink between the open and the post-open verification, even when the symlink points INSIDE the root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-x");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+      const decoyDir = join(root, "decoy");
+      mkdirSync(decoyDir, { recursive: true });
+
+      const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fsModule.openSync).mockImplementationOnce(((target: string, flags: string) => {
+        const fd = realOpenSync(target, flags);
+        // Swap AFTER the open has already succeeded, BEFORE `openNewOutputFileSafely`'s own
+        // post-open verification gets to run — reproducing "the component walk alone is
+        // check-then-use" for the open step specifically. The symlink's target (`decoyDir`) is
+        // deliberately INSIDE `root`, so only the component walk — not the root-containment check —
+        // can catch this.
+        const swappedDir = dirname(target);
+        rmSync(swappedDir, { recursive: true, force: true });
+        symlinkSync(decoyDir, swappedDir, "dir");
+        return fd;
+      }) as unknown as typeof fsModule.openSync);
+
+      expect(() => openNewOutputFileSafely(root, candidate, "reports")).toThrow(OutputPathError);
+      // Nothing the (now-cleaned-up) open created may have leaked into the decoy directory either.
+      expect(readdirSync(decoyDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Isolates the ROOT-CONTAINMENT check (`isWithin(realRootNow, realDirNow)`) from BOTH checks
+  // above: `root` itself is a symlink (legitimate — a root pointing at an external disk is allowed
+  // by this module by design) that gets REPOINTED, after the open, to a sibling directory. Nothing
+  // under the ORIGINAL root is touched or deleted, so no directory component the walk visits is
+  // itself a symlink and nothing is missing on disk — `assertNoSymlinkComponents` has nothing to
+  // catch here. Only re-resolving the root fresh and confirming the (unmoved, still-real) directory
+  // is still nested inside it catches this: the file the fd was opened against now sits OUTSIDE the
+  // root the symlink currently names.
+  it("REGRESSION: refuses when the root symlink itself is repointed to a sibling directory after the open, leaving every component clean", async () => {
+    const linkParent = mkdtempSync(join(tmpdir(), "tn-fd-link-parent-"));
+    const root1 = mkdtempSync(join(tmpdir(), "tn-fd-root1-"));
+    const root2 = mkdtempSync(join(tmpdir(), "tn-fd-root2-"));
+    const rootLink = join(linkParent, "root-link");
+    symlinkSync(root1, rootLink, "dir");
+    try {
+      const subDir = join(rootLink, "team-w");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fsModule.openSync).mockImplementationOnce(((target: string, flags: string) => {
+        const fd = realOpenSync(target, flags);
+        // Repoint the ROOT symlink itself to `root2` — `root1` and everything under it, including
+        // the file the fd was just opened against, is left completely untouched.
+        unlinkSync(rootLink);
+        symlinkSync(root2, rootLink, "dir");
+        return fd;
+      }) as unknown as typeof fsModule.openSync);
+
+      expect(() => openNewOutputFileSafely(rootLink, candidate, "reports")).toThrow(OutputPathError);
+      // Nothing may have leaked into root2, the root the symlink was repointed to.
+      expect(readdirSync(root2)).toEqual([]);
+    } finally {
+      rmSync(linkParent, { recursive: true, force: true });
+      rmSync(root1, { recursive: true, force: true });
+      rmSync(root2, { recursive: true, force: true });
+    }
+  });
+
+  // Isolates the INODE comparison from the component walk: every directory component stays a real,
+  // untouched directory for the whole test — only the LEAF is swapped, for a DIFFERENT file at the
+  // exact same path — so this test can only pass if the fstat/lstat comparison itself does the work.
+  // This is what proves the inode check is not redundant with the component walk (plan requirement).
+  it("REGRESSION: refuses independently when the fd's inode no longer matches the path, with every directory component clean the whole time", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-y");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fsModule.openSync).mockImplementationOnce(((target: string, flags: string) => {
+        const fd = realOpenSync(target, flags);
+        // Unlink what the fd points to and put a DIFFERENT file at the exact same path. No directory
+        // component is ever touched — only the leaf's identity changes underneath the open fd.
+        unlinkSync(target);
+        writeFileSync(target, "a different file entirely", "utf8");
+        return fd;
+      }) as unknown as typeof fsModule.openSync);
+
+      expect(() => openNewOutputFileSafely(root, candidate, "reports")).toThrow(OutputPathError);
+      // The swapped-in file must be gone too — best-effort cleanup removes whatever now sits at the
+      // leaf, not just the (already-unlinked) file the fd was originally opened against.
+      expect(existsSync(candidate)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A refusal must leave nothing behind at all: not a partial file, not orphaned temp debris. This
+  // exercises `writeNewOutputFile`'s OWN cleanup — distinct from `openNewOutputFileSafely`'s
+  // verification-failure cleanup above — for a failure that happens AFTER a successful, verified
+  // open, during the write itself.
+  it("REGRESSION: a write that fails after a successful, verified open leaves no partial file or debris behind", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-z");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.writeSync).mockImplementationOnce(() => {
+        throw new Error("simulated write failure (disk full)");
+      });
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "content that must not survive")).toThrow(
+        "simulated write failure (disk full)",
+      );
+      expect(existsSync(candidate)).toBe(false);
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a normal call opens, verifies, writes, and returns the real path written", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-normal");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      const realPath = writeNewOutputFile(root, candidate, "reports", "hello");
+
+      expect(readFileSync(realPath, "utf8")).toBe("hello");
+      expect(existsSync(candidate)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Both doc comments above (`openNewOutputFileSafely`, `writeNewOutputFile`) promise that a cleanup
+  // failure never masks the ORIGINAL error — mirroring `overwriteOutputFile`'s established shape.
+  // That promise is untested unless something forces the cleanup itself to fail; these two tests do,
+  // for both `openNewOutputFileSafely`'s own verification-failure cleanup and `writeNewOutputFile`'s
+  // separate write-failure cleanup.
+  it("REGRESSION: openNewOutputFileSafely surfaces the ORIGINAL verification error even when its own cleanup (close AND unlink) also fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const decoyDir = mkdtempSync(join(tmpdir(), "tn-fd-decoy-"));
+    try {
+      const subDir = join(root, "team-cleanup");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fsModule.openSync).mockImplementationOnce(((target: string, flags: string) => {
+        const fd = realOpenSync(target, flags);
+        const swappedDir = dirname(target);
+        rmSync(swappedDir, { recursive: true, force: true });
+        symlinkSync(decoyDir, swappedDir, "dir");
+        return fd;
+      }) as unknown as typeof fsModule.openSync);
+      vi.mocked(fsModule.closeSync).mockImplementationOnce(() => {
+        throw new Error("simulated EBADF (cleanup close failure)");
+      });
+      vi.mocked(fsModule.unlinkSync).mockImplementationOnce(() => {
+        throw new Error("simulated cleanup unlink failure");
+      });
+
+      let thrown: unknown;
+      try {
+        openNewOutputFileSafely(root, candidate, "reports");
+      } catch (err) {
+        thrown = err;
+      }
+      // The ORIGINAL verification error (component-swap refusal) must be what surfaces — neither
+      // cleanup failure above may mask it.
+      expect(thrown).toBeInstanceOf(OutputPathError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(decoyDir, { recursive: true, force: true });
+    }
+  });
+
+  it("REGRESSION: writeNewOutputFile surfaces the ORIGINAL write error even when its own cleanup (close AND unlink) also fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-cleanup2");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.writeSync).mockImplementationOnce(() => {
+        throw new Error("simulated write failure (disk full)");
+      });
+      vi.mocked(fsModule.closeSync).mockImplementationOnce(() => {
+        throw new Error("simulated EBADF (cleanup close failure)");
+      });
+      vi.mocked(fsModule.unlinkSync).mockImplementationOnce(() => {
+        throw new Error("simulated cleanup unlink failure");
+      });
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "content")).toThrow(
+        "simulated write failure (disk full)",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // `fs.writeSync` issues ONE `write(2)` and returns how many bytes it actually wrote — it does not
+  // retry the remainder the way `writeFileSync` does internally. A SHORT write is rare for a regular
+  // file but permitted, and a single unchecked `writeSync` would swallow one silently: the file would
+  // be truncated while the open, both post-open verifications, and the close all still reported
+  // success — a corrupted privacy artifact indistinguishable from a good one. This test forces the
+  // short write so the retry loop is a branch a test can actually kill, rather than one asserted to
+  // be correct by reading it (`rules/testing.md` → never keep a branch no test can kill).
+  it("REGRESSION: a SHORT write is retried to completion rather than silently truncating the file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const { writeSync: realWriteSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-short-write");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+      const content = "SENSITIVE CAPTURE BODY THAT MUST NOT BE TRUNCATED";
+
+      // Exactly one short write: the first call commits 5 bytes and reports 5, so the loop must come
+      // back for the remaining bytes. Without the loop the file ends up 5 bytes long.
+      vi.mocked(fsModule.writeSync).mockImplementationOnce(((fd: number, buffer: Buffer) =>
+        realWriteSync(fd, buffer, 0, 5)) as unknown as typeof fsModule.writeSync);
+
+      writeNewOutputFile(root, candidate, "reports", content);
+
+      expect(readFileSync(candidate, "utf8")).toBe(content);
+      expect(vi.mocked(fsModule.writeSync).mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

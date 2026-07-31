@@ -1,5 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -300,12 +311,21 @@ export function assertOutputPathSafe(candidatePath: string, root: string, permit
  * there — a LEXICAL path check answers "what does this string say", the filesystem is free to
  * disagree (Codex adversarial review, PR #31).
  *
- * Shared by every writer under this guard (`src/ingest/archive.ts`, `src/report/write.ts`) so the
- * hardening lives in exactly one place rather than being copied per caller. This function does not
- * itself write anything or decide the LEAF's write flag — that is caller policy: `archive.ts` never
- * rewrites a file in place and writes with `flag: "wx"` directly; `write.ts`'s reports ARE rewritten
- * on every run and use `overwriteOutputFile` below instead, which still refuses to follow a symlinked
- * leaf but tolerates (and replaces) a plain file left by a prior run.
+ * Shared by every writer under this guard so the hardening lives in exactly one place rather than
+ * being copied per caller — though the two callers now consume it differently (#33).
+ * `src/ingest/archive.ts` no longer calls this directly: its writes go through `writeNewOutputFile`
+ * below, which calls this internally as its OWN resolution step and then opens the result and
+ * verifies the fd before writing a single byte, closing the check-then-use window a bare path string
+ * leaves open. `src/report/write.ts` still calls this directly, exactly as before, and then hands the
+ * returned string to `overwriteOutputFile` — that path still resolves-then-writes, but
+ * `overwriteOutputFile` narrows the window as far as a pure path operation (`rename(2)`, no
+ * `renameat`) allows; see its own doc comment for the precise remaining shape.
+ *
+ * This function itself still does not write anything, open anything, or decide the leaf's write
+ * flag — that is caller policy, as it always was. What has changed is that a caller resolving a path
+ * here and then separately writing through the returned STRING (rather than through
+ * `openNewOutputFileSafely`/`writeNewOutputFile`'s fd) is choosing the narrower of the two guarantees
+ * this module now offers, not the only one available.
  */
 export function resolveRealOutputPath(root: string, candidatePath: string, permittedDir: string): string {
   const resolvedRoot = resolve(root);
@@ -321,6 +341,150 @@ export function resolveRealOutputPath(root: string, candidatePath: string, permi
     );
   }
   return join(realDir, basename(resolvedCandidate));
+}
+
+/**
+ * The fd-anchored write primitive (#33). A file descriptor is bound to an INODE, not to a path.
+ * Everything above this point — `resolveRealOutputPath` included — resolves a path STRING and hands
+ * it back to the caller, which then writes through that string: check-then-use. A directory
+ * component swapped for a symlink in the window between the resolution and the write redirects the
+ * bytes to wherever the symlink points, and nothing re-examines the filesystem in between. This
+ * function closes that window for the write itself by opening the file FIRST and only trusting it
+ * once two independent post-open checks both agree it is safe:
+ *
+ * 1. **The component walk, repeated.** `assertNoSymlinkComponents` re-run against the (freshly
+ *    re-resolved) root and the real path confirms no directory component between them is a symlink
+ *    RIGHT NOW — not at resolve time, now, after the open.
+ * 2. **The inode comparison.** `fstatSync(fd)` names the inode the OPEN FILE DESCRIPTOR actually
+ *    holds; `lstatSync(realPath)` names whatever inode the path string currently resolves to. They
+ *    must agree, and the entry must be a plain file.
+ *
+ * Neither check is sufficient alone — that is the whole design here, not an incidental detail:
+ *
+ * - The component walk ALONE is exactly what `resolveRealOutputPath` already provides, and it is
+ *   still check-then-use: nothing stops a symlink from being planted in the instant after the walk
+ *   finishes and before the open happens.
+ * - The inode comparison ALONE is UNSOUND: if an attacker leaves the planted symlink in place (rather
+ *   than swapping it back after redirecting the write), `lstatSync(realPath)` itself TRAVERSES the
+ *   symlinked directory component and reports the very inode the fd holds — a false match. `lstat`
+ *   only refuses to follow a symlink at the FINAL path component; every component before it is
+ *   followed exactly like `open` follows it, so the two calls agree on the wrong inode for the same
+ *   reason `open` was fooled by it in the first place.
+ *
+ * Run TOGETHER, immediately after the open, they establish something neither can alone: no directory
+ * component is a symlink NOW, and the fd IS what the path names NOW. A swap that happens AFTER this
+ * point cannot redirect the fd — it is a handle, not a lookup — so the bytes this function's caller
+ * writes through it are proven to land inside the validated real root.
+ *
+ * On ANY verification failure the newly-opened fd is closed and the (very likely empty, since the
+ * caller has not written anything through it yet) file it created is best-effort unlinked, so a
+ * refused open leaves no half-open resource and no stray empty file where a symlink pointed.
+ */
+export function openNewOutputFileSafely(
+  root: string,
+  candidatePath: string,
+  permittedDir: string,
+): { fd: number; realPath: string } {
+  const realPath = resolveRealOutputPath(root, candidatePath, permittedDir);
+
+  // `openSync(..., "wx")` is `O_CREAT | O_EXCL`: it refuses outright to follow an existing symlink
+  // (or any existing file at all) at the LEAF, closing the leaf half of the race before verification
+  // even starts. It does nothing about a symlink in a PARENT component — POSIX `open` follows
+  // directory-component symlinks transparently, same as every other path-based call — which is
+  // exactly the gap the two checks below exist to close.
+  const fd = openSync(realPath, "wx");
+
+  try {
+    // `assertNoSymlinkComponents` must be given a ROOT and a TARGET from the SAME tree — both
+    // lexical, or both real — or `relative()` between them walks out through unrelated ancestors and
+    // reports a false positive the moment either side crosses a symlinked ancestor of its own (macOS
+    // resolves `/var` to `/private/var`, so a lexical root under `/var` paired with the already-real
+    // `realPath` below produces exactly that false positive). `realPath` is already real (it came
+    // from `resolveRealOutputPath`), so the root re-resolved here is real too, before either is used.
+    const realRootNow = realpathOfNearestExisting(resolve(root));
+    assertRootSafe(realRootNow, permittedDir);
+    assertNoSymlinkComponents(realRootNow, realPath);
+    const realDirNow = realpathSync.native(dirname(realPath));
+    if (!isWithin(realRootNow, realDirNow)) {
+      throw new OutputPathError(
+        `refusing to write output path outside the resolved root "${realRootNow}": ${realDirNow}`,
+      );
+    }
+
+    const fdStat = fstatSync(fd);
+    const pathStat = lstatSync(realPath);
+    if (!pathStat.isFile() || fdStat.dev !== pathStat.dev || fdStat.ino !== pathStat.ino) {
+      throw new OutputPathError(
+        `refusing to write through a file descriptor whose target no longer matches the path it was opened from: ${realPath}`,
+      );
+    }
+  } catch (err) {
+    try {
+      closeSync(fd);
+    } catch {
+      // Best-effort: if closing the fd itself fails, the ORIGINAL verification error is still what
+      // the caller needs to see, not a close failure.
+    }
+    try {
+      unlinkSync(realPath);
+    } catch {
+      // Best-effort: `realPath` may not be the file we just opened (a symlinked component can make
+      // this unlink land somewhere unexpected, or the entry may already be gone) — either way the
+      // ORIGINAL verification error above is what propagates, never a cleanup failure.
+    }
+    throw err;
+  }
+
+  return { fd, realPath };
+}
+
+/**
+ * Opens, verifies, and writes `content` through the fd `openNewOutputFileSafely` proves safe, then
+ * closes it — the primitive `src/ingest/archive.ts` uses for its two never-rewritten leaves (see that
+ * function's own doc comment for why archive writes stay `wx`-only rather than using
+ * `overwriteOutputFile`'s replace-in-place semantics). Returns the REAL path written.
+ *
+ * Any throw past the open — verification failure, or a failure of `writeSync` itself — closes the fd
+ * and best-effort unlinks `realPath` so no partial file survives, then rethrows the ORIGINAL error
+ * (mirrors `overwriteOutputFile`'s existing cleanup shape below: a cleanup failure must never mask
+ * the real one). `openNewOutputFileSafely` already cleans up after itself on a verification failure,
+ * so this only has its own cleanup to do for a failure in the write step.
+ */
+export function writeNewOutputFile(
+  root: string,
+  candidatePath: string,
+  permittedDir: string,
+  content: string,
+): string {
+  const { fd, realPath } = openNewOutputFileSafely(root, candidatePath, permittedDir);
+  try {
+    // Looped, not a single `writeSync`. `fs.writeSync` issues ONE `write(2)` and returns the number
+    // of bytes it actually wrote; it does not retry the remainder the way `writeFileSync` does
+    // internally. A short write is rare for a regular file but permitted (a signal arriving
+    // mid-write, some filesystems), and swallowing one here would silently truncate an archived
+    // capture while every check above still reported success — a corrupted privacy artifact that
+    // looks exactly like a good one. Writing an EMPTY file (`content === ""`, a legitimate zero-byte
+    // capture) correctly performs no write at all, since `written` starts at the length.
+    const buffer = Buffer.from(content, "utf8");
+    let written = 0;
+    while (written < buffer.length) {
+      written += writeSync(fd, buffer, written, buffer.length - written);
+    }
+  } catch (err) {
+    try {
+      closeSync(fd);
+    } catch {
+      // Best-effort — see openNewOutputFileSafely's identical cleanup comment above.
+    }
+    try {
+      unlinkSync(realPath);
+    } catch {
+      // Best-effort — see openNewOutputFileSafely's identical cleanup comment above.
+    }
+    throw err;
+  }
+  closeSync(fd);
+  return realPath;
 }
 
 /**
@@ -370,11 +534,24 @@ export function assertLeafWritable(path: string): void {
  * principle be planted at `path` during that window; re-checking immediately before the rename means
  * the no-follow guarantee holds at the actual moment `path` is touched, not just at the start.
  *
- * Any failure past the first `writeFileSync` — the second `assertLeafWritable`, or `renameSync`
- * itself — cleans up the now-orphaned temp file (best-effort; if even the cleanup fails, the ORIGINAL
- * error is still what propagates, not the cleanup failure) and rethrows, leaving `path` exactly as it
- * was found: this function still throws in every case the previous version did, it just no longer
- * deletes anything on the way to throwing.
+ * Beside that second `assertLeafWritable` sits a second, independent check (#33): the temp file's
+ * create (`writeFileSync(..., { flag: "wx" })`) is already effectively fd-anchored — `wx` refuses to
+ * follow anything already at that leaf, so there is no pre-existing inode for a symlink swap to
+ * impersonate the way `openNewOutputFileSafely` above has to guard against. What is NOT anchored is
+ * the rename that follows: `renameSync` is a path operation with no `renameat`, so it re-resolves
+ * `dir` from scratch exactly like `writeFileSync` did. If `dir` itself is swapped for a symlink
+ * during the (non-instantaneous) write, the rename would silently move the temp file's real content
+ * into whatever the symlink points to instead of where this call started. `dir`'s realpath is
+ * captured before the write and re-checked here, immediately before the rename, so a swap in that
+ * window is refused rather than carried out. This narrows, but does not erase, the window: it is
+ * still a check-then-use path operation, just with the check moved as close to the use as pure Node
+ * allows.
+ *
+ * Any failure past the first `writeFileSync` — the second `assertLeafWritable`, the directory
+ * re-verification, or `renameSync` itself — cleans up the now-orphaned temp file (best-effort; if
+ * even the cleanup fails, the ORIGINAL error is still what propagates, not the cleanup failure) and
+ * rethrows, leaving `path` exactly as it was found: this function still throws in every case the
+ * previous version did, it just no longer deletes anything on the way to throwing.
  *
  * What this function does NOT claim: it guarantees atomicity for THIS ONE leaf. A caller writing
  * several leaves (`writeTeamDossier`'s html+md pair, `writeSectionalsDossiers`' whole batch) gets
@@ -389,6 +566,7 @@ export function overwriteOutputFile(path: string, content: string): void {
   assertLeafWritable(path);
   const dir = dirname(path);
   const tempPath = join(dir, `.${basename(path)}.tmp-${randomBytes(8).toString("hex")}`);
+  const realDirAtStart = realpathOfNearestExisting(dir);
   try {
     // The write is INSIDE the cleanup block, not before it. `writeFileSync` is not all-or-nothing:
     // it can create the file and then fail partway through (ENOSPC, EIO, a full quota), leaving a
@@ -397,6 +575,11 @@ export function overwriteOutputFile(path: string, content: string): void {
     // whether or not cleanup covered the case (Codex adversarial review, PR #38 round 4).
     writeFileSync(tempPath, content, { encoding: "utf8", flag: "wx" });
     assertLeafWritable(path);
+    if (realpathOfNearestExisting(dir) !== realDirAtStart) {
+      throw new OutputPathError(
+        `refusing to rename into an output directory that changed during the write: ${dir}`,
+      );
+    }
     renameSync(tempPath, path);
   } catch (err) {
     try {
