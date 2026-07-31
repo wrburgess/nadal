@@ -218,13 +218,25 @@ export const MCP_TOOLS: McpToolDef[] = [
     name: "player_avail",
     cliCommand: "player avail",
     description: "Record a home-team player's availability for an event day",
-    inputShape: { target: z.string().min(1), day: z.string().min(1), status: z.string().min(1) },
+    inputShape: {
+      target: z.string().min(1),
+      day: z.string().min(1),
+      status: z.string().min(1),
+      // Optional, and needed only when the day falls inside more than one event's range — the
+      // ordinary case once a league season and a tournament both exist.
+      event: z.string().optional(),
+    },
     handler: async (rawArgs) => {
-      const { target, day, status } = rawArgs as { target: string; day: string; status: string };
+      const { target, day, status, event } = rawArgs as {
+        target: string;
+        day: string;
+        status: string;
+        event?: string;
+      };
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
-        const result = setAvailability(db, { playerId: resolution.playerId, day, status });
+        const result = setAvailability(db, { playerId: resolution.playerId, day, status, eventName: event });
         return { player: target, day, availability: result.status, event: result.eventName };
       } finally {
         sqlite.close();

@@ -9,7 +9,7 @@
 // provenance are named, and anyone left over is listed. None of that is decoration — each line is
 // asserted in `test/cli-lineup-plan-command.test.ts`.
 
-import { ratingSourceLabel } from "./format-profile.js";
+import { formatName, ratingSourceLabel } from "./format-profile.js";
 import type { LineupPlan, LineupPlanSlot } from "../query/lineup.js";
 
 /** `basis` and `confidence` answer different questions, so both are printed: "low" from two shared
@@ -29,15 +29,17 @@ function slotEvidence(slot: LineupPlanSlot): string {
 
 export function formatLineupPlan(plan: LineupPlan): string {
   const lines = [
-    `PREDICTED LINEUP — ${plan.teamName}`,
+    `PREDICTED LINEUP — ${formatName(plan.teamName)}`,
     `  This is a guess, not a lineup card. Based on ${plan.observedCourtMatches} observed court ` +
       `match${plan.observedCourtMatches === 1 ? "" : "es"} across a roster of ${plan.rosterSize}.`,
     "",
   ];
 
+  // Sanitized BEFORE the width is measured: a control character contributes a column here but not
+  // on screen, so measuring the raw string misaligns every row in the table.
   const nameWidth = Math.max(
     1,
-    ...plan.slots.flatMap((s) => s.players.map((p) => p.canonicalName.length)),
+    ...plan.slots.flatMap((s) => s.players.map((p) => formatName(p.canonicalName).length)),
   );
 
   for (const slot of plan.slots) {
@@ -49,7 +51,7 @@ export function formatLineupPlan(plan: LineupPlan): string {
     slot.players.forEach((player, index) => {
       const label = index === 0 ? slot.slot.padEnd(4) : "    ";
       const trailer = index === 0 ? `  ${evidence}` : "";
-      lines.push(`  ${label} ${player.canonicalName.padEnd(nameWidth)}${trailer}`.trimEnd());
+      lines.push(`  ${label} ${formatName(player.canonicalName).padEnd(nameWidth)}${trailer}`.trimEnd());
     });
   }
 
@@ -57,7 +59,7 @@ export function formatLineupPlan(plan: LineupPlan): string {
   if (plan.unplaced.length > 0) {
     lines.push(
       `  not placed: ${plan.unplaced
-        .map((p) => `${p.canonicalName} (${p.courtMatches} court match${p.courtMatches === 1 ? "" : "es"})`)
+        .map((p) => `${formatName(p.canonicalName)} (${p.courtMatches} court match${p.courtMatches === 1 ? "" : "es"})`)
         .join(", ")}`,
     );
   }
@@ -68,7 +70,7 @@ export function formatLineupPlan(plan: LineupPlan): string {
       : `  ratings: ranked within ${ratingSourceLabel(plan.ratingSource)}` +
         (plan.unranked.length === 0
           ? ""
-          : `; unrated: ${plan.unranked.map((p) => p.canonicalName).join(", ")}`),
+          : `; unrated: ${plan.unranked.map((p) => formatName(p.canonicalName)).join(", ")}`),
   );
   // Named on every run, because it is the standing limitation of the v1 rule: the courts predicted
   // are the courts this team has been SEEN to field, which may not be the courts the event fields.

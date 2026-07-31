@@ -94,15 +94,28 @@ describe("pullPlayer writes winner_side from the parsed result", () => {
   });
 });
 
-describe("winner_side survives a pull from the opposing perspective", () => {
+// NAMED FOR WHAT IT ACTUALLY COVERS, after the independent Codex review of PR #47 pointed out
+// (rated medium) that the earlier name — "survives a pull from the opposing perspective" — claimed
+// pull-layer coverage this block does not have: it drives `upsertCourtMatch` / `upsertCourtMatchPlayers`
+// directly, so reverting `player-pull.ts` to `winnerSide: null` leaves it green.
+//
+// Two remedies were available. Building two opposing player-page fixtures would make it a genuine
+// dual-pull, but it means authoring TennisRecord pages through this repo's fixture capture and
+// redaction policy for one assertion — and the pull layer is ALREADY protected: the first test in
+// this file drives `pullPlayer` against the real fixture and goes red on exactly that revert, for
+// both a W and an L. So the accurate fix is to stop the name overclaiming rather than to fabricate
+// a fixture, which is the repo's own rule about a docstring claiming coverage the code does not
+// enforce (`rules/testing.md`), applied to a test title.
+//
+// What this block DOES cover, and nothing else does: the upsert-layer invariant underneath the
+// pull. Sides in `court_match_players` are PULL-PERSPECTIVE — `upsertCourtMatchPlayers` conflicts
+// on (courtMatchId, playerId) and SETS `side`, so pulling an opposing player rewrites every
+// participant from that player's perspective. The flip is symmetric and `windowedRecord` is
+// perspective-invariant only because `winner_side` flips WITH the sides. This fails if a later
+// refactor hoists the winner out of the loop that assigns them.
+describe("upsert layer: winner_side stays consistent when a court match is rewritten from the other side", () => {
   useTnDbPath();
 
-  // Sides in `court_match_players` are PULL-PERSPECTIVE, not real home/away:
-  // `upsertCourtMatchPlayers` conflicts on (courtMatchId, playerId) and SETS `side`, so pulling an
-  // opposing player's page rewrites every participant from that player's perspective. The flip is
-  // symmetric and `windowedRecord` is perspective-invariant — but only if `winner_side` flips with
-  // it, which holds only because it is written from the same record that assigns the sides. This is
-  // the test that fails if a later refactor hoists the winner out of that loop.
   it("keeps both players' records correct after the same court match is rewritten from the other side", () => {
     runMigrations();
     const { db, sqlite } = openDb();

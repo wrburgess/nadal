@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { availability, players, teamMemberships, teams } from "../src/db/schema.js";
+import { availability, events, players, teamMemberships, teams } from "../src/db/schema.js";
+import { setHomeTeam } from "../src/query/home-team.js";
 import { seedHomeTeamFixture } from "./helpers/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -160,5 +161,84 @@ describe("tn player avail (end-to-end via dispatch)", () => {
 
     expect(code).toBe(0);
     expect(logSpy).not.toHaveBeenCalled();
+  });
+});
+
+// The CLI half of the overlapping-events fix (Codex review of PR #47, rated high).
+describe("tn player avail with an overlapping event day", () => {
+  useTnDbPath();
+
+  function seedOverlap() {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    setHomeTeam(db, team.id); // the real writer, never a raw isHome insert (test/helpers/home-team.ts)
+    const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    db.insert(events)
+      .values({ name: "HOA 40&over3.5M Spring 2026", kind: "league", startsOn: "2026-03-01", endsOn: "2026-06-30" })
+      .run();
+    db.insert(events)
+      .values({ name: "Heart of America Districts", kind: "tournament", startsOn: "2026-05-15", endsOn: "2026-05-17" })
+      .run();
+    backfillNameKeys(db);
+    sqlite.close();
+    return { playerId: player.id };
+  }
+
+  it("refuses without an event name, listing the candidates and saying to name one", async () => {
+    seedOverlap();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "avail", "Randy Rostered", "2026-05-16", "available"]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("falls within more than one event"));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("name the one you mean"));
+  });
+
+  it("accepts the event as a fourth positional and writes against it", async () => {
+    const { playerId } = seedOverlap();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch([
+      "player", "avail", "Randy Rostered", "2026-05-16", "available", "Heart of America Districts",
+    ]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('event="Heart of America Districts"'));
+
+    const { db, sqlite } = openDb();
+    try {
+      const rows = db.select().from(availability).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ playerId, day: "2026-05-16", status: "available" });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("still refuses a fifth positional — the payload count did not become unbounded", async () => {
+    seedOverlap();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch([
+      "player", "avail", "Randy Rostered", "2026-05-16", "available", "Heart of America Districts", "extra",
+    ]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unexpected extra argument"));
+  });
+
+  it("refuses a named event that does not cover the day", async () => {
+    seedOverlap();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch([
+      "player", "avail", "Randy Rostered", "2026-06-20", "available", "Heart of America Districts",
+    ]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("does not cover day"));
   });
 });

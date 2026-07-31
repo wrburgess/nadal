@@ -4,7 +4,7 @@ import { getTeamProfile, resolveTeamTarget } from "../../query/team-profile.js";
 import type { TeamProfile } from "../../query/team-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
-import { formatRecord, formatSlotTendencies } from "../format-profile.js";
+import { formatName, formatRecord, formatSlotTendencies } from "../format-profile.js";
 import { sixMonthsAgo } from "../window.js";
 
 /**
@@ -14,7 +14,7 @@ import { sixMonthsAgo } from "../window.js";
  */
 function formatTeamProfileText(profile: TeamProfile): string {
   const lines = [
-    `${profile.teamName}`,
+    `${formatName(profile.teamName)}`,
     `  home: ${profile.isHome ? "yes" : "no"}`,
     `  record: ${formatRecord(profile.teamRecord)}`,
     `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
@@ -22,7 +22,7 @@ function formatTeamProfileText(profile: TeamProfile): string {
   ];
   for (const member of profile.roster) {
     lines.push(
-      `    ${member.canonicalName} — age: ${member.ageRange ?? "unknown"}` +
+      `    ${formatName(member.canonicalName)} — age: ${formatName(member.ageRange ?? "unknown")}` +
         `   singles: ${formatRecord(member.singlesRecord)} (6mo)` +
         `   doubles: ${formatRecord(member.doublesRecord)} (6mo)` +
         `   slots: ${formatSlotTendencies(member.slotTendencies)}`,

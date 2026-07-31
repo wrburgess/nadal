@@ -116,6 +116,18 @@ tn player avail "Halksworth"     2026-08-28 unavailable
 than creating a second event. `tn player avail` only accepts players on the **designated home
 team** (`tn team home "<your team>"`), by design.
 
+**If a day belongs to two events, name the one you mean.** A league season and a tournament inside
+it both cover the same May days, so `tn player avail` refuses that day rather than guessing, and
+lists the candidates. Add the event as a fourth argument:
+
+```
+tn player avail "Randy Burgess" 2026-05-16 available "Heart of America Districts"
+```
+
+Availability is stored per (player, event, day), so the same player and day can carry a different
+status for each overlapping event — which is what you want when the two are genuinely different
+commitments.
+
 ## Manual test segment (for the HC)
 
 Run these in order against a scratch database and confirm each expectation:
@@ -141,6 +153,10 @@ tn lineup plan "IA/Versteeg/40&Over3.5M"
    `ratingSource` and `slotSource` fields.
 7. `tn report build "<team>"` writes a dossier whose markdown contains a
    **"Predicted lineup (a guess)"** section matching what step 2 printed.
+8. Add a second, overlapping event and confirm the disambiguator works:
+   `tn event add "HOA Spring 2026" league 2026-03-01 2026-06-30` then
+   `tn player avail "<a home-team player>" 2026-05-16 available` must **refuse** and list both
+   events; re-running it with the event name as a fourth argument must succeed.
 
 ## If it refuses
 

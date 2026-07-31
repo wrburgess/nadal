@@ -95,6 +95,16 @@ Planned (spec § Interfaces; rows move up as commands land): `team list`,
 `player list`, `match add`, `event show`,
 `db backup/restore`.
 
+`tn player avail <name> <YYYY-MM-DD> <status> [event]` — the fourth positional is **optional** and
+names which event the day belongs to. It is needed only when the day falls inside more than one
+event's range, which is ordinary rather than exceptional: a district league season runs Mar–Jun and
+a districts tournament sits inside it in May, so every day in that window resolves to two events.
+Without a name that day refuses (listing the candidates and saying to name one) rather than guessing
+which event you meant — the same answer this grammar gives for every other ambiguous target. A name
+supplied for an **unambiguous** day is still checked, not ignored: if it does not cover the day, the
+command refuses. Availability is stored per (player, event, day), so the same player and day can
+legitimately carry a different status for each overlapping event.
+
 `tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` — payload positionals, the same
 shape `tn player avail` uses, so this adds no flags. The date range is **inclusive at both ends**,
 matching the day lookup `tn player avail` resolves its event through, and a single-day event
