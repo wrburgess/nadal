@@ -1,7 +1,11 @@
 import { dbMigrate } from "./commands/db-migrate.js";
+import { mcpServe } from "./commands/mcp-serve.js";
+import { playerAvail } from "./commands/player-avail.js";
+import { playerNote } from "./commands/player-note.js";
 import { playerPull } from "./commands/player-pull.js";
 import { playerShow } from "./commands/player-show.js";
 import { reportBuild } from "./commands/report-build.js";
+import { teamHome } from "./commands/team-home.js";
 import { teamPull } from "./commands/team-pull.js";
 import { teamShow } from "./commands/team-show.js";
 import { logRequest } from "../telemetry/request-log.js";
@@ -17,9 +21,13 @@ export const COMMANDS: Command[] = [
   dbMigrate,
   teamPull,
   teamShow,
+  teamHome,
   playerPull,
   playerShow,
+  playerAvail,
+  playerNote,
   reportBuild,
+  mcpServe,
 ];
 
 export function helpText(): string {

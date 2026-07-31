@@ -128,31 +128,57 @@ describe("renderDossier", () => {
     expect(html.toLowerCase()).toContain("prior meetings");
   });
 
-  it("renders head-to-head rows when headToHead is present", () => {
+  it("renders head-to-head rows when headToHead is present, naming the OPPONENT'S NAME rather than a raw id", () => {
     const dossier = buildDossier({
       team: buildTeamProfile({
-        headToHead: [{ playerId: 1, opponentId: 99, wins: 2, losses: 1, undecided: 0, matches: 3 }],
+        headToHead: [
+          { playerId: 1, opponentId: 99, opponentName: "Nova Norbury", wins: 2, losses: 1, undecided: 0, matches: 3 },
+        ],
       }),
     });
     const html = renderDossier(dossier);
     expect(html).toContain("2-1");
+    expect(html).toContain("vs Nova Norbury");
+    expect(html).not.toContain("player #99");
   });
 
   it("appends an undecided count to a head-to-head row when nonzero", () => {
     const dossier = buildDossier({
       team: buildTeamProfile({
-        headToHead: [{ playerId: 1, opponentId: 99, wins: 1, losses: 0, undecided: 1, matches: 2 }],
+        headToHead: [
+          { playerId: 1, opponentId: 99, opponentName: "Nova Norbury", wins: 1, losses: 0, undecided: 1, matches: 2 },
+        ],
       }),
     });
     const html = renderDossier(dossier);
     expect(html).toContain("1-0 (1 undecided)");
   });
 
+  it("escapes an opponent name that would otherwise inject markup into the rendered HTML", () => {
+    const dossier = buildDossier({
+      team: buildTeamProfile({
+        headToHead: [
+          {
+            playerId: 1,
+            opponentId: 99,
+            opponentName: "<script>alert(1)</script>",
+            wins: 1,
+            losses: 0,
+            undecided: 0,
+            matches: 1,
+          },
+        ],
+      }),
+    });
+    const html = renderDossier(dossier);
+    expect(html).not.toContain("<script>alert(1)</script>");
+  });
+
   it("headToHead present but with no rows for this player renders an explicit none-on-file note", () => {
     const dossier = buildDossier({
       team: buildTeamProfile({
         // A cross pair against a DIFFERENT player id — this dossier's only player never met anyone.
-        headToHead: [{ playerId: 999, opponentId: 1, wins: 0, losses: 0, undecided: 0, matches: 0 }],
+        headToHead: [{ playerId: 999, opponentId: 1, opponentName: "Someone Else", wins: 0, losses: 0, undecided: 0, matches: 0 }],
       }),
     });
     const html = renderDossier(dossier);

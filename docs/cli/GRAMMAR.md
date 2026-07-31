@@ -52,12 +52,16 @@ never be reached by any command.
 | `tn db migrate` | Apply pending schema migrations |
 | `tn team pull` | Pull a team roster and schedule from TennisRecord |
 | `tn team show` | Show a team's roster and match record |
+| `tn team home` | Designate a team as home (our team) for availability, notes, and dossiers |
 | `tn player pull` | Pull a player's ratings and match history from TennisRecord |
 | `tn player show` | Show a player's full profile: ratings trajectory, history, records |
+| `tn player avail` | Record a home-team player's availability for an event day |
+| `tn player note` | Append a captain note about a home-team player or pairing |
 | `tn report build` | Render per-opponent scouting dossiers (HTML + markdown) to disk |
+| `tn mcp serve` | Run the MCP server over stdio, mirroring the CLI grammar as tools |
 
 Planned (spec § Interfaces; rows move up as commands land): `team list`,
-`player note/list`, `match add`, `event show`, `lineup plan`,
+`player list`, `match add`, `event show`, `lineup plan`,
 `db backup/restore`.
 
 `tn report build [sectionals|<team>] [--json]` — `<team>` renders that one team's dossier;

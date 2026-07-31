@@ -1,8 +1,12 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import {
+  availability,
+  captainNotes,
   courtMatchPlayers,
   courtMatches,
+  events,
   players,
   playerAliases,
   ratingObservations,
@@ -126,25 +130,60 @@ describe("getPlayerProfile", () => {
       expect(profile.partnerFrequency).toEqual([]);
       expect(profile.ratingTrajectory).toEqual([]);
       expect(profile.teamMemberships).toEqual([]);
-      // dataGaps still reports even with nothing else on file.
+      // dataGaps still reports even with nothing else on file. `events` still has no writer
+      // anywhere in the codebase; `availability`/`captainNotes` (Tasks 3-4) now DO have writers, so
+      // an empty table for THIS player reads as "empty", never "not-collected" — the exact
+      // distinction Task 5 exists to keep truthful (docs/findings.md's "silent-lie risk").
       expect(profile.dataGaps.events).toBe("not-collected");
-      expect(profile.dataGaps.availability).toBe("not-collected");
-      expect(profile.dataGaps.captainNotes).toBe("not-collected");
+      expect(profile.dataGaps.availability).toBe("empty");
+      expect(profile.dataGaps.captainNotes).toBe("empty");
     } finally {
       sqlite.close();
     }
   });
 
-  it("dataGaps reports events/availability/captain_notes as not-collected — no writer anywhere writes them (docs/findings.md #15)", () => {
+  it("dataGaps reports events as not-collected (no writer anywhere) but availability/captainNotes as merely empty (Task 5: they have writers now — docs/findings.md #15's silent-lie risk)", () => {
     const { db, sqlite } = freshDb();
     try {
       const player = seedPlayer(db, { canonicalName: "Casey Calder" });
       const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
       expect(profile.dataGaps).toEqual({
         events: "not-collected",
-        availability: "not-collected",
-        captainNotes: "not-collected",
+        availability: "empty",
+        captainNotes: "empty",
       });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The defect this guards against (docs/findings.md's "silent-lie risk"): `hasWriter: false`
+  // hardcoded for availability/captainNotes would keep reporting "not collected yet" even once
+  // Tasks 3-4 gave both sections real writers and real data sits in the table — reading as correct
+  // while being false. `count === 0` alone cannot distinguish "no writer" from "writer, zero rows"
+  // (that is the whole point of `hasWriter`), so this has to observe ACTUAL rows landing.
+  it("dataGaps reports has-data for availability/captainNotes once real rows exist for this player (regression: hasWriter must not stay hardcoded false)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const home = db.insert(teams).values({ name: "Home Team" }).returning().get();
+      db.update(teams).set({ isHome: true }).where(eq(teams.id, home.id)).run();
+      const event = db
+        .insert(events)
+        .values({ name: "Event", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .returning()
+        .get();
+      const player = seedPlayer(db, { canonicalName: "Devon Dataworthy" });
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: home.id, eventId: event.id }).run();
+      db.insert(availability)
+        .values({ playerId: player.id, eventId: event.id, day: "2026-08-29", status: "available" })
+        .run();
+      db.insert(captainNotes)
+        .values({ playerId: player.id, note: "Serves big.", createdAt: new Date().toISOString() })
+        .run();
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      expect(profile.dataGaps.availability).toBe("has-data");
+      expect(profile.dataGaps.captainNotes).toBe("has-data");
     } finally {
       sqlite.close();
     }

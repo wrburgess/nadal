@@ -17,6 +17,7 @@ import {
   resolveRealOutputPath,
 } from "../fs/output-root.js";
 import type { Db } from "../ingest/db-types.js";
+import { resolveHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
 import { teams } from "../db/schema.js";
@@ -157,9 +158,19 @@ function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): M
  * member, in the same order as `team.roster` (src/report/types.ts's ordering contract) — the
  * roster table and per-player blocks need ratings/partner data `RosterMemberProfile` does not carry
  * (see that type's doc comment in src/query/team-profile.ts).
+ *
+ * Task 5 (#17): the designated home team (nadal ADR 0001) is passed to `getTeamProfile` as
+ * `versusTeamId`, finally populating spec § Deliverables #1's "prior meetings vs our players" —
+ * except when `teamId` itself IS the home team, since a team's dossier comparing itself against
+ * itself is not a meaningful "prior meetings" section (and would just report every match as a
+ * self-versus-self meeting). With no home team designated at all, `versusTeamId` stays `undefined`
+ * and `getTeamProfile` keeps its existing "not available" `headToHead: null` path — already tested
+ * in src/query/team-profile.ts's own suite, unchanged by this.
  */
 export function buildTeamDossier(db: Db, teamId: number, options: { since: string }): TeamDossier {
-  const team = getTeamProfile(db, teamId, { since: options.since });
+  const homeTeam = resolveHomeTeam(db);
+  const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
+  const team = getTeamProfile(db, teamId, { since: options.since, versusTeamId });
   const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { since: options.since }));
   return { team, players };
 }

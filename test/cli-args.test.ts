@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { globalFlags, parseArgs } from "../src/cli/args.js";
+import { globalFlags, parseArgs, parsePayloadArgs } from "../src/cli/args.js";
 
 describe("parseArgs", () => {
   it("parses a target with no flags", () => {
@@ -47,6 +47,39 @@ describe("parseArgs", () => {
       const parsed = parseArgs(["target", "--json", "--bogus"], [], []);
       expect(parsed.error).toBe("unrecognized flag --bogus");
     });
+  });
+});
+
+describe("parsePayloadArgs", () => {
+  it("collects target plus a fixed number of payload positionals, in order", () => {
+    const parsed = parsePayloadArgs(["Rowan Rushworth", "2026-08-29", "available"], 2);
+    expect(parsed).toEqual({
+      target: "Rowan Rushworth",
+      payload: ["2026-08-29", "available"],
+      flags: {},
+    });
+  });
+
+  it("leaves payload short (not an error here) when fewer tokens than payloadCount are given", () => {
+    const parsed = parsePayloadArgs(["Rowan Rushworth", "2026-08-29"], 2);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.target).toBe("Rowan Rushworth");
+    expect(parsed.payload).toEqual(["2026-08-29"]);
+  });
+
+  it("errors on a token beyond target + payloadCount", () => {
+    const parsed = parsePayloadArgs(["a", "b", "c", "d"], 2);
+    expect(parsed.error).toBe('unexpected extra argument "d"');
+  });
+
+  it("recognizes global flags interleaved with payload positionals", () => {
+    const parsed = parsePayloadArgs(["a", "--json", "b", "c"], 2);
+    expect(parsed).toEqual({ target: "a", payload: ["b", "c"], flags: { json: true } });
+  });
+
+  it("still rejects an undeclared flag", () => {
+    const parsed = parsePayloadArgs(["a", "b", "--bogus"], 1);
+    expect(parsed.error).toBe("unrecognized flag --bogus");
   });
 });
 

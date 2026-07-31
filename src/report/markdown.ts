@@ -73,7 +73,9 @@ function renderPlayerPriorMeetingsRowMarkdown(player: PlayerProfile, headToHead:
   const rows = headToHead.filter((h) => h.playerId === player.identity.playerId);
   const name = escapeMarkdownCell(player.identity.canonicalName);
   if (rows.length === 0) return `**${name}** — Prior meetings vs our players: none on file.`;
-  const items = rows.map((h) => `- vs player #${h.opponentId}: ${formatHeadToHead(h)} (${h.matches} matches)`);
+  const items = rows.map(
+    (h) => `- vs ${escapeMarkdownCell(h.opponentName)}: ${formatHeadToHead(h)} (${h.matches} matches)`,
+  );
   return [`**${name}** — Prior meetings vs our players:`, ...items].join("\n");
 }
 

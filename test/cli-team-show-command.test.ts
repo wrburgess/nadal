@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { runMigrations, openDb } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
+import { setHomeTeam } from "../src/query/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 function requestLogRows(dbPath: string) {
@@ -53,6 +54,25 @@ describe("tn team show (end-to-end via dispatch)", () => {
     const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
     expect(parsed.teamName).toBe("Team A");
     expect(parsed.roster).toHaveLength(1);
+    expect(parsed.isHome).toBe(false);
+  });
+
+  it("prints a home: yes/no line, reflecting the designated home team (Task 2: tn team home / #37)", async () => {
+    const home = seedTeamWithRoster("Home Team", []);
+    const other = seedTeamWithRoster("Other Team", []);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    setHomeTeam(db, home.id);
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await dispatch(["team", "show", home.name]);
+    await dispatch(["team", "show", other.name]);
+
+    const printedForHome = logSpy.mock.calls[0]?.[0] as string;
+    const printedForOther = logSpy.mock.calls[1]?.[0] as string;
+    expect(printedForHome).toContain("home: yes");
+    expect(printedForOther).toContain("home: no");
   });
 
   it("--quiet emits nothing on stdout and preserves exit code 0", async () => {

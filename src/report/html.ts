@@ -64,10 +64,6 @@ function renderTeamRecordHtml(dossier: TeamDossier): string {
   );
 }
 
-/** Head-to-head rows for one player, filtered from the team's cross-pair list — an opponent id with
- * no canonical name on hand (Task 4/#32's knowingly-deferred identity-perf tradeoff means the
- * dossier assembly does not resolve every opponent id to a name) falls back to `player #<id>`, the
- * same convention `player-profile.ts` already uses for an unresolved partner id. */
 /** `TeamCrossHeadToHead` carries `wins`/`losses`/`undecided`/`matches` but not `excludedUndated` —
  * unlike `windowedRecord`, `headToHead` (derive.ts) never excludes a row, it just counts it, so
  * there is nothing for that field to mean here. `formatRecord` therefore does not apply; this is
@@ -88,7 +84,10 @@ function renderPlayerPriorMeetingsRowHtml(player: PlayerProfile, headToHead: Tea
     return `<p><strong>${name}</strong> — Prior meetings vs our players: none on file.</p>`;
   }
   const items = rows
-    .map((h) => `<li>vs player #${h.opponentId}: ${escapeHtml(formatHeadToHead(h))} (${h.matches} matches)</li>`)
+    .map(
+      (h) =>
+        `<li>vs ${escapeHtml(h.opponentName)}: ${escapeHtml(formatHeadToHead(h))} (${h.matches} matches)</li>`,
+    )
     .join("");
   return `<div><strong>${name}</strong> — Prior meetings vs our players:<ul>${items}</ul></div>`;
 }

@@ -5,6 +5,7 @@ import { eq, or } from "drizzle-orm";
 import { players, teamMatches, teamMemberships, teams } from "../db/schema.js";
 import { findTeamByName } from "../ingest/identity.js";
 import type { Db } from "../ingest/db-types.js";
+import { resolveHomeTeam } from "./home-team.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
 import { headToHead, slotTendencies, teamMatchRecord, windowedRecord } from "./derive.js";
 import type { HeadToHeadResult, SlotTendency, TeamMatchRecordResult, TeamMatchRow, WindowedRecordResult } from "./types.js";
@@ -47,11 +48,25 @@ export type RosterMemberProfile = {
   slotTendencies: SlotTendency[];
 };
 
-export type TeamCrossHeadToHead = HeadToHeadResult & { playerId: number };
+export type TeamCrossHeadToHead = HeadToHeadResult & {
+  playerId: number;
+  /** The opposing player's canonical name — resolved here (this is the DB-access assembly layer,
+   * not `derive.ts`'s pure `headToHead`), so a renderer never has to print a raw `opponentId`.
+   * Falls back to `player #<id>` only if the id somehow has no matching roster row (should not
+   * happen in practice: `opponentId` always comes from `versusPlayerIds`, which IS the query this
+   * name map is built from), matching the existing `player-profile.ts` convention for an
+   * unresolved partner id. */
+  opponentName: string;
+};
 
 export type TeamProfile = {
   teamId: number;
   teamName: string;
+  /** Whether THIS team is the currently-designated home team (nadal ADR 0001,
+   * `src/query/home-team.ts`'s `resolveHomeTeam`) — `false` both when a different team is home and
+   * when no team is designated at all; a caller that needs to distinguish those two reads
+   * `resolveHomeTeam` directly. */
+  isHome: boolean;
   /** Alphabetical by canonical name (deterministic regardless of membership insertion order),
    * tie-broken by playerId — a member with no `team_memberships` row is never included, since the
    * roster IS that query. */
@@ -83,15 +98,22 @@ export function getTeamProfile(
       (a, b) => a.canonicalName.toLowerCase().localeCompare(b.canonicalName.toLowerCase()) || a.playerId - b.playerId,
     );
 
-  const versusPlayerIds =
+  const versusPlayerRows =
     options.versusTeamId === undefined
       ? []
       : db
-          .select({ playerId: teamMemberships.playerId })
+          .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName })
           .from(teamMemberships)
+          .innerJoin(players, eq(teamMemberships.playerId, players.id))
           .where(eq(teamMemberships.teamId, options.versusTeamId))
-          .all()
-          .map((r) => r.playerId);
+          .all();
+  const versusPlayerIds = versusPlayerRows.map((r) => r.playerId);
+  // Resolved once here (DB access lives in this assembly layer, not in derive.ts's pure
+  // `headToHead`) so every cross-pair row below can carry the opponent's NAME, not just their id —
+  // a rendered dossier prints "vs player #<id>" otherwise (a raw database id in a printed courtside
+  // binder), which was a latent, untested defect until Task 5 (#17) wired a real `versusTeamId` for
+  // the first time in production.
+  const versusPlayerNamesById = new Map(versusPlayerRows.map((r) => [r.playerId, r.canonicalName]));
 
   const allRelevantPlayerIds = [...rosterPlayerRows.map((r) => r.playerId), ...versusPlayerIds];
   const courtRows = courtMatchRowsForPlayers(db, allRelevantPlayerIds);
@@ -125,12 +147,17 @@ export function getTeamProfile(
     options.versusTeamId === undefined
       ? null
       : roster.flatMap((member) =>
-          headToHead(courtRows, member.playerId, versusPlayerIds).map((h) => ({ playerId: member.playerId, ...h })),
+          headToHead(courtRows, member.playerId, versusPlayerIds).map((h) => ({
+            playerId: member.playerId,
+            opponentName: versusPlayerNamesById.get(h.opponentId) ?? `player #${h.opponentId}`,
+            ...h,
+          })),
         );
 
   return {
     teamId: teamRow.id,
     teamName: teamRow.name,
+    isHome: resolveHomeTeam(db)?.id === teamRow.id,
     roster,
     teamRecord: teamMatchRecord(teamMatchRows, teamId, { since: options.since }),
     slotTendencies: aggregatedSlotTendencies,

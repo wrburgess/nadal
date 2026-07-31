@@ -25,7 +25,13 @@ export const teams = sqliteTable("teams", {
   district: text("district"),
   tennislinkUrl: text("tennislink_url"),
   tennisrecordUrl: text("tennisrecord_url"),       // durable re-pull handle (spec § Ingestion)
-});
+  // "Our team" designation (nadal ADR 0001) — nullable rather than a plain boolean default-false,
+  // so a partial unique index (below) can enforce "at most one true row" at the DATABASE level,
+  // not just in application code (rules/backend.md: "a validation is not a guarantee under
+  // concurrency"). `src/query/home-team.ts` is the only writer; it always clears any prior flag
+  // and sets the new one inside a single transaction, so the index can never observe two set rows.
+  isHome: integer("is_home", { mode: "boolean" }),
+}, (t) => [uniqueIndex("team_home_unique").on(t.isHome).where(sql`is_home = 1`)]);
 
 export const events = sqliteTable("events", {
   id: integer("id").primaryKey({ autoIncrement: true }),

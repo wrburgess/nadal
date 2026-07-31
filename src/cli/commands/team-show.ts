@@ -15,6 +15,7 @@ import { sixMonthsAgo } from "../window.js";
 function formatTeamProfileText(profile: TeamProfile): string {
   const lines = [
     `${profile.teamName}`,
+    `  home: ${profile.isHome ? "yes" : "no"}`,
     `  record: ${formatRecord(profile.teamRecord)}`,
     `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
     "  roster:",
