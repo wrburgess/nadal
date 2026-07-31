@@ -86,6 +86,12 @@ const OPPONENT_SOURCE_URL =
  * than matching on some other error that happened to reach stderr. */
 const NETWORK_STUB_MESSAGE = "dry run must never touch the network — fetchPage was called";
 
+/** The home page's one local-schedule fixture. US format on the page (what `parseUsDate` reads);
+ * ISO is what lands in `team_matches.played_on`. Deliberately not the scorecard's `2025-04-12`, so
+ * the schedule-derived team match and the `match add` one remain separately assertable. */
+const SCHEDULED_FIXTURE_US_DATE = "3/15/2025";
+const SCHEDULED_FIXTURE_ISO_DATE = "2025-03-15";
+
 const EVENT_NAME = "Springfield Sectionals";
 const AVAIL_DAY = "2026-08-28";
 const CAPTAIN_NOTE_TEXT = "Focus returns to the ad court — forehand is the pattern to exploit.";
@@ -171,10 +177,29 @@ describe("dry run: 2025 Tulsa data through the whole tn pipeline (issue #19)", (
   async function seedRosters(): Promise<void> {
     expect(await dispatch(["db", "migrate"])).toBe(0);
 
+    // The home page carries a REAL schedule row. A header-only schedule table (the helper's
+    // default) makes `parseSchedule` returning `[]` and `parseSchedule` being outright broken
+    // indistinguishable — a whole-pipeline dry run built only on header-only pages would pass with
+    // the schedule parser gutted, while a live pull silently dropped every fixture (independent
+    // Reviewer finding, PR #58 round 1). The opponent named here is the team the NEXT pull creates
+    // by name, so this row resolves onto that same team rather than minting a phantom third one,
+    // and its date is deliberately NOT the scorecard's 2025-04-12 so the schedule-derived team
+    // match and the `match add` one stay separately assertable.
     const homePath = writeTempFile(
       workDir,
       "home-team.html",
-      buildRosterPage({ teamName: HOME_TEAM_NAME, players: HOME_ROSTER_PLAYERS }),
+      buildRosterPage({
+        teamName: HOME_TEAM_NAME,
+        players: HOME_ROSTER_PLAYERS,
+        schedule: [
+          {
+            date: SCHEDULED_FIXTURE_US_DATE,
+            time: "9:00 AM",
+            opponent: OPPONENT_TEAM_NAME,
+            site: "Springfield Racquet Club",
+          },
+        ],
+      }),
     );
     expect(
       await dispatch(["team", "pull", "tr:home", "--from", homePath, "--source-url", HOME_SOURCE_URL]),
@@ -293,12 +318,36 @@ describe("dry run: 2025 Tulsa data through the whole tn pipeline (issue #19)", (
       expect(noteRows).toHaveLength(1);
       expect(noteRows[0]?.note).toBe(CAPTAIN_NOTE_TEXT);
 
-      // the scorecard's five court matches, persisted under one team match.
+      // The home page's local-schedule row parsed and landed as its own team match. This is the
+      // assertion that makes a broken `parseSchedule` fail the dry run instead of passing it: with
+      // the parser gutted (or the schedule table left header-only) there is no such row at all.
+      const scheduledMatch = db
+        .select()
+        .from(teamMatches)
+        .where(
+          and(
+            eq(teamMatches.homeTeamId, homeTeamRow!.id),
+            eq(teamMatches.visitingTeamId, oppTeamRow!.id),
+            eq(teamMatches.playedOn, SCHEDULED_FIXTURE_ISO_DATE),
+          ),
+        )
+        .all();
+      expect(scheduledMatch).toHaveLength(1);
+      // ...and it resolved onto the SAME opponent team the next pull creates, rather than minting a
+      // phantom third team from the opponent cell's text.
+      expect(db.select().from(teams).all()).toHaveLength(2);
+
+      // the scorecard's five court matches, persisted under one team match of their own — matched
+      // on the scorecard's own date so the schedule row above cannot be mistaken for it.
       const teamMatchRows = db
         .select()
         .from(teamMatches)
         .where(
-          and(eq(teamMatches.homeTeamId, homeTeamRow!.id), eq(teamMatches.visitingTeamId, oppTeamRow!.id)),
+          and(
+            eq(teamMatches.homeTeamId, homeTeamRow!.id),
+            eq(teamMatches.visitingTeamId, oppTeamRow!.id),
+            eq(teamMatches.playedOn, scorecardPayload.playedOn),
+          ),
         )
         .all();
       expect(teamMatchRows).toHaveLength(1);

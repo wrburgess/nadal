@@ -42,7 +42,12 @@ current."
 - You know which teams are already on file. There is no `tn team list` yet (`docs/cli/GRAMMAR.md`'s
   *Planned* section, not the 13 shipped commands) — enumerate directly:
   ```sh
-  sqlite3 "${TN_DB_PATH:-data/nadal.db}" "select name, tennisrecord_url, is_home from teams order by name"
+  DB="${TN_DB_PATH:-data/nadal.db}"
+  # Refuse before touching anything: sqlite3 CREATES an empty database for a path that does not
+  # exist, so a typo in TN_DB_PATH would otherwise print "no teams", read as "nothing to refresh",
+  # and leave a decoy file that a later `tn db migrate` happily migrates. Check first.
+  [ -f "$DB" ] || { echo "no database at $DB — check TN_DB_PATH" >&2; return 2>/dev/null || exit 1; }
+  sqlite3 "$DB" "select name, tennisrecord_url, is_home from teams order by name"
   ```
 - You know which players' dossiers need NTRP/WTN specifically (step 4 below), since that path is
   manual per player, not a blanket re-pull.
@@ -60,11 +65,36 @@ job — see [db-migration-recovery.md](db-migration-recovery.md).
 
 ### 2. Re-pull every already-scouted team, live, cascading rosters
 
-For each team the query in *Before you start* listed:
+**Do not paste a team name into a command template.** A team name is *scraped data* — it comes from
+TennisRecord and lands in the database unaltered — and the enumeration query above prints it raw. A
+name containing a double quote closes the quoted argument, and everything after it is read by your
+shell as further commands: substituting `A"; touch /tmp/pwn; #` into `tn team pull "<name>"` runs
+`touch`. That is this repo's own standing lesson (`docs/findings.md`, the #56/#57 entry) pointed at
+a runbook instead of an error message — handing a human something executable makes the payload the
+shell's problem, and stored data must never become syntax.
 
+Let the shell carry each name as a **value**, never as text you retype into a command:
+
+```sh
+DB="${TN_DB_PATH:-data/nadal.db}"
+sqlite3 "$DB" "select name from teams order by name" |
+  while IFS= read -r team; do
+    tn team pull "$team" --players
+  done
 ```
-tn team pull "<team name>" --players
+
+`"$team"` is expanded as a single argument and is never re-parsed as syntax, so no name can inject
+anything, whatever characters it holds. If you would rather drive it one team at a time, keep the
+same property — assign first, then run:
+
+```sh
+team='Paste the name between these single quotes'
+tn team pull "$team" --players
 ```
+
+(The one input this does not handle is a team name containing a literal newline, which the loop
+reads as two records. That fails *closed* — `tn` reports an unresolved target for both halves and
+writes nothing — so it is a lookup failure, not an injection. See *Known limitations*.)
 
 No `--from`/`--source-url` here — that pair replays a **previously saved** page (what the dry run
 and this repo's own tests use to stay offline); leaving both off is what makes this command fetch
@@ -89,8 +119,12 @@ row with no profile link on the page at all, which cascades can never reach).
 
 ### 3. Pull any player individually who needs it
 
-```
-tn player pull "<player name>"
+Same rule as step 2 — a player name is scraped data too, so assign it before you use it rather than
+typing it inside the command:
+
+```sh
+player='Paste the name between these single quotes'
+tn player pull "$player"
 ```
 
 Expected: `player pull status=ok player="<name>" matches=N archived="<raw dir>/tennisrecord/….html"`,
@@ -108,8 +142,9 @@ whose dossier needs NTRP or WTN, run the full procedure in
 
 A readback distinct from trusting each command's own `status=ok`:
 
-```
-tn team show "<team name>"
+```sh
+team='Paste the name between these single quotes'
+tn team show "$team"
 ```
 
 Read the roster block: every player you expect to still be on the team should be listed (someone

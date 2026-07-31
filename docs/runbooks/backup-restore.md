@@ -37,6 +37,15 @@ case "$BAK" in
   /*) : ;;
   *) echo "STOP: need an ABSOLUTE path for the backup; got '$BAK'" >&2; exit 1 ;;
 esac
+# The dot-command below re-parses its argument with SQLite's OWN tokenizer, which the outer shell
+# quoting cannot protect. Refuse the two characters that tokenizer would read as syntax rather than
+# as pathname, BEFORE writing anything. Without this the backup silently lands somewhere other than
+# $BAK (or nowhere), and step 2's verification then opens a path with no file at it — where sqlite3
+# helpfully creates an empty database whose `integrity_check` cheerfully answers `ok`.
+case "$BAK" in
+  *'"'*|*'
+'*) echo "STOP: backup path must not contain a double quote or newline; got '$BAK'" >&2; exit 1 ;;
+esac
 
 sqlite3 "$DB" ".backup \"$BAK\""
 ```
@@ -110,12 +119,20 @@ case "$TARGET" in
   /*) : ;;
   *) echo "STOP: need an ABSOLUTE path; got '$TARGET'" >&2; exit 1 ;;
 esac
+# Same fail-closed check as step 1, and it matters MORE here: `$BAK` goes into `.restore`'s own
+# tokenizer, and the operation on the other side of it overwrites `$TARGET`. Refuse before the
+# destructive step, never after it.
+case "$BAK" in
+  *'"'*|*'
+'*) echo "STOP: backup path must not contain a double quote or newline; got '$BAK'" >&2; exit 1 ;;
+esac
 
 sqlite3 "$TARGET" ".restore \"$BAK\""
 ```
 
 `.restore` is `.backup`'s mirror and carries the identical inner-quoting rule above — double-quote
-`$BAK` inside the dot-command string, for the same reason. **`sqlite3 "$TARGET" …` creates
+`$BAK` inside the dot-command string, for the same reason, and refuse the characters that rule
+cannot survive before running anything. **`sqlite3 "$TARGET" …` creates
 `$TARGET` if it does not already exist** — the same open-creates-a-file behavior step 2 warned
 about, except here it is the point: `.restore` then overwrites whatever schema that connection just
 opened (or created) with the backup's. If `$TARGET` is a database still in use by a running

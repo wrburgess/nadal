@@ -47,15 +47,32 @@ export type RosterPageOptions = {
   players: string[];
   seasonName?: string;
   leagueContext?: string;
+  /**
+   * Local-schedule rows to emit. Omitted/empty renders a HEADER-ONLY schedule table, which
+   * `parseSchedule` tolerates — useful where a test needs a team with no fixtures at all.
+   *
+   * Supplying rows is what makes a pull actually exercise `parseSchedule`'s row path (date parsing,
+   * the 5-cell width contract, opponent resolution, `mid=` extraction). Name an opponent that
+   * ALREADY exists when you do not want the pull to mint a new team for it — every schedule row's
+   * opponent cell resolves to a `teams` row, so an arbitrary name creates one.
+   */
+  schedule?: { date: string; time: string; opponent: string; site: string; result?: string }[];
 };
 
 /**
  * Synthesizes a minimal, from-scratch TennisRecord team page: a 3-row header block
  * (`src/parsers/tennisrecord/team.ts`'s `parseHeader` reads league context / season / team name,
  * one per row), a roster table satisfying its exact column and row-width contract
- * (`ROSTER_COLUMNS`/`ROSTER_ROW_CELLS`), and a HEADER-ONLY local schedule table — zero body rows,
- * which `parseSchedule` tolerates — so pulling this page never creates a phantom opponent team the
- * way replaying the real captured `team.html` fixture's own ten-row schedule would.
+ * (`ROSTER_COLUMNS`/`ROSTER_ROW_CELLS`), and a local schedule table carrying whatever
+ * `options.schedule` asks for — defaulting to HEADER-ONLY (zero body rows, which `parseSchedule`
+ * tolerates) so a caller that wants a team with no fixtures does not mint phantom opponent teams
+ * the way replaying the real captured `team.html` fixture's own ten-row schedule would.
+ *
+ * Defaulting to header-only is a convenience, NOT the right choice for a pipeline test: with zero
+ * schedule rows, `parseSchedule` returning `[]` and `parseSchedule` being outright broken are
+ * indistinguishable, so a dry run built only on header-only pages cannot detect a schedule-parser
+ * regression at all (independent Reviewer finding, PR #58). Pass `schedule` when the point is to
+ * exercise the pipeline.
  *
  * Built from scratch rather than mutating `team.html` (issue #19's dry run: "aligning the
  * payload's names with a synthesized roster page is the friction point of this whole task"). The
@@ -80,6 +97,19 @@ export function buildRosterPage(options: RosterPageOptions): string {
           <td>3-3</td>
           <td>4.05</td>
           <td></td>
+        </tr>`,
+    )
+    .join("\n");
+
+  const scheduleRows = (options.schedule ?? [])
+    .map(
+      (row) => `
+        <tr>
+          <td>${row.date}</td>
+          <td>${row.time}</td>
+          <td>${row.opponent}</td>
+          <td>${row.site}</td>
+          <td>${row.result ?? ""}</td>
         </tr>`,
     )
     .join("\n");
@@ -114,6 +144,7 @@ export function buildRosterPage(options: RosterPageOptions): string {
           <th>Match Site</th>
           <th>Result</th>
         </tr>
+        ${scheduleRows}
       </table>
     </div>
   </body></html>`;
