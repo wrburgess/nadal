@@ -19,22 +19,115 @@ missed the old row and inserted a second one carrying the identical URL. Migrati
 partial unique index on `teams.tennisrecord_url` (`WHERE tennisrecord_url IS NOT NULL`) to make that
 column a real source identity going forward — and a database that already has such a pair fails the
 `CREATE UNIQUE INDEX` itself. `runMigrations()` (`src/db/client.ts`) catches exactly this failure and
-rethrows it naming the cause and this recovery, rather than surfacing SQLite's bare "UNIQUE
-constraint failed: teams.tennisrecord_url".
+rethrows it naming the cause, the database that failed, and this runbook, rather than surfacing
+SQLite's bare "UNIQUE constraint failed: teams.tennisrecord_url".
 
-**Recovery is one line. It moves the database aside rather than deleting it** — substitute the path
-the error message names, which is the database that actually failed (`TN_DB_PATH` if you set it,
-`data/nadal.db` otherwise). The error prints this command with your real path already filled in:
+**Recovery is one line. It moves the database aside rather than deleting it.** The error names the
+database that actually failed — `TN_DB_PATH` if you set it, `data/nadal.db` otherwise — as an
+**absolute** path.
+
+**Put the path in a variable; never paste it into quotes, and never use the bare default.**
 
 ```sh
-mv -i -- '/abs/path/to/nadal.db' '/abs/path/to/nadal.db.pre-0009.bak' && tn db migrate
+# The error named the database. Paste THAT path — do not let the shell pick one. A TN_DB_PATH
+# left over in this shell may point somewhere else entirely, and preferring it would move and
+# rebuild an unrelated database while the broken one stays broken.
+printf 'paste the ABSOLUTE path the error named: '; IFS= read -r DB || DB=
+
+case "$DB" in
+  /*) export TN_DB_PATH="$DB"   # binds EVERY `tn` below — migrate, re-pull AND restore.
+                               # A one-off `TN_DB_PATH="$DB" tn db migrate` binds only
+                               # that child process; the restore would then write the
+                               # default while appearing to succeed.
+      mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
+  *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
+esac
 ```
 
-The command the error prints always uses **absolute** paths, so you can run it from wherever you are
-standing, and neither argument can be mistaken for an option even if you set `TN_DB_PATH` to
-something dash-prefixed. `-i` refuses to overwrite silently, and `--` ends option parsing — belt and
-braces on top of the absolute paths. The backup name is also chosen to be one that does not already
-exist, so recovering **twice** cannot destroy the first backup.
+`export TN_DB_PATH="$DB"` is not decoration, and **`export` rather than a one-off prefix** is the
+load-bearing part. `tn` resolves its database from `TN_DB_PATH` or the `data/nadal.db` default —
+**never** from your shell's `$DB`. So a bare `tn db migrate` after the move rebuilds the default and
+leaves the database you moved aside missing (verified: it created `data/nadal.db` while the selected
+file stayed 0 bytes). And a one-off `TN_DB_PATH="$DB" tn db migrate` fixes only *that* command: the
+re-pull and every restore step below would still write the default, succeeding all the way while the
+rebuilt database stays empty. Because the export step *is* correctly bound to `$BAK`, that failure is
+especially deceptive — you would export the right data and restore it into the wrong place.
+
+**Stay in this shell for everything below.** If you open a new one, re-run the `export`.
+
+The rest of these forms exist because the obvious shortcuts are each wrong, and each was caught by
+the Codex adversarial review of #56 after this runbook shipped it:
+
+- **Do not paste the path into a single-quoted template.** A perfectly legal
+  `TN_DB_PATH=/tmp/O'Brien.db` yields `mv -i -- '/tmp/O'Brien.db' …`, whose apostrophe closes the
+  quote — the command fails outright at best, and a crafted name can make it parse as something else.
+  `IFS= read -r` takes the line **verbatim**, so there is no quoting to get right at all: paste a path
+  with spaces, apostrophes or backslashes and it lands in `$DB` unchanged. This one is pointed: #56
+  removed a shell-quoting surface from the code and promptly recreated it as an *instruction*.
+- **Do not fall back to `data/nadal.db`.** That default is **relative**, and `dbPath()` resolves it
+  against the working directory of the process — so it names whatever `data/nadal.db` sits under
+  *your current* directory, which need not be the one the failed run used. The error deliberately
+  prints an **absolute** path for exactly this reason; use that, not the default. (Recovering from
+  the repo root after a run that failed in `/tmp/a` would otherwise move `<repo>/data/nadal.db` and
+  leave the broken database untouched — the wrong-file class again, one layer further out.)
+
+The error deliberately does **not** print this command filled in for you, though it used to
+(issue #56). Emitting it meant `src/db/client.ts` permanently owned a shell-quoting surface, a
+filesystem-race surface, an encoding surface and a platform surface — and that one line produced a
+defect in **six of the eleven** adversarial review rounds on PR #52. The command lives here instead,
+in markdown, where no sanitizer eats it and no encoding question arises.
+
+The consequence is that the safeguards the emitted command used to apply on your behalf are now
+yours to apply. Every one of them is here because it caught a real defect, so none is decoration:
+
+- **`"$DB"`, double-quoted, never a pasted path.** Double quotes stop word-splitting and globbing
+  while leaving the value untouched, so a space *or an apostrophe* in the path is safe.
+- **Keep `-i`.** It refuses to overwrite silently.
+- **Keep `--`.** It ends option parsing, which is what protects a dash-prefixed `TN_DB_PATH` — the
+  error's own path is absolute and so can never look like an option, but `$DB` above is whatever you
+  set, so the terminator is doing real work here.
+- **Check the backup name is not already taken** before running it: `ls "$DB".pre-0009*`. If one
+  exists from an earlier recovery, use a different suffix. Overwriting it destroys the captain notes
+  and availability saved by the *previous* failure — the exact data this whole procedure exists to
+  protect, and `-i` will prompt rather than silently clobber if you forget.
+- **`$DB` comes from the error, not from the shell** — that ordering is the point. An earlier draft
+  preferred an already-set `TN_DB_PATH`, and only told you to compare it against the error *after*
+  the move: a stale value pointing at a different database would have displaced that one and left
+  the broken one untouched. Prompting first makes the comparison structural instead of advisory.
+
+**If the error says `(path escaped …)` and the path contains `\u{…}` sequences**, those are escapes
+the error produced, not characters in the filename: the real path holds something that cannot be
+shown literally. Two things follow.
+
+First, **do not retype the escape into a shell** — it would name a different file, which is the whole
+reason the error escapes it. Move the database aside with a file manager, or with `node -e` using the
+real string, then re-run `tn db migrate`.
+
+Second, **read the escape off the `--json` payload, not off the summary line.** The one-line
+`key=value` summary escapes backslashes inside its quoted field, so a path rendered `…we\u{A}ird.db`
+appears there as `…we\\u{A}ird.db` — doubled, and one un-escaping away from being misread.
+
+**Redirect stderr, or you will pipe an empty stream.** A *failed* `db migrate` writes its payload to
+**stderr**, not stdout (`emitSummary` routes every non-`ok` result there), so the obvious
+`tn db migrate --json | jq …` silently gives you nothing:
+
+```sh
+tn db migrate --json 2>&1 | grep -m1 '^{' | jq -r .message
+```
+
+Two pieces, each earning its place (both found by the Codex adversarial review of #56):
+
+- **`2>&1`** — without it you pipe an empty stream. A *failed* run writes its payload to stderr, so
+  the obvious `tn db migrate --json | jq …` silently yields nothing. This runbook shipped it that
+  way, and since this was the only route offered for reading an escaped path, it blocked that
+  recovery entirely.
+- **`grep -m1 '^{'`** — merging stderr can merge in *more than* the payload. A duplicate-URL failure
+  emits exactly one stderr line today (checked), because the database opened fine and so telemetry's
+  own write succeeds. But if telemetry also fails — a full disk, a read-only directory, precisely the
+  degraded conditions someone reads a recovery runbook in — a plain-text
+  `telemetry: request_log write failed: …` lands on the same stream, and `jq` errors after the first
+  object. Taking the first `{`-line is one pipe stage and removes the dependency on that never
+  happening.
 
 Deleting would work too — `tn db migrate` only needs the file gone — but there is no reason to make
 the recovery destructive, and keeping the backup is what makes the export step below possible
@@ -68,11 +161,41 @@ which sits *between* #49's `0006` (`1785511384473`) and its `0007` (`17855158279
 
 So you end up with the roster-retirement columns missing *and* a failed migration.
 
-**Recovery is the same one line, and losing the database costs nothing by design:**
+**Recovery is the same one line, and losing the database costs nothing by design** — but read the
+next paragraph before running it, because this failure gives you less to work with than the one
+above.
+
+This error is **rethrown unchanged**: it does not match `runMigrations`' duplicate-URL predicate, so
+it never passes through the message that names the database. Unlike the case above, **the error does
+not tell you which file failed.** It is `TN_DB_PATH` if you set it, `data/nadal.db` otherwise —
+resolve that to an absolute path yourself, and apply every safeguard from the first section (`-i`,
+`--`, both paths quoted, a backup name that is not already taken):
 
 ```sh
-mv -i -- 'data/nadal.db' 'data/nadal.db.pre-0009.bak' && tn db migrate
+# Unlike the first recovery, THIS error does not name the database — so the shell's TN_DB_PATH is
+# the best available signal. Confirm it is the one you were actually using before running this:
+# `echo "${TN_DB_PATH:-data/nadal.db}"`. If it is not, paste the right absolute path at the prompt.
+case "${TN_DB_PATH:-}" in
+  /*) DB="$TN_DB_PATH" ;;
+  *)  printf 'absolute path to the database that failed: '
+      IFS= read -r DB || DB= ;;
+esac
+
+case "$DB" in
+  /*) export TN_DB_PATH="$DB"   # binds EVERY `tn` below — migrate, re-pull AND restore.
+                               # A one-off `TN_DB_PATH="$DB" tn db migrate` binds only
+                               # that child process; the restore would then write the
+                               # default while appearing to succeed.
+      mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
+  *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
+esac
 ```
+
+**Do not run that line with a literal `data/nadal.db` in it while `TN_DB_PATH` is set.** You would
+move an unrelated database aside while the one that actually failed stays broken — the same
+wrong-file class as the `rm data/nadal.db` this runbook's first draft shipped (issue #46, Codex
+round 1, rated critical). This section carried a hardcoded `data/nadal.db` until the Codex
+adversarial review of #56 found it here, one layer down from where that finding was fixed.
 
 Then re-pull. Read *General note on data at risk* below **first** if you had recorded captain notes
 or availability on that branch.
@@ -90,8 +213,10 @@ at the time of writing.
 Covered in [agent-chat-over-mcp.md](agent-chat-over-mcp.md), in its own "If `tn db migrate` fails
 with..." section — only reachable on a database migrated on a specific pre-merge branch (#17 PR A),
 and closed permanently for every database created after that merge. That section predates this one
-and still writes the recovery as `rm`; prefer the `mv` form above for it too — the end state is
-identical (`tn db migrate` only needs the file gone) and the backup costs nothing.
+and used to write the recovery as a hardcoded `rm data/nadal.db`; #56 brought it onto the same
+non-destructive, path-substituted `mv` form used here, for the same two reasons — the end state is
+identical (`tn db migrate` only needs the file gone), and a hardcoded path names the wrong database
+the moment `TN_DB_PATH` is set.
 
 ## General note on data at risk
 
@@ -116,38 +241,78 @@ a `select *` dump is unrestorable by construction: the numbers in it will point 
 Events must carry `kind`, `starts_on` and `ends_on` too, because those are the arguments
 `tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` requires to recreate one.
 
-`data/nadal.db.pre-0009.bak` below stands in for the backup path — use the one the recovery command
-actually named, which is absolute and may not be under `data/` at all if you set `TN_DB_PATH`.
+**Point `BAK` at the backup you actually created**, and note that the suffix depends on *which*
+recovery you ran — this block is shared by both:
+
+| Recovery | Backup suffix |
+|---|---|
+| duplicate-URL, on this page | `.pre-0009.bak` |
+| `duplicate column name: is_home`, in [agent-chat-over-mcp.md](agent-chat-over-mcp.md) | `.pre-0005.bak` |
+
+So `BAK` is read rather than computed. A *wrong* path is worse than a broken one here: `sqlite3`
+**creates** an empty database at a path that does not exist, so a mistyped or wrong-suffix backup
+name yields four empty CSVs and no error — which reads as "there was nothing to restore" at the
+exact moment that conclusion is most costly. This guard took **four** attempts, and every failed one looked right. They are listed because the
+progression is the actual lesson:
+
+1. `test -s "$BAK" || { echo …; }` — prints its warning and **exits 0**, so execution continued
+   straight into the sqlite3 calls it existed to stop (round 4).
+2. Wrapping those calls in `if test -s "$BAK"` — but `test -s` only proves "a non-empty filesystem
+   object": it is true for a **directory** and for any text file. And since a shell redirection
+   **truncates its target before the command runs**, four empty CSVs appeared even though every
+   query failed (round 5).
+3. Probing with `sqlite3 "$BAK" 'select count(*) from sqlite_master'` — which **creates** a database
+   at a path that does not exist, then reports the empty one it just made as perfectly readable. The
+   guard against a false-empty export had become a way to manufacture one. It survived a round of
+   testing because the missing-backup case used a path whose *parent directory* did not exist, so it
+   failed for a reason other than the one under test (round 6).
+4. `test -f` **first**, then the SQLite probe, then publish into a directory of its own.
+
+Two general shapes worth carrying off this page. A guard that *opens* the thing it is validating is
+not a read-only guard, and SQLite in particular treats "open" as "create". And a fixture that makes
+the case fail for the wrong reason will pass a guard that does not work.
 
 ```sh
-# 0. The home team and the events — without these, steps below have nothing to attach to.
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
-  select name from teams where is_home = 1" > home-team-backup.csv
+printf 'backup path: '; IFS= read -r BAK || BAK=   # verbatim — quotes/apostrophes need no escaping
 
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
-  select name, kind, starts_on, ends_on
-  from events
-  order by starts_on" > events-backup.csv
-
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
-  select p.canonical_name        as player,
-         pp.canonical_name       as pair_player,
-         n.note,
-         n.created_at
-  from captain_notes n
-  join players p        on p.id  = n.player_id
-  left join players pp  on pp.id = n.pair_player_id
-  order by n.created_at" > captain-notes-backup.csv
-
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
-  select p.canonical_name as player,
-         e.name           as event,
-         a.day,
-         a.status
-  from availability a
-  join players p on p.id = a.player_id
-  join events  e on e.id = a.event_id
-  order by a.day" > availability-backup.csv
+# `test -f` FIRST, and it is load-bearing: sqlite3 CREATES a database at a path that does not
+# exist, so probing a missing backup would manufacture an empty one and then happily accept it.
+# `test -s` alone is not enough either — it is true for a directory and for any text file.
+if ! test -f "$BAK" || ! sqlite3 "$BAK" 'select count(*) from sqlite_master' >/dev/null 2>&1; then
+  echo "STOP: '$BAK' is not a readable SQLite database. Nothing below would work." >&2
+else
+  # Everything is written into a fresh directory of its own and NOTHING is moved into the working
+  # directory. Publishing with `mv "$OUT"/*.csv .` would silently overwrite the CSVs of an EARLIER
+  # recovery — destroying exactly the data this procedure exists to preserve, which is the same
+  # clobber hazard #46 round 2 found in the error message itself.
+  OUT=$(mktemp -d "${TMPDIR:-/tmp}/nadal-export.XXXXXX") &&
+  sqlite3 -header -csv "$BAK" "
+    select name from teams where is_home = 1" > "$OUT/home-team-backup.csv" &&
+  sqlite3 -header -csv "$BAK" "
+    select name, kind, starts_on, ends_on
+    from events
+    order by starts_on" > "$OUT/events-backup.csv" &&
+  sqlite3 -header -csv "$BAK" "
+    select p.canonical_name        as player,
+           pp.canonical_name       as pair_player,
+           n.note,
+           n.created_at
+    from captain_notes n
+    join players p        on p.id  = n.player_id
+    left join players pp  on pp.id = n.pair_player_id
+    order by n.created_at" > "$OUT/captain-notes-backup.csv" &&
+  sqlite3 -header -csv "$BAK" "
+    select p.canonical_name as player,
+           e.name           as event,
+           a.day,
+           a.status
+    from availability a
+    join players p on p.id = a.player_id
+    join events  e on e.id = a.event_id
+    order by a.day" > "$OUT/availability-backup.csv" &&
+  echo "exported 4 CSVs into $OUT — COPY THEM SOMEWHERE DURABLE, this is a temp directory" ||
+  echo "STOP: an export failed. Nothing was published; partial files are in $OUT" >&2
+fi
 ```
 
 `pair_player` is `LEFT JOIN`ed because `captain_notes.pair_player_id` is nullable — a note about one
@@ -166,10 +331,30 @@ To restore after re-pulling, work back **up** the dependency order above.
 > backticks. For anything else, restore notes through the **`player_note` MCP tool** via
 > [agent-chat-over-mcp.md](agent-chat-over-mcp.md): it takes the note as a **structured JSON
 > argument**, so no shell ever parses it, and it is also the only route that can restore a
-> **pairing** note. When in doubt, use it — it is strictly safer and never wrong.
+> **pairing** note. For note *content*, it is strictly safer than any shell form.
+>
+> **But it is only safe for the DATABASE under one condition, which the `export` above does not
+> give you.** An MCP tool opens the database from the **already-running server's** environment, not
+> from your shell — so a server started without this recovery's `TN_DB_PATH` will restore your notes
+> into *its* database and report success, while the database you just rebuilt stays empty. Nothing in
+> the tool result would reveal it. This applies to every restoring tool — `team_home`, `event_add`,
+> `player_avail`, `player_note` — not just notes.
+>
+> So before restoring anything over MCP: **restart the server with the exact absolute path you
+> exported**, and do not reuse a server whose environment you cannot account for. Verify it landed by
+> reading the rebuilt database directly rather than trusting the tool result:
+>
+> ```sh
+> test -f "$TN_DB_PATH" && sqlite3 "$TN_DB_PATH" "select count(*) from captain_notes"
+> ```
+>
+> If that count does not move, the server is writing somewhere else — stop and fix the server's
+> environment before restoring the rest.
 
 ```sh
 # Safe for simple values only — see the warning above before using these for note text.
+# EVERY line here writes to $TN_DB_PATH. If this is a new shell, re-run the `export` from the
+# recovery step first, or these will restore into data/nadal.db and silently succeed.
 tn team home '<name from home-team-backup.csv>'
 tn event add '<name>' '<kind>' '<starts_on>' '<ends_on>'      # one per events-backup.csv row
 tn player avail '<player>' '<day>' '<status>' '<event>'       # one per availability-backup.csv row

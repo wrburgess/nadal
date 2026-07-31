@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { backfillNameKeys } from "./name-key.js";
@@ -40,38 +40,17 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
 // constraint failed: teams.tennisrecord_url" — legible to nobody who hasn't read this migration.
 // Shipping no dedupe DML for that pair is a deliberate choice (a same-URL rename collision is a
 // merge decision, out of bounds per spec § Ingestion, same as `upsertTeam`'s own
-// `AmbiguousIdentityError`), so THIS message is the whole mitigation: it names the cause and the
-// one-line recovery rather than silently leaving `tn db migrate` broken. See
-// docs/runbooks/db-migration-recovery.md for the full runbook this line is drawn from.
+// `AmbiguousIdentityError`), so THIS message is the whole mitigation: it names the cause, the
+// database that failed, and the runbook — docs/runbooks/db-migration-recovery.md — rather than
+// silently leaving `tn db migrate` broken.
+//
+// Issue #56: it deliberately does NOT emit the recovery COMMAND, though it used to. A
+// copy-pasteable `mv` here means this module permanently owns a shell-quoting surface, a
+// filesystem-race surface (picking an untaken backup name), an encoding surface, and a platform
+// surface — and it produced a defect in six of the eleven adversarial review rounds on PR #52.
+// The runbook already carries the command in markdown, where no sanitizer eats it and no encoding
+// question arises. A diagnosis plus a link is the smaller thing to own and the same thing to read.
 const TEAMS_URL_UNIQUE_FAILURE = /UNIQUE constraint failed: teams\.tennisrecord_url/;
-
-/**
- * POSIX single-quote wrapping for a path interpolated into a copy-pasteable shell command. The
- * database path is caller-supplied (`TN_DB_PATH`, or a `runMigrations(path)` argument), so it can
- * contain spaces — an unquoted `mv /tmp/my db.db …` would silently become a two-source `mv`.
- * Unconditional rather than "quote only if it looks unsafe": a conditional would be a branch whose
- * false side no fixture in this repo distinguishes (`rules/testing.md`).
- */
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-/**
- * A backup path for `dbPath` that is **not already taken**. The first draft of the recovery moved
- * the database to a FIXED `<path>.pre-0009.bak`, which meant a SECOND failure overwrote the FIRST
- * backup — silently destroying the captain notes and availability the same message promises are
- * safe (Codex adversarial review round 2, rated high: the fix for a data-loss hazard reintroducing
- * one). Checking what is on disk closes it by construction rather than by warning the reader.
- *
- * Both sides of the branch are reachable and test-pinned (`test/db-teams-url-unique-upgrade.test.ts`):
- * the plain name on a first failure, the disambiguated one when a backup already exists. The
- * residual TOCTOU — a backup appearing between this message and the human running it — is covered
- * separately by `mv -i`, which is why that flag is not redundant with this function.
- */
-function untakenBackupPath(dbPath: string): string {
-  const preferred = `${dbPath}.pre-0009.bak`;
-  return existsSync(preferred) ? `${dbPath}.pre-0009.${Date.now()}.bak` : preferred;
-}
 
 /**
  * The characters a database path cannot carry through to a human, from TWO independent mechanisms:
@@ -86,6 +65,11 @@ function untakenBackupPath(dbPath: string): string {
  * so both belong in one predicate. Deriving the branch from `sanitizeValue` alone was necessary but
  * NOT sufficient, which is what Codex round 7 caught: a surrogate path skipped the fail-safe and got
  * a `mv` command naming a U+FFFD sibling.
+ *
+ * That command is gone (#56), which changes what this predicate is FOR without retiring it. It no
+ * longer decides whether to withhold something executable; it decides whether the path can be shown
+ * literally or has to be escaped and labelled as escaped. The failure it prevents is unchanged and
+ * still the whole point — telling a human to go look at a file that is not the one that failed.
  *
  * Reachability, checked rather than argued: a lone surrogate CANNOT arrive through `TN_DB_PATH`,
  * because an environment variable is decoded from UTF-8 bytes and that round trip already replaces
@@ -159,46 +143,14 @@ export function runMigrations(path: string = dbPath()): void {
     } catch (err) {
       const chain = messageChain(err);
       if (TEAMS_URL_UNIQUE_FAILURE.test(chain)) {
-        // ABSOLUTE, always. Two reasons, and the second is the load-bearing one:
-        //   1. the reader may not be in the directory the run used, so a relative path in a
-        //      copy-pasteable recovery command is a trap;
-        //   2. an absolute path cannot begin with `-`, so it can never be parsed as an OPTION —
-        //      which closes the dash-prefixed-`TN_DB_PATH` hazard structurally rather than relying
-        //      on the `--` terminator alone (Codex round 3; see the note on `--` below).
+        // ABSOLUTE, always: the reader is not necessarily standing in the directory the run used,
+        // so a relative path names a file they cannot find. (This used to carry a second reason —
+        // an absolute path can never be parsed as an OPTION — which mattered only while a shell
+        // command was being emitted, and retired with it in #56. The reason above did not.)
         const source = resolve(path);
-        // SINGLE LINE, no newlines — a hard requirement of the consumer, not a style choice.
-        // `tn db migrate` renders this through `emitSummary`'s one-line `key=value` summary, whose
-        // `quoteSummaryValue` -> `sanitizeValue` replaces every control character (newlines
-        // included) with a space. A multi-line message therefore does not survive: it collapses
-        // into one long run of prose with the recovery command buried mid-paragraph, which is
-        // precisely what a human staring at a failed migration cannot use.
-        //
-        // This is a MERGE-BORN defect neither side had alone, and it is why it is called out here:
-        // this message was first written against `console.error`, which passed newlines through,
-        // while #44/PR #51 concurrently moved `db migrate` onto `emitSummary`. Both changes were
-        // green in isolation. Keep the message single-line; the long-form version lives in
-        // docs/runbooks/db-migration-recovery.md, which is markdown and has room for it.
-        // Built as a function of the path rather than concatenated around it. The earlier form
-         // sliced a trailing space off a fixed prefix and appended `(${source})`, which RENDERED as
-         // "...cannot apply.(/path)." — the database orphaned after a full stop. Eight static review
-         // rounds passed over that; it only shows when the message is actually printed, which is why
-         // this run renders it end-to-end through `tn db migrate` rather than reading the source.
-        const cause = (where: string) =>
-          "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
-          `${where} has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
-          "0009's unique index cannot apply.";
-        const DATA_AT_RISK =
-          " Captain notes and availability exist ONLY in this file, so extract them from the " +
-          "backup first: docs/runbooks/db-migration-recovery.md";
-
-        // A path that cannot be reproduced faithfully in the one-line summary gets NO
-        // copy-pasteable command. Emitting an `mv` for one is worse than emitting none: the
-        // rendered command names a normalized sibling path, and if THAT file exists, pasting it
-        // moves an unrelated database aside while the real one still fails to migrate. Codex round
-        // 5 refuted the earlier "this is pre-existing" position on exactly that point, and
-        // correctly — main's success-path `path=` field is merely lossy to LOOK at, whereas an
-        // executable recovery turns the same loss into a destructive action on the wrong file.
-        // Display-loss and wrong-action are not the same severity, so this fails safe.
+        // How the database is named. A path that survives every transform between here and the
+        // reader is shown literally; one that does not is escaped and SAID to be escaped, so the
+        // reader knows the odd-looking text is a rendering rather than the filename.
         //
         // The predicate is `UNRENDERABLE`, which is `sanitizeValue`'s class PLUS lone surrogates.
         // Deriving it from `sanitizeValue` alone read better and was wrong (Codex round 7): the
@@ -206,19 +158,42 @@ export function runMigrations(path: string = dbPath()): void {
         // Node's UTF-8 encoder turning a lone surrogate into U+FFFD — leaves no trace in the
         // sanitizer's class. "Match what module X strips" is the right instinct only when X is the
         // ONLY thing between here and the reader.
-        if (UNRENDERABLE.test(source)) {
-          throw new Error(
-            `${cause(`at ${losslessPath(source)} (path escaped — it contains characters that cannot be shown literally)`)}` +
-              " No copy-pasteable command is offered for it: any rendering of that path would name a " +
-              "DIFFERENT file. Move the database aside yourself and re-run `tn db migrate`." +
-              DATA_AT_RISK,
-          );
-        }
+        //
+        // Both branches once differed by more than this: the renderable one carried a
+        // copy-pasteable `mv`, and the escaped one withheld it because any rendering of such a path
+        // would name a DIFFERENT file — pasting it would move an unrelated database aside while the
+        // real one still failed to migrate (Codex round 5, rated high). #56 removed the command
+        // from both, so the difference that remains is purely how the path is written.
+        const where = UNRENDERABLE.test(source)
+          ? `at ${losslessPath(source)} (path escaped — it contains characters that cannot be shown literally)`
+          : `(${source})`;
 
+        // SINGLE LINE, no newlines — a hard requirement of the consumer, not a style choice.
+        // `tn db migrate` renders this through `emitSummary`'s one-line `key=value` summary, whose
+        // `quoteSummaryValue` -> `sanitizeValue` replaces every control character (newlines
+        // included) with a space. A multi-line message therefore does not survive: it collapses
+        // into one long run of prose, which is precisely what a human staring at a failed migration
+        // cannot use.
+        //
+        // This is a MERGE-BORN defect neither side had alone, and it is why it is called out here:
+        // this message was first written against `console.error`, which passed newlines through,
+        // while #44/PR #51 concurrently moved `db migrate` onto `emitSummary`. Both changes were
+        // green in isolation. Keep the message single-line; the long form lives in
+        // docs/runbooks/db-migration-recovery.md, which is markdown and has room for it.
+        //
+        // The path is interpolated INTO a sentence, never appended after one. An earlier form
+        // sliced a trailing space off a fixed prefix and stuck `(${source})` on the end, which
+        // RENDERED as "...cannot apply.(/path)." — the database orphaned after a full stop. Eight
+        // static review rounds passed over that; it only shows when the message is actually
+        // printed, which is why every run touching this line renders it end-to-end through
+        // `tn db migrate` against a seeded duplicate-pair database rather than reading the source.
         throw new Error(
-          `${cause(`(${source})`)} Recover (non-destructive, moves the file aside): ` +
-            `mv -i -- ${shellQuote(source)} ${shellQuote(untakenBackupPath(source))} && tn db migrate ` +
-            `— then re-pull.${DATA_AT_RISK}`,
+          "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+            `${where} has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
+            "0009's unique index cannot apply. Recovery moves this database aside rather than " +
+            "deleting it, but read the runbook FIRST: captain notes and availability exist ONLY " +
+            "in this file and must be exported from it before you re-pull. " +
+            "docs/runbooks/db-migration-recovery.md",
         );
       }
       throw err;
