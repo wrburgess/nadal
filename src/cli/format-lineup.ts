@@ -9,20 +9,8 @@
 // provenance are named, and anyone left over is listed. None of that is decoration — each line is
 // asserted in `test/cli-lineup-plan-command.test.ts`.
 
+import { ratingSourceLabel } from "./format-profile.js";
 import type { LineupPlan, LineupPlanSlot } from "../query/lineup.js";
-
-const RATING_SOURCE_LABELS: Record<string, string> = {
-  ntrp: "NTRP",
-  wtn_singles: "WTN singles",
-  wtn_doubles: "WTN doubles",
-  tr_dynamic: "TennisRecord dynamic",
-};
-
-/** An unrecognized source falls through to its raw string rather than being hidden — the same
- * open-vocabulary rule `format-profile.ts` and `derive.ts` follow. */
-function ratingSourceLabel(source: string): string {
-  return RATING_SOURCE_LABELS[source] ?? source;
-}
 
 /** `basis` and `confidence` answer different questions, so both are printed: "low" from two shared
  * matches and "low" from no shared matches at all are not the same claim. */

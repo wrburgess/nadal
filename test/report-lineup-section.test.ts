@@ -43,7 +43,9 @@ describe("predicted-lineup section — markdown", () => {
     const md = renderDossierMarkdown(buildDossier());
 
     expect(md).toContain("**Not placed:** Ira Inglewood (1 court match)");
-    expect(md).toContain("**Ratings:** ranked within ntrp; unrated: Ira Inglewood.");
+    // The human label, not the raw source string — a binder reading "ranked within ntrp" beside a
+    // roster row reading "NTRP" is drift, so both go through `ratingSourceLabel`.
+    expect(md).toContain("**Ratings:** ranked within NTRP; unrated: Ira Inglewood.");
     expect(md).toContain("**Courts:** 3, taken from this team's observed match history — not from the event format.");
   });
 

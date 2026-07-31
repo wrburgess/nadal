@@ -43,6 +43,14 @@ const RATING_SOURCE_LABELS: Record<string, string> = {
   tr_dynamic: "TR-Dyn",
 };
 
+/** The one place a rating source becomes human-readable, exported so `tn lineup plan` and the two
+ * dossier renderers name a scale the same way this module already does — a printed binder reading
+ * "ranked within ntrp" beside a roster row reading "NTRP" is the drift this prevents. An unknown
+ * source falls through to its raw string, per the open-vocabulary rule above. */
+export function ratingSourceLabel(source: string): string {
+  return RATING_SOURCE_LABELS[source] ?? source;
+}
+
 /**
  * Every rating source renders at a FIXED precision, never a variable one — these are scouting
  * numbers read side by side in print, and a WTN of exactly `4` rendering as `"4"` next to a `"4.2"`
@@ -72,9 +80,11 @@ export function formatRatingTrajectory(trajectory: RatingTrajectoryResult): stri
     .join(", ");
 }
 
-// Human labels for the three sections with no writer anywhere in the codebase (docs/findings.md,
-// #15) — `dataGaps`' keys are the camelCase field names `getPlayerProfile` builds
-// (`captainNotes`), which read awkwardly bare in prose.
+// Human labels for the three `dataGaps` sections — `dataGaps`' keys are the camelCase field names
+// `getPlayerProfile` builds (`captainNotes`), which read awkwardly bare in prose. All three have
+// real writers as of #17 (`setAvailability`, `addCaptainNote` in PR A; `addEvent` in PR B), so
+// "not collected" is now an unusual state rather than the standing one docs/findings.md #15
+// recorded.
 const DATA_GAP_LABELS: Record<string, string> = {
   events: "events",
   availability: "availability",

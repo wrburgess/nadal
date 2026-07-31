@@ -21,6 +21,7 @@ import {
   formatRatingTrajectory,
   formatRecord,
   formatSlotTendencies,
+  ratingSourceLabel,
 } from "../cli/format-profile.js";
 import type { TeamDossier } from "./types.js";
 
@@ -131,9 +132,11 @@ function renderPlayersSectionHtml(dossier: TeamDossier): string {
   return dossier.players.map((p) => renderPlayerBlockHtml(p)).join("");
 }
 
-// The three sections with no writer ANYWHERE in the codebase (docs/findings.md, #15) — same labels
-// `src/cli/format-profile.ts` uses for the CLI's compact text, kept in sync deliberately rather than
-// re-deriving a second label map here.
+// Labels for the three `dataGaps` sections — same ones `src/cli/format-profile.ts` uses for the
+// CLI's compact text, kept in sync deliberately rather than re-deriving a second label map here.
+// (All three have real writers as of #17: `setAvailability`, `addCaptainNote` in PR A, `addEvent`
+// in PR B — so "not collected" is now an unusual state rather than the standing one it was when
+// docs/findings.md #15 recorded it.)
 const DATA_GAP_LABELS: Record<string, string> = {
   events: "events",
   availability: "availability",
@@ -193,7 +196,7 @@ function renderPredictedLineupHtml(dossier: TeamDossier): string {
   footnotes.push(
     lineup.ratingSource === null
       ? "<strong>Ratings:</strong> none on file — ties fell through to a stable ordering, not to strength."
-      : `<strong>Ratings:</strong> ranked within ${escapeHtml(lineup.ratingSource)}` +
+      : `<strong>Ratings:</strong> ranked within ${escapeHtml(ratingSourceLabel(lineup.ratingSource))}` +
         (lineup.unranked.length === 0
           ? "."
           : `; unrated: ${lineup.unranked.map((p) => escapeHtml(p.canonicalName)).join(", ")}.`),

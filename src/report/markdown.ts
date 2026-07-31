@@ -11,6 +11,7 @@ import {
   formatRatingTrajectory,
   formatRecord,
   formatSlotTendencies,
+  ratingSourceLabel,
 } from "../cli/format-profile.js";
 import type { TeamDossier } from "./types.js";
 
@@ -139,7 +140,7 @@ function renderPredictedLineupMarkdown(dossier: TeamDossier): string {
           .join(", ")}`,
     lineup.ratingSource === null
       ? "**Ratings:** none on file — ties fell through to a stable ordering, not to strength."
-      : `**Ratings:** ranked within ${escapeMarkdownCell(lineup.ratingSource)}` +
+      : `**Ratings:** ranked within ${escapeMarkdownCell(ratingSourceLabel(lineup.ratingSource))}` +
         (lineup.unranked.length === 0
           ? "."
           : `; unrated: ${lineup.unranked.map((p) => escapeMarkdownCell(p.canonicalName)).join(", ")}.`),
