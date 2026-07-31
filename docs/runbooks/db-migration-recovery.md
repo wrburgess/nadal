@@ -22,36 +22,71 @@ column a real source identity going forward — and a database that already has 
 rethrows it naming the cause and this recovery, rather than surfacing SQLite's bare "UNIQUE
 constraint failed: teams.tennisrecord_url".
 
-**Recovery is one line, and losing the database costs nothing by design:**
+**Recovery is one line. It moves the database aside rather than deleting it** — substitute the path
+the error message names, which is the database that actually failed (`TN_DB_PATH` if you set it,
+`data/nadal.db` otherwise). The error prints this command with your real path already filled in:
 
 ```sh
-rm data/nadal.db && tn db migrate
+mv 'data/nadal.db' 'data/nadal.db.pre-0006.bak' && tn db migrate
 ```
+
+Deleting would work too — `tn db migrate` only needs the file gone — but there is no reason to make
+the recovery destructive, and keeping the backup is what makes the export step below possible
+*after* you have a working database again rather than only before. Delete the `.bak` once you have
+re-pulled and confirmed the notes you cared about are restored.
 
 Then re-pull every team you had on file. No dedupe migration ships for this pair on purpose: which
 of the two rows is "the" team, and what to do with a rename that collides with a name a *different*
 row already holds, are merge decisions — spec § Ingestion puts a silent merge out of bounds
 entirely, the same reasoning behind `upsertTeam`'s own `AmbiguousIdentityError` for that collision
-case (issue #46). A blanket delete-the-database recovery is the honest alternative to carrying
+case (issue #46). Rebuilding from `raw/` is the honest alternative to carrying
 merge-reconciliation logic in production for a database that is disposable by design.
 
 ## If `tn db migrate` fails with "duplicate column name: is_home"
 
 Covered in [agent-chat-over-mcp.md](agent-chat-over-mcp.md), in its own "If `tn db migrate` fails
 with..." section — only reachable on a database migrated on a specific pre-merge branch (#17 PR A),
-and closed permanently for every database created after that merge. Same one-line recovery.
+and closed permanently for every database created after that merge. That section predates this one
+and still writes the recovery as `rm`; prefer the `mv` form above for it too — the end state is
+identical (`tn db migrate` only needs the file gone) and the backup costs nothing.
 
 ## General note on data at risk
 
-The one-line recovery above is safe for the database itself, but **not** for anything recorded only
-in it. If you had already captured availability or captain notes against the database you are about
-to delete, copy them out first:
+The recovery above is safe for the database itself, but **not** for anything recorded only in it.
+Team rosters, ratings, and match history are never at risk — they are re-derivable from a re-pull of
+the same `tennisrecord_url` targets, which is the whole point of treating the database as a cache.
+**Captain notes and availability are the exception: nothing outside the database holds them.**
+
+Export them from the backup — **joined to names, never raw**. `captain_notes` and `availability`
+store `player_id` / `event_id` foreign keys, and a rebuilt database assigns new autoincrement ids, so
+a `select *` dump is unrestorable by construction: the numbers in it will point at different players.
 
 ```sh
-sqlite3 data/nadal.db "select * from captain_notes;"
-sqlite3 data/nadal.db "select * from availability;"
+sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
+  select p.canonical_name        as player,
+         pp.canonical_name       as pair_player,
+         n.note,
+         n.created_at
+  from captain_notes n
+  join players p        on p.id  = n.player_id
+  left join players pp  on pp.id = n.pair_player_id
+  order by n.created_at" > captain-notes-backup.csv
+
+sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
+  select p.canonical_name as player,
+         e.name           as event,
+         a.day,
+         a.status
+  from availability a
+  join players p on p.id = a.player_id
+  join events  e on e.id = a.event_id
+  order by a.day" > availability-backup.csv
 ```
 
-Team rosters, ratings, and match history are never at risk this way — they are re-derivable from a
-re-pull of the same `tennisrecord_url` targets, which is the whole point of treating the database as
-a cache.
+`pair_player` is `LEFT JOIN`ed because `captain_notes.pair_player_id` is nullable — a note about one
+player rather than a pairing. An inner join would silently drop every single-player note.
+
+To restore after re-pulling: re-enter them through `tn player note` and `tn player avail` (or the
+`player_note` / `player_avail` MCP tools), which resolve the player by **name** against the rebuilt
+database. That name-based round trip is why the export must carry names — it is the only column both
+databases agree on.

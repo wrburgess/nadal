@@ -588,15 +588,46 @@ describe("upsertTeam resolves by tennisrecord_url first (#46)", () => {
   // The existing NAME-branch test at :260 guards only that branch — this guards that the URL
   // branch's null-skipping `set` (upsert.ts:65-73) survives unchanged, so a re-pull that carries
   // `section: null` cannot erase another source's value on this path either.
-  it("REGRESSION: re-upserting via the tennisrecord_url branch with section: null preserves the stored section", () => {
+  //
+  // The RENAME is load-bearing and was missing in this test's first draft (Codex adversarial
+  // review, rated medium, raised to high here — `PROJECT.md` scores a missing required test as
+  // High). With both writes under the SAME name, reverting the whole URL branch still routes the
+  // second write through the old name-conflict update, which has the same null-skipping `set` — so
+  // the test stayed green while proving nothing about the new path. Renaming forces the URL branch:
+  // the old name-conflict target matches no row under the new name, so a revert INSERTS a second
+  // row and both the id and the row-count assertions go red.
+  //
+  // All three optional columns are asserted, not just `section`: `district` and `tennislink_url`
+  // are the two the upsertTeam doc comment actually names as at risk ("a TennisRecord pull knows
+  // nothing about tennislink_url and passes district: null unconditionally"), so a test that omits
+  // them guards the rationale's example rather than its claim.
+  it("REGRESSION: re-upserting a RENAMED team via the tennisrecord_url branch with every optional column null preserves all of them", () => {
     runMigrations();
     const { db, sqlite } = openDb();
     try {
       const url = "https://tennisrecord.com/team.aspx?teamname=Springfield%20A";
-      upsertTeam(db, { name: "Springfield A", tennisrecordUrl: url, section: "Missouri Valley" });
-      const after = upsertTeam(db, { name: "Springfield A", tennisrecordUrl: url, section: null });
+      const first = upsertTeam(db, {
+        name: "Springfield A",
+        tennisrecordUrl: url,
+        section: "Missouri Valley",
+        district: "Central",
+        tennislinkUrl: "https://tennislink.usta.com/team/1",
+      });
 
+      // The rename is what routes this through the URL branch rather than the name-conflict path.
+      const after = upsertTeam(db, {
+        name: "Springfield A 4.0",
+        tennisrecordUrl: url,
+        section: null,
+        district: null,
+        tennislinkUrl: null,
+      });
+
+      expect(after.id).toBe(first.id);
+      expect(after.name).toBe("Springfield A 4.0");
       expect(after.section).toBe("Missouri Valley");
+      expect(after.district).toBe("Central");
+      expect(after.tennislinkUrl).toBe("https://tennislink.usta.com/team/1");
       expect(db.select().from(teams).all()).toHaveLength(1);
     } finally {
       sqlite.close();

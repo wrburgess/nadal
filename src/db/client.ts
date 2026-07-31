@@ -61,6 +61,17 @@ const TEAMS_URL_UNIQUE_FAILURE = /UNIQUE constraint failed: teams\.tennisrecord_
  * yields `""` here, which matches no pattern and so falls through to the `throw err` below — the
  * original is re-thrown untouched, which is what the discarded `String(err)` branch was for.
  */
+/**
+ * POSIX single-quote wrapping for a path interpolated into a copy-pasteable shell command. The
+ * database path is caller-supplied (`TN_DB_PATH`, or a `runMigrations(path)` argument), so it can
+ * contain spaces — an unquoted `mv /tmp/my db.db …` would silently become a two-source `mv`.
+ * Unconditional rather than "quote only if it looks unsafe": a conditional would be a branch whose
+ * false side no fixture in this repo distinguishes (`rules/testing.md`).
+ */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function messageChain(err: unknown): string {
   const messages: string[] = [];
   let current: unknown = err;
@@ -81,10 +92,13 @@ export function runMigrations(path: string = dbPath()): void {
       if (TEAMS_URL_UNIQUE_FAILURE.test(chain)) {
         throw new Error(
           `${chain}\n\n` +
-            "This database has two team rows sharing the same tennisrecord_url (issue #46) — " +
-            "migration 0006's unique index cannot apply until that is resolved.\n" +
-            "Recovery: rm data/nadal.db && tn db migrate, then re-pull. The database is a " +
-            "disposable cache over the archived raw/, not a system of record " +
+            `This database (${path}) has two team rows sharing the same tennisrecord_url ` +
+            "(issue #46) — migration 0006's unique index cannot apply until that is resolved.\n\n" +
+            "Recovery — moves the database aside rather than deleting it, so nothing is lost:\n" +
+            `  mv ${shellQuote(path)} ${shellQuote(`${path}.pre-0006.bak`)} && tn db migrate\n\n` +
+            "Then re-pull. Rosters, ratings and match history are all re-derivable from the " +
+            "archived raw/ pages, but captain notes and availability exist ONLY in this file — " +
+            "extract those from the backup first if you recorded any " +
             "(docs/runbooks/db-migration-recovery.md).",
         );
       }
