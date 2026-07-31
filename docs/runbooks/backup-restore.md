@@ -112,7 +112,13 @@ around after failing this same check across four attempts). Follow it with a rea
 rows:
 
 ```sh
-sqlite3 -header -column "$BAK" "select count(*) as teams from teams;
+# This fence is separately pasteable, so it carries its own guard — the rule this runbook states
+# elsewhere and broke here. Without it, `BAK=/tmp/missing.db` makes sqlite3 CREATE that file before
+# the query fails, and the empty file it leaves behind then satisfies step 3's `[ -f "$BAK" ]`
+# check: a missed error here becomes an empty database restored over your live one.
+[ -f "$BAK" ] || { echo "STOP: no backup file at $BAK" >&2; exit 1; }
+# Read-only, so this verification cannot create or modify anything even if the path is wrong.
+sqlite3 -header -column "file:$BAK?mode=ro" "select count(*) as teams from teams;
 select count(*) as players from players;
 select count(*) as court_matches from court_matches;"
 ```

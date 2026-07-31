@@ -74,20 +74,39 @@ This is this repo's own #56/#57 lesson (`docs/findings.md`) with the roles swapp
 never become syntax, and no amount of quoting advice fixes an instruction whose final step is
 "splice this text into a command".
 
-So the refresh **never carries a name at all.** It drives on each team's stored TennisRecord URL,
-which `tn team pull` accepts directly (`src/ingest/team-pull.ts`'s `resolveTargetUrl`: an
-`https://` target is used as-is). A URL is percent-encoded and cannot contain a space, a quote or a
-newline, so it is safe *as transport*, not merely safe once quoted:
+So the refresh **never carries a name at all.** It drives on each team's stored URL, which
+`tn team pull` accepts directly (`src/ingest/team-pull.ts`'s `resolveTargetUrl`: an `https://`
+target is used as-is). A URL is percent-encoded and cannot contain a space, a quote or a newline, so
+it is safe *as shell transport*.
+
+**Safe as shell transport is not the same as trusted, and the query below enforces the difference.**
+`teams.tennisrecord_url` stores whatever target a previous `tn team pull` was given —
+`resolveTargetUrl` accepts *any* `http://` or `https://` string with no host check, and the value is
+persisted verbatim (`src/ingest/team-pull.ts:146`). So a one-off pull against some other host leaves
+that host in the column, and an unfiltered batch would re-fetch it on **every** refresh from then
+on, letting that page rewrite the roster. A one-time operator-chosen target is not the same risk as
+a standing automatic one. The batch therefore selects **only** TennisRecord hosts, and prints
+anything it skipped rather than silently dropping it:
 
 ```sh
 DB="${TN_DB_PATH:-data/nadal.db}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
 
+# Anything stored that is NOT a TennisRecord URL — shown, never auto-pulled. Investigate before
+# refreshing: a row here means some earlier pull targeted another host.
+sqlite3 "file:$DB?mode=ro" "select name, tennisrecord_url from teams
+  where tennisrecord_url is not null
+    and tennisrecord_url not like 'https://www.tennisrecord.com/%'
+    and tennisrecord_url not like 'https://tennisrecord.com/%'"
+
 # Enumerate to a file, NOT into a pipe. `sqlite3 … | while …` reports the STATUS OF THE LOOP: an
 # unreadable or corrupt database emits no rows, the loop body never runs, and the pipeline exits 0 —
 # a total enumeration failure that reads exactly like "no teams to refresh".
 urls="$(mktemp)" || exit 1
-sqlite3 "$DB" "select tennisrecord_url from teams where tennisrecord_url is not null order by name" > "$urls" \
+sqlite3 "file:$DB?mode=ro" "select tennisrecord_url from teams
+  where tennisrecord_url like 'https://www.tennisrecord.com/%'
+     or tennisrecord_url like 'https://tennisrecord.com/%'
+  order by name" > "$urls" \
   || { echo "STOP: could not read teams from $DB" >&2; rm -f "$urls"; exit 1; }
 
 failed=0
@@ -98,13 +117,20 @@ while IFS= read -r url; do
 done < "$urls"
 rm -f "$urls"
 
-[ "$failed" -eq 0 ] || echo "STOP: at least one pull failed — this refresh is PARTIAL" >&2
+# Exit NONZERO, not just noisy. `[ "$failed" -eq 0 ] || echo …` ends the block with echo's own
+# (successful) status, so a partial refresh would still leave the block exiting 0 — the very
+# outcome the accumulator exists to prevent.
+if [ "$failed" -ne 0 ]; then
+  echo "STOP: at least one pull failed — this refresh is PARTIAL" >&2
+  exit 1
+fi
 ```
 
 The `failed` accumulator is not decoration: without it a failed pull followed by a successful one
 leaves the loop's exit status 0, and a partial refresh reads as a clean one. **A team with no stored
-`tennisrecord_url` is skipped by the query** — deliberately, since there is nothing to pull it from;
-the enumeration in *Before you start* prints that column so you can see which teams those are.
+`tennisrecord_url`, or one stored against another host, is skipped by the query** — the first
+because there is nothing to pull it from, the second on purpose (above); the two queries in
+*Before you start* and at the top of this step show you both sets rather than leaving them invisible.
 
 To drive one team at a time, read it at a **prompt** rather than pasting it into shell syntax —
 the same `IFS= read -r` pattern [db-migration-recovery.md](db-migration-recovery.md) and
