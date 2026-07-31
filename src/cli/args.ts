@@ -1,7 +1,6 @@
 /**
- * Hand-rolled arg parsing shared by `team pull` and `player pull` — GRAMMAR.md forbids a `--`
- * payload terminator and these two commands are the whole surface that needs more than the
- * global flags, so a dependency is not worth taking for it (spec constraint: no new npm deps).
+ * Hand-rolled arg parsing shared by every command — the surface needing more than the global flags
+ * is small enough that a dependency is not worth taking for it (spec constraint: no new npm deps).
  *
  * Grammar: `tn <noun> <verb> <target> [flags]` — the first non-flag argument is the target; every
  * `--name` must be one of the caller's declared `booleanFlags`/`valueFlags`, or be one of the
@@ -45,14 +44,29 @@ function parsePositionals(
 ): { positionals: string[]; flags: Record<string, string | true>; error?: string } {
   const positionals: string[] = [];
   const flags: Record<string, string | true> = {};
+  // Everything after a bare `--` is payload, never a flag (standard GNU end-of-flags). Added in
+  // #17 PR A after the independent reviewer showed there was no lossless way to record an ordinary
+  // captain note beginning with `--`: `tn player note Randy "--poach at net"` died as
+  // `unrecognized flag --poach at net`, and the two workarounds both corrupt the note (leading
+  // whitespace changes text this service deliberately stores untrimmed). Free-text payload
+  // commands did not exist when GRAMMAR.md wrote "there is no `--` payload terminator", which is
+  // why that line was true then and is a defect now; it is updated alongside this.
+  //
+  // Applied in the SHARED loop rather than only for payload commands, so a `--`-leading TARGET
+  // (a team or player named that way) is equally recordable — the same defect, one positional over.
+  let endOfFlags = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "-q") {
+    if (!endOfFlags && arg === "--") {
+      endOfFlags = true;
+      continue;
+    }
+    if (!endOfFlags && arg === "-q") {
       flags.q = true;
       continue;
     }
-    if (arg.startsWith("--")) {
+    if (!endOfFlags && arg.startsWith("--")) {
       const name = arg.slice(2);
       if (GLOBAL_BOOLEAN_FLAGS.includes(name) || booleanFlags.includes(name)) {
         flags[name] = true;

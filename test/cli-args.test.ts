@@ -104,3 +104,59 @@ describe("globalFlags", () => {
     expect(globalFlags({ quiet: true, json: true })).toEqual({ quiet: true, json: true });
   });
 });
+
+// Independent-reviewer finding on #17 PR A (Codex, medium, category A — reachable by the sole
+// operator through ordinary use): every token beginning `--` was treated as a flag, so an ordinary
+// captain note beginning `--` could not be recorded at all. `tn player note Randy "--poach at net"`
+// died as `unrecognized flag --poach at net`, and both workarounds corrupt the note (leading
+// whitespace changes text `addCaptainNote` deliberately stores untrimmed). Free-text payload
+// commands did not exist when GRAMMAR.md wrote "there is no `--` payload terminator" — that line
+// was true when written and became a defect the moment `player note` landed.
+describe("`--` end-of-flags delimiter", () => {
+  it("records a payload token that begins with `--`", () => {
+    const parsed = parsePayloadArgs(["Randy", "--", "--poach at net"], 1);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.target).toBe("Randy");
+    expect(parsed.payload).toEqual(["--poach at net"]);
+  });
+
+  it("treats a token that LOOKS like a known global flag as payload once after `--`", () => {
+    // The whole point of the delimiter: past it, `--json` is text, not a flag.
+    const parsed = parsePayloadArgs(["Randy", "--", "--json"], 1);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.payload).toEqual(["--json"]);
+    expect(parsed.flags.json).toBeUndefined();
+  });
+
+  it("still parses global flags that appear BEFORE the delimiter", () => {
+    const parsed = parsePayloadArgs(["Randy", "--json", "--", "--poach"], 1);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.flags.json).toBe(true);
+    expect(parsed.payload).toEqual(["--poach"]);
+  });
+
+  it("a second `--` after the delimiter is payload, not another delimiter", () => {
+    const parsed = parsePayloadArgs(["Randy", "--", "--"], 1);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.payload).toEqual(["--"]);
+  });
+
+  it("an empty payload after the delimiter is still reported as missing, not silently filled", () => {
+    const parsed = parsePayloadArgs(["Randy", "--"], 1);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.target).toBe("Randy");
+    expect(parsed.payload[0]).toBeUndefined();
+  });
+
+  it("applies to a TARGET beginning with `--` too, not only to payloads", () => {
+    // Same defect one positional over — a team or player whose name begins `--`.
+    const parsed = parseArgs(["--", "--Odd Team Name"], [], []);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.target).toBe("--Odd Team Name");
+  });
+
+  it("an unrecognized flag before the delimiter still fails (the delimiter is not a way to silence typos)", () => {
+    const parsed = parsePayloadArgs(["Randy", "--typo", "--", "text"], 1);
+    expect(parsed.error).toBe("unrecognized flag --typo");
+  });
+});
