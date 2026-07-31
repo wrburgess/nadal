@@ -1,13 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import {
-  assertNoSymlinkComponents,
-  assertOutputPathSafe,
-  assertRootSafe,
-  isWithin,
-  OutputPathError,
-  realpathOfNearestExisting,
-} from "../fs/output-root.js";
+import { join } from "node:path";
+import { assertOutputPathSafe, resolveRealOutputPath } from "../fs/output-root.js";
 
 const DEFAULT_RAW_DIR = "raw";
 
@@ -86,35 +79,32 @@ export function archivePage(input: ArchivePageInput): string {
   assertArchivePathSafe(provenancePath);
 
   mkdirSync(dir, { recursive: true });
-  // Re-checked AFTER mkdir: `mkdirSync(..., { recursive: true })` treats an existing symlink-to-a-
+  // Re-checked AFTER mkdir, and resolved to the directory's REAL location, rather than trusting the
+  // path string built above: `mkdirSync(..., { recursive: true })` treats an existing symlink-to-a-
   // directory as "already there" and succeeds silently, so the pre-check alone leaves a
-  // check-then-use gap. `flag: "wx"` (O_CREAT|O_EXCL) closes the leaf half — it refuses to follow an
-  // existing symlink at the target rather than writing through it, and the timestamped filenames
-  // mean a genuine collision cannot happen in normal operation.
-  assertNoSymlinkComponents(resolve(rawRoot()), resolve(htmlPath));
-
-  // Then write through the directory's REAL location, resolved here rather than trusting the
-  // path string built above. Rejecting symlinked components asks "is this a link?"; this asks the
-  // question that actually matters — "where does it point?" — so a component swapped for a link
-  // into the repo is refused by its target, not merely by its type.
+  // check-then-use gap. `resolveRealOutputPath` (src/fs/output-root.ts — shared with
+  // `src/report/write.ts` so this hardening lives in exactly one place) re-runs the symlink-component
+  // check now that the directory genuinely exists, then re-resolves ROOT and the directory to their
+  // real filesystem locations and re-confirms containment there. Rejecting symlinked components asks
+  // "is this a link?"; resolving to the real path asks the question that actually matters — "where
+  // does it point?" — so a component swapped for a link into the repo is refused by its target, not
+  // merely by its type. `flag: "wx"` (O_CREAT|O_EXCL) below closes the leaf half of the same gap — it
+  // refuses to follow an existing symlink at the target rather than writing through it, and the
+  // timestamped filenames mean a genuine collision cannot happen in normal operation.
   //
   // RESIDUAL, deliberately not claimed as closed: this is still check-then-use. An actor able to
   // swap a component between this resolution and the write can still win the race, and pure Node
   // has no `openat`/`O_NOFOLLOW` directory-handle write to close it (a native helper would be a new
   // dependency the plan forbids). See the tracked follow-up and `docs/findings.md`.
-  // The allowlist applies to the ROOT; containment applies to the directory beneath it. Running
-  // `assertRootSafe` on the descendant instead broke the DOCUMENTED DEFAULT outright: with
-  // TN_RAW_PATH unset the root is `<repo>/raw`, the directory is `<repo>/raw/tennisrecord`, and the
-  // root-only allowlist ("inside the repo, and not exactly <repo>/raw") rejected it — so every pull
-  // threw before writing a byte. Every test set TN_RAW_PATH to a temp dir, so nothing exercised the
-  // one configuration the README documents. (Codex adversarial review, PR #31 round 3.)
-  const realRoot = realpathOfNearestExisting(resolve(rawRoot()));
-  assertRootSafe(realRoot, DEFAULT_RAW_DIR);
-  const realDir = realpathOfNearestExisting(resolve(dir));
-  if (!isWithin(realRoot, realDir)) {
-    throw new OutputPathError(`refusing to write outside the resolved raw root "${realRoot}": ${realDir}`);
-  }
-  const realHtmlPath = join(realDir, basename(htmlPath));
+  //
+  // NOTE on why the root check happens at the ROOT and not the descendant: with TN_RAW_PATH unset
+  // the root is `<repo>/raw`, the directory is `<repo>/raw/tennisrecord`, and an allowlist checked
+  // against the descendant instead ("inside the repo, and not exactly <repo>/raw") rejected the
+  // DOCUMENTED DEFAULT outright — every pull threw before writing a byte, and every test at the time
+  // set TN_RAW_PATH to a temp dir, so nothing exercised the one configuration the README describes.
+  // (Codex adversarial review, PR #31 round 3.) `resolveRealOutputPath` checks the root, not the
+  // directory, preserving that fix.
+  const realHtmlPath = resolveRealOutputPath(rawRoot(), htmlPath, DEFAULT_RAW_DIR);
   const realProvenancePath = `${realHtmlPath}.provenance.json`;
   writeFileSync(realHtmlPath, input.body, { encoding: "utf8", flag: "wx" });
 

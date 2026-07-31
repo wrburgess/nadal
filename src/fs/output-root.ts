@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -122,4 +122,61 @@ export function assertOutputPathSafe(candidatePath: string, root: string, permit
     );
   }
   assertNoSymlinkComponents(resolvedRoot, resolvedCandidate);
+}
+
+/**
+ * Re-validates root+candidate AFTER `mkdirSync` has already run for `candidatePath`'s parent
+ * directory, and returns the REAL resolved path a caller should write through instead of the string
+ * it started with. `assertOutputPathSafe` runs necessarily BEFORE `mkdirSync` (the directory may not
+ * exist yet for it to check), and `mkdirSync(..., { recursive: true })` treats an existing
+ * symlink-to-a-directory as "already there" and succeeds silently — so the pre-check alone leaves a
+ * check-then-use gap: a symlink swapped into a path component between the pre-check and this call is
+ * never re-examined by a caller that keeps trusting the original string. This closes that gap by (1)
+ * re-running the symlink-component check now that the directory genuinely exists, then (2) resolving
+ * ROOT and the candidate's directory to their REAL filesystem locations and re-confirming containment
+ * there — a LEXICAL path check answers "what does this string say", the filesystem is free to
+ * disagree (Codex adversarial review, PR #31).
+ *
+ * Shared by every writer under this guard (`src/ingest/archive.ts`, `src/report/write.ts`) so the
+ * hardening lives in exactly one place rather than being copied per caller. This function does not
+ * itself write anything or decide the LEAF's write flag — that is caller policy: `archive.ts` never
+ * rewrites a file in place and writes with `flag: "wx"` directly; `write.ts`'s reports ARE rewritten
+ * on every run and use `overwriteOutputFile` below instead, which still refuses to follow a symlinked
+ * leaf but tolerates (and replaces) a plain file left by a prior run.
+ */
+export function resolveRealOutputPath(root: string, candidatePath: string, permittedDir: string): string {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidatePath);
+  assertNoSymlinkComponents(resolvedRoot, resolvedCandidate);
+
+  const realRoot = realpathOfNearestExisting(resolvedRoot);
+  assertRootSafe(realRoot, permittedDir);
+  const realDir = realpathOfNearestExisting(dirname(resolvedCandidate));
+  if (!isWithin(realRoot, realDir)) {
+    throw new OutputPathError(
+      `refusing to write output path outside the resolved root "${realRoot}": ${realDir}`,
+    );
+  }
+  return join(realDir, basename(resolvedCandidate));
+}
+
+/**
+ * Writes `content` to `path` such that an existing SYMLINK at the leaf is never followed — refused
+ * outright — while a plain existing file (the normal case for a writer whose output is rewritten in
+ * place on every run, e.g. a dossier report) is safely replaced. A bare `{ flag: "wx" }` write (the
+ * no-follow idiom `archivePage` uses for its never-rewritten, timestamped filenames) cannot serve a
+ * rewrite-in-place caller: `wx` refuses whenever ANYTHING already exists at the leaf, symlink or not,
+ * which would break every second run. So: `lstat` the leaf first (never follows a link itself); a
+ * symlink found there is refused unconditionally, before any write is attempted; anything else that
+ * exists (an ordinary file left by a prior run) is removed, and ONLY THEN is the fresh file created
+ * with `wx` — so the create step itself never silently follows a link either, it always either makes
+ * a brand-new leaf or throws.
+ */
+export function overwriteOutputFile(path: string, content: string): void {
+  const existing = lstatSync(path, { throwIfNoEntry: false });
+  if (existing?.isSymbolicLink()) {
+    throw new OutputPathError(`refusing to write through a symlinked output path: ${path}`);
+  }
+  if (existing !== undefined) unlinkSync(path);
+  writeFileSync(path, content, { encoding: "utf8", flag: "wx" });
 }

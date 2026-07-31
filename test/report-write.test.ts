@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
@@ -138,6 +138,52 @@ describe("src/report/write.ts", () => {
     });
   });
 
+  // REGRESSION (verify pass, PR #38, Finding 3). `src/ingest/archive.ts` re-checks for symlinked
+  // path components AFTER `mkdirSync` (which silently treats an existing symlink-to-a-directory as
+  // "already there") and writes with `flag: "wx"` so the leaf itself cannot be followed either.
+  // `write.ts` inherited only the pre-`mkdirSync` check, so it never gained either protection.
+  // Reports carry the same personal data as raw captures and land in the same public repo, so they
+  // deserve the same discipline — the difference is reports are DELIBERATELY rewritten in place on
+  // every run, so a bare `wx` (which refuses whenever anything already exists at the leaf) would
+  // break every second run; the fix must refuse a symlink specifically, not "anything already there".
+  describe("writeTeamDossier vs the filesystem (symlinks + reruns)", () => {
+    it("REGRESSION: refuses to follow a symlink planted at index.html, even though mkdirSync silently succeeds over an existing directory", () => {
+      const team = seedTeamWithRoster("Team Sym", []);
+      const dir = join(reportsDir, "team-sym");
+      mkdirSync(dir, { recursive: true });
+      const escapeTarget = mkdtempSync(join(tmpdir(), "tn-escape-"));
+      const linkTarget = join(escapeTarget, "leaked.html");
+      symlinkSync(linkTarget, join(dir, "index.html"));
+      const { db, sqlite } = openDb();
+      try {
+        expect(() => writeTeamDossier(db, team.id, { since: "2026-01-01" })).toThrow(OutputPathError);
+        // The write must never have followed the symlink through to its target.
+        expect(existsSync(linkTarget)).toBe(false);
+      } finally {
+        sqlite.close();
+        rmSync(escapeTarget, { recursive: true, force: true });
+      }
+    });
+
+    it("a second run over the same team still succeeds and rewrites both files in place (no bare-'wx' regression)", () => {
+      const team = seedTeamWithRoster("Team Rerun", []);
+      const { db, sqlite } = openDb();
+      try {
+        const first = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        let second: string[] = [];
+        expect(() => {
+          second = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        }).not.toThrow();
+        expect(second).toEqual(first);
+        for (const p of second) {
+          expect(existsSync(p)).toBe(true);
+        }
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
   describe("slugify", () => {
     it("lowercases and collapses runs of non-alphanumerics to a single dash", () => {
       expect(slugify("IA/Versteeg/40&Over3.5M")).toBe("ia-versteeg-40-over3-5m");
@@ -212,6 +258,58 @@ describe("src/report/write.ts", () => {
         expect(readFileSync(join(reportsDir, `team-a-${teamTwo.id}`, "index.html"), "utf8")).toContain(
           "Team A???",
         );
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // REGRESSION (verify pass, PR #38, Finding 1). `renderIndexHtml` correctly calls `escapeHtml` on
+    // the team name; `renderIndexMarkdown` two functions below it interpolated the raw name straight
+    // into a markdown link label — the exact defect class already fixed on the HTML side, left
+    // unfixed one function over. A name containing `]`/`(`/`)` breaks the link's structure, and a
+    // name containing `<script>` survives into the `.md` file as raw, renderable HTML (CommonMark
+    // permits inline HTML) — either way a scraped, attacker-influenced team name controls markup in
+    // a file this tool writes to disk.
+    it("REGRESSION: escapes a team name that would otherwise break or inject markup into index.md's link", () => {
+      seedTeamWithRoster("X](javascript:alert(1))", []);
+      seedTeamWithRoster("<script>alert(1)</script>", []);
+      const { db, sqlite } = openDb();
+      try {
+        writeSectionalsDossiers(db, { since: "2026-01-01" });
+        const indexMd = readFileSync(join(reportsDir, "index.md"), "utf8");
+        // Unescaped, "X](javascript:alert(1))" closes the link label early, turning the rest into a
+        // live `(javascript:alert(1))` href — the escaped form has a backslash before the `]` so this
+        // exact substring never appears.
+        expect(indexMd).not.toContain("X](javascript:alert(1))");
+        expect(indexMd).not.toContain("<script>alert(1)</script>");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // REGRESSION (verify pass, PR #38, Finding 2). `resolveTeamDirNames` checked the disambiguated
+    // candidate (`${slug}-${teamId}`) for a collision exactly once, and added it unconditionally even
+    // when THAT was already taken too — so two teams could still land in the same directory and one
+    // dossier would silently overwrite the other. Reproducer in DB id order: id 1 "X" -> slug "x"; id
+    // 2 "X 3" -> slug "x-3"; id 3 "X!" -> slug "x" collides -> retries "x-3" -> ALSO collides with
+    // team 2. The function's own doc comment promises "neither dossier ever overwrites the other" —
+    // this is the case that broke the promise.
+    it("REGRESSION: a second-round collision (disambiguated slug ALSO taken) still gets a distinct directory", () => {
+      const t1 = seedTeamWithRoster("X", []);
+      const t2 = seedTeamWithRoster("X 3", []);
+      const t3 = seedTeamWithRoster("X!", []);
+      expect([t1.id, t2.id, t3.id]).toEqual([1, 2, 3]);
+      const { db, sqlite } = openDb();
+      try {
+        const written = writeSectionalsDossiers(db, { since: "2026-01-01" });
+        const teamIndexHtmlPaths = written.filter(
+          (p) => p.endsWith("index.html") && p !== join(reportsDir, "index.html"),
+        );
+        const dirs = teamIndexHtmlPaths.map((p) => dirname(p));
+        expect(new Set(dirs).size).toBe(3);
+        for (const dir of dirs) {
+          expect(existsSync(join(dir, "index.html"))).toBe(true);
+        }
       } finally {
         sqlite.close();
       }

@@ -7,15 +7,15 @@
 // must be refused by the same control that refuses `TN_RAW_PATH=src`, never a second hand-rolled
 // check.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { assertOutputPathSafe } from "../fs/output-root.js";
+import { assertOutputPathSafe, overwriteOutputFile, resolveRealOutputPath } from "../fs/output-root.js";
 import type { Db } from "../ingest/db-types.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
 import { teams } from "../db/schema.js";
 import { renderDossier, escapeHtml } from "./html.js";
-import { renderDossierMarkdown } from "./markdown.js";
+import { escapeMarkdownCell, renderDossierMarkdown } from "./markdown.js";
 import type { TeamDossier } from "./types.js";
 
 const DEFAULT_REPORTS_DIR = "reports";
@@ -83,13 +83,30 @@ export function teamSlug(teamId: number, teamName: string): string {
  * appended, so neither dossier ever overwrites the other. Deterministic given a fixed input order
  * (callers pass teams in DB id order), not merely "safe" — the same DB produces the same directory
  * names every time, preserving `writeTeamDossier`'s byte-identical-reruns guarantee.
+ *
+ * The disambiguated candidate (`${slug}-${teamId}`) is itself re-checked in a LOOP rather than added
+ * unconditionally after a single retry: it can ALSO already be taken by a third team. Example, in DB
+ * id order: id 1 "X" -> slug "x"; id 2 "X 3" -> slug "x-3"; id 3 "X!" -> slug "x" collides -> retries
+ * "x-3" -> collides AGAIN with team 2. A single check-and-append let that second collision through
+ * silently (one dossier overwriting another) despite this function's own promise above. Each further
+ * retry keeps appending the same team's own id (never another team's), so the candidate is still
+ * fully determined by (this team's id, prior teams' names) — the loop only ever makes the string
+ * longer and more specific, and with finitely many teams it is guaranteed to land on a free one.
  */
 function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): Map<number, string> {
   const used = new Set<string>();
   const dirNames = new Map<number, string>();
   for (const e of entries) {
     let slug = teamSlug(e.teamId, e.teamName);
-    if (used.has(slug)) slug = `${slug}-${e.teamId}`;
+    if (used.has(slug)) {
+      let candidate = `${slug}-${e.teamId}`;
+      let suffix = 2;
+      while (used.has(candidate)) {
+        candidate = `${slug}-${e.teamId}-${suffix}`;
+        suffix += 1;
+      }
+      slug = candidate;
+    }
     used.add(slug);
     dirNames.set(e.teamId, slug);
   }
@@ -114,7 +131,17 @@ export function buildTeamDossier(db: Db, teamId: number, options: { since: strin
  * `dirName`, when given, is a pre-resolved (and, for a batch, collision-disambiguated) directory
  * name from `resolveTeamDirNames` — `writeSectionalsDossiers` passes one so a `team-a` collision
  * between two teams in the same run is caught at the batch level; a standalone single-team call (no
- * sibling teams to collide with) computes its own from `teamSlug` directly. */
+ * sibling teams to collide with) computes its own from `teamSlug` directly.
+ *
+ * Reports carry the same personal data as raw archive captures and land in the same public repo, so
+ * the write is held to `archivePage`'s standard, not just its pre-check: after `mkdirSync` (which
+ * silently succeeds over an existing symlinked directory) the path is re-validated and resolved to
+ * its REAL location via `resolveRealOutputPath`, and the leaf is written with `overwriteOutputFile`
+ * — which refuses to follow an existing symlink at `index.html`/`index.md` rather than writing
+ * through it. Unlike `archivePage`'s never-rewritten, timestamped filenames, a dossier IS rewritten
+ * in place on every run (byte-identical reruns are a tested guarantee), so the leaf write can't be a
+ * bare `flag: "wx"` — `overwriteOutputFile` tolerates and replaces a plain file left by a prior run
+ * while still refusing a symlink. */
 export function writeTeamDossier(
   db: Db,
   teamId: number,
@@ -130,8 +157,10 @@ export function writeTeamDossier(
   assertReportPathSafe(mdPath);
 
   mkdirSync(dir, { recursive: true });
-  writeFileSync(htmlPath, renderDossier(dossier), "utf8");
-  writeFileSync(mdPath, renderDossierMarkdown(dossier), "utf8");
+  const realHtmlPath = resolveRealOutputPath(reportsRoot(), htmlPath, DEFAULT_REPORTS_DIR);
+  const realMdPath = resolveRealOutputPath(reportsRoot(), mdPath, DEFAULT_REPORTS_DIR);
+  overwriteOutputFile(realHtmlPath, renderDossier(dossier));
+  overwriteOutputFile(realMdPath, renderDossierMarkdown(dossier));
 
   return [htmlPath, mdPath];
 }
@@ -152,7 +181,15 @@ function renderIndexHtml(entries: TeamIndexEntry[]): string {
 
 function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
   if (entries.length === 0) return "# Sectionals dossiers _(v0 layout)_\n\nNo teams on file yet.\n";
-  const items = entries.map((e) => `- [${e.teamName}](${e.dirName}/index.md)`).join("\n");
+  // `e.teamName` is attacker-influenced (scraped) same as everywhere else a name is interpolated in
+  // this codebase — `escapeMarkdownCell` (markdown.ts) is the ONE escaping helper for that, reused
+  // here rather than duplicated, exactly as `renderIndexHtml` above reuses `escapeHtml` for the same
+  // field. Unescaped, a name containing `]` closes the link label early (turning the rest of the name
+  // into a live URL) and a name containing raw HTML survives into the `.md` file, which CommonMark
+  // renders verbatim.
+  const items = entries
+    .map((e) => `- [${escapeMarkdownCell(e.teamName)}](${e.dirName}/index.md)`)
+    .join("\n");
   return `# Sectionals dossiers _(v0 layout)_\n\n${items}\n`;
 }
 
@@ -180,8 +217,13 @@ export function writeSectionalsDossiers(db: Db, options: { since: string }): str
   assertReportPathSafe(indexHtmlPath);
   assertReportPathSafe(indexMdPath);
   mkdirSync(reportsRoot(), { recursive: true });
-  writeFileSync(indexHtmlPath, renderIndexHtml(entries), "utf8");
-  writeFileSync(indexMdPath, renderIndexMarkdown(entries), "utf8");
+  // Same post-mkdir re-check + no-follow-leaf-overwrite discipline as `writeTeamDossier` above — the
+  // top-level index names every team on file, so it deserves the identical protection, not a lesser
+  // one just because it lives one directory up.
+  const realIndexHtmlPath = resolveRealOutputPath(reportsRoot(), indexHtmlPath, DEFAULT_REPORTS_DIR);
+  const realIndexMdPath = resolveRealOutputPath(reportsRoot(), indexMdPath, DEFAULT_REPORTS_DIR);
+  overwriteOutputFile(realIndexHtmlPath, renderIndexHtml(entries));
+  overwriteOutputFile(realIndexMdPath, renderIndexMarkdown(entries));
   written.push(indexHtmlPath, indexMdPath);
 
   return written;
