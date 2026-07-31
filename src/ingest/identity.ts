@@ -1,6 +1,6 @@
 import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { editDistance, FUZZY_MAX_DISTANCE, nameKey, nameKeyLength } from "../db/name-key.js";
-import { playerAliases, players, teams } from "../db/schema.js";
+import { playerAliases, players, teamMemberships, teams } from "../db/schema.js";
 import type { Db } from "./db-types.js";
 
 type PlayerRow = typeof players.$inferSelect;
@@ -294,4 +294,119 @@ export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution
     .returning()
     .get();
   return { kind: "created", row: created };
+}
+
+export type ResolveRosterPlayerInput = {
+  /** A bare name, or a prefix-ID (`usta:` / `wtn:` / `tr:`) — the same three prefixes
+   * `resolvePlayerTarget` (src/query/player-profile.ts) uses for a `player show`-style target. */
+  name: string;
+  teamId: number;
+  /** Accepted for forward compatibility with an event-scoped roster; NOT required to match —
+   * every real `team_memberships` row has a null `event_id` today (docs/findings.md:199), so
+   * scoping this lookup on `eventId` as well would refuse every real roster. Currently unused by
+   * the query below for exactly that reason. */
+  eventId?: number | null;
+};
+
+/**
+ * The outcome of a roster-scoped, NEVER-CREATE identity resolution (Task 2, #18). Unlike
+ * `resolvePlayer`, a miss here is `unresolved`, never a new row: a name extracted from a scorecard
+ * photo is agent vision, not a captain's own roster entry, and spec § Ingestion's "flag, never
+ * guess" has no room for a misread name silently growing `players`. `ambiguous` and `unresolved`
+ * both carry the candidates they saw (empty for a true `unresolved` miss), matching the shape of
+ * every other resolution outcome in this module.
+ */
+export type RosterPlayerResolution =
+  | { kind: "matched"; row: PlayerRow }
+  | { kind: "ambiguous"; candidates: PlayerRow[] }
+  | { kind: "unresolved"; candidates: PlayerRow[] };
+
+/**
+ * Resolve one scorecard name against ONE team's roster. Ladder:
+ *
+ * 1. **Prefix-ID** (`usta:`/`wtn:`/`tr:`): a GLOBAL lookup by source id, same three prefixes
+ *    `resolvePlayerTarget` uses. An id names an exact identity, so roster scoping does not apply
+ *    here — this is how a correction supplied this way OVERRIDES a name that would otherwise flag.
+ * 2. **Exact name**, restricted to `teamId`'s `team_memberships` — `players.name_key` OR
+ *    `player_aliases.name_key`, the same fold `resolvePlayer` uses, but the candidate set is
+ *    narrowed to the roster FIRST. This is the whole point of Task 2: a same-named player on a
+ *    different team (or on no team at all) must NOT match here, even though `players` may have
+ *    exactly one row with that name globally.
+ * 3. **Fuzzy**, also restricted to the roster: a near-miss NEVER auto-matches — it reports
+ *    `ambiguous` with every roster candidate within `FUZZY_MAX_DISTANCE`, same as `resolvePlayer`'s
+ *    own tier 3, leaving the correction to a human via a prefix-ID.
+ *
+ * A name matching nothing at any tier — because it is not on `teamId`'s roster at all, not because
+ * it was merely misspelled — is `unresolved`. This function never inserts a `players` row; that
+ * stays `resolvePlayer`'s job for the scraping paths that want it.
+ */
+export function resolveRosterPlayer(db: Db, input: ResolveRosterPlayerInput): RosterPlayerResolution {
+  if (input.name.startsWith("usta:")) {
+    const row = db.select().from(players).where(eq(players.ustaUaid, input.name.slice("usta:".length))).all()[0];
+    return row === undefined ? { kind: "unresolved", candidates: [] } : { kind: "matched", row };
+  }
+  if (input.name.startsWith("wtn:")) {
+    const row = db.select().from(players).where(eq(players.wtnTennisId, input.name.slice("wtn:".length))).all()[0];
+    return row === undefined ? { kind: "unresolved", candidates: [] } : { kind: "matched", row };
+  }
+  if (input.name.startsWith("tr:")) {
+    const row = db
+      .select()
+      .from(players)
+      .where(eq(players.tennisrecordUrl, input.name.slice("tr:".length)))
+      .all()[0];
+    return row === undefined ? { kind: "unresolved", candidates: [] } : { kind: "matched", row };
+  }
+
+  assertPlayersKeyed(db);
+  assertPlayerAliasesKeyed(db);
+
+  const rosterPlayerIds = db
+    .select({ playerId: teamMemberships.playerId })
+    .from(teamMemberships)
+    .where(eq(teamMemberships.teamId, input.teamId))
+    .all()
+    .map((r) => r.playerId);
+  if (rosterPlayerIds.length === 0) return { kind: "unresolved", candidates: [] };
+
+  const key = nameKey(input.name);
+
+  const exactByAlias = db
+    .select({ playerId: playerAliases.playerId })
+    .from(playerAliases)
+    .where(and(eq(playerAliases.nameKey, key), inArray(playerAliases.playerId, rosterPlayerIds)))
+    .all()
+    .map((r) => r.playerId);
+  const exactByCanonicalName = db
+    .select({ id: players.id })
+    .from(players)
+    .where(and(eq(players.nameKey, key), inArray(players.id, rosterPlayerIds)))
+    .all()
+    .map((r) => r.id);
+  const exactIds = Array.from(new Set([...exactByAlias, ...exactByCanonicalName]));
+
+  if (exactIds.length === 1) {
+    const row = db.select().from(players).where(eq(players.id, exactIds[0]!)).all()[0];
+    if (row !== undefined) return { kind: "matched", row };
+  }
+  if (exactIds.length > 1) {
+    return {
+      kind: "ambiguous",
+      candidates: db.select().from(players).where(inArray(players.id, exactIds)).all(),
+    };
+  }
+
+  // Fuzzy tier: filtered directly over the roster's own rows rather than the length-banded index
+  // query `fuzzyPlayerBand` uses — a roster is small (a handful of players), so there is no scan
+  // cost this needs to avoid, unlike `resolvePlayer`'s whole-table tier 3.
+  const rosterRows = db.select().from(players).where(inArray(players.id, rosterPlayerIds)).all();
+  const fuzzyCandidates = rosterRows.filter((p) => {
+    const distance = editDistance(p.canonicalName, input.name);
+    return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
+  });
+  if (fuzzyCandidates.length > 0) {
+    return { kind: "ambiguous", candidates: fuzzyCandidates };
+  }
+
+  return { kind: "unresolved", candidates: [] };
 }

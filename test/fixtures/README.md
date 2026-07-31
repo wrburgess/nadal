@@ -109,7 +109,26 @@ client-rendered SPA); the TennisRecord pages are public and were fetched directl
 TennisLink team, player-history and scorecard fixtures are absent because every
 `tennislink.usta.com` league and tournament path now redirects to `account.usta.com` OAuth. Spec
 § Ingestion classifies TennisLink as a public path; it is now a login-assisted one. Capturing these
-needs an HC login session — see `docs/findings.md` and the tracked follow-up issue.
+needs an HC login session — see `docs/findings.md` and the tracked follow-up issue. This is still
+true for HTML: no scorecard PAGE is committed anywhere in this repo. The scorecard payload
+fixture below is a different thing entirely — see that section.
+
+## Scorecard payloads (#18)
+
+`scorecard/tulsa-2025-redacted.json` is a fixture for `src/ingest/scorecard.ts`'s
+`scorecardPayloadSchema` and the `addMatchFromScorecard` service — **not** a captured page, and not
+subject to the HTML redaction pipeline above (there is no DOM to redact; the pipeline is
+cheerio/DOM-based and has nothing to walk here). Its *structure* is taken from a real Tulsa 2025
+scorecard (five courts: `S1` + `D1`-`D4`, including a match-tiebreak deciding set), with every name
+replaced from this repo's existing synthetic name pool
+(`test/helpers/players.ts`/`tools/fixture-vocabulary/stand-ins.txt`) — the same "same person maps to
+the same stand-in" discipline the HTML fixtures use, applied to a JSON payload instead of a DOM.
+
+**No scorecard photograph is committed, and none ever will be for this fixture set.** A scorecard
+photo shows real people's full names in-frame with no structural handle to redact by — unlike an
+HTML page, there is no element tree to walk and no attribute to elide. Any real photo captured at an
+actual tournament is exercised through
+[the runbook](../../docs/runbooks/in-event-screenshot-ingest.md), out of git, never committed.
 
 ## Re-capturing
 

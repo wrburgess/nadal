@@ -16,8 +16,14 @@ export type ArchivePageInput = {
   sourceSet: string;
   slug: string;
   url: string;
-  body: string;
+  /** `string | Uint8Array` (#18): every caller before #18 archived HTML text; a scorecard photo
+   * archives its raw bytes through the identical writer. */
+  body: string | Uint8Array;
   httpStatus: number;
+  /** File extension for the archived leaf, including the leading dot. Defaults to `".html"` —
+   * every caller before #18 archived HTML; a binary capture (a scorecard photo) passes its real
+   * extension so the archived leaf round-trips byte-identical off disk. */
+  extension?: string;
 };
 
 export type ArchiveProvenance = {
@@ -66,16 +72,19 @@ function nextTimestamp(): string {
  * makes a parser failure recoverable: the page is already safely on disk.
  *
  * Every path this function would touch is checked with `assertArchivePathSafe` before anything is
- * written, so a refusal writes NOTHING — not even the html file, half the pair.
+ * written, so a refusal writes NOTHING — not even the leaf file, half the pair.
  */
 export function archivePage(input: ArchivePageInput): string {
   const fetchedAt = nextTimestamp();
   const stamp = fetchedAt.replace(/[:.]/g, "-");
   const dir = join(rawRoot(), input.sourceSet);
-  const htmlPath = join(dir, `${input.slug}-${stamp}.html`);
-  const provenancePath = `${htmlPath}.provenance.json`;
+  // Defaults to ".html" — every caller before #18 archived HTML; a scorecard photo (#18) passes
+  // its own extension so the archived leaf keeps a real, openable file suffix.
+  const extension = input.extension ?? ".html";
+  const leafPath = join(dir, `${input.slug}-${stamp}${extension}`);
+  const provenancePath = `${leafPath}.provenance.json`;
 
-  assertArchivePathSafe(htmlPath);
+  assertArchivePathSafe(leafPath);
   assertArchivePathSafe(provenancePath);
 
   mkdirSync(dir, { recursive: true });
@@ -117,14 +126,16 @@ export function archivePage(input: ArchivePageInput): string {
   // set TN_RAW_PATH to a temp dir, so nothing exercised the one configuration the README describes.
   // (Codex adversarial review, PR #31 round 3.) `resolveRealOutputPath` checks the root, not the
   // directory, preserving that fix.
-  writeNewOutputFile(rawRoot(), htmlPath, DEFAULT_RAW_DIR, input.body);
+  writeNewOutputFile(rawRoot(), leafPath, DEFAULT_RAW_DIR, input.body);
 
   const provenance: ArchiveProvenance = {
     sourceUrl: input.url,
     fetchedAt,
     httpStatus: input.httpStatus,
     redacted: false,
-    bytes: Buffer.byteLength(input.body, "utf8"),
+    // `input.body` may already be raw bytes (#18) — byte-length is `Buffer.byteLength` for a
+    // string (UTF-8 encoded length, not JS `.length`) and the buffer's own `.byteLength` otherwise.
+    bytes: typeof input.body === "string" ? Buffer.byteLength(input.body, "utf8") : input.body.byteLength,
   };
   writeNewOutputFile(rawRoot(), provenancePath, DEFAULT_RAW_DIR, JSON.stringify(provenance, null, 2));
 
@@ -132,5 +143,5 @@ export function archivePage(input: ArchivePageInput): string {
   // what we hand back. They differ whenever the root legitimately resolves elsewhere — on macOS a
   // temp dir under /var realpaths to /private/var — and a caller that configured TN_RAW_PATH should
   // be told where it asked for the file, not shown a path it never named. Both name the same bytes.
-  return htmlPath;
+  return leafPath;
 }

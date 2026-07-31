@@ -9,9 +9,10 @@ exercises, and runbooks double as HC post-merge checklists.
   availability and captain notes conversationally
 - [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md) — `tn lineup plan` → read the guess
   critically; record availability behind `tn event add`
+- [in-event-screenshot-ingest.md](in-event-screenshot-ingest.md) — scorecard photo → agent →
+  `match_add` → verified rows → what to do when a name is flagged
 
 Planned (spec § Testing):
 
 - pre-tournament-full-pull.md — refresh all scouted teams end to end
-- in-event-screenshot-ingest.md — scorecard photo → tn match add → verified rows
 - backup-restore.md — tn db backup / restore drill

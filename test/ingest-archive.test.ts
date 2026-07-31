@@ -112,6 +112,70 @@ describe("archivePage", () => {
   });
 });
 
+// Task 4, #18: `archivePage`'s `body` widens to `string | Uint8Array` so a scorecard photo can
+// archive through the identical writer as every HTML capture — every path check, the O_CREAT|O_EXCL
+// open, and the post-open verification stay byte-identical; only WHAT is written changes.
+describe("archivePage: binary body support", () => {
+  useTnRawPath();
+
+  it("a Uint8Array body with an explicit extension round-trips byte-identical off disk", () => {
+    // A small synthetic buffer, not a photograph (test/fixtures/README.md: no scorecard photo is
+    // ever committed) — the PNG magic bytes are enough to prove bytes survive unmodified.
+    const body = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02]);
+
+    const path = archivePage({
+      sourceSet: "scorecard",
+      slug: "court-1",
+      url: "/tmp/court-1.png",
+      body,
+      httpStatus: 200,
+      extension: ".png",
+    });
+
+    expect(path.endsWith(".png")).toBe(true);
+    expect(new Uint8Array(readFileSync(path))).toEqual(body);
+  });
+
+  it("its .provenance.json sibling is still written, with a byte count matching the binary body", () => {
+    const body = new Uint8Array([1, 2, 3, 4, 5]);
+
+    const path = archivePage({
+      sourceSet: "scorecard",
+      slug: "court-2",
+      url: "/tmp/court-2.png",
+      body,
+      httpStatus: 200,
+      extension: ".png",
+    });
+
+    const provenance = JSON.parse(readFileSync(`${path}.provenance.json`, "utf8")) as Record<string, unknown>;
+    expect(provenance.bytes).toBe(5);
+    expect(provenance.redacted).toBe(false);
+  });
+
+  it("extension defaults to .html when omitted, unaffected by the widened content type", () => {
+    const path = archivePage({
+      sourceSet: "tennisrecord",
+      slug: "still-html",
+      url: "https://example.test",
+      body: "<html></html>",
+      httpStatus: 200,
+    });
+
+    expect(path.endsWith(".html")).toBe(true);
+  });
+
+  it("a path refusal still writes NOTHING for the binary path either — not half the pair", () => {
+    process.env.TN_RAW_PATH = resolve("src");
+    const body = new Uint8Array([1, 2, 3]);
+
+    expect(() =>
+      archivePage({ sourceSet: "scorecard", slug: "x", url: "/tmp/x.png", body, httpStatus: 200, extension: ".png" }),
+    ).toThrow(ArchivePathError);
+    expect(existsSync(join(resolve("src"), "scorecard"))).toBe(false);
+  });
+});
+
 describe("assertArchivePathSafe", () => {
   useTnRawPath();
 

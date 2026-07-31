@@ -526,6 +526,10 @@ export function openNewOutputFileSafely(
  * function's own doc comment for why archive writes stay `wx`-only rather than using
  * `overwriteOutputFile`'s replace-in-place semantics). Returns the REAL path written.
  *
+ * `content` is `string | Uint8Array` (#18: a scorecard photo archives through this same writer) —
+ * every path check, the `O_CREAT|O_EXCL` open, and the post-open verification above are unchanged
+ * either way; only the bytes handed to the write loop differ.
+ *
  * Any throw past the open — verification failure, or a failure of `writeSync` itself — closes the fd
  * and best-effort unlinks `realPath` so no partial file survives, then rethrows the ORIGINAL error
  * (mirrors `overwriteOutputFile`'s existing cleanup shape below: a cleanup failure must never mask
@@ -536,7 +540,7 @@ export function writeNewOutputFile(
   root: string,
   candidatePath: string,
   permittedDir: string,
-  content: string,
+  content: string | Uint8Array,
 ): string {
   const { fd, realPath, openedStat } = openNewOutputFileSafely(root, candidatePath, permittedDir);
   try {
@@ -547,7 +551,12 @@ export function writeNewOutputFile(
     // capture while every check above still reported success — a corrupted privacy artifact that
     // looks exactly like a good one. Writing an EMPTY file (`content === ""`, a legitimate zero-byte
     // capture) correctly performs no write at all, since `written` starts at the length.
-    const buffer = Buffer.from(content, "utf8");
+    //
+    // `content` widened to `string | Uint8Array` (#18, a scorecard photo archived through this same
+    // writer): encoded to a `Buffer` only when it is a string; a `Uint8Array` is copied through
+    // as-is. Every check above and the loop below are unchanged either way — this widens WHAT is
+    // written, never WHERE or HOW the destination is verified safe.
+    const buffer = typeof content === "string" ? Buffer.from(content, "utf8") : Buffer.from(content);
     let written = 0;
     while (written < buffer.length) {
       const justWritten = writeSync(fd, buffer, written, buffer.length - written);

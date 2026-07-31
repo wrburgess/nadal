@@ -1,0 +1,49 @@
+{
+  "playedOn": "2025-04-12",
+  "homeTeam": "IA/Versteeg/40&Over3.5M",
+  "visitingTeam": "OK/Tulsa Ironwood/40&Over3.5M",
+  "scheduledTime": "9:00 AM",
+  "site": "Clayview Country Club",
+  "courts": [
+    {
+      "slot": "S1",
+      "discipline": "singles",
+      "homePlayers": ["Nova Norbury"],
+      "visitingPlayers": ["Harper Duxbury"],
+      "winnerSide": "home",
+      "score": "6-4 6-3"
+    },
+    {
+      "slot": "D1",
+      "discipline": "doubles",
+      "homePlayers": ["Rowan Rushworth", "Rowan Kestrel"],
+      "visitingPlayers": ["Juniper Eastwick", "Delaney Duxbury"],
+      "winnerSide": "visiting",
+      "score": "4-6 6-3 [10-8]"
+    },
+    {
+      "slot": "D2",
+      "discipline": "doubles",
+      "homePlayers": ["Kai Bramwell", "Kai Linfield"],
+      "visitingPlayers": ["Delaney Eastwick", "Ellis Inglewood"],
+      "winnerSide": "home",
+      "score": "6-2 6-4"
+    },
+    {
+      "slot": "D3",
+      "discipline": "doubles",
+      "homePlayers": ["Blake Calder", "Lane Oakhurst"],
+      "visitingPlayers": ["Emory Ellerby", "Emory Yarrowby"],
+      "winnerSide": "home",
+      "score": "7-5 4-6 [10-6]"
+    },
+    {
+      "slot": "D4",
+      "discipline": "doubles",
+      "homePlayers": ["Casey Melbourne", "Orin Ashby"],
+      "visitingPlayers": ["Ellis Eastwick", "Juniper Duxbury"],
+      "winnerSide": "visiting",
+      "score": "3-6 4-6"
+    }
+  ]
+}

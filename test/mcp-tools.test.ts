@@ -244,6 +244,89 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     }
   });
 
+  it("match_add writes the same rows as the CLI — same service, asserted through the tool", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const home = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    const visiting = db.insert(teams).values({ name: "Report Opponent" }).returning().get();
+    const rosterNames: [number, string][] = [
+      [home.id, "Ada Ashby"],
+      [home.id, "Bo Bramwell"],
+      [home.id, "Cy Calder"],
+      [visiting.id, "Opp One"],
+      [visiting.id, "Opp Two"],
+      [visiting.id, "Opp Three"],
+    ];
+    for (const [teamId, name] of rosterNames) {
+      const player = db.insert(players).values({ canonicalName: name }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId, eventId: null }).run();
+    }
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "match_add",
+      arguments: {
+        playedOn: "2026-08-28",
+        homeTeam: home.name,
+        visitingTeam: visiting.name,
+        courts: [
+          { slot: "S1", discipline: "singles", homePlayers: ["Ada Ashby"], visitingPlayers: ["Opp One"] },
+          {
+            slot: "D1",
+            discipline: "doubles",
+            homePlayers: ["Bo Bramwell", "Cy Calder"],
+            visitingPlayers: ["Opp Two", "Opp Three"],
+            winnerSide: "home",
+            score: "6-3 6-4",
+          },
+        ],
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).toMatchObject({ courts: 2 });
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(teamMatches).all()).toHaveLength(1);
+    } finally {
+      check.sqlite.close();
+    }
+  });
+
+  it("match_add refusal returns the structured flag list rather than throwing", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const home = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    const visiting = db.insert(teams).values({ name: "Report Opponent" }).returning().get();
+    // Deliberately no roster seeded — every player name in the payload will flag.
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "match_add",
+      arguments: {
+        playedOn: "2026-08-28",
+        homeTeam: home.name,
+        visitingTeam: visiting.name,
+        courts: [{ slot: "S1", discipline: "singles", homePlayers: ["Ada Ashby"], visitingPlayers: ["Opp One"] }],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Ada Ashby");
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(teamMatches).all(), "a refusal must write nothing").toHaveLength(0);
+    } finally {
+      check.sqlite.close();
+    }
+  });
+
   // Found by the independent Codex review of PR #47 (rated medium). MCP tool results carry scraped
   // player and team names and were passed through a bare `JSON.stringify`, which escapes the C0
   // controls but leaves RIGHT-TO-LEFT OVERRIDE and U+2028/U+2029 intact — so the guard the CLI's

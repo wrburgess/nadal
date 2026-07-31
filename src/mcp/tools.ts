@@ -11,7 +11,10 @@ import { teams } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { pullArchivedUstaProfile } from "../ingest/archived.js";
 import { fetchPage } from "../ingest/fetch.js";
+import { addMatchFromScorecard, archiveScorecardImage, describeMatchAddRefusal } from "../ingest/match-add.js";
 import { pullPlayer } from "../ingest/player-pull.js";
+import { scorecardPayloadSchema } from "../ingest/scorecard.js";
+import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
@@ -302,6 +305,35 @@ export const MCP_TOOLS: McpToolDef[] = [
           endsOn: result.endsOn,
           created: result.created,
         };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "match_add",
+    cliCommand: "match add",
+    description: "Record a scorecard's results from an agent-extracted payload",
+    // The payload INLINE, not a file — that is the whole point: the agent has just produced this
+    // shape from vision and has no file to hand (unlike `tn match add <file>`, the CLI's own
+    // presenter for the same service). `scorecardPayloadSchema.shape` is spread directly rather
+    // than re-declared here, so the two surfaces cannot silently drift on what counts as valid —
+    // every nested check (a court's per-discipline player-count invariant, `playedOn`'s calendar-
+    // date rule) rides along unchanged, since it lives on the schema object itself.
+    inputShape: { ...scorecardPayloadSchema.shape },
+    handler: async (rawArgs) => {
+      // No `requireResolved` here, matching `event_add` above: this writer's whole point is to
+      // persist rows an agent just extracted from a photo, and the SDK has already validated
+      // `rawArgs` against `scorecardPayloadSchema`'s own shape via `inputShape`.
+      const payload = rawArgs as ScorecardPayload;
+      const { db, sqlite } = openDb();
+      try {
+        const archivedPath =
+          payload.sourceImage === undefined ? undefined : archiveScorecardImage(payload.sourceImage);
+        const result = addMatchFromScorecard(db, payload);
+        if (!result.ok) throw new McpToolError(describeMatchAddRefusal(result));
+        return { teamMatchId: result.teamMatchId, courts: result.courts, archivedPath };
       } finally {
         sqlite.close();
       }
