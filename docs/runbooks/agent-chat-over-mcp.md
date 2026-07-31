@@ -88,6 +88,28 @@ positionals by name.
 - `tn player show "<name>"` (the CLI, not MCP) reads back availability/notes recorded via MCP — same
   database, same service functions, so there is nothing surface-specific to reconcile.
 
+## If `tn db migrate` fails with "duplicate column name: is_home"
+
+Only reachable if you migrated a database **on this branch before it was merged with `main`** — i.e.
+while it still carried the pre-merge `0004_free_warstar` migration. `main` later landed its own
+`0004`, so this branch's home-team migration renumbered to `0005`; a database that recorded the old
+`0004` will try to apply `0005` on top of a column it already has.
+
+**Recovery is one line, and losing the database costs nothing by design:**
+
+```sh
+rm data/nadal.db && tn db migrate
+```
+
+Then re-pull. The database is a *cache* over `raw/`, not a system of record — spec § Ingestion makes
+every fetch an idempotent upsert and archives every page, precisely so it can be rebuilt at any time.
+Nothing you typed by hand is at risk unless you had already recorded captain notes or availability on
+that branch, in which case copy them out first (`sqlite3 data/nadal.db "select * from captain_notes;"`).
+
+**This cannot happen to a database created after the merge**, which applies `0000`..`0005` in order.
+No permanent repair path is shipped for it, deliberately: that would mean carrying
+migration-reconciliation machinery in production forever to serve a window that closed on merge.
+
 ## Known limitations
 
 - **No predicted lineup or `lineup_plan` tool yet.** That is PR B of #17 (the predicted-lineup
