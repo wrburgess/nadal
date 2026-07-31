@@ -1,9 +1,13 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import * as client from "../src/db/client.js";
+import { buildLegacyMigrationsFolder } from "./helpers/legacy-migrations.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 // Unicode line-break characters that are NOT ASCII C0 controls: NEL, Line
@@ -151,5 +155,129 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
 
     runMigrationsSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+});
+
+// #44 Task 5: the adjacent defect folded into this issue — `db migrate` never parsed its `args` at
+// all, so `tn db migrate --jsno bogus-extra-arg` silently ran the real migration and reported
+// status=ok. Fixed by giving `run` the same `parseArgs` + `emitSummary` treatment every other
+// command already has, which is also what makes `--quiet`/`--json` real here (GRAMMAR.md already
+// promised them for every command).
+describe("tn db migrate rejects unrecognized flags and extra arguments (#44 folded defect)", () => {
+  const fixture = useTnDbPath("arg-parsing.db");
+
+  function tableNames(): string[] {
+    const sqlite = new Database(fixture.path());
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+      name: string;
+    }>;
+    sqlite.close();
+    return rows.map((r) => r.name);
+  }
+
+  it("an unrecognized flag exits 1, reports it on stderr, and applies no migrations", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "--jsno"]);
+
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith('db migrate status=error message="unrecognized flag --jsno"');
+    expect(logSpy).not.toHaveBeenCalled();
+    // The real bug: `runMigrations()` used to run regardless of `args`. Confirm no migration table
+    // exists at all — not just that the exit code looks like failure. (The db FILE itself may
+    // still exist: dispatch's telemetry wrapper opens it independently to log the request and its
+    // own insert then fails on the missing `request_log` table — that failure is expected and
+    // reported as a second stderr line; what must NOT have happened is any table getting created.)
+    expect(tableNames()).toEqual([]);
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("an unexpected extra argument exits 1 and applies no migrations (db migrate takes no positionals)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "extra-arg"]);
+
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^db migrate status=error message=".+"$/));
+    expect(errorSpy.mock.calls[0]?.[0]).toContain("extra-arg");
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(tableNames()).toEqual([]);
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("--quiet applies migrations but writes nothing to stdout — the global GRAMMAR.md promises, now true here too", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "--quiet"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(tableNames()).toContain("players");
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  // MERGE-BORN regression (#46 integrating #44/PR #51). #46 added a detailed, copy-pasteable
+  // recovery to the migration-failure error; PR #51 concurrently moved `db migrate` from a raw
+  // `console.error` onto `emitSummary`'s one-line `key=value` summary, whose `sanitizeValue`
+  // replaces every control character — newlines included — with a space. Both were green alone.
+  // Together, the multi-line recovery collapsed into one ~1200-character run of prose with the `mv`
+  // command buried mid-paragraph: unusable by the human it was written for.
+  //
+  // This asserts the RENDERED CLI line, which is the surface that actually broke — the sibling
+  // assertion in test/db-teams-url-unique-upgrade.test.ts covers the message itself. The defect
+  // lives in the seam, so it is guarded from both sides.
+  it("renders the #46 duplicate-URL recovery command INTACT through the one-line summary", async () => {
+    const dbFile = join(mkdtempSync(join(tmpdir(), "tn-")), "legacy.db");
+    // A database migrated up to 0005 that already holds the duplicate pair 0006 forbids.
+    const legacyDir = buildLegacyMigrationsFolder(5);
+    const seed = new Database(dbFile);
+    try {
+      migrate(drizzle(seed), { migrationsFolder: legacyDir });
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A', 'https://tr/t?a')`);
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A 4.0', 'https://tr/t?a')`);
+    } finally {
+      seed.close();
+    }
+    process.env.TN_DB_PATH = dbFile;
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const code = await dispatch(["db", "migrate"]);
+    expect(code).toBe(1);
+
+    const printed = errorSpy.mock.calls.map((c) => String(c[0])).find((l) => l.includes("db migrate"));
+    expect(printed, "no db migrate summary line was emitted").toBeDefined();
+    const fields = parseSummaryFields(printed as string);
+    expect(fields.status).toBe("error");
+    // The whole recovery command survives as one contiguous, copy-pasteable run — this is what a
+    // collapsed multi-line message destroys.
+    expect(fields.message).toContain(`mv -i -- '${dbFile}' '${dbFile}.pre-0006.bak' && tn db migrate`);
+    expect(fields.message).toContain("docs/runbooks/db-migration-recovery.md");
+
+    errorSpy.mockRestore();
+  });
+
+  it("--json prints a parseable status=ok payload and applies migrations", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "--json"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    const parsed = JSON.parse(printed) as { status: string; path: string };
+    expect(parsed.status).toBe("ok");
+    expect(parsed.path).toBe(fixture.path());
+    expect(tableNames()).toContain("players");
+
+    logSpy.mockRestore();
   });
 });

@@ -23,6 +23,10 @@ there and writing either would corrupt the protocol. It therefore **rejects** ev
 surfaces instead of silently starting a server. `--help` still works, handled by `dispatch` before
 the command runs.
 
+`db migrate` rejects unrecognized flags and unexpected arguments the same way every command in this
+table does — it used to take no `args` at all and silently accept anything after `tn db migrate`
+(#44), unlike `mcp serve` above, which deliberately rejects *every* argument rather than parsing any.
+
 Every value field in that summary line is double-quoted (e.g. `status=ok path="..."`), so a value
 can safely contain spaces or `=` without being mistaken for a field boundary. Within a quoted
 value: backslashes are escaped first (`\` becomes `\\`), then double quotes (`"` becomes `\"`) —
@@ -34,8 +38,7 @@ this keeps the line single-line and un-spoofable. Sanitizing does not trim leadi
 whitespace: a quoted value preserves edge whitespace exactly (e.g. a `TN_DB_PATH` with a trailing
 space round-trips unchanged), since quoting already makes it unambiguous.
 
-A bare **`--` ends flag parsing** — with one documented exception below: every token after it is a
-target or payload, never a flag, so
+A bare **`--` ends flag parsing:** every token after it is a target or payload, never a flag, so
 `tn player note Randy -- "--poach at net"` records a note that begins with `--`. Global flags are
 recognized only *before* the delimiter — past it, `--json` is literal text. An unrecognized flag
 *before* `--` still fails, so the delimiter is not a way to silence a typo'd flag. (This is a change:
@@ -44,12 +47,14 @@ free-text payload and became a defect the moment `player note` landed — an ord
 `--` could not be recorded at all, and prefixing whitespace corrupts text that is deliberately
 stored untrimmed. Found by the independent reviewer on #17 PR A.)
 
-**The exception:** a `--` that is itself the *value* of a declared value flag (`--from`, `--source-url`
-on `team pull` / `player pull`) is that flag's value, not a delimiter — the parser consumes it
-statefully. `dispatch`'s help scan, which runs earlier and does not know a command's value flags,
-uses a simpler first-`--` scan, so the two disagree in exactly that case: `tn player pull X --from --
---source-url URL --help` prints no help. This needs an argument literally named `--` to reach and is
-tracked as #44 rather than fixed inside #17 PR A.
+The rule holds in exactly one shared form, at **both** layers: a `--` that is itself the *value* of
+a declared value flag (`--from`, `--source-url` on `team pull` / `player pull`) is that flag's
+value, not the end-of-flags delimiter — never a real `--` that could terminate flag parsing. Both
+`parseArgs` and `dispatch`'s `--help` scan (`scanFlags`, src/cli/args.ts) walk the same tokens with
+the same classification rule to know this, which is what makes `tn player pull X --from --
+--source-url URL --help` print help rather than fail with "unrecognized flag --help" (#44 — the two
+scans used to disagree here, because `dispatch` ran its own naive first-`--` scan that did not know
+any command's value flags).
 
 `team pull` and `player pull` are the exception to "no additional flags beyond the
 three listed" above: they also accept `--players` (team pull only, cascades each roster profile
@@ -66,13 +71,24 @@ is precisely why the outcome is `partial` rather than `error`, and why it must n
 requested player pulls happened.
 
 The parity test (`test/cli-grammar-parity.test.ts`) fails CI when this table and the router's
-registry diverge — in either direction. `dispatch` treats `--help` anywhere **before the `--`
-delimiter** as a request for help text (checked before the target is parsed), so `tn player note
---help` and `tn --help` both print help. Past the delimiter it is ordinary text: `tn player note
-Randy -- --help` records a note reading `--help`. That exception exists because the help check runs
-ahead of every command's parser, and without it the check would silently outrank the delimiter for
-exactly one token — leaving `--help` the single payload the CLI could not record while the MCP
-`player_note` tool accepted it, i.e. the same lossless-escape gap the delimiter exists to close.
+registry diverge — in either direction. `dispatch` resolves the noun+verb pair FIRST, and how it
+looks for `--help` then depends on whether that resolved:
+
+- **Unresolved** (no such noun+verb, or a bare `tn --help` where there is no verb at all): a raw
+  scan of the whole argv, stopping at the first bare `--` if one is present, exactly as if no
+  command's flags existed to be value-flag-aware about — there are none. `tn --help`,
+  `tn player --help`, and `tn bogus nope --help` all print help this way, rather than the exit-2
+  unknown-command diagnostic.
+- **Resolved** (a real command, e.g. `db migrate`, `player pull`): the SAME `scanFlags` walk
+  `parseArgs` uses, over the same tokens the command's own parser receives, using that command's
+  declared `booleanFlags`/`valueFlags`. `tn player note --help` prints help (`tn --help` also does,
+  but by the *unresolved* path above — there is no `tn --help` command to resolve);
+  past the delimiter it is ordinary text (`tn player note Randy -- --help` records a note reading
+  `--help`), and a `--` consumed as a declared value flag's value is likewise never the delimiter —
+  see above. Help is checked ahead of every resolved command's own parser, and without that check
+  the parser would just reject `--help` as unrecognized — leaving `--help` the one payload the CLI
+  could not record while the MCP `player_note` tool accepted it, i.e. the same lossless-escape gap
+  the delimiter exists to close (found by the independent reviewer on #17 PR A).
 
 ## Commands
 

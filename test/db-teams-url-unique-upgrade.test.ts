@@ -102,6 +102,15 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     // satisfies every other assertion here, and `rules/testing.md` does not allow a branch side no
     // test can kill. The clobber test below pins the other side.
     expect(message).toContain(`${dbPath}.pre-0006.bak'`);
+    // MERGE-BORN regression, caught integrating #44/PR #51. `tn db migrate` renders this message
+    // through `emitSummary`'s one-line `key=value` summary, and `sanitizeValue` turns every control
+    // character into a space — so a multi-line message silently collapses into one run of prose
+    // with the `mv` command buried mid-paragraph. The message must be single-line BY CONSTRUCTION.
+    // Guarded here (the message itself) and end-to-end in test/cli-db-migrate-command.test.ts (the
+    // rendered CLI line), because this defect lives in the seam between them and neither side had
+    // it alone.
+    // eslint-disable-next-line no-control-regex
+    expect(message).not.toMatch(/[\u0000-\u001F\u0085\u2028\u2029]/);
   });
 
   // Codex round 2, rated HIGH: the round-1 fix replaced `rm` with a bare `mv` to a FIXED backup

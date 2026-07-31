@@ -114,19 +114,25 @@ export function runMigrations(path: string = dbPath()): void {
         //      which closes the dash-prefixed-`TN_DB_PATH` hazard structurally rather than relying
         //      on the `--` terminator alone (Codex round 3; see the note on `--` below).
         const source = resolve(path);
+        // SINGLE LINE, no newlines — a hard requirement of the consumer, not a style choice.
+        // `tn db migrate` renders this through `emitSummary`'s one-line `key=value` summary, whose
+        // `quoteSummaryValue` -> `sanitizeValue` replaces every control character (newlines
+        // included) with a space. A multi-line message therefore does not survive: it collapses
+        // into one long run of prose with the recovery command buried mid-paragraph, which is
+        // precisely what a human staring at a failed migration cannot use.
+        //
+        // This is a MERGE-BORN defect neither side had alone, and it is why it is called out here:
+        // this message was first written against `console.error`, which passed newlines through,
+        // while #44/PR #51 concurrently moved `db migrate` onto `emitSummary`. Both changes were
+        // green in isolation. Keep the message single-line; the long-form version lives in
+        // docs/runbooks/db-migration-recovery.md, which is markdown and has room for it.
         throw new Error(
-          `${chain}\n\n` +
-            `This database (${source}) has two team rows sharing the same tennisrecord_url ` +
-            "(issue #46) — migration 0006's unique index cannot apply until that is resolved.\n\n" +
-            "Recovery — moves the database aside rather than deleting it, so nothing is lost. " +
-            "`-i` refuses to overwrite silently if a backup appeared since this message; `--` ends " +
-            "option parsing (kept as belt-and-braces — the absolute paths above already cannot be " +
-            "read as options):\n" +
-            `  mv -i -- ${shellQuote(source)} ${shellQuote(untakenBackupPath(source))} && tn db migrate\n\n` +
-            "Then re-pull. Rosters, ratings and match history are all re-derivable from the " +
-            "archived raw/ pages, but captain notes and availability exist ONLY in this file — " +
-            "extract those from the backup first if you recorded any " +
-            "(docs/runbooks/db-migration-recovery.md).",
+          "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+            `(${source}) has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
+            "0006's unique index cannot apply. Recover (non-destructive, moves the file aside): " +
+            `mv -i -- ${shellQuote(source)} ${shellQuote(untakenBackupPath(source))} && tn db migrate ` +
+            "— then re-pull. Captain notes and availability exist ONLY in this file, so extract " +
+            "them from the backup first: docs/runbooks/db-migration-recovery.md",
         );
       }
       throw err;
