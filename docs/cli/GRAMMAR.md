@@ -6,6 +6,16 @@ namespace. Ambiguous names error with candidates listed — never guess. Global 
 `--quiet/-q`, `--json`, `--help`. GNU flag style, max one short alias per flag. Every command
 prints one deterministic `key=value` summary line; non-zero exit on failure.
 
+`--quiet`/`-q` and `--json` are accepted by **every** command automatically — a command never has
+to declare them the way it declares `--players` or `--from` — because `parseArgs` recognizes both
+ahead of any command-specific flag. `--quiet` suppresses the command's normal `status=ok` summary
+line on stdout; it does **not** touch the exit code or anything written to stderr, so a caller
+piping stdout to `/dev/null` still gets a meaningful exit code and still sees an `error`/`partial`
+diagnostic. `--json` replaces the `key=value` line with `JSON.stringify` of the same fields (e.g.
+`{"status":"ok","team":"Norbury","roster":18,...}`), values unquoted in the CLI sense (no
+backslash-escaping — JSON's own string encoding applies instead). Passing both together: **`--quiet`
+wins**, suppressing all stdout regardless of `--json`.
+
 Every value field in that summary line is double-quoted (e.g. `status=ok path="..."`), so a value
 can safely contain spaces or `=` without being mistaken for a field boundary. Within a quoted
 value: backslashes are escaped first (`\` becomes `\\`), then double quotes (`"` becomes `\"`) —
