@@ -1,4 +1,5 @@
-import { eq } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { editDistance, FUZZY_MAX_DISTANCE, nameKey, nameKeyLength } from "../db/name-key.js";
 import { playerAliases, players, teams } from "../db/schema.js";
 import type { Db } from "./db-types.js";
 
@@ -37,54 +38,80 @@ export type NameLookup<T> =
   | { kind: "not-found" }
   | { kind: "ambiguous"; candidates: T[] };
 
-// Near-identical, not "vaguely similar": a one- or two-character typo distance, small enough that
-// two genuinely different names in the same roster essentially never collide by accident (the
-// fixture rosters are all distinct first+last combinations well outside this radius).
-const FUZZY_MAX_DISTANCE = 2;
-
-/** Case-insensitive comparison only — spec § Ingestion: no other name normalization at ingest. */
-function namesEqual(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
-/** Classic Levenshtein edit distance over case-folded, whitespace-trimmed strings. */
-function editDistance(a: string, b: string): number {
-  const s = a.trim().toLowerCase();
-  const t = b.trim().toLowerCase();
-  const rows = s.length + 1;
-  const cols = t.length + 1;
-  const d: number[][] = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
-  for (let i = 0; i < rows; i++) d[i]![0] = i;
-  for (let j = 0; j < cols; j++) d[0]![j] = j;
-  for (let i = 1; i < rows; i++) {
-    for (let j = 1; j < cols; j++) {
-      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
-      d[i]![j] = Math.min(
-        d[i - 1]![j]! + 1,
-        d[i]![j - 1]! + 1,
-        d[i - 1]![j - 1]! + cost,
-      );
-    }
+/**
+ * Thrown by the fail-closed unkeyed-row probe below (issue #32) when a table has a row with no
+ * `name_key` — meaning a DB that hasn't been through `tn db migrate` since migration 0004, whose
+ * own `runMigrations()` backfills every existing row (`src/db/name-key.ts`'s `backfillNameKeys`).
+ * Missing this loudly, rather than having the unkeyed row silently fail to match, is the deliberate
+ * counter to the fail-open shape that bit PR #31 round 3 and PR #38 round 2: a name that fails to
+ * match an existing (but unkeyed) row would otherwise create a silent duplicate.
+ */
+export class NameKeyNotBackfilledError extends Error {
+  constructor(tableLabel: string) {
+    super(
+      `${tableLabel} has a row with no name_key — run \`tn db migrate\` to backfill it before resolving names.`,
+    );
+    this.name = "NameKeyNotBackfilledError";
   }
-  return d[rows - 1]![cols - 1]!;
 }
 
-/** Exact (case-insensitive) then fuzzy name matching, shared by the resolve* and find*By Name functions. */
-function matchByName<T>(
-  candidates: T[],
-  nameOf: (row: T) => string,
-  name: string,
-): NameLookup<T> {
-  const exact = candidates.find((row) => namesEqual(nameOf(row), name));
-  if (exact !== undefined) return { kind: "found", row: exact };
+// Verified index-backed (`SEARCH ... USING COVERING INDEX`): this is one constant-cost query per
+// call, not a scan, so the fail-closed guarantee below costs nothing material to keep.
+//
+// Exported (not module-private) because src/query/player-profile.ts's `findPlayerByNameOrAlias`
+// queries `players.name_key` / `player_aliases.name_key` directly rather than through one of this
+// module's own functions, and needs the same fail-closed guard before doing so.
+export function assertPlayersKeyed(db: Db): void {
+  const probe = db.select({ one: sql<number>`1` }).from(players).where(isNull(players.nameKey)).limit(1).all();
+  if (probe.length > 0) throw new NameKeyNotBackfilledError("players");
+}
 
-  const fuzzy = candidates.filter((row) => {
-    const distance = editDistance(nameOf(row), name);
-    return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
-  });
-  if (fuzzy.length > 0) return { kind: "ambiguous", candidates: fuzzy };
+export function assertPlayerAliasesKeyed(db: Db): void {
+  const probe = db
+    .select({ one: sql<number>`1` })
+    .from(playerAliases)
+    .where(isNull(playerAliases.nameKey))
+    .limit(1)
+    .all();
+  if (probe.length > 0) throw new NameKeyNotBackfilledError("player_aliases");
+}
 
-  return { kind: "not-found" };
+function assertTeamsKeyed(db: Db): void {
+  const probe = db.select({ one: sql<number>`1` }).from(teams).where(isNull(teams.nameKey)).limit(1).all();
+  if (probe.length > 0) throw new NameKeyNotBackfilledError("teams");
+}
+
+/**
+ * Every row whose `name_key_length` is within `FUZZY_MAX_DISTANCE` of `targetLength` — a
+ * NECESSARY condition for a Levenshtein distance within that same radius (each edit changes length
+ * by at most 1), so narrowing on it can never drop a true fuzzy candidate. This is what makes
+ * "recall provably unchanged" a checked claim (test/identity-fuzzy-recall.test.ts) rather than an
+ * argument: the caller still runs the exact Levenshtein over this band, unabridged.
+ */
+function fuzzyPlayerBand(db: Db, targetLength: number): PlayerRow[] {
+  return db
+    .select()
+    .from(players)
+    .where(
+      and(
+        gte(players.nameKeyLength, targetLength - FUZZY_MAX_DISTANCE),
+        lte(players.nameKeyLength, targetLength + FUZZY_MAX_DISTANCE),
+      ),
+    )
+    .all();
+}
+
+function fuzzyTeamBand(db: Db, targetLength: number): TeamRow[] {
+  return db
+    .select()
+    .from(teams)
+    .where(
+      and(
+        gte(teams.nameKeyLength, targetLength - FUZZY_MAX_DISTANCE),
+        lte(teams.nameKeyLength, targetLength + FUZZY_MAX_DISTANCE),
+      ),
+    )
+    .all();
 }
 
 /**
@@ -93,12 +120,36 @@ function matchByName<T>(
  * an instruction to create a new player.
  */
 export function findPlayerByName(db: Db, name: string): NameLookup<PlayerRow> {
-  return matchByName(db.select().from(players).all(), (p) => p.canonicalName, name);
+  assertPlayersKeyed(db);
+  const key = nameKey(name);
+
+  const exact = db.select().from(players).where(eq(players.nameKey, key)).all();
+  if (exact[0] !== undefined) return { kind: "found", row: exact[0] };
+
+  const fuzzy = fuzzyPlayerBand(db, nameKeyLength(key)).filter((row) => {
+    const distance = editDistance(row.canonicalName, name);
+    return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
+  });
+  if (fuzzy.length > 0) return { kind: "ambiguous", candidates: fuzzy };
+
+  return { kind: "not-found" };
 }
 
 /** Same as `findPlayerByName`, for teams. */
 export function findTeamByName(db: Db, name: string): NameLookup<TeamRow> {
-  return matchByName(db.select().from(teams).all(), (t) => t.name, name);
+  assertTeamsKeyed(db);
+  const key = nameKey(name);
+
+  const exact = db.select().from(teams).where(eq(teams.nameKey, key)).all();
+  if (exact[0] !== undefined) return { kind: "found", row: exact[0] };
+
+  const fuzzy = fuzzyTeamBand(db, nameKeyLength(key)).filter((row) => {
+    const distance = editDistance(row.name, name);
+    return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
+  });
+  if (fuzzy.length > 0) return { kind: "ambiguous", candidates: fuzzy };
+
+  return { kind: "not-found" };
 }
 
 /**
@@ -115,6 +166,10 @@ export function findTeamByName(db: Db, name: string): NameLookup<TeamRow> {
  *
  * A name with no match at any tier creates exactly one new player, `canonicalName` set to the
  * name exactly as given (the page's own spelling — never title-cased or otherwise normalized).
+ *
+ * Tiers 2-3 are indexed lookups on `players.name_key` / `player_aliases.name_key` (issue #32):
+ * equality for tier 2, a length-banded Levenshtein for tier 3 (`fuzzyPlayerBand` above) — rather
+ * than loading every player into memory on every call.
  */
 export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolution<PlayerRow> {
   const idMatches: PlayerRow[] = [];
@@ -137,33 +192,42 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
   }
   if (idMatches[0] !== undefined) return { kind: "matched", row: idMatches[0] };
 
-  const allPlayers = db.select().from(players).all();
+  assertPlayersKeyed(db);
+  assertPlayerAliasesKeyed(db);
 
-  // Case-folded in JS, NOT in SQL. SQLite's `lower()` is ASCII-only, while the canonical-name half
-  // of this same tier uses JavaScript's Unicode-aware `toLowerCase()` — so an alias `Élodie` would
-  // never match a source spelling `élodie`, the tier-2 lookup would miss, and a SECOND player row
-  // would be created for someone already on file. One identity ladder cannot run two different
-  // notions of "the same name". (Codex adversarial review, PR #31, rated medium.)
+  // Case-folded via `nameKey` (src/db/name-key.ts), NOT SQLite's `lower()`, which is ASCII-only —
+  // this is what keeps the JS notion of "the same name" and the stored `name_key` column in
+  // agreement by construction (the class-level close of the #31 "one ladder, two notions of a
+  // name" defect: an alias `Élodie` failing to match a source spelling `élodie` created a SECOND
+  // player row for someone already on file).
+  const key = nameKey(input.name);
+
   const exactByAlias = db
-    .select({ playerId: playerAliases.playerId, alias: playerAliases.alias })
+    .select({ playerId: playerAliases.playerId })
     .from(playerAliases)
+    .where(eq(playerAliases.nameKey, key))
     .all()
-    .filter((r) => namesEqual(r.alias, input.name))
     .map((r) => r.playerId);
-  const exactByCanonicalName = allPlayers
-    .filter((p) => namesEqual(p.canonicalName, input.name))
-    .map((p) => p.id);
+  const exactByCanonicalName = db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.nameKey, key))
+    .all()
+    .map((r) => r.id);
   const exactIds = Array.from(new Set([...exactByAlias, ...exactByCanonicalName]));
 
   if (exactIds.length === 1) {
-    const row = allPlayers.find((p) => p.id === exactIds[0]);
+    const row = db.select().from(players).where(eq(players.id, exactIds[0]!)).all()[0];
     if (row !== undefined) return { kind: "matched", row };
   }
   if (exactIds.length > 1) {
-    return { kind: "ambiguous", candidates: allPlayers.filter((p) => exactIds.includes(p.id)) };
+    return {
+      kind: "ambiguous",
+      candidates: db.select().from(players).where(inArray(players.id, exactIds)).all(),
+    };
   }
 
-  const fuzzyCandidates = allPlayers.filter((p) => {
+  const fuzzyCandidates = fuzzyPlayerBand(db, nameKeyLength(key)).filter((p) => {
     const distance = editDistance(p.canonicalName, input.name);
     return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
   });
@@ -182,12 +246,13 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
       ustaUaid: input.ustaUaid ?? null,
       wtnTennisId: input.wtnTennisId ?? null,
       tennisrecordUrl: input.tennisrecordUrl ?? null,
+      nameKey: key,
     })
     .returning()
     .get();
   // Recorded as its own first alias so a second pull of the same name resolves here via tier 2
   // rather than re-running (and risking a different verdict from) the fuzzy tier.
-  db.insert(playerAliases).values({ playerId: created.id, alias: input.name }).run();
+  db.insert(playerAliases).values({ playerId: created.id, alias: input.name, nameKey: key }).run();
 
   return { kind: "created", row: created };
 }
@@ -196,6 +261,7 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
  * Resolve a team against the same three-tier shape as `resolvePlayer`, scoped to
  * `teams.tennisrecord_url` (tier 1) and `teams.name` (tiers 2-3; already unique, so tier 2 is a
  * single-row lookup rather than an alias join). Same "never a silent merge" contract on tier 3.
+ * Tiers 2-3 are indexed on `teams.name_key` / `teams.name_key_length`, same as `resolvePlayer`.
  */
 export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution<TeamRow> {
   if (input.tennisrecordUrl !== undefined && input.tennisrecordUrl !== null) {
@@ -207,11 +273,13 @@ export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution
     if (idMatch[0] !== undefined) return { kind: "matched", row: idMatch[0] };
   }
 
-  const allTeams = db.select().from(teams).all();
-  const exact = allTeams.find((t) => namesEqual(t.name, input.name));
-  if (exact !== undefined) return { kind: "matched", row: exact };
+  assertTeamsKeyed(db);
+  const key = nameKey(input.name);
 
-  const fuzzyCandidates = allTeams.filter((t) => {
+  const exact = db.select().from(teams).where(eq(teams.nameKey, key)).all();
+  if (exact[0] !== undefined) return { kind: "matched", row: exact[0] };
+
+  const fuzzyCandidates = fuzzyTeamBand(db, nameKeyLength(key)).filter((t) => {
     const distance = editDistance(t.name, input.name);
     return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
   });
@@ -222,7 +290,7 @@ export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution
   // `.returning()` for the same reason as `resolvePlayer` above.
   const created = db
     .insert(teams)
-    .values({ name: input.name, tennisrecordUrl: input.tennisrecordUrl ?? null })
+    .values({ name: input.name, tennisrecordUrl: input.tennisrecordUrl ?? null, nameKey: key })
     .returning()
     .get();
   return { kind: "created", row: created };

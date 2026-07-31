@@ -60,6 +60,8 @@ describe("tn player pull (end-to-end via dispatch)", () => {
         ageRange: null,
         gender: null,
         tennisrecordUrl: null,
+        nameKey: null,
+        nameKeyLength: null,
       },
       courtMatchCount: 0,
       archivedPath: "raw/tennisrecord/x.html",

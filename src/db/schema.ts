@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const players = sqliteTable("players", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -10,13 +10,32 @@ export const players = sqliteTable("players", {
   ageRange: text("age_range"),
   gender: text("gender"),
   tennisrecordUrl: text("tennisrecord_url"),       // durable re-pull handle (spec § Ingestion)
-});
+  // Issue #32: the JS-folded (name-key.ts) comparison key for canonicalName. Nullable on purpose:
+  // SQLite rejects `ADD COLUMN ... NOT NULL DEFAULT '' CHECK (name_key <> '')` on a populated table
+  // ("CHECK constraint failed"), and the same form WITHOUT the check is fail-open — a forgotten
+  // insert silently gets ''. So the guarantee lives at read time instead, in the fail-closed probe
+  // in src/ingest/identity.ts. Backfilled in JS (SQLite's lower() is ASCII-only) by
+  // backfillNameKeys in db/name-key.ts.
+  nameKey: text("name_key"),
+  // Indexed length of nameKey, used to narrow the fuzzy (tier-3) candidate band to rows whose key
+  // length is within FUZZY_MAX_DISTANCE of the target's — a necessary condition for a Levenshtein
+  // distance within that radius, so narrowing on it cannot drop a true candidate.
+  nameKeyLength: integer("name_key_length").generatedAlwaysAs(sql`length(name_key)`, { mode: "virtual" }),
+}, (t) => [
+  index("players_name_key_idx").on(t.nameKey),
+  index("players_name_key_length_idx").on(t.nameKeyLength),
+]);
 
 export const playerAliases = sqliteTable("player_aliases", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   playerId: integer("player_id").notNull().references(() => players.id),
   alias: text("alias").notNull(),
-}, (t) => [uniqueIndex("player_alias_unique").on(t.playerId, t.alias)]);
+  // Issue #32: JS-folded comparison key for alias, same rationale as players.nameKey above.
+  nameKey: text("name_key"),
+}, (t) => [
+  uniqueIndex("player_alias_unique").on(t.playerId, t.alias),
+  index("player_aliases_name_key_idx").on(t.nameKey),
+]);
 
 export const teams = sqliteTable("teams", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -25,7 +44,14 @@ export const teams = sqliteTable("teams", {
   district: text("district"),
   tennislinkUrl: text("tennislink_url"),
   tennisrecordUrl: text("tennisrecord_url"),       // durable re-pull handle (spec § Ingestion)
-});
+  // Issue #32: JS-folded comparison key for name, same rationale as players.nameKey above.
+  nameKey: text("name_key"),
+  // Same fuzzy-band purpose as players.nameKeyLength above.
+  nameKeyLength: integer("name_key_length").generatedAlwaysAs(sql`length(name_key)`, { mode: "virtual" }),
+}, (t) => [
+  index("teams_name_key_idx").on(t.nameKey),
+  index("teams_name_key_length_idx").on(t.nameKeyLength),
+]);
 
 export const events = sqliteTable("events", {
   id: integer("id").primaryKey({ autoIncrement: true }),

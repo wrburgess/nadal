@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { runMigrations, openDb } from "../src/db/client.js";
+import { nameKey } from "../src/db/name-key.js";
 import { playerAliases, players } from "../src/db/schema.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -18,7 +19,7 @@ describe("tn player show (end-to-end via dispatch)", () => {
   function seedPlayer(name: string) {
     runMigrations();
     const { db, sqlite } = openDb();
-    const row = db.insert(players).values({ canonicalName: name }).returning().get();
+    const row = db.insert(players).values({ canonicalName: name, nameKey: nameKey(name) }).returning().get();
     sqlite.close();
     return row;
   }
@@ -39,7 +40,9 @@ describe("tn player show (end-to-end via dispatch)", () => {
   it("includes aliases in the human profile text when the player has any on file", async () => {
     const player = seedPlayer("JT Martin");
     const { db, sqlite } = openDb();
-    db.insert(playerAliases).values({ playerId: player.id, alias: "Jerry Martin" }).run();
+    db.insert(playerAliases)
+      .values({ playerId: player.id, alias: "Jerry Martin", nameKey: nameKey("Jerry Martin") })
+      .run();
     sqlite.close();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -76,7 +79,12 @@ describe("tn player show (end-to-end via dispatch)", () => {
   it("an ambiguous name lists every candidate on stderr and exits 1", async () => {
     runMigrations();
     const { db, sqlite } = openDb();
-    db.insert(players).values([{ canonicalName: "Alex Stone" }, { canonicalName: "Alex Stove" }]).run();
+    db.insert(players)
+      .values([
+        { canonicalName: "Alex Stone", nameKey: nameKey("Alex Stone") },
+        { canonicalName: "Alex Stove", nameKey: nameKey("Alex Stove") },
+      ])
+      .run();
     sqlite.close();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
