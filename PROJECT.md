@@ -395,16 +395,31 @@ run either of them.**
    assessment or plan comment on the issue, where `ship` already records its stops and asks) and
    transcribe it into `docs/findings.md` in the first phase that has a branch — `invoke`.
 
-   **If the run never reaches `invoke`, that transcription never happens — so the ending is what has to
-   carry it.** An emergency stop, an abandoned option, or an issue closed without implementation all
-   terminate before any branch exists, and *"it is in an issue comment"* is **not** an acceptable
-   terminal disposition: the issue comment is not the triage artifact, and a learning left only there
-   fails **open**, silently, which is precisely what *"one findings line, always"* must not permit.
-   Before such a run ends it must therefore **name each untranscribed learning in its terminal comment
-   under a literal `Untranscribed findings:` heading**, quoting the line it would have written. Any
-   later run that reaches `invoke` on that issue transcribes every such block it finds, as part of the
-   standing plan task above. **This is the one path on which the line lands late or by the HC's hand,
-   and it is labelled rather than hidden** — the label is what turns a silent loss into a visible debt.
+   **A learning is only safe once it is on `main`, and two endings prevent that.** Committing the line
+   with its phase is not sufficient on its own:
+
+   - **The run never reaches `invoke`** — an emergency stop, an abandoned option, an issue closed
+     without implementation. No branch ever exists.
+   - **The run reaches `invoke`, but its PR is closed unmerged** — the branch is discarded, and with it
+     every findings line committed onto it. (This PR would demonstrate it: closing it unmerged would
+     throw away all of its own entries.)
+
+   In both, *"it is in an issue comment"* or *"it was committed on the branch"* is **not** an
+   acceptable terminal disposition: neither is the triage artifact, and a learning left in either fails
+   **open**, silently — precisely what *"one findings line, always"* must not permit.
+
+   **So whoever ends the run — stopping it, or closing the PR unmerged — must post a block headed with
+   the literal string `Untranscribed findings:`, quoting each line that would have been written, as a
+   comment on the issue.** On the **issue**, always, even when a closed PR is what triggered it: a
+   closed PR is not where the next run will look.
+
+   That single canonical location makes discovery **deterministic rather than lucky**, which is the
+   other half of the requirement: **the next run that reaches `invoke` on that issue reads the issue's
+   comments for `Untranscribed findings:` blocks and transcribes every one not already in
+   [`docs/findings.md`](docs/findings.md)**, as part of the standing plan task above. That is the whole
+   search scope — no other is implied, and none is needed. **This is the one path on which a line lands
+   late or by the HC's hand, and it is labelled rather than hidden**: the label is what turns a silent
+   loss into a visible debt.
 3. **At `final` Step 1: append nothing, commit nothing.** Confirm the run's learnings are already in
    the log, and that is the whole step. Fold nothing (edit no Rules Layer, no skill body, no
    `docs/standards/` file — all vendored). File nothing: no Issue, no PR, no ADR. Wait for nothing —
