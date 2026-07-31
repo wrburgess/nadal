@@ -158,15 +158,34 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       // would silently retire real members whose names merely came later in page order than the
       // skipped one — a partial-roster hazard the empty-set guard INSIDE `retireAbsentMemberships`
       // cannot see, because a partial roster is not an empty one.
-      const observedRetiredCount = retireAbsentMemberships(tx, {
-        teamId: upserted.id,
-        observedPlayerIds,
-        // The pull's single already-computed timestamp (`source.fetchedAt` above), not a fresh
-        // `new Date()` — every retirement this pull records shares one instant, so a re-run a
-        // moment later cannot introduce clock skew between memberships that were, in truth, all
-        // last (not) observed by the same fetch.
-        retiredAt: source.fetchedAt,
-      });
+      // A REPLAYED page (`--from`) never reconciles. Retirement is a claim about the roster *now*,
+      // and `--from` reads an arbitrary saved file whose vintage nothing establishes: replaying an
+      // archive captured before a newer live pull would retire every player who joined since, and
+      // the transaction's atomicity does no work against an out-of-order snapshot — it makes the
+      // wrong write atomically. The stamp would compound it, since `source.fetchedAt` is `new
+      // Date()` even here, so the row would record a departure "observed" at a moment the page it
+      // came from long predates.
+      //
+      // The replay path keeps doing its real job either way: the roster loop above still upserts
+      // (and un-retires) everyone the archived page DOES list. Only the destructive half is
+      // withheld — a replay can add and refresh, never remove.
+      //
+      // Deliberately NOT a flag: an "authoritative replay" mode would need provenance the archive
+      // does not carry. If one is ever wanted, it needs a captured-at timestamp compared against
+      // the memberships it would retire, not a caller's assertion that this file is current.
+      // (Found by the independent Codex adversarial review of this PR, rated high.)
+      const observedRetiredCount =
+        from !== undefined
+          ? 0
+          : retireAbsentMemberships(tx, {
+              teamId: upserted.id,
+              observedPlayerIds,
+              // The pull's single already-computed timestamp (`source.fetchedAt` above), not a fresh
+              // `new Date()` — every retirement this pull records shares one instant, so a re-run a
+              // moment later cannot introduce clock skew between memberships that were, in truth, all
+              // last (not) observed by the same fetch.
+              retiredAt: source.fetchedAt,
+            });
 
       for (const row of parsed.schedule) {
         const opponent = resolveTeam(tx, { name: row.opponentTeamName });

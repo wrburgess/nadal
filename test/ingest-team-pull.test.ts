@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
@@ -366,6 +369,98 @@ describe("pullTeam roster retirement (issue #49)", () => {
       expect(result.kind).toBe("ambiguous");
       const after = db.select().from(teamMemberships).all();
       expect(after).toEqual(before);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Issue #49, found by the independent Codex adversarial review of PR #53 (rated high). `--from`
+// reads an arbitrary saved page whose vintage NOTHING establishes, so it must never reconcile:
+// replaying an archive captured before a newer live pull would retire everyone who joined since.
+// The reviewer noted the pre-existing `--from` coverage all starts from an EMPTY database, so a
+// stale replay against a populated one was never exercised.
+describe("pullTeam --from never retires (issue #49, Codex review of PR #53)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  /** Writes `html` to a throwaway file and returns the path, for the `--from` replay path. */
+  function archiveFile(html: string): string {
+    const path = join(mkdtempSync(join(tmpdir(), "tn-archive-")), "team.html");
+    writeFileSync(path, html, "utf8");
+    return path;
+  }
+
+  it("replaying an OLDER archive after a newer live pull retires nobody", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // The live roster of record: all 18.
+      const live = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
+        target: team.source.url,
+      });
+      expect(live.kind).toBe("ok");
+      const before = db.select().from(teamMemberships).all();
+      expect(before).toHaveLength(18);
+
+      // A STALE archive that predates one member joining — i.e. it simply does not list them.
+      // Replaying it must not conclude they left.
+      const stale = archiveFile(removeRosterRow(team.html, "Ellis Eastwick"));
+      const replay = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({}),
+        from: { path: stale, sourceUrl: team.source.url },
+      });
+
+      expect(replay.kind).toBe("ok");
+      if (replay.kind !== "ok") throw new Error("expected ok");
+      expect(replay.retiredCount, "a replayed page must never retire").toBe(0);
+
+      // Asserted on DATABASE STATE, not just the reported count: every membership is still current.
+      const after = db.select().from(teamMemberships).all();
+      expect(after).toHaveLength(18);
+      expect(after.every((m) => m.retiredAt === null), "no membership was retired by the replay").toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a replay still ADDS and un-retires the members it does list — only the destructive half is withheld", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Retire Ellis legitimately, via a live pull whose roster omits them.
+      await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
+        target: team.source.url,
+      });
+      const withoutEllis = removeRosterRow(team.html, "Ellis Eastwick");
+      const live = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: withoutEllis } }),
+        target: team.source.url,
+      });
+      expect(live.kind).toBe("ok");
+      if (live.kind !== "ok") throw new Error("expected ok");
+      expect(live.retiredCount).toBe(1);
+
+      // Now replay the FULL archive: Ellis is listed again, so the roster loop must un-retire them.
+      // This is what proves the guard skips only `retireAbsentMemberships`, not the whole write.
+      const full = archiveFile(team.html);
+      const replay = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({}),
+        from: { path: full, sourceUrl: team.source.url },
+      });
+      expect(replay.kind).toBe("ok");
+
+      const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+      const rows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.retiredAt, "a replay that DOES list the player must un-retire them").toBeNull();
     } finally {
       sqlite.close();
     }
