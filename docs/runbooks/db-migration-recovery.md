@@ -24,11 +24,23 @@ SQLite's bare "UNIQUE constraint failed: teams.tennisrecord_url".
 
 **Recovery is one line. It moves the database aside rather than deleting it.** The error names the
 database that actually failed — `TN_DB_PATH` if you set it, `data/nadal.db` otherwise — as an
-**absolute** path. Substitute that path here:
+**absolute** path.
+
+**Let the shell expand the path; do not paste it into quotes yourself.** This form works for both
+cases and needs no editing:
 
 ```sh
-mv -i -- '/abs/path/to/nadal.db' '/abs/path/to/nadal.db.pre-0009.bak' && tn db migrate
+DB="${TN_DB_PATH:-data/nadal.db}"
+mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate
 ```
+
+Pasting the path into a single-quoted template instead is a real hazard, not a style preference: a
+perfectly legal `TN_DB_PATH=/tmp/O'Brien.db` yields `mv -i -- '/tmp/O'Brien.db' …`, whose apostrophe
+closes the quote — the command then fails outright at best, and with a crafted name can be made to
+parse as something else entirely. This runbook shipped exactly that template until the Codex
+adversarial review of #56 caught it, which is a pointed lesson: #56 removed a shell-quoting surface
+from the code and promptly recreated it as an *instruction*. A variable expansion has no such
+surface, because the shell never re-parses the value.
 
 The error deliberately does **not** print this command filled in for you, though it used to
 (issue #56). Emitting it meant `src/db/client.ts` permanently owned a shell-quoting surface, a
@@ -39,17 +51,18 @@ in markdown, where no sanitizer eats it and no encoding question arises.
 The consequence is that the safeguards the emitted command used to apply on your behalf are now
 yours to apply. Every one of them is here because it caught a real defect, so none is decoration:
 
-- **Use the absolute path the error names**, not a relative one. You may not be standing where the
-  failing run was — and since `-` cannot begin an absolute path, neither argument can be mistaken
-  for an option even if `TN_DB_PATH` is dash-prefixed.
+- **`"$DB"`, double-quoted, never a pasted path.** Double quotes stop word-splitting and globbing
+  while leaving the value untouched, so a space *or an apostrophe* in the path is safe.
 - **Keep `-i`.** It refuses to overwrite silently.
-- **Keep `--`.** It ends option parsing — belt and braces on top of the absolute paths.
-- **Keep both paths quoted.** A path containing a space is otherwise two arguments, and the source
-  path is whatever you set `TN_DB_PATH` to.
-- **Choose a backup name that is not already taken.** If `…pre-0009.bak` already exists from an
-  earlier recovery, add a suffix (`…pre-0009.2.bak`). Overwriting it destroys the captain notes and
-  availability saved by the *previous* failure — the exact data this whole procedure exists to
-  protect.
+- **Keep `--`.** It ends option parsing, which is what protects a dash-prefixed `TN_DB_PATH` — the
+  error's own path is absolute and so can never look like an option, but `$DB` above is whatever you
+  set, so the terminator is doing real work here.
+- **Check the backup name is not already taken** before running it: `ls "$DB".pre-0009*`. If one
+  exists from an earlier recovery, use a different suffix. Overwriting it destroys the captain notes
+  and availability saved by the *previous* failure — the exact data this whole procedure exists to
+  protect, and `-i` will prompt rather than silently clobber if you forget.
+- **Confirm `$DB` is the database that actually failed** — compare it against the path in the error.
+  They differ if you set `TN_DB_PATH` in one shell and recover in another.
 
 **If the error says `(path escaped …)` and the path contains `\u{…}` sequences**, those are escapes
 the error produced, not characters in the filename: the real path holds something that cannot be
@@ -59,13 +72,21 @@ First, **do not retype the escape into a shell** — it would name a different f
 reason the error escapes it. Move the database aside with a file manager, or with `node -e` using the
 real string, then re-run `tn db migrate`.
 
-Second, **read the escape off `--quiet`'s JSON, not off the summary line.** The one-line
+Second, **read the escape off the `--json` payload, not off the summary line.** The one-line
 `key=value` summary escapes backslashes inside its quoted field, so a path rendered `…we\u{A}ird.db`
-appears there as `…we\\u{A}ird.db` — doubled, and one un-escaping away from being misread:
+appears there as `…we\\u{A}ird.db` — doubled, and one un-escaping away from being misread.
+
+**Redirect stderr, or you will pipe an empty stream.** A *failed* `db migrate` writes its payload to
+**stderr**, not stdout (`emitSummary` routes every non-`ok` result there), so the obvious
+`tn db migrate --json | jq …` silently gives you nothing:
 
 ```sh
-tn db migrate --json | jq -r .message      # carries the escape exactly as produced
+tn db migrate --json 2>&1 | jq -r .message      # carries the escape exactly as produced
 ```
+
+That `2>&1` is the whole instruction — this runbook shipped the command without it until the Codex
+adversarial review of #56, where it was the only route offered for recovering a control-character
+path and therefore blocked that recovery entirely.
 
 Deleting would work too — `tn db migrate` only needs the file gone — but there is no reason to make
 the recovery destructive, and keeping the backup is what makes the export step below possible
@@ -110,7 +131,8 @@ resolve that to an absolute path yourself, and apply every safeguard from the fi
 `--`, both paths quoted, a backup name that is not already taken):
 
 ```sh
-mv -i -- '/abs/path/to/your.db' '/abs/path/to/your.db.pre-0009.bak' && tn db migrate
+DB="${TN_DB_PATH:-data/nadal.db}"
+mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate
 ```
 
 **Do not run that line with a literal `data/nadal.db` in it while `TN_DB_PATH` is set.** You would
@@ -163,21 +185,27 @@ a `select *` dump is unrestorable by construction: the numbers in it will point 
 Events must carry `kind`, `starts_on` and `ends_on` too, because those are the arguments
 `tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` requires to recreate one.
 
-`data/nadal.db.pre-0009.bak` below stands in for the backup path — use the one **you** chose when you
-ran the recovery above, which is absolute and may not be under `data/` at all if you set
-`TN_DB_PATH`.
+**Point `BAK` at the backup you actually created** in the recovery step above — the same
+`"$DB.pre-0009.bak"`, which is absolute and may not be under `data/` at all if you set `TN_DB_PATH`.
+Every command below reads `"$BAK"`, double-quoted, for the same reason the recovery does: a pasted
+path breaks on a space or an apostrophe, and a *wrong* path is worse than a broken one here —
+`sqlite3` **creates** an empty database at a path that does not exist, so a mistyped backup name
+yields four empty CSVs and no error, which reads as "there was nothing to export".
 
 ```sh
+BAK="${TN_DB_PATH:-data/nadal.db}.pre-0009.bak"
+test -s "$BAK" || { echo "no backup at $BAK — do not continue"; }
+
 # 0. The home team and the events — without these, steps below have nothing to attach to.
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
+sqlite3 -header -csv "$BAK" "
   select name from teams where is_home = 1" > home-team-backup.csv
 
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
+sqlite3 -header -csv "$BAK" "
   select name, kind, starts_on, ends_on
   from events
   order by starts_on" > events-backup.csv
 
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
+sqlite3 -header -csv "$BAK" "
   select p.canonical_name        as player,
          pp.canonical_name       as pair_player,
          n.note,
@@ -187,7 +215,7 @@ sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
   left join players pp  on pp.id = n.pair_player_id
   order by n.created_at" > captain-notes-backup.csv
 
-sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
+sqlite3 -header -csv "$BAK" "
   select p.canonical_name as player,
          e.name           as event,
          a.day,

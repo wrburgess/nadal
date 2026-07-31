@@ -85,7 +85,19 @@ positionals by name.
 
 ## Verifying it landed
 
-- Every tool call writes a `request_log` row with `surface="mcp"` — `sqlite3 data/nadal.db "select
+> **Every direct `sqlite3` read below must target the same database the MCP server writes.** Set it
+> once and use the variable — a literal `data/nadal.db` inspects the wrong file the moment
+> `TN_DB_PATH` is set, and worse, `sqlite3` *creates* an empty database at a path that does not
+> exist, so you get a confident empty answer rather than an error. That is a false verification
+> arriving exactly when you are trying to confirm a write landed. (Hardcoded literals here were
+> found by the Codex adversarial review of #56, the fourth instance of this class in two runbooks.)
+>
+> ```sh
+> DB="${TN_DB_PATH:-data/nadal.db}"      # double-quoted everywhere below, so a space or an
+>                                         # apostrophe in the path is safe
+> ```
+
+- Every tool call writes a `request_log` row with `surface="mcp"` — `sqlite3 "$DB" "select
   surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
   from either surface, interleaved, which is the whole point of one shared telemetry table (spec §
   Request telemetry).
@@ -102,8 +114,8 @@ positionals by name.
 
   For the rows themselves there is no command yet, so read the table directly:
 
-  ```
-  sqlite3 data/nadal.db "select p.canonical_name, e.name, a.day, a.status
+  ```sh
+  sqlite3 "$DB" "select p.canonical_name, e.name, a.day, a.status
     from availability a
     join players p on p.id = a.player_id
     join events  e on e.id = a.event_id
@@ -118,11 +130,12 @@ while it still carried the pre-merge `0004_free_warstar` migration. `main` later
 `0004` will try to apply `0005` on top of a column it already has.
 
 **Recovery is one line, and losing the database costs nothing by design.** This error is rethrown
-unchanged, so it does **not** name the failing database — it is `TN_DB_PATH` if you set it,
-`data/nadal.db` otherwise. Resolve that to an absolute path yourself and substitute it here:
+unchanged, so it does **not** name the failing database. Let the shell resolve it rather than
+pasting a path — `TN_DB_PATH` if you set it, `data/nadal.db` otherwise:
 
 ```sh
-mv -i -- '/abs/path/to/your.db' '/abs/path/to/your.db.pre-0005.bak' && tn db migrate
+DB="${TN_DB_PATH:-data/nadal.db}"
+mv -i -- "$DB" "$DB.pre-0005.bak" && tn db migrate
 ```
 
 Two things this line used to get wrong, both fixed under #56 after the Codex adversarial review found
@@ -136,8 +149,10 @@ the same class one runbook over:
   have **deleted an unrelated database** and left the failing one untouched. That is the wrong-file
   class rated critical in issue #46, Codex round 1.
 
-`-i` refuses a silent overwrite, `--` ends option parsing, quoting survives a path with a space, and
-a backup name that is not already taken keeps a *second* recovery from destroying the first backup.
+`-i` refuses a silent overwrite, `--` ends option parsing, and `"$DB"` double-quoted survives a path
+containing a space *or an apostrophe* — which a pasted single-quoted path does not, the third defect
+this line carried and the one that reached both runbooks. Check `ls "$DB".pre-0005*` first: a backup
+name that is already taken means a *second* recovery would destroy the first one's captain notes.
 See [db-migration-recovery.md](db-migration-recovery.md) for why each of those is there.
 
 Then re-pull. The database is a *cache* over `raw/`, not a system of record — spec § Ingestion makes
