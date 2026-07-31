@@ -295,12 +295,34 @@ describe("registry-wide: dispatch's --help scan is value-flag-aware for EVERY de
   });
 });
 
-describe("registry-wide: no command declares the same flag name as both boolean and value (#44)", () => {
+describe("registry-wide: flag-declaration invariants dispatch's scan depends on (#44)", () => {
   it("booleanFlags and valueFlags never overlap on any registered command", () => {
     for (const c of COMMANDS) {
       const overlap = (c.booleanFlags ?? []).filter((f) => (c.valueFlags ?? []).includes(f));
       expect(overlap, `tn ${c.noun} ${c.verb} declares ${JSON.stringify(overlap)} as both boolean and value`).toEqual(
         [],
+      );
+    }
+  });
+
+  // `help` is RESERVED, and until this test that was enforced only by a comment in args.ts and by
+  // nobody having tried it. Traced by the independent Codex review (round 2) of this PR: declaring
+  // it reopens #44's exact divergence for that one name, because `scanFlags` sets `helpRequested`
+  // from the token BEFORE `classifyFlag` sees it. With `valueFlags: ["help"]`,
+  // `scanFlags(["--help","v"], [], ["help"])` reports help requested AND consumes `v`, so
+  // `dispatch` prints help and exits 0 — while `parseArgs` on the same tokens stores
+  // `flags.help === "v"` and would have run the command. Two layers, one token, different answers:
+  // the thing this whole PR exists to make impossible.
+  //
+  // Guarded as a registry invariant rather than a runtime check because `COMMANDS` is static — the
+  // only way to declare it is to edit a command module, and this fails the moment someone does.
+  // The fix if it is ever genuinely wanted is to reserve the name in `scanFlags` explicitly, not to
+  // delete this test.
+  it("no command declares a flag named `help` — dispatch owns that token before any parser sees it", () => {
+    for (const c of COMMANDS) {
+      const declared = [...(c.booleanFlags ?? []), ...(c.valueFlags ?? [])];
+      expect(declared, `tn ${c.noun} ${c.verb} declares a flag named \`help\`, which dispatch intercepts`).not.toContain(
+        "help",
       );
     }
   });
