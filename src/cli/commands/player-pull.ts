@@ -36,8 +36,14 @@ export const playerPull: Command = {
   noun: "player",
   verb: "pull",
   summary: "Pull a player's ratings and match history from TennisRecord",
+  // Declared here rather than only inline in `run` below (#44 Task 4) so `dispatch`'s
+  // value-flag-aware `--help` scan (src/cli/router.ts) reads the exact same list `run` parses
+  // with — one declaration, not two that a future edit could let drift apart. Self-reference is
+  // safe: `run` is a closure that only reads `playerPull` when it is actually invoked, long after
+  // this object literal has finished initializing.
+  valueFlags: ["from", "source-url"],
   run: async (args) => {
-    const parsed = parseArgs(args, [], ["from", "source-url"]);
+    const parsed = parseArgs(args, playerPull.booleanFlags ?? [], playerPull.valueFlags ?? []);
     const opts = globalFlags(parsed.flags);
     if (parsed.error !== undefined) {
       emitSummary("player pull", "error", [["message", parsed.error]], opts);

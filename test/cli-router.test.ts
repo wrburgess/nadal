@@ -118,6 +118,181 @@ describe("tn router", () => {
   });
 });
 
+// #44: `dispatch`'s own `argv.indexOf("--")` scan disagreed with the command parser's stateful
+// scan about which `--` ends the flag region, so a `--` consumed as `--from`'s value looked like
+// the end-of-flags delimiter to `dispatch` only — suppressing a `--help` that came after it. The
+// headline regression: `tn player pull usta:1234 --from -- --source-url https://x --help` exited 1
+// with "unrecognized flag --help" instead of printing help.
+describe("dispatch and a command's declared value flags (#44)", () => {
+  const fixture = useTnDbPath("value-flag-help.db");
+
+  beforeEach(() => {
+    runMigrations(fixture.path());
+  });
+
+  function requestLogRows() {
+    const sqlite = new Database(fixture.path());
+    const rows = sqlite.prepare("SELECT * FROM request_log").all() as Array<Record<string, unknown>>;
+    sqlite.close();
+    return rows;
+  }
+
+  it("REGRESSION: `--from --` no longer swallows a trailing --help into 'unrecognized flag'", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch([
+      "player",
+      "pull",
+      "usta:1234",
+      "--from",
+      "--",
+      "--source-url",
+      "https://example.com",
+      "--help",
+    ]);
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(helpText());
+    // The command never ran — no telemetry row for an invocation that was actually a help request.
+    expect(requestLogRows()).toHaveLength(0);
+    logSpy.mockRestore();
+  });
+
+  it.each([
+    ["player", "pull", "from"],
+    ["player", "pull", "source-url"],
+    ["team", "pull", "from"],
+    ["team", "pull", "source-url"],
+  ])("%s %s: `--%s --` still reaches a trailing --help past the consumed `--`", async (noun, verb, consumedFlag) => {
+    const otherFlag = consumedFlag === "from" ? "source-url" : "from";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch([
+      noun,
+      verb,
+      "some-target",
+      `--${consumedFlag}`,
+      "--",
+      `--${otherFlag}`,
+      "value",
+      "--help",
+    ]);
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(helpText());
+    expect(requestLogRows()).toHaveLength(0);
+    logSpy.mockRestore();
+  });
+
+  it("consequence: `--from --help` no longer prints help — --help becomes --from's value, so the command runs and fails on the pairing rule instead", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch(["player", "pull", "some-target", "--from", "--help"]);
+    expect(code).toBe(1);
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--from requires --source-url"));
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+});
+
+// Risks & Considerations (plan): "Ordering inversion (highest)." Resolution now precedes the help
+// check in `dispatch`, so these pin the UNRESOLVED path specifically — written before the Task 3
+// reorder, not after, since that is exactly the failure mode a reorder could introduce silently.
+describe("dispatch's unresolved-command path still honors --help (#44 ordering-inversion guard)", () => {
+  it("dispatch([]) — a bare 'tn' with no arguments at all — prints help and returns 0", async () => {
+    // #44 Task 3 split this off dispatch's old single `argv.length === 0 || beforeTerminator...`
+    // condition into its own early return; every OTHER case of that condition already had test
+    // coverage via some `--help` invocation, but none ever called dispatch with a truly empty
+    // argv, so this specific branch went uncovered by the split until this test.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch([]);
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(helpText());
+    logSpy.mockRestore();
+  });
+
+  it("dispatch(['--help']) prints help and returns 0", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch(["--help"]);
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(helpText());
+    logSpy.mockRestore();
+  });
+
+  it("dispatch(['player', '--help']) prints help and returns 0 — an unresolved noun+verb pair ('player' + '--help'), not the 'player pull' command", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch(["player", "--help"]);
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(helpText());
+    logSpy.mockRestore();
+  });
+
+  it("dispatch(['bogus', 'nope', '--help']) prints help and returns 0 — NOT the exit-2 unknown-command diagnostic", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const code = await dispatch(["bogus", "nope", "--help"]);
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(helpText());
+    expect(errorSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("dispatch(['--', 'player', 'note', 'X']) is still exit 2 unknown-command (noun '--') — pins the index basis dispatch reads argv at", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const code = await dispatch(["--", "player", "note", "X"]);
+    expect(code).toBe(2);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unknown command"));
+    errorSpy.mockRestore();
+  });
+});
+
+// #44 Task 6: registry-wide guards, derived from `COMMANDS` rather than hand-listing each command,
+// so a command registered tomorrow is covered without anyone remembering to add a case here.
+describe("registry-wide: --help reachability for every registered command (#44)", () => {
+  // Called at describe scope, not inside the `it.each` callback: `useTnDbPath` registers its own
+  // `beforeEach`/`afterEach` (vitest hooks are collection-time registrations, not something a
+  // running test can call), and its `beforeEach` re-runs before EACH of the 12 parameterized
+  // cases below, so every case still gets its own fresh mkdtemp path.
+  const fixture = useTnDbPath("help-reachability.db");
+
+  it.each(COMMANDS.map((c) => [c.noun, c.verb] as const))(
+    "tn %s %s --help prints help, returns 0, and touches no DB file",
+    async (noun, verb) => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const code = await dispatch([noun, verb, "--help"]);
+      expect(code).toBe(0);
+      expect(logSpy).toHaveBeenCalledWith(helpText());
+      expect(existsSync(fixture.path())).toBe(false);
+      logSpy.mockRestore();
+    },
+  );
+});
+
+describe("registry-wide: declaration parity — dispatch's scan uses the SAME valueFlags list the command parses with (#44)", () => {
+  // If `cmd.valueFlags` on the registered Command object and the list `run` passes to `parseArgs`
+  // ever drifted apart, `dispatch`'s scan would misclassify the flag below as unrecognized,
+  // treat its "--" as a real end-of-flags delimiter, and never visit the --help past it — this
+  // test would then fail with code 1 (or a swallowed help) instead of 0. Derived from the
+  // registry: a NEW value flag added to any command tomorrow is covered without editing this test.
+  const cases = COMMANDS.flatMap((c) => (c.valueFlags ?? []).map((flag) => [c.noun, c.verb, flag] as const));
+
+  it.each(cases)("tn %s %s --%s -- --help still prints help (declared value flag consumes the `--`, not a delimiter)", async (noun, verb, flag) => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch([noun, verb, "some-target", `--${flag}`, "--", "--help"]);
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(helpText());
+    logSpy.mockRestore();
+  });
+});
+
+describe("registry-wide: no command declares the same flag name as both boolean and value (#44)", () => {
+  it("booleanFlags and valueFlags never overlap on any registered command", () => {
+    for (const c of COMMANDS) {
+      const overlap = (c.booleanFlags ?? []).filter((f) => (c.valueFlags ?? []).includes(f));
+      expect(overlap, `tn ${c.noun} ${c.verb} declares ${JSON.stringify(overlap)} as both boolean and value`).toEqual(
+        [],
+      );
+    }
+  });
+});
 
 // Found by the independent Codex review of PR #47 (rated medium). This diagnostic runs BEFORE any
 // command is resolved, so no command formatter exists to sanitize it — which made it the last
