@@ -6,6 +6,16 @@ namespace. Ambiguous names error with candidates listed — never guess. Global 
 `--quiet/-q`, `--json`, `--help`. GNU flag style, max one short alias per flag. Every command
 prints one deterministic `key=value` summary line; non-zero exit on failure.
 
+`--quiet`/`-q` and `--json` are accepted by **every** command automatically — a command never has
+to declare them the way it declares `--players` or `--from` — because `parseArgs` recognizes both
+ahead of any command-specific flag. `--quiet` suppresses the command's normal `status=ok` summary
+line on stdout; it does **not** touch the exit code or anything written to stderr, so a caller
+piping stdout to `/dev/null` still gets a meaningful exit code and still sees an `error`/`partial`
+diagnostic. `--json` replaces the `key=value` line with `JSON.stringify` of the same fields (e.g.
+`{"status":"ok","team":"Norbury","roster":18,...}`), values unquoted in the CLI sense (no
+backslash-escaping — JSON's own string encoding applies instead). Passing both together: **`--quiet`
+wins**, suppressing all stdout regardless of `--json`.
+
 Every value field in that summary line is double-quoted (e.g. `status=ok path="..."`), so a value
 can safely contain spaces or `=` without being mistaken for a field boundary. Within a quoted
 value: backslashes are escaped first (`\` becomes `\\`), then double quotes (`"` becomes `\"`) —
@@ -41,8 +51,19 @@ never be reached by any command.
 |---------|---------|
 | `tn db migrate` | Apply pending schema migrations |
 | `tn team pull` | Pull a team roster and schedule from TennisRecord |
+| `tn team show` | Show a team's roster and match record |
 | `tn player pull` | Pull a player's ratings and match history from TennisRecord |
+| `tn player show` | Show a player's full profile: ratings trajectory, history, records |
+| `tn report build` | Render per-opponent scouting dossiers (HTML + markdown) to disk |
 
-Planned (spec § Interfaces; rows move up as commands land): `team show/list`,
-`player show/note/list`, `match add`, `event show`, `lineup plan`, `report build`,
+Planned (spec § Interfaces; rows move up as commands land): `team list`,
+`player note/list`, `match add`, `event show`, `lineup plan`,
 `db backup/restore`.
+
+`tn report build [sectionals|<team>] [--json]` — `<team>` renders that one team's dossier;
+`sectionals`, and bare (no target), render one dossier per team on file plus a top-level
+`index.html`/`index.md`. Output root: `TN_REPORTS_PATH`, defaulting to repo-relative `reports/` —
+mirroring `TN_DB_PATH`/`TN_RAW_PATH` exactly, so this introduces no new flag. Every write is
+checked by the same hardened output-root guard `raw/` uses (`src/fs/output-root.ts`), with
+`"reports"` as the one permitted in-repo directory — a misconfigured `TN_REPORTS_PATH` pointed at
+any other in-repo path (e.g. `src`) is refused, exit 1.

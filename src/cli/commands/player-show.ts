@@ -1,0 +1,89 @@
+import type { Command } from "../router.js";
+import { openDb } from "../../db/client.js";
+import { getPlayerProfile, resolvePlayerTarget } from "../../query/player-profile.js";
+import type { PlayerProfile } from "../../query/player-profile.js";
+import { globalFlags, parseArgs } from "../args.js";
+import { emitSummary } from "../emit.js";
+import {
+  formatDataGapsLine,
+  formatPartnerFrequency,
+  formatRatingTrajectory,
+  formatRecord,
+  formatSlotTendencies,
+} from "../format-profile.js";
+import { sixMonthsAgo } from "../window.js";
+
+/**
+ * Spec § Interfaces: `tn player show <name|usta:…> [--json]` — "full profile: ratings trajectory,
+ * history, records". Unlike `pull`, the ok path is NOT `emitSummary`'s one-line `key=value` form —
+ * a profile is inherently multi-field, and squeezing it through that format would either truncate
+ * it or produce an unreadable wall of `key="value"` pairs. Instead: exactly ONE `console.log` call
+ * either way (human or `--json`), which is what "one summary" actually means for this command — the
+ * error paths (missing/unknown/ambiguous target, a bad flag) still go through `emitSummary` so they
+ * stay consistent with every other command's error contract.
+ */
+function formatPlayerProfileText(profile: PlayerProfile): string {
+  const id = profile.identity;
+  const aliasSuffix = id.aliases.length > 0 ? ` (aka ${id.aliases.join(", ")})` : "";
+  const gapsLine = formatDataGapsLine(profile.dataGaps);
+
+  const lines = [
+    `${id.canonicalName}${aliasSuffix}`,
+    `  age: ${id.ageRange ?? "unknown"}   gender: ${id.gender ?? "unknown"}`,
+    `  ratings: ${formatRatingTrajectory(profile.ratingTrajectory)}`,
+    `  singles: ${formatRecord(profile.singlesRecord.sixMonth)} (6mo) / ${formatRecord(profile.singlesRecord.allTime)} (all-time)`,
+    `  doubles: ${formatRecord(profile.doublesRecord.sixMonth)} (6mo) / ${formatRecord(profile.doublesRecord.allTime)} (all-time)`,
+    `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
+    `  partners: ${formatPartnerFrequency(profile.partnerFrequency)}`,
+    `  teams: ${profile.teamMemberships.map((m) => m.teamName).join(", ") || "none"}`,
+  ];
+  if (gapsLine !== null) lines.push(`  not collected yet: ${gapsLine}`);
+  return lines.join("\n");
+}
+
+export const playerShow: Command = {
+  noun: "player",
+  verb: "show",
+  summary: "Show a player's full profile: ratings trajectory, history, records",
+  run: async (args) => {
+    const parsed = parseArgs(args, [], []);
+    const opts = globalFlags(parsed.flags);
+    if (parsed.error !== undefined) {
+      emitSummary("player show", "error", [["message", parsed.error]], opts);
+      return 1;
+    }
+    if (parsed.target === undefined) {
+      emitSummary("player show", "error", [["message", "missing target"]], opts);
+      return 1;
+    }
+
+    const { db, sqlite } = openDb();
+    try {
+      const resolution = resolvePlayerTarget(db, parsed.target);
+      if (resolution.kind === "not-found") {
+        emitSummary("player show", "error", [["message", `unknown target "${parsed.target}"`]], opts);
+        return 1;
+      }
+      if (resolution.kind === "ambiguous") {
+        emitSummary(
+          "player show",
+          "error",
+          [["message", `ambiguous target: ${resolution.candidates.join(", ")}`]],
+          opts,
+        );
+        return 1;
+      }
+
+      const profile = getPlayerProfile(db, resolution.playerId, { since: sixMonthsAgo() });
+
+      // `--quiet` wins over `--json` (GRAMMAR.md), same as `emitSummary` — checked here rather
+      // than routed through `emitSummary` itself, since neither success form is a `key=value` line.
+      if (!opts.quiet) {
+        console.log(opts.json ? JSON.stringify(profile) : formatPlayerProfileText(profile));
+      }
+      return 0;
+    } finally {
+      sqlite.close();
+    }
+  },
+};

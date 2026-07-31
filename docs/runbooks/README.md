@@ -4,6 +4,7 @@ One runbook per operational flow; each SOW's manual-test segment cites the runbo
 exercises, and runbooks double as HC post-merge checklists.
 
 - [login-assisted-scrape.md](login-assisted-scrape.md) — USTA/WTN pull with HC standing by to log in
+- [build-and-print-dossiers.md](build-and-print-dossiers.md) — `tn report build` → browser → courtside binder
 
 Planned (spec § Testing):
 

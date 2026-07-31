@@ -13,6 +13,21 @@ describe("tn router", () => {
     }
   });
 
+  it("helpText aligns the command column so every summary starts at the same character position, even though registered commands have differently-sized noun+verb pairs (spec § Interfaces: help fits one screen)", () => {
+    const help = helpText();
+    const lines = help.split("\n").filter((l) => l.startsWith("  tn "));
+    expect(lines.length).toBe(COMMANDS.length);
+    // The real registry already mixes short ("db migrate") and long ("report build", "player show")
+    // noun+verb pairs — padding only the verb (the old bug) misaligns every row whose NOUN differs
+    // in length, which every one of these does. No fixture needed to exercise the failure mode.
+    const summaryStarts = COMMANDS.map((c) => {
+      const line = lines.find((l) => l.includes(`tn ${c.noun} ${c.verb}`));
+      expect(line, `no help line found for tn ${c.noun} ${c.verb}`).toBeDefined();
+      return line!.indexOf(c.summary);
+    });
+    expect(new Set(summaryStarts).size).toBe(1);
+  });
+
   it("dispatch returns 2 and prints an error line for an unknown command", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const code = await dispatch(["bogus", "nope"]);

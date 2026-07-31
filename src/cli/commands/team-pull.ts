@@ -2,12 +2,8 @@ import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import { fetchPage } from "../../ingest/fetch.js";
 import { pullTeam } from "../../ingest/team-pull.js";
-import { parseArgs } from "../args.js";
-import { quoteSummaryValue } from "../summary.js";
-
-function summarize(fields: Array<[string, string]>): string {
-  return `team pull ${fields.map(([k, v]) => `${k}=${v}`).join(" ")}`;
-}
+import { globalFlags, parseArgs } from "../args.js";
+import { emitSummary, type SummaryField } from "../emit.js";
 
 export const teamPull: Command = {
   noun: "team",
@@ -15,25 +11,19 @@ export const teamPull: Command = {
   summary: "Pull a team roster and schedule from TennisRecord",
   run: async (args) => {
     const parsed = parseArgs(args, ["players"], ["from", "source-url"]);
+    const opts = globalFlags(parsed.flags);
     if (parsed.error !== undefined) {
-      console.error(summarize([["status", "error"], ["message", `"${quoteSummaryValue(parsed.error)}"`]]));
+      emitSummary("team pull", "error", [["message", parsed.error]], opts);
       return 1;
     }
     if (parsed.target === undefined) {
-      console.error(
-        summarize([["status", "error"], ["message", `"${quoteSummaryValue("missing target")}"`]]),
-      );
+      emitSummary("team pull", "error", [["message", "missing target"]], opts);
       return 1;
     }
     const from = parsed.flags.from;
     const sourceUrl = parsed.flags["source-url"];
     if ((from !== undefined) !== (sourceUrl !== undefined)) {
-      console.error(
-        summarize([
-          ["status", "error"],
-          ["message", `"${quoteSummaryValue("--from requires --source-url and vice versa")}"`],
-        ]),
-      );
+      emitSummary("team pull", "error", [["message", "--from requires --source-url and vice versa"]], opts);
       return 1;
     }
 
@@ -48,11 +38,11 @@ export const teamPull: Command = {
       });
 
       if (result.kind === "ok") {
-        const fields: Array<[string, string]> = [
-          ["team", `"${quoteSummaryValue(result.team.name)}"`],
-          ["roster", String(result.rosterCount)],
-          ["matches", String(result.matchCount)],
-          ["archived", `"${quoteSummaryValue(result.archivedPath)}"`],
+        const fields: SummaryField[] = [
+          ["team", result.team.name],
+          ["roster", result.rosterCount],
+          ["matches", result.matchCount],
+          ["archived", result.archivedPath],
         ];
 
         // The team transaction has already committed, so a cascade failure is NOT an error — but it
@@ -63,18 +53,20 @@ export const teamPull: Command = {
         // the entries, and exits non-zero — the outcome is visible to a caller that only reads the
         // exit code.
         if (result.skippedRosterEntries.length > 0) {
-          console.error(
-            summarize([
-              ["status", "partial"],
+          emitSummary(
+            "team pull",
+            "partial",
+            [
               ...fields,
-              ["skipped", String(result.skippedRosterEntries.length)],
-              ["skippedEntries", `"${quoteSummaryValue(result.skippedRosterEntries.join(", "))}"`],
-            ]),
+              ["skipped", result.skippedRosterEntries.length],
+              ["skippedEntries", result.skippedRosterEntries.join(", ")],
+            ],
+            opts,
           );
           return 1;
         }
 
-        console.log(summarize([["status", "ok"], ...fields]));
+        emitSummary("team pull", "ok", fields, opts);
         return 0;
       }
 
@@ -82,7 +74,7 @@ export const teamPull: Command = {
         result.kind === "ambiguous"
           ? `ambiguous target: ${result.candidates.join(", ")}`
           : result.message;
-      console.error(summarize([["status", "error"], ["message", `"${quoteSummaryValue(message)}"`]]));
+      emitSummary("team pull", "error", [["message", message]], opts);
       return 1;
     } finally {
       sqlite.close();
