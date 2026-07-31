@@ -146,6 +146,23 @@ describe("describeMatchAddRefusal", () => {
         'court "D2": the same player (id 9) listed as home:"Transfer Player" and visiting:"Transfer Player"',
     );
   });
+
+  // Codex adversarial review of PR #54, High findings 1-2.
+  it("names an off-roster player flag distinctly from a plain unresolved one", () => {
+    expect(
+      describeMatchAddRefusal({
+        ok: false,
+        kind: "unresolved-players",
+        flags: [{ name: "usta:99999", reason: "off-roster", candidates: ["Some Other Spelling"] }],
+      }),
+    ).toBe('unresolved player name(s): "usta:99999" resolved to Some Other Spelling, who is not on this team\'s roster');
+  });
+
+  it("names every duplicate court slot together", () => {
+    expect(describeMatchAddRefusal({ ok: false, kind: "duplicate-slots", slots: ["S1", "D2"] })).toBe(
+      "duplicate court slot(s) in one payload: S1, D2",
+    );
+  });
 });
 
 describe("addMatchFromScorecard", () => {
@@ -344,39 +361,125 @@ describe("addMatchFromScorecard", () => {
     }
   });
 
-  it("a usta: prefix-ID overrides a name that would otherwise flag — resolved globally, not by roster", () => {
+  // Codex adversarial review of PR #54, High finding 1: a prefix-ID used to resolve GLOBALLY,
+  // ignoring roster scoping entirely — this test used to assert exactly that bypass. Rewritten to
+  // assert the bounded behavior: an id naming a real player who is NOT on the payload's own team
+  // roster must flag, never write them in as a participant of a team they aren't rostered to.
+  it("REGRESSION (Codex High finding 1): a usta: prefix-ID naming a player on NO roster at all is flagged, DB unchanged", () => {
     const { db, sqlite } = freshDb();
     try {
       const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
       const visiting = seedTeam(db, "Report Opponent");
       seedRosterPlayer(db, home.id, "Ada Ashby");
-      const cy = seedRosterPlayer(db, home.id, "Cy Calder");
+      seedRosterPlayer(db, home.id, "Cy Calder");
       seedRosterPlayer(db, visiting.id, "Opp One");
       seedRosterPlayer(db, visiting.id, "Opp Two");
       seedRosterPlayer(db, visiting.id, "Opp Three");
 
-      // "Bo" is NOT on any roster at all — only a usta: id can resolve them.
+      // "Bo" exists in `players` with a real usta id — but is on NO roster at all.
       db.insert(players)
         .values({ canonicalName: "Bo B. Ashby-Bramwell", ustaUaid: "88888", nameKey: nameKey("Bo B. Ashby-Bramwell") })
         .run();
-      const bo = db.select().from(players).all().find((p) => p.ustaUaid === "88888")!;
+
+      const before = {
+        teamMatches: db.select().from(teamMatches).all(),
+        courtMatches: db.select().from(courtMatches).all(),
+        courtMatchPlayers: db.select().from(courtMatchPlayers).all(),
+        players: db.select().from(players).all(),
+      };
 
       const payload = basePayload(home.name, visiting.name);
       payload.courts[1] = { ...payload.courts[1]!, homePlayers: ["usta:88888", "Cy Calder"] };
 
       const result = addMatchFromScorecard(db, payload);
 
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.kind === "unresolved-players") {
+        expect(result.flags.map((f) => f.name)).toEqual(["usta:88888"]);
+        expect(result.flags[0]!.reason).toBe("off-roster");
+      } else {
+        throw new Error("expected an unresolved-players refusal with an off-roster flag");
+      }
+
+      expect(db.select().from(teamMatches).all()).toEqual(before.teamMatches);
+      expect(db.select().from(courtMatches).all()).toEqual(before.courtMatches);
+      expect(db.select().from(courtMatchPlayers).all()).toEqual(before.courtMatchPlayers);
+      expect(db.select().from(players).all()).toEqual(before.players);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a usta: prefix-ID naming a player on ANOTHER team's roster is flagged, DB unchanged", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const visiting = seedTeam(db, "Report Opponent");
+      seedRosterPlayer(db, home.id, "Ada Ashby");
+      seedRosterPlayer(db, home.id, "Cy Calder");
+      const oppOne = seedRosterPlayer(db, visiting.id, "Opp One");
+      seedRosterPlayer(db, visiting.id, "Opp Two");
+      seedRosterPlayer(db, visiting.id, "Opp Three");
+      // "Opp One" is a real roster player — but on the VISITING team, not home's.
+      db.update(players).set({ ustaUaid: "55555" }).where(eq(players.id, oppOne.id)).run();
+
+      const before = {
+        teamMatches: db.select().from(teamMatches).all(),
+        courtMatches: db.select().from(courtMatches).all(),
+        courtMatchPlayers: db.select().from(courtMatchPlayers).all(),
+        players: db.select().from(players).all(),
+      };
+
+      const payload = basePayload(home.name, visiting.name);
+      payload.courts[1] = { ...payload.courts[1]!, homePlayers: ["usta:55555", "Cy Calder"] };
+
+      const result = addMatchFromScorecard(db, payload);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.kind === "unresolved-players") {
+        expect(result.flags[0]!.reason).toBe("off-roster");
+      } else {
+        throw new Error("expected an unresolved-players refusal with an off-roster flag");
+      }
+
+      expect(db.select().from(teamMatches).all()).toEqual(before.teamMatches);
+      expect(db.select().from(courtMatches).all()).toEqual(before.courtMatches);
+      expect(db.select().from(courtMatchPlayers).all()).toEqual(before.courtMatchPlayers);
+      expect(db.select().from(players).all()).toEqual(before.players);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a usta: prefix-ID naming a player ON the payload's own team roster still resolves — the correction workflow keeps working", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const visiting = seedTeam(db, "Report Opponent");
+      const ada = seedRosterPlayer(db, home.id, "Ada Ashby");
+      seedRosterPlayer(db, home.id, "Bo Bramwell");
+      seedRosterPlayer(db, home.id, "Cy Calder");
+      seedRosterPlayer(db, visiting.id, "Opp One");
+      seedRosterPlayer(db, visiting.id, "Opp Two");
+      seedRosterPlayer(db, visiting.id, "Opp Three");
+      // A misread name corrected via id — "Ada Ashby" IS on home's roster.
+      db.update(players).set({ ustaUaid: "88888" }).where(eq(players.id, ada.id)).run();
+
+      const payload = basePayload(home.name, visiting.name);
+      payload.courts[0] = { ...payload.courts[0]!, homePlayers: ["usta:88888"] }; // S1: singles, 1 player
+
+      const result = addMatchFromScorecard(db, payload);
+
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const d1 = db.select().from(courtMatches).all().find((c) => c.slot === "D1")!;
-        const d1HomeIds = db
+        const s1 = db.select().from(courtMatches).all().find((c) => c.slot === "S1")!;
+        const s1HomeIds = db
           .select()
           .from(courtMatchPlayers)
           .all()
-          .filter((p) => p.courtMatchId === d1.id && p.side === "home")
-          .map((p) => p.playerId)
-          .sort();
-        expect(d1HomeIds).toEqual([bo.id, cy.id].sort());
+          .filter((p) => p.courtMatchId === s1.id && p.side === "home")
+          .map((p) => p.playerId);
+        expect(s1HomeIds).toEqual([ada.id]);
       }
     } finally {
       sqlite.close();
@@ -794,6 +897,74 @@ describe("addMatchFromScorecard", () => {
         const result = addMatchFromScorecard(db, basePayload(home.name, visiting.name));
 
         expect(result.ok).toBe(true);
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  // Codex adversarial review of PR #54, High finding 2: the schema requires only a non-empty
+  // `slot`, but the id-less write key `upsertCourtMatch` uses is `(slot, playedOn, teamMatchId)` —
+  // and WITHIN one payload, every court shares the same `playedOn` and the same freshly-resolved
+  // `teamMatchId`, so `slot` alone is the only thing that can tell two courts apart. Two
+  // schema-valid courts sharing a slot therefore silently collapse: the second `upsertCourtMatch`
+  // call UPDATES the first court's row, and `upsertCourtMatchPlayers` only ever ADDS participants,
+  // never removes — so the surviving row ends up with every player from BOTH courts and the SECOND
+  // court's score, with no refusal at all. Same class as the duplicate-resolved-player guard above,
+  // one level out: any two distinct payload entities that collide on a write key must refuse, not
+  // silently merge.
+  describe("duplicate court-slot guard", () => {
+    it("REGRESSION (Codex High finding 2): two schema-valid courts sharing a slot refuse, and ALL FOUR match tables are unchanged", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const visiting = seedTeam(db, "Report Opponent");
+        seedRosterPlayer(db, home.id, "Ada Ashby");
+        seedRosterPlayer(db, home.id, "Cy Calder");
+        seedRosterPlayer(db, visiting.id, "Opp One");
+        seedRosterPlayer(db, visiting.id, "Opp Three");
+
+        const before = {
+          teamMatches: db.select().from(teamMatches).all(),
+          courtMatches: db.select().from(courtMatches).all(),
+          courtMatchPlayers: db.select().from(courtMatchPlayers).all(),
+          players: db.select().from(players).all(),
+        };
+
+        // Two DIFFERENT, individually schema-valid singles courts, both mislabeled "S1".
+        const payload: ScorecardPayload = {
+          playedOn: "2026-08-28",
+          homeTeam: home.name,
+          visitingTeam: visiting.name,
+          courts: [
+            { slot: "S1", discipline: "singles", homePlayers: ["Ada Ashby"], visitingPlayers: ["Opp One"] },
+            { slot: "S1", discipline: "singles", homePlayers: ["Cy Calder"], visitingPlayers: ["Opp Three"] },
+          ],
+        };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.kind).toBe("duplicate-slots");
+
+        expect(db.select().from(teamMatches).all()).toEqual(before.teamMatches);
+        expect(db.select().from(courtMatches).all()).toEqual(before.courtMatches);
+        expect(db.select().from(courtMatchPlayers).all()).toEqual(before.courtMatchPlayers);
+        expect(db.select().from(players).all()).toEqual(before.players);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("two courts with DIFFERENT slots still ingest cleanly — the guard must not over-refuse", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+
+        const result = addMatchFromScorecard(db, basePayload(home.name, visiting.name)); // S1 + D1
+
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.courts).toBe(2);
       } finally {
         sqlite.close();
       }

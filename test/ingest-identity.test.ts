@@ -321,18 +321,72 @@ describe("resolveRosterPlayer", () => {
     }
   });
 
-  it("a usta: prefix-ID overrides a name that would otherwise flag — global, not roster-scoped", () => {
+  // Codex adversarial review of PR #54, High finding 1: the three prefix-ID branches returned a
+  // GLOBAL player row without ever consulting `team_memberships` — so an id naming a real player on
+  // some OTHER team (or no team at all) matched here regardless, defeating the roster-scoping
+  // invariant this whole function exists to enforce. This is the exact "comment claims coverage the
+  // code does not enforce" shape: the doc comment above already claimed "roster scoping does not
+  // apply" for prefix-IDs, when the intent was only ever to let a correction override a NAME that
+  // would otherwise flag — never to bypass the roster boundary entirely.
+  it("REGRESSION (Codex High finding 1): a usta: prefix-ID naming a player NOT on the given team's roster is off-roster, never matched", () => {
     const { db, sqlite } = freshDb();
     try {
       const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
-      // Deliberately NOT on `team`'s roster — the id alone must still resolve it.
+      // The id resolves to a real player — just not one on THIS team's roster.
       const player = seedPlayer(db, "Some Other Spelling");
       db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
 
       const result = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
 
+      expect(result.kind).toBe("off-roster");
+      if (result.kind === "off-roster") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a usta: prefix-ID naming a player ON the given team's roster still resolves — the correction workflow keeps working", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Some Other Spelling");
+      db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
+
       expect(result.kind).toBe("matched");
       if (result.kind === "matched") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a wtn: prefix-ID off-roster is refused the same way as usta:", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Some Other Spelling");
+      db.update(players).set({ wtnTennisId: "wtn-42" }).where(eq(players.id, player.id)).run();
+
+      const result = resolveRosterPlayer(db, { name: "wtn:wtn-42", teamId: team.id });
+
+      expect(result.kind).toBe("off-roster");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a tr: prefix-ID off-roster is refused the same way as usta:", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Some Other Spelling");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?x" }).where(eq(players.id, player.id)).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?x", teamId: team.id });
+
+      expect(result.kind).toBe("off-roster");
     } finally {
       sqlite.close();
     }

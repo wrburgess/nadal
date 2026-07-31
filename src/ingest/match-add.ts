@@ -17,8 +17,12 @@ type TeamRow = typeof teams.$inferSelect;
 
 export type MatchAddPlayerFlag = {
   name: string;
-  reason: "unresolved" | "ambiguous";
-  /** Every candidate `resolveRosterPlayer` saw for this name — empty for a true `unresolved` miss. */
+  /** `off-roster` (Codex adversarial review of PR #54, High finding 1) is distinct from
+   * `unresolved`: the name/id resolved to a REAL player, just not one on the payload's OWN team
+   * roster — worth telling apart from a true miss in the refusal message. */
+  reason: "unresolved" | "ambiguous" | "off-roster";
+  /** Every candidate `resolveRosterPlayer` saw for this name — empty for a true `unresolved` miss,
+   * exactly one entry (the off-roster player's own name) for `off-roster`. */
   candidates: string[];
 };
 
@@ -39,7 +43,8 @@ export type AddMatchFromScorecardResult =
   | { ok: false; kind: "unknown-event"; event: string }
   | { ok: false; kind: "unresolved-players"; flags: MatchAddPlayerFlag[] }
   | { ok: false; kind: "same-team"; team: string }
-  | { ok: false; kind: "duplicate-players"; duplicates: MatchAddDuplicatePlayerFlag[] };
+  | { ok: false; kind: "duplicate-players"; duplicates: MatchAddDuplicatePlayerFlag[] }
+  | { ok: false; kind: "duplicate-slots"; slots: string[] };
 
 /** Thrown inside the transaction to abort it — better-sqlite3/drizzle roll back automatically on a
  * thrown error, same "no partial write" precedent as `AmbiguousIdentityError`
@@ -73,6 +78,11 @@ class DuplicatePlayersRefusal extends Error {
     super(`duplicate participant(s) across ${duplicates.length} court(s)`);
   }
 }
+class DuplicateSlotsRefusal extends Error {
+  constructor(readonly slots: string[]) {
+    super(`duplicate court slot(s): ${slots.join(", ")}`);
+  }
+}
 
 /**
  * Resolve one side's team by name — NEVER creates (a team is created by `team pull`, not here).
@@ -87,23 +97,25 @@ function requireTeam(db: Db, name: string): TeamRow {
 }
 
 /**
- * Ingests one scorecard payload: resolves both teams and the named event (never-create — see
- * `requireTeam` above), refuses if both teams resolve to the SAME row (comparing the resolved id,
- * never the input strings — two spellings/aliases of one team count), resolves EVERY player on
- * both sides through the roster-scoped, never-create ladder (`resolveRosterPlayer`, Task 2),
- * refuses if any RESOLVED player appears more than once across a single court's two sides (PR #54
- * verify findings 1-2 — same reasoning as the team check: compared by resolved `playerId`, never
- * by the input name, since a duplicate can arrive as an identical string, two names sharing an
- * alias, a `usta:` id duplicating a bare name, or the same player rostered on both teams at once
- * per bug #49's append-only `team_memberships`) — and if ANY of these checks fails, collects every
- * violation of that kind before refusing, rolling the WHOLE ingest back rather than writing a
- * partial match (mirrors the `AmbiguousIdentityError`-inside-a-transaction precedent at
- * `src/ingest/archived.ts:66-67`). Every one of these invariants lives HERE, in the service, not
- * only on `scorecardPayloadSchema` — a cross-field check declared on the schema object itself would
- * not survive `src/mcp/tools.ts` spreading `scorecardPayloadSchema.shape` into `match_add`'s
- * `inputShape` (see that file's own comment), so putting it there would protect the CLI and
- * silently skip the MCP surface. On success: `upsertTeamMatch` for the parent — MANDATORY, since
- * `upsertCourtMatch`'s id-less branch dedupes on `(slot, playedOn, teamMatchId)`
+ * Ingests one scorecard payload: refuses if two courts share a `slot` (Codex adversarial review of
+ * PR #54, High finding 2 — see the check itself, below, for why WITHIN one payload `slot` alone is
+ * the only thing that can tell two courts apart); resolves both teams and the named event
+ * (never-create — see `requireTeam` above), refuses if both teams resolve to the SAME row
+ * (comparing the resolved id, never the input strings — two spellings/aliases of one team count);
+ * resolves EVERY player on both sides through the roster-scoped, never-create ladder
+ * (`resolveRosterPlayer`, Task 2), refuses if any RESOLVED player appears more than once across a
+ * single court's two sides (PR #54 verify findings 1-2 — same reasoning as the team check:
+ * compared by resolved `playerId`, never by the input name, since a duplicate can arrive as an
+ * identical string, two names sharing an alias, a `usta:` id duplicating a bare name, or the same
+ * player rostered on both teams at once per bug #49's append-only `team_memberships`) — and if ANY
+ * of these checks fails, collects every violation of that kind before refusing, rolling the WHOLE
+ * ingest back rather than writing a partial match (mirrors the `AmbiguousIdentityError`-inside-a-
+ * transaction precedent at `src/ingest/archived.ts:66-67`). Every one of these invariants lives
+ * HERE, in the service, not only on `scorecardPayloadSchema` — a cross-field check declared on the
+ * schema object itself would not survive `src/mcp/tools.ts` spreading `scorecardPayloadSchema.shape`
+ * into `match_add`'s `inputShape` (see that file's own comment), so putting it there would protect
+ * the CLI and silently skip the MCP surface. On success: `upsertTeamMatch` for the parent —
+ * MANDATORY, since `upsertCourtMatch`'s id-less branch dedupes on `(slot, playedOn, teamMatchId)`
  * (`upsert.ts:302-334`); without a parent, two different same-day courts at the same slot would
  * silently collapse into one row — then one `upsertCourtMatch` + `upsertCourtMatchPlayers` per
  * court. Both writers are the id-less branch: a screenshot carries no `mid=` TennisRecord id.
@@ -111,6 +123,23 @@ function requireTeam(db: Db, name: string): TeamRow {
 export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMatchFromScorecardResult {
   try {
     return db.transaction((tx) => {
+      // PR #54 verify finding 2: the schema requires only a non-empty `slot` — never distinctness —
+      // and `upsertCourtMatch`'s id-less write key is `(slot, playedOn, teamMatchId)`. WITHIN one
+      // payload every court shares the same `playedOn` and the same freshly-resolved `teamMatchId`,
+      // so `slot` alone is the only discriminator across courts here; two schema-valid courts
+      // sharing a slot would otherwise silently collapse — the second `upsertCourtMatch` call
+      // UPDATES the first court's row, and `upsertCourtMatchPlayers` only ever ADDS participants,
+      // never removes, leaving one row with every player from BOTH courts and the SECOND court's
+      // score, no refusal anywhere. Checked first, before any DB lookup: it is pure payload-shape
+      // analysis, so there is no reason to spend a team/player resolution query on a payload that is
+      // already structurally broken.
+      const slotCounts = new Map<string, number>();
+      for (const court of payload.courts) slotCounts.set(court.slot, (slotCounts.get(court.slot) ?? 0) + 1);
+      const duplicateSlots = Array.from(slotCounts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([slot]) => slot);
+      if (duplicateSlots.length > 0) throw new DuplicateSlotsRefusal(duplicateSlots);
+
       const homeTeam = requireTeam(tx, payload.homeTeam);
       const visitingTeam = requireTeam(tx, payload.visitingTeam);
 
@@ -141,6 +170,11 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
         const resolution = resolveRosterPlayer(tx, { name, teamId, eventId });
         if (resolution.kind === "matched") {
           resolvedPlayerIds.set(key, resolution.row.id);
+        } else if (resolution.kind === "off-roster") {
+          // The id/name resolved to a REAL player — just not one on THIS team's roster (Codex
+          // adversarial review of PR #54, High finding 1). Named distinctly from a true miss, and
+          // carries the player it actually found so the refusal message can say who and why.
+          flags.push({ name, reason: "off-roster", candidates: [resolution.row.canonicalName] });
         } else {
           flags.push({
             name,
@@ -235,6 +269,7 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
     if (err instanceof DuplicatePlayersRefusal) {
       return { ok: false, kind: "duplicate-players", duplicates: err.duplicates };
     }
+    if (err instanceof DuplicateSlotsRefusal) return { ok: false, kind: "duplicate-slots", slots: err.slots };
     throw err;
   }
 }
@@ -261,10 +296,17 @@ export function describeMatchAddRefusal(result: Extract<AddMatchFromScorecardRes
       )
       .join("; ")}`;
   }
+  if (result.kind === "duplicate-slots") {
+    return `duplicate court slot(s) in one payload: ${result.slots.join(", ")}`;
+  }
   return `unresolved player name(s): ${result.flags
-    .map((f) =>
-      f.reason === "ambiguous" ? `"${f.name}" ambiguous (${f.candidates.join(", ")})` : `"${f.name}" unresolved`,
-    )
+    .map((f) => {
+      if (f.reason === "ambiguous") return `"${f.name}" ambiguous (${f.candidates.join(", ")})`;
+      if (f.reason === "off-roster") {
+        return `"${f.name}" resolved to ${f.candidates[0]}, who is not on this team's roster`;
+      }
+      return `"${f.name}" unresolved`;
+    })
     .join("; ")}`;
 }
 

@@ -314,19 +314,42 @@ export type ResolveRosterPlayerInput = {
  * photo is agent vision, not a captain's own roster entry, and spec § Ingestion's "flag, never
  * guess" has no room for a misread name silently growing `players`. `ambiguous` and `unresolved`
  * both carry the candidates they saw (empty for a true `unresolved` miss), matching the shape of
- * every other resolution outcome in this module.
+ * every other resolution outcome in this module. `off-roster` (Codex adversarial review of PR #54,
+ * High finding 1) is distinct from `unresolved`: the id/name resolved to a REAL player, just not one
+ * on `teamId`'s roster — worth telling apart in a refusal message, and worth its own kind so a caller
+ * cannot accidentally treat "found, wrong team" the same as "not found at all".
  */
 export type RosterPlayerResolution =
   | { kind: "matched"; row: PlayerRow }
   | { kind: "ambiguous"; candidates: PlayerRow[] }
-  | { kind: "unresolved"; candidates: PlayerRow[] };
+  | { kind: "unresolved"; candidates: PlayerRow[] }
+  | { kind: "off-roster"; row: PlayerRow };
+
+/** True when `playerId` has a `team_memberships` row for `teamId` — the roster-boundary check every
+ * tier of `resolveRosterPlayer` must pass, prefix-IDs included (Codex adversarial review of PR #54,
+ * High finding 1: the three prefix branches used to skip this entirely). */
+function isOnRoster(db: Db, playerId: number, teamId: number): boolean {
+  return (
+    db
+      .select({ id: teamMemberships.id })
+      .from(teamMemberships)
+      .where(and(eq(teamMemberships.playerId, playerId), eq(teamMemberships.teamId, teamId)))
+      .all().length > 0
+  );
+}
 
 /**
  * Resolve one scorecard name against ONE team's roster. Ladder:
  *
  * 1. **Prefix-ID** (`usta:`/`wtn:`/`tr:`): a GLOBAL lookup by source id, same three prefixes
- *    `resolvePlayerTarget` uses. An id names an exact identity, so roster scoping does not apply
- *    here — this is how a correction supplied this way OVERRIDES a name that would otherwise flag.
+ *    `resolvePlayerTarget` uses, followed by the SAME roster-membership check every other tier
+ *    goes through. An id names an exact identity, so a MISSPELLED name that IS on the roster can
+ *    be corrected this way — that is the one thing a prefix-ID is for. It does NOT, and must not,
+ *    let a payload name an arbitrary player from any other team (or no team at all) as a
+ *    participant here: an id resolving to someone off this roster is `off-roster`, the same as a
+ *    bare name would be, never `matched` (Codex adversarial review of PR #54, High finding 1 — the
+ *    prior version treated an id as an unconditional override of roster scoping, which is a hole,
+ *    not a feature, once a payload can name ANY known player's id).
  * 2. **Exact name**, restricted to `teamId`'s `team_memberships` — `players.name_key` OR
  *    `player_aliases.name_key`, the same fold `resolvePlayer` uses, but the candidate set is
  *    narrowed to the roster FIRST. This is the whole point of Task 2: a same-named player on a
@@ -343,11 +366,13 @@ export type RosterPlayerResolution =
 export function resolveRosterPlayer(db: Db, input: ResolveRosterPlayerInput): RosterPlayerResolution {
   if (input.name.startsWith("usta:")) {
     const row = db.select().from(players).where(eq(players.ustaUaid, input.name.slice("usta:".length))).all()[0];
-    return row === undefined ? { kind: "unresolved", candidates: [] } : { kind: "matched", row };
+    if (row === undefined) return { kind: "unresolved", candidates: [] };
+    return isOnRoster(db, row.id, input.teamId) ? { kind: "matched", row } : { kind: "off-roster", row };
   }
   if (input.name.startsWith("wtn:")) {
     const row = db.select().from(players).where(eq(players.wtnTennisId, input.name.slice("wtn:".length))).all()[0];
-    return row === undefined ? { kind: "unresolved", candidates: [] } : { kind: "matched", row };
+    if (row === undefined) return { kind: "unresolved", candidates: [] };
+    return isOnRoster(db, row.id, input.teamId) ? { kind: "matched", row } : { kind: "off-roster", row };
   }
   if (input.name.startsWith("tr:")) {
     const row = db
@@ -355,7 +380,8 @@ export function resolveRosterPlayer(db: Db, input: ResolveRosterPlayerInput): Ro
       .from(players)
       .where(eq(players.tennisrecordUrl, input.name.slice("tr:".length)))
       .all()[0];
-    return row === undefined ? { kind: "unresolved", candidates: [] } : { kind: "matched", row };
+    if (row === undefined) return { kind: "unresolved", candidates: [] };
+    return isOnRoster(db, row.id, input.teamId) ? { kind: "matched", row } : { kind: "off-roster", row };
   }
 
   assertPlayersKeyed(db);
