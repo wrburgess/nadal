@@ -266,12 +266,24 @@ describe("registry-wide: --help reachability for every registered command (#44)"
   );
 });
 
-describe("registry-wide: declaration parity — dispatch's scan uses the SAME valueFlags list the command parses with (#44)", () => {
-  // If `cmd.valueFlags` on the registered Command object and the list `run` passes to `parseArgs`
-  // ever drifted apart, `dispatch`'s scan would misclassify the flag below as unrecognized,
-  // treat its "--" as a real end-of-flags delimiter, and never visit the --help past it — this
-  // test would then fail with code 1 (or a swallowed help) instead of 0. Derived from the
-  // registry: a NEW value flag added to any command tomorrow is covered without editing this test.
+describe("registry-wide: dispatch's --help scan is value-flag-aware for EVERY declared value flag (#44)", () => {
+  // What this guarantees: for every value flag any registered command declares, `dispatch` consumes
+  // that flag's `--`-valued argument rather than reading it as the end-of-flags delimiter. Derived
+  // from the registry, so a NEW value flag added to any command tomorrow is covered without editing
+  // this test — which is the whole reason it exists alongside the hand-written 4-case matrix above.
+  //
+  // What it does NOT guarantee, stated because the honest limit matters more than the reassuring
+  // claim: it does not detect drift between `cmd.valueFlags` and the list `run` actually passes to
+  // `parseArgs`. Its cases are derived from `cmd.valueFlags`, so a flag dropped from that field
+  // simply stops generating a case (silently), and a flag present there but missing from `run`'s
+  // list still passes, because `dispatch` prints help and returns before the command ever parses.
+  // Verified by mutation, not assumed: dropping `source-url` from `player pull`'s `parseArgs` call
+  // leaves all 39 tests in this file green and fails `cli-player-pull-command.test.ts` instead.
+  //
+  // Drift is prevented STRUCTURALLY rather than detected here — each command's `run` reads the
+  // declaration back off its own `Command` object (`playerPull.valueFlags ?? []`), so there is one
+  // list, not two — and each command's own tests cover the flag actually working. A future command
+  // that hardcodes its lists inline instead would reopen that gap, and this test would not see it.
   const cases = COMMANDS.flatMap((c) => (c.valueFlags ?? []).map((flag) => [c.noun, c.verb, flag] as const));
 
   it.each(cases)("tn %s %s --%s -- --help still prints help (declared value flag consumes the `--`, not a delimiter)", async (noun, verb, flag) => {

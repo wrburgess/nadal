@@ -81,7 +81,8 @@ looks for `--help` then depends on whether that resolved:
   unknown-command diagnostic.
 - **Resolved** (a real command, e.g. `db migrate`, `player pull`): the SAME `scanFlags` walk
   `parseArgs` uses, over the same tokens the command's own parser receives, using that command's
-  declared `booleanFlags`/`valueFlags`. `tn player note --help` and `tn --help` both print help;
+  declared `booleanFlags`/`valueFlags`. `tn player note --help` prints help (`tn --help` also does,
+  but by the *unresolved* path above — there is no `tn --help` command to resolve);
   past the delimiter it is ordinary text (`tn player note Randy -- --help` records a note reading
   `--help`), and a `--` consumed as a declared value flag's value is likewise never the delimiter —
   see above. Help is checked ahead of every resolved command's own parser, and without that check
