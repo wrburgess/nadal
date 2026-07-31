@@ -103,12 +103,13 @@ looks for `--help` then depends on whether that resolved:
 | `tn player avail` | Record a home-team player's availability for an event day |
 | `tn player note` | Append a captain note about a home-team player or pairing |
 | `tn event add` | Create or update an event and its inclusive date range |
+| `tn match add` | Record a scorecard's results from an agent-extracted payload |
 | `tn lineup plan` | Predict an opponent's lineup from court-assignment history and ratings |
 | `tn report build` | Render per-opponent scouting dossiers (HTML + markdown) to disk |
 | `tn mcp serve` | Run the MCP server over stdio, mirroring the CLI grammar as tools |
 
 Planned (spec § Interfaces; rows move up as commands land): `team list`,
-`player list`, `match add`, `event show`,
+`player list`, `event show`,
 `db backup/restore`.
 
 `tn player avail <name> <YYYY-MM-DD> <status> [event]` — the fourth positional is **optional** and
@@ -133,6 +134,19 @@ something the command should decide. This is the one target-taking command that 
 resolve its target against existing rows — it is the writer that creates them. It exists because
 nothing in production wrote an `events` row before it, which made `tn player avail` unreachable: the
 availability writer resolves its event from the day, and there were never any events to find.
+
+`tn match add <payload-file>` — a positional target, no new flags (like every command above except
+`team pull`/`player pull`). The payload is a JSON file matching the scorecard contract in
+`src/ingest/scorecard.ts`: a played-on date, both team names, and a list of courts (slot,
+discipline, players by side, and an optional winner/score). **This command cannot read a
+screenshot directly** — spec § Ingestion path 4 puts extraction through agent vision, not
+in-process image decoding, so a photo handed to `tn match add` is refused with a message pointing
+at the `match_add` MCP tool instead. Every player name resolves against the NAMED team's own
+roster only — a name unresolved, ambiguous, or matching a player on the *other* team's roster is
+flagged, never guessed, and the whole ingest is refused (rolled back, nothing written) until every
+name is fixed, typically by supplying a `usta:`/`tr:`/`wtn:` prefix-ID in the payload instead of a
+bare name. See `docs/runbooks/in-event-screenshot-ingest.md` for the full photo-to-verified-rows
+flow, including what to do when a name is flagged.
 
 `tn lineup plan <team>` — renders that team's **predicted lineup, which is a guess** (spec §
 Deliverables 1), from court-assignment history plus ratings. The rule is pair-first: the most

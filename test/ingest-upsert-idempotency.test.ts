@@ -1,9 +1,11 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
 import {
   courtMatchPlayers,
   courtMatches,
+  events,
   ratingObservations,
   teamMatches,
   teamMemberships,
@@ -368,6 +370,428 @@ describe("id-less team matches across opposing perspectives", () => {
       expect(rows[0]?.visitingCourtsWon).toBe(2);
     } finally {
       sqlite.close();
+    }
+  });
+});
+
+// Codex adversarial review (PR #54 round 5), the second round-5 finding: `team-pull` passes
+// `eventId: null` UNCONDITIONALLY for every parsed schedule row (verified at its one call site,
+// src/ingest/team-pull.ts:301 — a hardcoded literal, not derived from anything parsed), and the
+// id-less update branch above used to write `values.eventId ?? null` straight through with no
+// regard for what the STORED row already held. So: ingest a scorecard for an event-linked fixture
+// (`addMatchFromScorecard`/`match-add`, which supplies a real `eventId`), then re-pull either team
+// from a schedule containing that SAME id-less fixture — the event link on the parent row is
+// SILENTLY ERASED, even though the lenient matching PR #54 round 2 added never lets team-pull MOVE
+// the event to a different one (`upsertTeamMatch`'s own matching logic is untouched by that
+// change). HC-ruled in scope for #18 (relaxing the earlier "upsertTeamMatch/team-pull.ts stay
+// untouched" boundary for this ONE change): the fix is the identical fill-in-blanks idiom the
+// scorecard-specific updater (`upsertLenientTeamMatchForScorecard` in src/ingest/match-add.ts)
+// already uses for `scheduledTime`/`site` — `existing.eventId ?? values.eventId`, and two
+// DIFFERENT non-null event ids refuse rather than silently overwrite, matching this file's own
+// existing error posture (a bare `Error`, same as `upsertPlayer` above) rather than inventing a new
+// refusal mechanism that would ripple into every caller of `upsertTeamMatch`.
+describe("id-less team matches preserve a stored event link (Codex round 5, HC-approved exception)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function seedEvent(db: ReturnType<typeof openDb>["db"], name: string) {
+    return db
+      .insert(events)
+      .values({ name, kind: "tournament", startsOn: "2026-08-01", endsOn: "2026-08-31" })
+      .returning()
+      .get();
+  }
+
+  it("REGRESSION: an event-linked row survives a later id-less update supplying no event (team-pull's own shape)", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-28", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: null };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      // The exact shape team-pull's own call site uses: eventId: null, unconditionally.
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+      // The rest of the update still applies — this is not a "reject the whole write" guard.
+      expect(rows[0]?.homeCourtsWon).toBe(3);
+      expect(rows[0]?.visitingCourtsWon).toBe(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the reverse ordering: a stored row with no event is filled in by a later update that supplies one", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-29", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: null };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REGRESSION: two DIFFERENT non-null events on the same id-less fixture refuse, nothing overwritten", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const eventB = seedEvent(db, "Event B");
+      const base = { playedOn: "2026-08-30", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: null };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      expect(() =>
+        upsertTeamMatch(db, {
+          ...base,
+          eventId: eventB.id,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          homeCourtsWon: 3,
+          visitingCourtsWon: 2,
+        }),
+      ).toThrow();
+
+      // Nothing moved or partially applied: the stored row is untouched.
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+      expect(rows[0]?.homeCourtsWon).toBeNull();
+      expect(rows[0]?.visitingCourtsWon).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Codex adversarial review (PR #54 round 8, rated High): round 5 fixed event preservation in the
+// ID-LESS branch above but left its SIBLING — the `sourceMatchId`-keyed `onConflictDoUpdate` branch
+// a few lines below it, in the SAME function — writing `eventId: values.eventId ?? null`
+// unconditionally, exactly the shape round 5 already fixed once. Round 7 made this reachable in a
+// way it was not before: a scorecard can now attach to (and set an event on) a `mid=`-bearing row,
+// so a re-pull of that SAME `mid=` (which always passes `eventId: null`, per team-pull's one call
+// site) silently erased the event the scorecard had just linked. Fixed with the identical
+// preserve/fill/refuse semantics, expressed differently because this branch has no separate
+// SELECT-then-UPDATE step to hang a JS `existing.eventId ?? values.eventId` off of the way the
+// id-less branch does: a PRE-SELECT by `sourceMatchId` runs first (better-sqlite3 is fully
+// synchronous, so there is no interleaving window between this select and the upsert that follows —
+// unlike a multi-connection database, nothing else can run in between), throwing the SAME conflict
+// error on two different non-null events, and computing the SAME JS expression
+// (`existing?.eventId ?? values.eventId ?? null`) the id-less branch already uses, fed into
+// `onConflictDoUpdate`'s `set` clause as a plain value rather than a hand-rolled SQL `coalesce` —
+// one shared notion of "how an event is written," not two independently-invented ones.
+describe("source-backed team matches preserve a stored event link (Codex round 8)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function seedEvent(db: ReturnType<typeof openDb>["db"], name: string) {
+    return db
+      .insert(events)
+      .values({ name, kind: "tournament", startsOn: "2026-08-01", endsOn: "2026-08-31" })
+      .returning()
+      .get();
+  }
+
+  it("REGRESSION (Codex round 8, rated High): an event-linked source-backed row survives a later re-pull of the SAME mid= (team-pull's own shape)", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-28", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181505" };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      // The exact shape team-pull's own call site uses: eventId: null, unconditionally.
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id); // survives, not erased
+      expect(rows[0]?.homeCourtsWon).toBe(3); // the rest of the re-pull still applies
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the reverse ordering: a source-backed row with no event is filled in by a later re-pull that supplies one", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-29", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181506" };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REGRESSION (Codex round 8): two DIFFERENT non-null events on the same mid= refuse, nothing overwritten", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const eventB = seedEvent(db, "Event B");
+      const base = { playedOn: "2026-08-30", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181507" };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      expect(() =>
+        upsertTeamMatch(db, {
+          ...base,
+          eventId: eventB.id,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          homeCourtsWon: 3,
+          visitingCourtsWon: 2,
+        }),
+      ).toThrow();
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id); // untouched
+      expect(rows[0]?.homeCourtsWon).toBeNull(); // nothing partially applied
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Codex adversarial review (PR #54 round 9, rated Medium): round 8's fix (a JS pre-select, then a
+// JS-computed decision fed into `onConflictDoUpdate`) is safe within ONE synchronous connection —
+// nothing else can run between the select and the write in a single process — but NOT across two
+// separate connections, which is exactly how the MCP server and a CLI invocation reach this table:
+// as separate processes, each with its OWN connection. Concrete interleaving: `mid=181505` stored
+// with `eventId=null`; connection A pre-selects (sees null); connection B pre-selects (ALSO sees
+// null, since A hasn't written yet) and upserts event 102; A then upserts event 101 using ITS
+// pre-selected (now STALE) null, silently overwriting B's write with neither call ever throwing.
+//
+// Testing note, not glossed over: a black-box call to `upsertTeamMatch` cannot literally reproduce
+// this interleaving, because the vulnerable OLD shape's own pre-select ran synchronously, fresh, at
+// the START of THAT call — there is no way for test code to pause a synchronous JS function mid-body
+// to let another connection commit in between. The FIRST test below reconstructs the vulnerable
+// two-statement shape directly, with raw table operations standing in for what the OLD code did
+// internally, to demonstrate the hazard is real independent of any one function's implementation —
+// this is what actually justifies collapsing conflict-check-and-write into ONE atomic SQL statement,
+// rather than trusting a description of the bug. The SECOND test exercises the ACTUAL, FIXED
+// `upsertTeamMatch` across two real connections and confirms the invariant now holds even when a
+// later-arriving connection's own read reflects an earlier state than the one that actually commits
+// first — which is the property the fix guarantees structurally (there is no separate pre-select
+// left in the fixed code for a second connection's write to race against).
+describe("source-id event conflict check is atomic ACROSS CONNECTIONS (Codex round 9, rated Medium)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function seedEvent(db: ReturnType<typeof openDb>["db"], name: string) {
+    return db
+      .insert(events)
+      .values({ name, kind: "tournament", startsOn: "2026-08-01", endsOn: "2026-08-31" })
+      .returning()
+      .get();
+  }
+
+  it("CHARACTERIZATION: a select-then-decide-then-write shape across two connections silently corrupts the invariant (the hazard this fix closes)", () => {
+    runMigrations();
+    const connA = openDb();
+    const connB = openDb();
+    try {
+      const a = upsertTeam(connA.db, { name: "Team A" });
+      const b = upsertTeam(connA.db, { name: "Team B" });
+      const eventA = seedEvent(connA.db, "Event A");
+      const eventB = seedEvent(connA.db, "Event B");
+      connA.db
+        .insert(teamMatches)
+        .values({
+          eventId: null,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          playedOn: "2026-08-28",
+          sourceMatchId: "181505",
+        })
+        .run();
+
+      // Both connections independently see the SAME blank state before either decides anything —
+      // reproducing the exact moment the OLD pre-select-based code made its decision from.
+      const seenByA = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      const seenByB = connB.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(seenByA.eventId).toBeNull();
+      expect(seenByB.eventId).toBeNull();
+
+      // Connection B decides (from its own null read) that it is safe to set event B, and commits.
+      connB.db.update(teamMatches).set({ eventId: eventB.id }).where(eq(teamMatches.id, seenByB.id)).run();
+
+      // Connection A now acts on ITS pre-selected (now stale) `seenByA.eventId === null` — exactly
+      // what the OLD `upsertTeamMatch` shape did: decide from the read, THEN write, with no
+      // re-check. Nothing here throws, and the write silently succeeds.
+      connA.db.update(teamMatches).set({ eventId: eventA.id }).where(eq(teamMatches.id, seenByA.id)).run();
+
+      // The invariant IS violated: two different non-null events were both accepted, one silently
+      // clobbering the other, with no error at any point — this is the corruption the atomic fix
+      // (a single statement, re-evaluated against whatever is actually current) closes.
+      const final = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(final.eventId).toBe(eventA.id); // B's committed event, silently overwritten
+    } finally {
+      connA.sqlite.close();
+      connB.sqlite.close();
+    }
+  });
+
+  it("REGRESSION (Codex round 9, rated Medium): the REAL upsertTeamMatch refuses a conflicting event across two connections, even though a stale read happened first", () => {
+    runMigrations();
+    const connA = openDb();
+    const connB = openDb();
+    try {
+      const a = upsertTeam(connA.db, { name: "Team A" });
+      const b = upsertTeam(connA.db, { name: "Team B" });
+      const eventA = seedEvent(connA.db, "Event A");
+      const eventB = seedEvent(connA.db, "Event B");
+      const base = { playedOn: "2026-08-28", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181505" };
+
+      upsertTeamMatch(connA.db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      // Both connections read the blank row before either sets an event — same setup as above.
+      const seenByA = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      const seenByB = connB.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(seenByA.eventId).toBeNull();
+      expect(seenByB.eventId).toBeNull();
+
+      // Connection B commits event B through the real function.
+      const afterB = upsertTeamMatch(connB.db, {
+        ...base,
+        eventId: eventB.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+      expect(afterB.eventId).toBe(eventB.id);
+
+      // Connection A now attempts event A. The fixed function does NOT consult `seenByA` (or any
+      // other stale JS value) — its conflict check and its write are ONE atomic SQL statement,
+      // evaluated against whatever `teamMatches` actually holds the instant it executes, so it sees
+      // B's committed event and refuses rather than silently overwriting it.
+      expect(() =>
+        upsertTeamMatch(connA.db, {
+          ...base,
+          eventId: eventA.id,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          homeCourtsWon: null,
+          visitingCourtsWon: null,
+        }),
+      ).toThrow();
+
+      const final = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(final.eventId).toBe(eventB.id); // survives, untouched by A's refused attempt
+    } finally {
+      connA.sqlite.close();
+      connB.sqlite.close();
     }
   });
 });

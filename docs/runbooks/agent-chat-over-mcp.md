@@ -50,7 +50,10 @@ server reads the identical env vars via the identical `src/db/client.ts`/`src/re
 
 Every tool mirrors a `tn` command 1:1 (`test/mcp-tool-parity.test.ts` enforces this both directions):
 `db_migrate`, `team_pull`, `team_show`, `team_home`, `player_pull`, `player_show`, `player_avail`,
-`player_note`, `event_add`, `lineup_plan`, `report_build`. `player_note` additionally accepts an MCP-only `pairTarget` argument
+`player_note`, `event_add`, `match_add`, `lineup_plan`, `report_build`. `match_add` takes its
+scorecard payload inline (see [in-event-screenshot-ingest.md](in-event-screenshot-ingest.md)) rather
+than a file path — the one tool whose whole reason to exist is that the agent produced the payload
+itself and has no file to hand. `player_note` additionally accepts an MCP-only `pairTarget` argument
 for a pairing note (`src/cli/commands/player-note.ts`'s own doc comment explains why that stays
 MCP-only rather than a third CLI positional) — this is the one deliberate CLI/MCP argument-shape
 difference, and it is *additive*: every other argument matches the CLI grammar's target/payload

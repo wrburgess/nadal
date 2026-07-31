@@ -1,8 +1,9 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
-import { playerAliases, players, teams } from "../src/db/schema.js";
-import { findTeamByName, resolvePlayer, resolveTeam } from "../src/ingest/identity.js";
+import { playerAliases, players, teamMemberships, teams } from "../src/db/schema.js";
+import { findTeamByName, resolvePlayer, resolveRosterPlayer, resolveTeam } from "../src/ingest/identity.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 describe("resolvePlayer", () => {
@@ -199,6 +200,370 @@ describe("identity ladder — Unicode case folding", () => {
     } finally {
       sqlite.close();
     }
+  });
+});
+
+// Task 2, #18: a NEVER-CREATE, roster-scoped ladder for names extracted from a scorecard photo.
+// Unlike `resolvePlayer` (the scraping paths, which create on a miss), a miss here is `unresolved`
+// — "flag, never guess" (spec § Ingestion) has no room for a misread name silently growing `players`.
+describe("resolveRosterPlayer", () => {
+  useTnDbPath();
+
+  function freshDb() {
+    runMigrations();
+    return openDb();
+  }
+
+  function seedTeam(db: ReturnType<typeof openDb>["db"], name: string) {
+    db.insert(teams).values({ name, nameKey: nameKey(name) }).run();
+    return db.select().from(teams).all().find((t) => t.name === name)!;
+  }
+
+  function seedPlayer(db: ReturnType<typeof openDb>["db"], name: string) {
+    db.insert(players).values({ canonicalName: name, nameKey: nameKey(name) }).run();
+    return db.select().from(players).all().find((p) => p.canonicalName === name)!;
+  }
+
+  it("matches an exact roster name", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Ada Ashby");
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: team.id });
+
+      expect(result.kind).toBe("matched");
+      if (result.kind === "matched") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("matches an alias on the roster, case-insensitively", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Ada Ashby");
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      db.insert(playerAliases).values({ playerId: player.id, alias: "AA", nameKey: nameKey("AA") }).run();
+
+      const result = resolveRosterPlayer(db, { name: "aa", teamId: team.id });
+
+      expect(result.kind).toBe("matched");
+      if (result.kind === "matched") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("tier 3: a near-miss spelling on the roster is ambiguous, listing the candidate(s), never auto-matched", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Alex Stone");
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "Alex Ston", teamId: team.id });
+
+      expect(result.kind).toBe("ambiguous");
+      if (result.kind === "ambiguous") {
+        expect(result.candidates.map((c) => c.canonicalName)).toEqual(["Alex Stone"]);
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("unresolved: a name not on any roster at all", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+
+      const result = resolveRosterPlayer(db, { name: "Nobody Ontheroster", teamId: team.id });
+
+      expect(result.kind).toBe("unresolved");
+      if (result.kind === "unresolved") expect(result.candidates).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // REGRESSION guard for the design choice itself: an unscoped lookup would find this player by
+  // exact name and match — the whole point of Task 2 is that it must NOT.
+  it("REGRESSION: a player who exists in `players` and is on the OPPOSING team's roster flags rather than matching", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const homeTeam = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const otherTeam = seedTeam(db, "Report Opponent");
+      const player = seedPlayer(db, "Ada Ashby");
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: otherTeam.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: homeTeam.id });
+
+      expect(result.kind).toBe("unresolved");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REGRESSION: a player who exists in `players` but is on NO roster at all flags rather than matching", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      seedPlayer(db, "Ada Ashby"); // no team_memberships row at all
+
+      const result = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: team.id });
+
+      expect(result.kind).toBe("unresolved");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Codex adversarial review of PR #54, High finding 1: the three prefix-ID branches returned a
+  // GLOBAL player row without ever consulting `team_memberships` — so an id naming a real player on
+  // some OTHER team (or no team at all) matched here regardless, defeating the roster-scoping
+  // invariant this whole function exists to enforce. This is the exact "comment claims coverage the
+  // code does not enforce" shape: the doc comment above already claimed "roster scoping does not
+  // apply" for prefix-IDs, when the intent was only ever to let a correction override a NAME that
+  // would otherwise flag — never to bypass the roster boundary entirely.
+  it("REGRESSION (Codex High finding 1): a usta: prefix-ID naming a player NOT on the given team's roster is off-roster, never matched", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      // The id resolves to a real player — just not one on THIS team's roster.
+      const player = seedPlayer(db, "Some Other Spelling");
+      db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+
+      const result = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
+
+      expect(result.kind).toBe("off-roster");
+      if (result.kind === "off-roster") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a usta: prefix-ID naming a player ON the given team's roster still resolves — the correction workflow keeps working", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Some Other Spelling");
+      db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
+
+      expect(result.kind).toBe("matched");
+      if (result.kind === "matched") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a wtn: prefix-ID off-roster is refused the same way as usta:", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Some Other Spelling");
+      db.update(players).set({ wtnTennisId: "wtn-42" }).where(eq(players.id, player.id)).run();
+
+      const result = resolveRosterPlayer(db, { name: "wtn:wtn-42", teamId: team.id });
+
+      expect(result.kind).toBe("off-roster");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a tr: prefix-ID off-roster is refused the same way as usta:", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Some Other Spelling");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?x" }).where(eq(players.id, player.id)).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?x", teamId: team.id });
+
+      expect(result.kind).toBe("off-roster");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a tr: prefix-ID with a single, on-roster match still resolves normally", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Ada Ashby");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?x" }).where(eq(players.id, player.id)).run();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?x", teamId: team.id });
+
+      expect(result.kind).toBe("matched");
+      if (result.kind === "matched") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Codex adversarial review of PR #54 round 4, High finding 3: unlike `usta_uaid`/`wtn_tennis_id`
+  // (both DB `.unique()`), `players.tennisrecord_url` carries NO uniqueness constraint — so two
+  // DISTINCT player rows can legitimately share one, and the old `.all()[0]` silently picked an
+  // unspecified one. That is a guess, in the one code path whose entire purpose is flag-never-guess.
+  it("REGRESSION: a tr: prefix-ID shared by TWO players on the named team's roster is ambiguous, not a silent pick", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const playerA = seedPlayer(db, "Ada Ashby");
+      const playerB = seedPlayer(db, "Bo Bramwell");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, playerA.id)).run();
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, playerB.id)).run();
+      db.insert(teamMemberships).values({ playerId: playerA.id, teamId: team.id, eventId: null }).run();
+      db.insert(teamMemberships).values({ playerId: playerB.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?shared", teamId: team.id });
+
+      expect(result.kind).toBe("ambiguous");
+      if (result.kind === "ambiguous") {
+        expect(result.candidates.map((c) => c.id).sort()).toEqual([playerA.id, playerB.id].sort());
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a tr: prefix-ID shared by two players where only ONE is on the named roster resolves to that one, not ambiguous", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const visiting = seedTeam(db, "Report Opponent");
+      const onRoster = seedPlayer(db, "Ada Ashby");
+      const elsewhere = seedPlayer(db, "Someone Else");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, onRoster.id)).run();
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, elsewhere.id)).run();
+      db.insert(teamMemberships).values({ playerId: onRoster.id, teamId: home.id, eventId: null }).run();
+      db.insert(teamMemberships).values({ playerId: elsewhere.id, teamId: visiting.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?shared", teamId: home.id });
+
+      expect(result.kind).toBe("matched");
+      if (result.kind === "matched") expect(result.row.id).toBe(onRoster.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("never creates: an unresolved call leaves `players` untouched", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const before = db.select().from(players).all();
+
+      resolveRosterPlayer(db, { name: "Nobody Ontheroster", teamId: team.id });
+
+      expect(db.select().from(players).all()).toEqual(before);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #49 (PR #52, main) added nullable `team_memberships.retired_at`; every OTHER
+  // current-roster read (`getTeamProfile`, `getLineupPlan`) and write gate (`setAvailability`,
+  // `addCaptainNote`) filters it. `resolveRosterPlayer` merged in without doing so (found by the
+  // orchestrator's own audit after this branch merged main) — a retired player still resolved as
+  // on-roster for a scorecard, through both the bare-name tiers and the prefix-ID `isOnRoster`
+  // check, defeating the exact invariant this function exists to enforce.
+  describe("retired team_memberships rows (#49) are excluded from the roster, like every sibling read", () => {
+    it("REGRESSION: a bare name for a player RETIRED from the named team is not matched", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.insert(teamMemberships)
+          .values({ playerId: player.id, teamId: team.id, eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" })
+          .run();
+
+        const result = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: team.id });
+
+        // Reported, not assumed: with the retired row excluded from the roster query entirely, the
+        // player cannot appear in tier 2 (exact) or tier 3 (fuzzy) — nothing on file for this team
+        // to be ambiguous WITH — so this resolves the same as a name matching no one at all.
+        expect(result.kind).toBe("unresolved");
+        if (result.kind === "unresolved") expect(result.candidates).toEqual([]);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION: a usta: prefix-ID for a player RETIRED from the named team is off-roster, not matched", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+        db.insert(teamMemberships)
+          .values({ playerId: player.id, teamId: team.id, eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" })
+          .run();
+
+        const result = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
+
+        expect(result.kind).toBe("off-roster");
+        if (result.kind === "off-roster") expect(result.row.id).toBe(player.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a CURRENT (non-retired) member still resolves normally, by both a bare name and a prefix-ID — the guard must not over-refuse", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+        db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+        const byName = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: team.id });
+        const byId = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
+
+        expect(byName.kind).toBe("matched");
+        if (byName.kind === "matched") expect(byName.row.id).toBe(player.id);
+        expect(byId.kind).toBe("matched");
+        if (byId.kind === "matched") expect(byId.row.id).toBe(player.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a player retired from team A but CURRENT on team B resolves for B, and is off-roster/unresolved for A", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const teamA = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const teamB = seedTeam(db, "Report Opponent");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+        db.insert(teamMemberships)
+          .values({ playerId: player.id, teamId: teamA.id, eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" })
+          .run();
+        db.insert(teamMemberships).values({ playerId: player.id, teamId: teamB.id, eventId: null }).run();
+
+        const forA = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: teamA.id });
+        const forAById = resolveRosterPlayer(db, { name: "usta:99999", teamId: teamA.id });
+        const forB = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: teamB.id });
+        const forBById = resolveRosterPlayer(db, { name: "usta:99999", teamId: teamB.id });
+
+        expect(forA.kind).toBe("unresolved");
+        expect(forAById.kind).toBe("off-roster");
+        expect(forB.kind).toBe("matched");
+        if (forB.kind === "matched") expect(forB.row.id).toBe(player.id);
+        expect(forBById.kind).toBe("matched");
+        if (forBById.kind === "matched") expect(forBById.row.id).toBe(player.id);
+      } finally {
+        sqlite.close();
+      }
+    });
   });
 });
 

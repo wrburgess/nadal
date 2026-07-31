@@ -384,10 +384,35 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
     const reversed = existing.homeTeamId === values.visitingTeamId && existing.visitingTeamId === values.homeTeamId;
     const incomingHome = values.homeCourtsWon ?? null;
     const incomingVisiting = values.visitingCourtsWon ?? null;
+
+    // Codex adversarial review (PR #54 round 5), HC-approved exception to the earlier
+    // `upsertTeamMatch`/`team-pull.ts` scoping boundary: `team-pull` passes `eventId: null`
+    // UNCONDITIONALLY for every parsed schedule row (see its one call site), so writing
+    // `values.eventId ?? null` straight through here silently ERASED an event a scorecard ingest
+    // had already linked, the moment either team was next re-pulled. Fixed with the identical
+    // fill-in-blanks idiom `upsertLenientTeamMatchForScorecard` (src/ingest/match-add.ts) already
+    // uses for `scheduledTime`/`site`: a blank (null/undefined) incoming value never clobbers a
+    // stored one, a blank stored value is filled in by a supplied incoming one, and two DIFFERENT
+    // non-null values are a genuine conflict — refused rather than silently decided. A plain `Error`
+    // matches this file's own existing posture for an unexpected write (`upsertPlayer` above), not a
+    // new refusal type: `upsertTeamMatch` has no candidate-list/ambiguity shape to extend, and
+    // team-pull's own catch-all (`catch (err) { ... return { kind: "error", message: ... } }`)
+    // already surfaces any thrown error without needing a new branch.
+    if (
+      existing.eventId !== null &&
+      values.eventId !== null &&
+      values.eventId !== undefined &&
+      existing.eventId !== values.eventId
+    ) {
+      throw new Error(
+        `upsertTeamMatch: conflicting event for existing team match id ${existing.id}: stored event id ${existing.eventId} vs incoming event id ${values.eventId}`,
+      );
+    }
+
     return db
       .update(teamMatches)
       .set({
-        eventId: values.eventId ?? null,
+        eventId: existing.eventId ?? values.eventId ?? null,
         homeCourtsWon: reversed ? incomingVisiting : incomingHome,
         visitingCourtsWon: reversed ? incomingHome : incomingVisiting,
       })
@@ -395,23 +420,74 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
       .returning()
       .get();
   }
-  return db
+  // Codex adversarial review (PR #54 round 8, rated High, HARDENED round 9, rated Medium): this
+  // branch wrote `eventId: values.eventId ?? null` unconditionally — the SAME shape round 5 already
+  // fixed a few lines up, in this function's OTHER branch, and left standing here. Round 7 made it
+  // reachable: a scorecard can now attach to (and set an event on) a `mid=`-bearing row, so
+  // re-pulling that same `mid=` — which always supplies `eventId: null`, per team-pull's one call
+  // site — silently erased the event the scorecard had just linked.
+  //
+  // Round 8's own fix (a JS pre-select, then a JS-computed decision fed into `set`) closed that, but
+  // only within ONE synchronous connection — nothing else can run between a select and a write in a
+  // single process, so that reasoning was correct as far as it went. It did NOT hold across TWO
+  // connections, which is exactly how the MCP server and a CLI invocation reach this table: as
+  // separate processes, each with its own connection. Concrete interleaving: `mid=181505` stored
+  // with `eventId=null`; connection A pre-selects (sees null); connection B ALSO pre-selects (sees
+  // the SAME null, since A has not written yet) and commits event 102; A then commits event 101 from
+  // its now-stale pre-selected null — NEITHER call throws, and B's event is silently overwritten.
+  //
+  // Fixed by making the conflict check and the write ONE atomic statement instead of two: no
+  // pre-select at all. `setWhere` gates the ENTIRE `onConflictDoUpdate` on "the stored event is
+  // null, OR the incoming event is null, OR they already match" — i.e. exactly the conditions under
+  // which it is safe to write — and when NONE of those hold (a genuine conflict), SQLite's own
+  // UPSERT semantics skip the update for that row entirely: no row is touched, and `.returning()`
+  // therefore yields nothing, which is the sole way `.get()` can come back `undefined` here (a fresh
+  // insert or a permitted update always returns the affected row). `eventId` itself is computed with
+  // SQL `coalesce` on the STORED column, not a JS `existing?.eventId ?? ...` — the two branches now
+  // use two different mechanisms for the identical NOTION (preserve/fill/refuse), and that
+  // divergence is deliberate: correctness across connections requires the check and the write to be
+  // one round-trip to SQLite, which only `setWhere`+SQL `coalesce` can express for a real
+  // conflict-target column; the id-less branch's identity has no such column to hang a conflict
+  // target off (see its own doc comment — "no DB uniqueness constraint on the id-less natural key"),
+  // so it cannot use this same mechanism and is addressed separately (see the class-level note in
+  // `docs/findings.md` on whether that branch shares this exposure).
+  //
+  // Every OTHER column here keeps its existing "overwrite unconditionally" policy: unlike the
+  // id-less branch (which reconciles two POSSIBLY-STALE observations of an unidentified fixture), a
+  // `mid=`-keyed conflict means team-pull just re-scraped the SAME identified page, and a fresh
+  // authoritative parse of it is exactly what should win for orientation/courts-won — only `eventId`
+  // is a detail team-pull can never truthfully report on.
+  const incomingEventId = values.eventId ?? null;
+  const upserted = db
     .insert(teamMatches)
     .values(values)
     .onConflictDoUpdate({
       target: teamMatches.sourceMatchId,
       targetWhere: sql`source_match_id IS NOT NULL`,
       set: {
-        eventId: values.eventId ?? null,
+        eventId: sql`coalesce(${teamMatches.eventId}, ${incomingEventId})`,
         homeTeamId: values.homeTeamId,
         visitingTeamId: values.visitingTeamId,
         playedOn: values.playedOn ?? null,
         homeCourtsWon: values.homeCourtsWon ?? null,
         visitingCourtsWon: values.visitingCourtsWon ?? null,
       },
+      setWhere: sql`${teamMatches.eventId} IS NULL OR ${incomingEventId} IS NULL OR ${teamMatches.eventId} = ${incomingEventId}`,
     })
     .returning()
     .get();
+
+  if (upserted !== undefined) return upserted;
+
+  // `setWhere` blocked the update — the ONLY way that happens is a genuine conflict (stored and
+  // incoming both non-null and different), since every other combination satisfies the predicate.
+  // Re-selected here purely to name both ids in the error; a concurrent write landing between the
+  // blocked upsert above and this read could make the reported ids slightly stale, which affects
+  // only the MESSAGE, not the refusal itself — the write above already, atomically, did not happen.
+  const conflicting = db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, values.sourceMatchId)).all()[0]!;
+  throw new Error(
+    `upsertTeamMatch: conflicting event for existing team match id ${conflicting.id}: stored event id ${conflicting.eventId} vs incoming event id ${incomingEventId}`,
+  );
 }
 
 /**

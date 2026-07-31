@@ -11,7 +11,10 @@ import { teams } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { pullArchivedUstaProfile } from "../ingest/archived.js";
 import { fetchPage } from "../ingest/fetch.js";
+import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../ingest/match-add.js";
 import { pullPlayer } from "../ingest/player-pull.js";
+import { scorecardPayloadSchema } from "../ingest/scorecard.js";
+import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
@@ -309,6 +312,51 @@ export const MCP_TOOLS: McpToolDef[] = [
           endsOn: result.endsOn,
           created: result.created,
         };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "match_add",
+    cliCommand: "match add",
+    description: "Record a scorecard's results from an agent-extracted payload",
+    // The payload INLINE, not a file — that is the whole point: the agent has just produced this
+    // shape from vision and has no file to hand (unlike `tn match add <file>`, the CLI's own
+    // presenter for the same service). `scorecardPayloadSchema.shape` is spread directly rather
+    // than re-declared here, so the two surfaces cannot drift on any PER-KEY schema: each field's
+    // own validator (a court's per-discipline player-count invariant, `playedOn`'s calendar-date
+    // rule) rides along unchanged, since it lives on that field's own schema object, and
+    // `McpServer#registerTool` rebuilds `z.object(inputShape)` from these same per-key schemas.
+    //
+    // What the spread does NOT carry: a top-level `.superRefine` on the WHOLE payload object.
+    // A cross-field invariant declared that way on `scorecardPayloadSchema` itself — rather than on
+    // one of its fields — would apply when the CLI parses the whole object directly, and silently
+    // NOT apply here, protecting one surface and skipping the other with no error at all (PR #54
+    // verify, findings 1-2 — the exact trap `docs/findings.md:195` already names: a true sentence
+    // about what a spread preserves, read one inference too far into what it preserves). That is
+    // exactly why the duplicate-resolved-player and same-team invariants live in the SERVICE
+    // (`addMatchFromScorecard`, `src/ingest/match-add.ts`) instead: both presenters call that one
+    // function, so both get the same guard for free, and neither schema carries a cross-field check
+    // this spread would only sometimes honor.
+    inputShape: { ...scorecardPayloadSchema.shape },
+    handler: async (rawArgs) => {
+      // No `requireResolved` here, matching `event_add` above: this writer's whole point is to
+      // persist rows an agent just extracted from a photo, and the SDK has already validated
+      // `rawArgs` against `scorecardPayloadSchema`'s own shape via `inputShape`.
+      const payload = rawArgs as ScorecardPayload;
+      const { db, sqlite } = openDb();
+      try {
+        // Ordering: the DB write runs FIRST, and the photo is archived only after it succeeds — a
+        // refused ingest must persist nothing (Codex adversarial review, rated Critical). See
+        // `addMatchFromScorecardWithArchive`'s own doc comment in src/ingest/match-add.ts for why a
+        // post-commit archive failure is returned as `archiveError` rather than thrown: the write
+        // has already committed by then, so throwing would hide a successful `teamMatchId` behind
+        // what reads as a total failure.
+        const { serviceResult: result, archivedPath, archiveError } = addMatchFromScorecardWithArchive(db, payload);
+        if (!result.ok) throw new McpToolError(describeMatchAddRefusal(result));
+        return { teamMatchId: result.teamMatchId, courts: result.courts, archivedPath, archiveError };
       } finally {
         sqlite.close();
       }

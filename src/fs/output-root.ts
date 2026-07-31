@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
 import {
   closeSync,
+  constants as fsConstants,
   existsSync,
   fstatSync,
   lstatSync,
   openSync,
+  readSync,
   realpathSync,
   renameSync,
   unlinkSync,
@@ -526,6 +528,10 @@ export function openNewOutputFileSafely(
  * function's own doc comment for why archive writes stay `wx`-only rather than using
  * `overwriteOutputFile`'s replace-in-place semantics). Returns the REAL path written.
  *
+ * `content` is `string | Uint8Array` (#18: a scorecard photo archives through this same writer) —
+ * every path check, the `O_CREAT|O_EXCL` open, and the post-open verification above are unchanged
+ * either way; only the bytes handed to the write loop differ.
+ *
  * Any throw past the open — verification failure, or a failure of `writeSync` itself — closes the fd
  * and best-effort unlinks `realPath` so no partial file survives, then rethrows the ORIGINAL error
  * (mirrors `overwriteOutputFile`'s existing cleanup shape below: a cleanup failure must never mask
@@ -536,7 +542,7 @@ export function writeNewOutputFile(
   root: string,
   candidatePath: string,
   permittedDir: string,
-  content: string,
+  content: string | Uint8Array,
 ): string {
   const { fd, realPath, openedStat } = openNewOutputFileSafely(root, candidatePath, permittedDir);
   try {
@@ -547,7 +553,12 @@ export function writeNewOutputFile(
     // capture while every check above still reported success — a corrupted privacy artifact that
     // looks exactly like a good one. Writing an EMPTY file (`content === ""`, a legitimate zero-byte
     // capture) correctly performs no write at all, since `written` starts at the length.
-    const buffer = Buffer.from(content, "utf8");
+    //
+    // `content` widened to `string | Uint8Array` (#18, a scorecard photo archived through this same
+    // writer): encoded to a `Buffer` only when it is a string; a `Uint8Array` is copied through
+    // as-is. Every check above and the loop below are unchanged either way — this widens WHAT is
+    // written, never WHERE or HOW the destination is verified safe.
+    const buffer = typeof content === "string" ? Buffer.from(content, "utf8") : Buffer.from(content);
     let written = 0;
     while (written < buffer.length) {
       const justWritten = writeSync(fd, buffer, written, buffer.length - written);
@@ -571,6 +582,169 @@ export function writeNewOutputFile(
   }
   closeSync(fd);
   return realPath;
+}
+
+/**
+ * The READ-side pre-filter for `openInputFileSafely` below: validates that `candidatePath` names an
+ * existing, non-symlinked regular file inside `root` — a cheap, clearly-messaged rejection for the
+ * common cases (outside the root, a symlinked leaf, a missing root) before anything is opened.
+ *
+ * NOT sufficient alone (Codex adversarial review, round 6, rated Critical — the finding that
+ * corrected this file's ORIGINAL doc comment here, which called the gap below "a residual" when it
+ * is in fact the whole vulnerability): every check in this function is a PATHNAME check, and a
+ * pathname can be re-pointed after this function returns and before the caller's own
+ * `readFileSync`/`statSync` reopens it. Two concrete ways that bites: (1) a HARDLINK inside `root`
+ * to an outside file — `lstat` reports an ordinary regular file, because a hardlink genuinely IS
+ * that file's inode under a second name; no pathname check, however careful, can see the other name.
+ * (2) A swap (to a symlink, to a different file, to a bigger one) in the window between this
+ * function returning and the caller's next syscall. Both are closed only by opening the file and
+ * verifying the DESCRIPTOR (`openInputFileSafely`), never by checking the path again — see that
+ * function's own doc comment for the reasoning this one used to (wrongly) claim as sufficient.
+ */
+function assertInputPathSafe(candidatePath: string, root: string): string {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidatePath);
+
+  let realRoot: string;
+  try {
+    realRoot = realpathSync.native(resolvedRoot);
+  } catch {
+    throw new OutputPathError(`refusing: the configured source root does not exist: ${resolvedRoot}`);
+  }
+
+  const leafStat = lstatSync(resolvedCandidate, { throwIfNoEntry: false });
+  if (leafStat === undefined) {
+    throw new OutputPathError(`refusing an unreadable source path: ${resolvedCandidate}`);
+  }
+  if (leafStat.isSymbolicLink()) {
+    throw new OutputPathError(`refusing a symlinked source path: ${resolvedCandidate}`);
+  }
+  if (!leafStat.isFile()) {
+    throw new OutputPathError(`refusing a non-regular-file source path: ${resolvedCandidate}`);
+  }
+
+  // Same rule as the write side's `assertNoSymlinkComponents`: no DIRECTORY component between the
+  // root and the leaf may be a symlink either — checked on the lexical pair first, exactly like
+  // `resolveRealOutputPath` does, before the real-root containment check below.
+  assertNoSymlinkComponents(resolvedRoot, resolvedCandidate);
+
+  const realDir = realpathSync.native(dirname(resolvedCandidate));
+  if (!isWithin(realRoot, realDir)) {
+    throw new OutputPathError(`refusing source path outside root "${realRoot}": ${resolvedCandidate}`);
+  }
+
+  return resolvedCandidate;
+}
+
+/**
+ * The fd-anchored read primitive (#18, Codex adversarial review round 6, rated Critical) — the read
+ * side's counterpart to `openNewOutputFileSafely` above, and the fix for the gap the PREVIOUS
+ * version of this file shipped as an accepted "residual": `assertInputPathSafe` validates a PATHNAME
+ * and then hands the caller back a string, which the caller then reopens by name — check-then-use,
+ * and a hardlink defeats the "check" half entirely rather than merely racing it (`lstat` on a
+ * hardlinked path reports an ordinary regular file; there is no pathname-level test that can tell
+ * "the only name" from "one of several names, one of which may be outside the root").
+ *
+ * This closes it the way `openNewOutputFileSafely` already closes the equivalent write-side gap:
+ * open the file ONCE, then verify everything through the resulting file descriptor, never through
+ * the path string again. A descriptor is bound to an inode for its whole lifetime; nothing that
+ * happens to the pathname after the open can change what this function (or its caller) is actually
+ * reading.
+ *
+ * 1. **The pre-open check still runs** (`assertInputPathSafe`) — cheap, clearly-messaged, and closes
+ *    the common cases before an open is even attempted.
+ * 2. **The open itself refuses to follow a leaf symlink** (`O_NOFOLLOW`), closing the leaf half of
+ *    the check-then-open race at the SYSCALL level rather than by re-checking a path afterward.
+ * 3. **The containment check is repeated against a FRESH real-root/real-directory resolution**,
+ *    mirroring `openNewOutputFileSafely`'s own post-open re-verification: a root or parent directory
+ *    repointed in the window between the pre-check and the open is caught here, not assumed away.
+ * 4. **The descriptor's inode is compared against a pre-open `lstat` of the same path.** A mismatch
+ *    means the path was swapped for a DIFFERENT file in the window between the check and the open —
+ *    detected rather than silently followed, the same property `openNewOutputFileSafely` gets from
+ *    comparing its own pre/post-open stats.
+ * 5. **`nlink !== 1` is refused unconditionally.** This is the hardlink close, and it is exactly
+ *    `openNewOutputFileSafely`'s own link-count check, carried over rather than reinvented: a file
+ *    with more than one name cannot be shown to have no OTHER name outside the root, no matter how
+ *    carefully the one name we were given is checked.
+ *
+ * Returns the open, verified descriptor — callers MUST read through it (never re-open the path) and
+ * close it when done.
+ */
+export function openInputFileSafely(root: string, candidatePath: string): { fd: number; realPath: string } {
+  const resolvedCandidate = assertInputPathSafe(candidatePath, root);
+
+  // Taken as close to the open as a separate syscall allows — narrows, but (as documented on
+  // `openNewOutputFileSafely` above) cannot fully close, the window between this stat and the open.
+  const preOpenStat = lstatSync(resolvedCandidate);
+
+  const fd = openSync(resolvedCandidate, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+
+  let realPath: string;
+  try {
+    const realRootNow = realpathSync.native(resolve(root));
+    const realDirNow = realpathSync.native(dirname(resolvedCandidate));
+    if (!isWithin(realRootNow, realDirNow)) {
+      throw new OutputPathError(
+        `refusing to read source path outside the resolved root "${realRootNow}": ${realDirNow}`,
+      );
+    }
+    // Both sides of this walk must come from the SAME tree (both real here), or `relative()` inside
+    // it reports a false positive the moment either crosses a symlinked ancestor of its own — macOS
+    // resolves `/var` to `/private/var`, so a REAL root paired with a merely-resolved (not
+    // realpath'd) candidate produces exactly that false escape (see `openNewOutputFileSafely`'s own
+    // doc comment for the identical reasoning on the write side).
+    realPath = join(realDirNow, basename(resolvedCandidate));
+    assertNoSymlinkComponents(realRootNow, realPath);
+
+    const fdStat = fstatSync(fd);
+    if (!fdStat.isFile() || fdStat.dev !== preOpenStat.dev || fdStat.ino !== preOpenStat.ino) {
+      throw new OutputPathError(
+        `refusing to read through a file descriptor whose target no longer matches the path it was opened from: ${resolvedCandidate}`,
+      );
+    }
+
+    // The hardlink close (see this function's own doc comment): `openSync` above only ever succeeds
+    // by opening whatever inode the path named at that instant — it does not, and cannot, prove that
+    // inode has no OTHER name. `nlink` is the only thing that can, and it is checked on the
+    // DESCRIPTOR (never re-derived from a path) so nothing after the open can spoof it.
+    if (fdStat.nlink !== 1) {
+      throw new OutputPathError(
+        `refusing to read through a file descriptor with ${fdStat.nlink} links — this file has another ` +
+          `name, which cannot be shown to lie inside the validated root: ${resolvedCandidate}`,
+      );
+    }
+  } catch (err) {
+    closeQuietly(fd);
+    throw err;
+  }
+
+  return { fd, realPath };
+}
+
+/**
+ * Reads `fd` to EOF in bounded chunks, throwing the moment the running total exceeds `maxBytes` —
+ * never trusting a prior `statSync`, which describes whatever the path named at THAT instant, not
+ * necessarily what the descriptor is actually delivering now (Codex adversarial review round 6: a
+ * file swapped for a larger one, or one that grows, between a `statSync` size check and a later
+ * `readFileSync` defeats a cap enforced that way entirely). Reading in chunks rather than one
+ * `readFileSync(fd)` call also means a file far over the cap is never loaded into memory in full —
+ * the read is abandoned as soon as the cap is crossed, however large the remainder is.
+ */
+export function readBoundedFromFd(fd: number, maxBytes: number): Buffer {
+  const CHUNK_BYTES = 64 * 1024;
+  const chunk = Buffer.alloc(CHUNK_BYTES);
+  const collected: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const bytesRead = readSync(fd, chunk, 0, CHUNK_BYTES, null);
+    if (bytesRead === 0) break;
+    total += bytesRead;
+    if (total > maxBytes) {
+      throw new OutputPathError(`refusing to read past the ${maxBytes}-byte limit`);
+    }
+    collected.push(Buffer.from(chunk.subarray(0, bytesRead)));
+  }
+  return Buffer.concat(collected);
 }
 
 /**
