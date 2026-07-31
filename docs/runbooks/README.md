@@ -13,8 +13,8 @@ exercises, and runbooks double as HC post-merge checklists.
   `match_add` → verified rows → what to do when a name is flagged
 - [db-migration-recovery.md](db-migration-recovery.md) — `tn db migrate` fails on an existing
   database; the one-line recovery and why losing the database costs nothing by design
-
-Planned (spec § Testing):
-
-- pre-tournament-full-pull.md — refresh all scouted teams end to end
-- backup-restore.md — tn db backup / restore drill
+- [pre-tournament-full-pull.md](pre-tournament-full-pull.md) — refresh every scouted team end to
+  end: live TennisRecord pulls, the human-in-the-loop USTA/WTN path, and the TennisLink hole (#27)
+  none of it closes
+- [backup-restore.md](backup-restore.md) — `sqlite3 .backup`/`.restore` drill against the database
+  `tn` actually ships today (no `tn db backup`/`db restore` command exists yet)

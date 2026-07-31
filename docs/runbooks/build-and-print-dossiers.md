@@ -5,7 +5,8 @@
 Any time you want the courtside binder: before Sectionals, after a fresh pull, or after Friday's
 results land in the system. `tn report build` renders **from whatever is in the database right
 now** — it never fetches. If the data is stale, the dossier is stale; pull first
-([pre-tournament-full-pull.md](README.md) once it exists, or `tn team pull --players` per team).
+([pre-tournament-full-pull.md](pre-tournament-full-pull.md) for the full team-by-team refresh, or
+a single-team pull for one team).
 
 Spec § Deliverables #5 is the destination: *printable reports → courtside binder; no laptop
 required at the venue.*
@@ -13,7 +14,14 @@ required at the venue.*
 ## Before you start
 
 - The database has been migrated: `tn db migrate`
-- At least one team has been pulled: `tn team pull "<team name or URL>" --players`
+- At least one team has been pulled. **Read the name at a prompt rather than typing it into the
+  command** — a team name is scraped data, and pasting one between quotes lets a `"` or `'` in it
+  close the argument and run whatever follows (see
+  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2 for the full reasoning):
+  ```sh
+  printf 'team name (or its TennisRecord URL): '; IFS= read -r team
+  tn team pull "$team" --players
+  ```
 
 ## Steps
 
@@ -23,10 +31,22 @@ required at the venue.*
 tn team show "IA/Versteeg/40&Over3.5M"
 ```
 
-Read the roster block. Every player should carry an age range and at least a TennisRecord dynamic
-rating. **NTRP and WTN come only from the login-assisted path** — if those are missing for
-everyone, run [login-assisted-scrape.md](login-assisted-scrape.md) before printing, or the binder
-ships with a third of each rating row blank.
+Read the roster block: every scouted player should be listed (someone missing here is a pull
+problem, not a report problem), with an age range wherever the team page carried one and a real
+singles/doubles record once matches are on file. **`tn team show` does not print ratings at all** —
+its `RosterMemberProfile` (`src/query/team-profile.ts`) carries no rating field by design; ratings
+live on the player, not this team-level read. To spot-check ratings before building, read a player
+directly:
+
+```
+tn player show "Avery Ashby"
+```
+
+The `ratings: …` line (e.g. `ratings: NTRP 4.0C, TR-Dyn 3.67`, or `ratings: none on file`) is what
+the dossier will actually print for that player. **NTRP and WTN come only from the login-assisted
+path** — if a player's line carries only TennisRecord's dynamic rating (or nothing at all), run
+[login-assisted-scrape.md](login-assisted-scrape.md) before printing, or the binder ships with a
+third of each rating row blank.
 
 ### 2. Build
 
@@ -83,10 +103,17 @@ about an opponent since last time (useful mid-event).
 ## Known limitations in v1
 
 - **"Prior meetings vs our players" renders as unavailable until a home team is designated.**
-  Run `tn team home "<your team>"` first (#37 / nadal ADR 0001) — once a home team is set, `report
+  Designate one first (#37 / nadal ADR 0001) — `printf 'our team: '; IFS= read -r team` then
+  `tn team home "$team"`, per the prompt rule in *Before you start* — once a home team is set, `report
   build` automatically populates this section for every OTHER team's dossier. It stays unavailable
   on the home team's own dossier (comparing a team against itself is not a meaningful section) and
-  on any dossier built before a home team is designated at all.
+  on any dossier built before a home team is designated at all. **The two cases now say which one
+  you are looking at**: the home team's own dossier reads *"Not available on our own team's dossier
+  — this section compares an opponent's roster against ours"*, and only a genuinely unset home team
+  reads *"no home team configured"*. Until #19 both printed the second sentence, so the home team's
+  own dossier announced that no home team was configured immediately after `tn team home` had
+  succeeded — if you are holding a binder printed before that fix, read that line as "this is our
+  team", not as a failed designation.
 - **The predicted lineup is a guess, and the dossier says so.** Every dossier now carries a
   *"Predicted lineup (a guess)"* section (#17 PR B). Read the confidence and the "Based on" column
   before planning against it: a row reading `placed by rating — no shared history` is not a
@@ -95,7 +122,7 @@ about an opponent since last time (useful mid-event).
   section says how many were excluded as belonging elsewhere. The rule itself, and how to read it
   critically, is in [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md).
 - **A team with no court matches of its own renders the lineup section as an explicit absence**
-  rather than an empty table. Pull it with `tn team pull "<team>" --players` and rebuild.
+  rather than an empty table. Pull it (the prompt form in *Before you start*) and rebuild.
 - **`events` has no player-scoped writer yet** — hence the "Not collected yet" block for that
   section. `tn event add` (#17 PR B) creates events, but nothing yet associates a *player* with one
   (`tn team pull` writes a null `event_id`), so a dossier cannot say which events a player is on.

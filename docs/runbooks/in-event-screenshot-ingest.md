@@ -12,7 +12,9 @@ sees the photo; `tn` validates and writes.
 ## Before you start
 
 - The database is migrated (`tn db migrate`).
-- **Both teams are already on file, with their rosters pulled** (`tn team pull "<team>" --players`
+- **Both teams are already on file, with their rosters pulled** (the prompt form in
+  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2 — never paste a scraped team
+  name between quotes
   for each side, or the equivalent `team_pull`/`player_pull` MCP calls). `tn match add` / `match_add`
   never creates a team, and every player name resolves ONLY against the named team's own roster
   (never a global lookup) — a team or a roster that does not exist yet cannot be matched into, no
@@ -77,9 +79,27 @@ payload.
 on success. Beyond that:
 
 ```sh
-sqlite3 data/nadal.db "select cm.slot, cm.discipline, cm.winner_side, cm.score
+# Read the SAME database the ingest wrote to. A hardcoded `data/nadal.db` silently reads a stale
+# file whenever TN_DB_PATH is set, and — since SQLite creates on open — conjures an empty decoy when
+# that path holds nothing, so the readback would "verify" a match that is not in the database you
+# just wrote.
+DB="${TN_DB_PATH:-data/nadal.db}"
+[ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
+case "$DB" in
+  *'?'*|*'#'*|*'%'*) echo "STOP: database path must not contain ? , # or % ; got '$DB'" >&2; exit 1 ;;
+esac
+
+# The id the command printed. Checked numeric before it reaches SQL: it is pasted from output, and a
+# readback should not be the one place a value goes into a query unvalidated.
+printf 'teamMatchId from the summary line: '; IFS= read -r TMID
+case "$TMID" in
+  ''|*[!0-9]*) echo "STOP: teamMatchId must be digits; got '$TMID'" >&2; exit 1 ;;
+esac
+
+# Read-only: verifying a write must never itself write.
+sqlite3 "file:$DB?mode=ro" "select cm.slot, cm.discipline, cm.winner_side, cm.score
   from court_matches cm
-  where cm.team_match_id = <teamMatchId>
+  where cm.team_match_id = $TMID
   order by cm.slot"
 ```
 

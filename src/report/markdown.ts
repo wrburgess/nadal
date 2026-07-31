@@ -94,13 +94,18 @@ function renderPlayerPriorMeetingsRowMarkdown(player: PlayerProfile, headToHead:
  * One dedicated section for the whole dossier, rendered ONCE — not once per player block. Same
  * rationale as `html.ts`'s twin: the "not available" line does not depend on which player it is
  * about, so repeating it per player only repeated the same sentence N times for an N-player
- * dossier.
+ * dossier. The two-reason split below is `html.ts`'s twin too — see that comment for why one
+ * sentence for both was wrong; the pair must stay in step so the printed and the readable dossier
+ * never disagree about why a section is empty.
  */
 function renderPriorMeetingsSectionMarkdown(dossier: TeamDossier): string {
   const headToHead = dossier.team.headToHead;
+  const unavailable = dossier.team.isHome
+    ? "_Not available on our own team's dossier — this section compares an opponent's roster against ours._"
+    : "_Not available in this build (no home team configured)._";
   const body =
     headToHead === null
-      ? "_Not available in this build (no home team configured)._"
+      ? unavailable
       : dossier.players.map((p) => renderPlayerPriorMeetingsRowMarkdown(p, headToHead)).join("\n\n");
   return `## Prior meetings vs our players\n\n${body}`;
 }

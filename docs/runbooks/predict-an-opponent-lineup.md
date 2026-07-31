@@ -49,7 +49,8 @@ Three limits worth knowing before you rely on it:
 
 - The database has been migrated: `tn db migrate`
 - The opponent has been pulled **with their roster's match histories**:
-  `tn team pull "<team>" --players`. Without `--players` there are no court matches, and the
+  a `--players` pull (the prompt form in [pre-tournament-full-pull.md](pre-tournament-full-pull.md)
+  step 2 — a scraped team name is never pasted between quotes). Without `--players` there are no court matches, and the
   command will refuse.
 
 ## Steps
@@ -180,6 +181,6 @@ tn lineup plan "IA/Versteeg/40&Over3.5M"
 
 | Message | What it means |
 |---|---|
-| `no court-match history on file for "<team>"` | No court matches belonging to **this team** were ingested — its players may still have plenty of history for other teams, which does not count. Re-run `tn team pull "<team>" --players`, which writes the schedule the player pulls then link against. |
+| `no court-match history on file for "<team>"` | No court matches belonging to **this team** were ingested — its players may still have plenty of history for other teams, which does not count. Re-run a `--players` pull for it (prompt form, [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2), which writes the schedule the player pulls then link against. |
 | `unknown target "<team>"` | No team by that name. `tn team show` with a partial name to find the spelling. |
 | `ambiguous target: A, B` | More than one team matches. Use the full name, or `tr:<url>`. |
