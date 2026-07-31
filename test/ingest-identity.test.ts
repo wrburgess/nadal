@@ -392,6 +392,70 @@ describe("resolveRosterPlayer", () => {
     }
   });
 
+  it("a tr: prefix-ID with a single, on-roster match still resolves normally", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const player = seedPlayer(db, "Ada Ashby");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?x" }).where(eq(players.id, player.id)).run();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?x", teamId: team.id });
+
+      expect(result.kind).toBe("matched");
+      if (result.kind === "matched") expect(result.row.id).toBe(player.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Codex adversarial review of PR #54 round 4, High finding 3: unlike `usta_uaid`/`wtn_tennis_id`
+  // (both DB `.unique()`), `players.tennisrecord_url` carries NO uniqueness constraint — so two
+  // DISTINCT player rows can legitimately share one, and the old `.all()[0]` silently picked an
+  // unspecified one. That is a guess, in the one code path whose entire purpose is flag-never-guess.
+  it("REGRESSION: a tr: prefix-ID shared by TWO players on the named team's roster is ambiguous, not a silent pick", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const playerA = seedPlayer(db, "Ada Ashby");
+      const playerB = seedPlayer(db, "Bo Bramwell");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, playerA.id)).run();
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, playerB.id)).run();
+      db.insert(teamMemberships).values({ playerId: playerA.id, teamId: team.id, eventId: null }).run();
+      db.insert(teamMemberships).values({ playerId: playerB.id, teamId: team.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?shared", teamId: team.id });
+
+      expect(result.kind).toBe("ambiguous");
+      if (result.kind === "ambiguous") {
+        expect(result.candidates.map((c) => c.id).sort()).toEqual([playerA.id, playerB.id].sort());
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a tr: prefix-ID shared by two players where only ONE is on the named roster resolves to that one, not ambiguous", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+      const visiting = seedTeam(db, "Report Opponent");
+      const onRoster = seedPlayer(db, "Ada Ashby");
+      const elsewhere = seedPlayer(db, "Someone Else");
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, onRoster.id)).run();
+      db.update(players).set({ tennisrecordUrl: "https://tr/profile?shared" }).where(eq(players.id, elsewhere.id)).run();
+      db.insert(teamMemberships).values({ playerId: onRoster.id, teamId: home.id, eventId: null }).run();
+      db.insert(teamMemberships).values({ playerId: elsewhere.id, teamId: visiting.id, eventId: null }).run();
+
+      const result = resolveRosterPlayer(db, { name: "tr:https://tr/profile?shared", teamId: home.id });
+
+      expect(result.kind).toBe("matched");
+      if (result.kind === "matched") expect(result.row.id).toBe(onRoster.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("never creates: an unresolved call leaves `players` untouched", () => {
     const { db, sqlite } = freshDb();
     try {

@@ -51,7 +51,14 @@ export type AddMatchFromScorecardResult =
   | { ok: false; kind: "same-team"; team: string }
   | { ok: false; kind: "duplicate-players"; duplicates: MatchAddDuplicatePlayerFlag[] }
   | { ok: false; kind: "duplicate-slots"; slots: string[] }
-  | { ok: false; kind: "ambiguous-parent-match"; candidates: MatchAddAmbiguousParentCandidate[] };
+  | { ok: false; kind: "ambiguous-parent-match"; candidates: MatchAddAmbiguousParentCandidate[] }
+  | {
+      ok: false;
+      kind: "conflicting-parent-event";
+      teamMatchId: number;
+      existingEventId: number;
+      incomingEventId: number;
+    };
 
 /** Thrown inside the transaction to abort it — better-sqlite3/drizzle roll back automatically on a
  * thrown error, same "no partial write" precedent as `AmbiguousIdentityError`
@@ -93,6 +100,17 @@ class DuplicateSlotsRefusal extends Error {
 class AmbiguousParentMatchRefusal extends Error {
   constructor(readonly candidates: MatchAddAmbiguousParentCandidate[]) {
     super(`ambiguous parent match: ${candidates.length} lenient-compatible candidates`);
+  }
+}
+class ConflictingParentEventRefusal extends Error {
+  constructor(
+    readonly teamMatchId: number,
+    readonly existingEventId: number,
+    readonly incomingEventId: number,
+  ) {
+    super(
+      `conflicting event for existing team match ${teamMatchId}: stored event ${existingEventId} vs incoming event ${incomingEventId}`,
+    );
   }
 }
 
@@ -198,13 +216,25 @@ function upsertLenientTeamMatchForScorecard(
     (stored === null && incoming === null) ||
     (stored !== null && incoming !== null && normalize(stored) === normalize(incoming));
 
-  const exactMatch = candidates.find(
+  // FILTERED, not `.find()` (Codex adversarial review of PR #54 round 4, High finding 2 — the
+  // FOURTH occurrence of this exact class in this PR: a set that could hold more than one row,
+  // picked from with no ambiguity check). There is no DB uniqueness constraint on the id-less
+  // natural key `(unordered team pair, playedOn, normalized time, normalized site)`, so two rows
+  // that are BOTH an exact match for the same incoming payload are representable — the prior round
+  // fixed this for the LENIENT fallback below and left the exact pass, three lines above it, on
+  // the identical unguarded `.find()`.
+  const exactMatches = candidates.filter(
     (row) =>
       exact(row.scheduledTime, values.scheduledTime, normalizeTimeKey) &&
       exact(row.site, values.site, normalizeSiteKey),
   );
+  if (exactMatches.length > 1) {
+    throw new AmbiguousParentMatchRefusal(
+      exactMatches.map((row) => ({ teamMatchId: row.id, scheduledTime: row.scheduledTime, site: row.site })),
+    );
+  }
 
-  let existing = exactMatch;
+  let existing = exactMatches[0];
   if (existing === undefined) {
     // The lenient fallback, only reached when NO exact match exists. If MORE THAN ONE candidate is
     // lenient-compatible (Codex adversarial review of PR #54 round 3, High finding 2), a silent
@@ -247,10 +277,24 @@ function upsertLenientTeamMatchForScorecard(
       .get();
   }
 
+  // Codex adversarial review of PR #54 round 4, High finding 1: `eventId` used to be written
+  // UNCONDITIONALLY on an update, ignoring what was already stored — so a correction submitted
+  // with no `event` silently DETACHED an already-linked match (overwritten with NULL), and a
+  // correction naming a DIFFERENT event silently MOVED it. Fixed with the SAME symmetric
+  // fill-in-blanks idiom already used for `scheduledTime`/`site` just below: an omitted incoming
+  // event (`values.eventId === null`) PRESERVES the stored one; a stored-null is FILLED IN by a
+  // supplied incoming one; and two DIFFERENT non-null event ids are a genuine CONFLICT — refused,
+  // naming both, rather than silently deciding which one wins. Deliberately a DISTINCT result kind
+  // from `ambiguous-parent-match`: "which parent row" and "which event to link it to" are
+  // different questions for the operator to answer.
+  if (existing.eventId !== null && values.eventId !== null && existing.eventId !== values.eventId) {
+    throw new ConflictingParentEventRefusal(existing.id, existing.eventId, values.eventId);
+  }
+
   return db
     .update(teamMatches)
     .set({
-      eventId: values.eventId,
+      eventId: existing.eventId ?? values.eventId,
       // Fill in a blank; NEVER null out an already-stored value — the whole point of this function.
       scheduledTime: existing.scheduledTime ?? values.scheduledTime,
       site: existing.site ?? values.site,
@@ -462,6 +506,15 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
     if (err instanceof AmbiguousParentMatchRefusal) {
       return { ok: false, kind: "ambiguous-parent-match", candidates: err.candidates };
     }
+    if (err instanceof ConflictingParentEventRefusal) {
+      return {
+        ok: false,
+        kind: "conflicting-parent-event",
+        teamMatchId: err.teamMatchId,
+        existingEventId: err.existingEventId,
+        incomingEventId: err.incomingEventId,
+      };
+    }
     throw err;
   }
 }
@@ -495,6 +548,9 @@ export function describeMatchAddRefusal(result: Extract<AddMatchFromScorecardRes
     return `ambiguous parent match — ${result.candidates.length} existing team matches are each compatible: ${result.candidates
       .map((c) => `id ${c.teamMatchId} (scheduledTime=${c.scheduledTime ?? "blank"}, site=${c.site ?? "blank"})`)
       .join("; ")} — supply the missing scheduledTime/site to disambiguate`;
+  }
+  if (result.kind === "conflicting-parent-event") {
+    return `conflicting event for existing team match id ${result.teamMatchId}: stored event id ${result.existingEventId} vs incoming event id ${result.incomingEventId} — supply the same event, or omit it, rather than a different one`;
   }
   return `unresolved player name(s): ${result.flags
     .map((f) => {

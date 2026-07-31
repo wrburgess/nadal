@@ -135,12 +135,21 @@ export function findPlayerByName(db: Db, name: string): NameLookup<PlayerRow> {
   return { kind: "not-found" };
 }
 
-/** Same as `findPlayerByName`, for teams. */
+/**
+ * Same as `findPlayerByName`, for teams — with one difference: unlike `players.name_key`,
+ * `teams.name_key` is NOT DB-unique (only the exact `name` column is), so two rows can legitimately
+ * share a nameKey (e.g. two differently-cased `team pull` scrapes of the same real team). A
+ * same-nameKey collision is exactly as ambiguous as a fuzzy near-miss, so it gets the same
+ * `"ambiguous"` outcome rather than the silent `exact[0]` pick this used to make (Codex round-4
+ * sweep follow-up, HC-ruled in-scope for #18 since every caller already handles `"ambiguous"`
+ * meaningfully — see `resolveTeamTarget`/`requireTeam`/`resolveTargetUrl`).
+ */
 export function findTeamByName(db: Db, name: string): NameLookup<TeamRow> {
   assertTeamsKeyed(db);
   const key = nameKey(name);
 
   const exact = db.select().from(teams).where(eq(teams.nameKey, key)).all();
+  if (exact.length > 1) return { kind: "ambiguous", candidates: exact };
   if (exact[0] !== undefined) return { kind: "found", row: exact[0] };
 
   const fuzzy = fuzzyTeamBand(db, nameKeyLength(key)).filter((row) => {
@@ -374,6 +383,9 @@ function isOnRoster(db: Db, playerId: number, teamId: number): boolean {
  * stays `resolvePlayer`'s job for the scraping paths that want it.
  */
 export function resolveRosterPlayer(db: Db, input: ResolveRosterPlayerInput): RosterPlayerResolution {
+  // `usta:`/`wtn:` stay a plain `.all()[0]` DELIBERATELY, not by oversight: `players.usta_uaid` and
+  // `players.wtn_tennis_id` are both declared `.unique()` in the schema, so `.all()` can never
+  // return more than one row for either — there is no set to pick an unspecified member of.
   if (input.name.startsWith("usta:")) {
     const row = db.select().from(players).where(eq(players.ustaUaid, input.name.slice("usta:".length))).all()[0];
     if (row === undefined) return { kind: "unresolved", candidates: [] };
@@ -385,13 +397,27 @@ export function resolveRosterPlayer(db: Db, input: ResolveRosterPlayerInput): Ro
     return isOnRoster(db, row.id, input.teamId) ? { kind: "matched", row } : { kind: "off-roster", row };
   }
   if (input.name.startsWith("tr:")) {
-    const row = db
+    // UNLIKE `usta_uaid`/`wtn_tennis_id` above, `players.tennisrecord_url` carries NO uniqueness
+    // constraint (Codex adversarial review of PR #54 round 4, High finding 3) — two DISTINCT
+    // players can legitimately share one, so a bare `.all()[0]` silently picked an unspecified row,
+    // a guess in the one path whose entire purpose is flag-never-guess. Collect every match, then
+    // narrow to the ones actually viable (on THIS team's current roster) before deciding: more than
+    // one viable identity is `ambiguous`, carrying every viable candidate — never silently resolved
+    // to one of them.
+    const rawMatches = db
       .select()
       .from(players)
       .where(eq(players.tennisrecordUrl, input.name.slice("tr:".length)))
-      .all()[0];
-    if (row === undefined) return { kind: "unresolved", candidates: [] };
-    return isOnRoster(db, row.id, input.teamId) ? { kind: "matched", row } : { kind: "off-roster", row };
+      .all();
+    if (rawMatches.length === 0) return { kind: "unresolved", candidates: [] };
+    const viable = rawMatches.filter((row) => isOnRoster(db, row.id, input.teamId));
+    if (viable.length > 1) return { kind: "ambiguous", candidates: viable };
+    if (viable.length === 1) return { kind: "matched", row: viable[0]! };
+    // None of the matches are on this team's current roster — off-roster. WHICH raw match is named
+    // here is cosmetic, not a data-integrity risk the way silently picking a VIABLE one would be:
+    // this is a refusal either way (no write ever follows an off-roster flag), so naming an
+    // arbitrary one of several off-roster identities does not change what gets persisted.
+    return { kind: "off-roster", row: rawMatches[0]! };
   }
 
   assertPlayersKeyed(db);

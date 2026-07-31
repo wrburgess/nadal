@@ -181,6 +181,21 @@ describe("describeMatchAddRefusal", () => {
         "supply the missing scheduledTime/site to disambiguate",
     );
   });
+
+  it("names a conflicting-parent-event refusal, both event ids", () => {
+    expect(
+      describeMatchAddRefusal({
+        ok: false,
+        kind: "conflicting-parent-event",
+        teamMatchId: 7,
+        existingEventId: 1,
+        incomingEventId: 2,
+      }),
+    ).toBe(
+      "conflicting event for existing team match id 7: stored event id 1 vs incoming event id 2 — " +
+        "supply the same event, or omit it, rather than a different one",
+    );
+  });
 });
 
 describe("addMatchFromScorecard", () => {
@@ -877,6 +892,41 @@ describe("addMatchFromScorecard", () => {
       }
     });
 
+    it("REGRESSION (Codex round-4 sweep follow-up): two DIFFERENT team rows whose exact names fold to the SAME nameKey (a differently-cased re-scrape) refuse as ambiguous, nothing written", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        // Two distinct rows, not one — `teams.name` is unique but these two strings differ, so both
+        // legitimately exist (exactly how two differently-cased `team pull` scrapes of the same real
+        // team could land two rows sharing a nameKey). findTeamByName's exact tier must refuse this
+        // as ambiguous rather than silently picking whichever row sorts first.
+        seedTeam(db, "Norbury, Nova");
+        seedTeam(db, "NORBURY, NOVA");
+        const visiting = seedTeam(db, "Report Opponent");
+        seedRosterPlayer(db, visiting.id, "Opp One");
+        seedRosterPlayer(db, visiting.id, "Opp Two");
+        seedRosterPlayer(db, visiting.id, "Opp Three");
+
+        const before = {
+          teamMatches: db.select().from(teamMatches).all(),
+          courtMatches: db.select().from(courtMatches).all(),
+        };
+
+        const result = addMatchFromScorecard(db, basePayload("Norbury, Nova", visiting.name));
+
+        expect(result.ok).toBe(false);
+        if (!result.ok && result.kind === "unknown-team") {
+          expect(result.candidates.slice().sort()).toEqual(["NORBURY, NOVA", "Norbury, Nova"]);
+        } else {
+          throw new Error("expected an ambiguous unknown-team refusal naming both candidates");
+        }
+
+        expect(db.select().from(teamMatches).all()).toEqual(before.teamMatches);
+        expect(db.select().from(courtMatches).all()).toEqual(before.courtMatches);
+      } finally {
+        sqlite.close();
+      }
+    });
+
     it("REGRESSION: ALL duplicate-participant violations across multiple courts are reported together, not just the first", () => {
       const { db, sqlite } = freshDb();
       try {
@@ -1439,6 +1489,185 @@ describe("addMatchFromScorecard", () => {
 
         expect(result.ok).toBe(true);
         if (result.ok) expect(result.teamMatchId).toBe(exactRow.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Codex adversarial review of PR #54 round 4, High finding 2 — the FOURTH time this exact
+    // class (a set that could hold more than one row, picked from via `.find()`/`[0]` with no
+    // ambiguity check) has surfaced in this PR: within a court (round 2), across courts in one
+    // payload (round 2), across CALLS for the same court (round 2's participant-replacement fix),
+    // and now the exact-tier candidate search itself, one level out from the lenient tier the
+    // PRIOR round already fixed. There is no DB uniqueness constraint on the id-less natural key
+    // `(unordered team pair, playedOn, normalized time, normalized site)`, so two rows that are
+    // BOTH an exact match for an incoming payload are representable, and `.find()` would silently
+    // pick whichever SQLite returns first — attaching this payload's courts to ONE of them and
+    // leaving the other stale, exactly the same failure shape the lenient-tier fix (finding 2 of
+    // round 3) already closed one tier over.
+    it("REGRESSION (Codex High finding 2, round 4): two EXACT duplicate parent rows also refuse as ambiguous, not just lenient-compatible ones", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        // Two rows that are EXACT duplicates of each other under normalization — representable
+        // because there is no DB constraint preventing it. Inserted DIRECTLY (bypassing
+        // `upsertTeamMatch`) because that function's OWN id-less matching would otherwise merge
+        // these two calls into one row itself — the whole point here is a pre-existing anomaly
+        // `upsertTeamMatch` never lets its own callers create, not one reachable through it.
+        const rowA = db
+          .insert(teamMatches)
+          .values({
+            homeTeamId: home.id,
+            visitingTeamId: visiting.id,
+            playedOn: "2026-08-28",
+            scheduledTime: "9:00 AM",
+            site: "Court 1",
+            sourceMatchId: null,
+            homeCourtsWon: null,
+            visitingCourtsWon: null,
+          })
+          .returning()
+          .get();
+        const rowB = db
+          .insert(teamMatches)
+          .values({
+            homeTeamId: home.id,
+            visitingTeamId: visiting.id,
+            playedOn: "2026-08-28",
+            scheduledTime: "09:00 AM", // same time under normalization, different raw string
+            site: "Court 1",
+            sourceMatchId: null,
+            homeCourtsWon: null,
+            visitingCourtsWon: null,
+          })
+          .returning()
+          .get();
+        expect(db.select().from(teamMatches).all()).toHaveLength(2); // sanity: genuinely two rows
+
+        const payload: ScorecardPayload = {
+          ...basePayload(home.name, visiting.name),
+          scheduledTime: "9:00 AM",
+          site: "Court 1",
+        };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok && result.kind === "ambiguous-parent-match") {
+          expect(result.candidates.map((c) => c.teamMatchId).sort()).toEqual([rowA.id, rowB.id].sort());
+        } else {
+          throw new Error("expected an ambiguous-parent-match refusal");
+        }
+
+        expect(db.select().from(teamMatches).all()).toHaveLength(2);
+        expect(db.select().from(courtMatches).all()).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  // Codex adversarial review of PR #54 round 4, High finding 1: the update branch ignored
+  // `eventId` entirely for MATCHING (correct — an event link is not a fixture discriminator) but
+  // then wrote the incoming value UNCONDITIONALLY, so a correction submitted without an `event`
+  // silently DETACHED an already-linked match (`event_id` overwritten with NULL), and a
+  // correction naming a DIFFERENT event silently MOVED it. Fixed with the identical symmetric
+  // fill-in-blanks idiom already used for `scheduledTime`/`site`: an omitted incoming event
+  // PRESERVES the stored one, a stored-null is FILLED IN by a supplied one, and two DIFFERENT
+  // supplied event ids are a genuine CONFLICT — refused, naming both, never silently decided.
+  describe("conflicting/omitted parent event (Codex High finding 1)", () => {
+    function seedEvent(db: TestDb, name: string) {
+      return db
+        .insert(events)
+        .values({ name, kind: "tournament", startsOn: "2026-08-01", endsOn: "2026-08-31" })
+        .returning()
+        .get();
+    }
+
+    it("REGRESSION: a correction that OMITS the event preserves the stored event link rather than detaching it", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const eventA = seedEvent(db, "Event A");
+
+        const first = addMatchFromScorecard(db, { ...basePayload(home.name, visiting.name), event: eventA.name });
+        expect(first.ok).toBe(true);
+
+        // The correction omits `event` entirely — same as a captain resubmitting to fix a score,
+        // not thinking to repeat the event name every time.
+        const second = addMatchFromScorecard(db, basePayload(home.name, visiting.name));
+
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.eventId).toBe(eventA.id); // NOT nulled out
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a correction that SUPPLIES an event fills in a previously-null one", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const eventA = seedEvent(db, "Event A");
+
+        const first = addMatchFromScorecard(db, basePayload(home.name, visiting.name)); // no event
+        expect(first.ok).toBe(true);
+
+        const second = addMatchFromScorecard(db, { ...basePayload(home.name, visiting.name), event: eventA.name });
+
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.eventId).toBe(eventA.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("re-ingesting with the SAME event again is a no-op, not a conflict", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const eventA = seedEvent(db, "Event A");
+        const payload: ScorecardPayload = { ...basePayload(home.name, visiting.name), event: eventA.name };
+
+        const first = addMatchFromScorecard(db, payload);
+        const second = addMatchFromScorecard(db, payload);
+
+        expect(first.ok).toBe(true);
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.eventId).toBe(eventA.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION: a correction naming a DIFFERENT event refuses rather than silently moving the match", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const eventA = seedEvent(db, "Event A");
+        const eventB = seedEvent(db, "Event B");
+
+        const first = addMatchFromScorecard(db, { ...basePayload(home.name, visiting.name), event: eventA.name });
+        expect(first.ok).toBe(true);
+
+        const second = addMatchFromScorecard(db, { ...basePayload(home.name, visiting.name), event: eventB.name });
+
+        expect(second.ok).toBe(false);
+        if (!second.ok) expect(second.kind).toBe("conflicting-parent-event");
+
+        // Nothing moved: the stored row still points at Event A.
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.eventId).toBe(eventA.id);
       } finally {
         sqlite.close();
       }
