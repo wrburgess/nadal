@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { globalFlags, parseArgs, parsePayloadArgs } from "../src/cli/args.js";
+import { globalFlags, parseArgs, parsePayloadArgs, scanFlags } from "../src/cli/args.js";
 
 describe("parseArgs", () => {
   it("parses a target with no flags", () => {
@@ -158,5 +158,76 @@ describe("`--` end-of-flags delimiter", () => {
   it("an unrecognized flag before the delimiter still fails (the delimiter is not a way to silence typos)", () => {
     const parsed = parsePayloadArgs(["Randy", "--typo", "--", "text"], 1);
     expect(parsed.error).toBe("unrecognized flag --typo");
+  });
+
+  // #44: `--from --` was already read by `parseArgs` as `from` taking the value `"--"` (correct
+  // — a declared value flag's value is that value, never a delimiter, the same rule this whole
+  // describe block already exercises one flag over). The bug was `dispatch`'s SEPARATE raw
+  // `argv.indexOf("--")` scan disagreeing with this layer about which `--` was the delimiter.
+  // These three pin that this layer was always right, ahead of the Task 2 refactor that makes
+  // `dispatch` share this exact scan instead of re-deriving its own.
+  it("#44: a `--` that is a declared value flag's value is that value, not the end-of-flags delimiter", () => {
+    const parsed = parseArgs(["T", "--from", "--", "--source-url", "U"], [], ["from", "source-url"]);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.target).toBe("T");
+    expect(parsed.flags.from).toBe("--");
+    expect(parsed.flags["source-url"]).toBe("U");
+  });
+
+  it("#44: same, with the flag order swapped — `--source-url --` then `--from`", () => {
+    const parsed = parseArgs(["T", "--source-url", "--", "--from", "U"], [], ["from", "source-url"]);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.target).toBe("T");
+    expect(parsed.flags["source-url"]).toBe("--");
+    expect(parsed.flags.from).toBe("U");
+  });
+
+  it("a trailing `--` as the FINAL token is still a value flag's value, not 'requires a value'", () => {
+    const parsed = parseArgs(["T", "--from", "--"], [], ["from"]);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.flags.from).toBe("--");
+  });
+});
+
+// The single scan `dispatch` (src/cli/router.ts) and `parsePositionals` both derive from, added by
+// #44 so the two layers can no longer disagree about where flags end and whether `--help` was
+// requested — they were previously two independent scans of the same tokens, and dispatch's scan
+// did not know about value flags at all, so it read a value flag's `--`-valued argument as the
+// end-of-flags delimiter.
+describe("scanFlags", () => {
+  it("no delimiter found: a `--` consumed as a value flag's value does not set endOfFlags", () => {
+    const scan = scanFlags(["--from", "--", "x"], [], ["from"]);
+    expect(scan.endOfFlags).toBe(3);
+    expect(scan.helpRequested).toBe(false);
+  });
+
+  it("#44 consequence: `--help` consumed as a value flag's value is not a help request", () => {
+    const scan = scanFlags(["--from", "--help"], [], ["from"]);
+    expect(scan.helpRequested).toBe(false);
+  });
+
+  it("a BOOLEAN flag does not consume the next token, so a following `--` is a real delimiter", () => {
+    const scan = scanFlags(["--players", "--", "--help"], ["players"], []);
+    expect(scan.endOfFlags).toBe(1);
+    // Past the real delimiter, "--help" is text — never visited as a flag.
+    expect(scan.helpRequested).toBe(false);
+  });
+
+  it("a second `--help`, past the one consumed as a value, IS in flag position", () => {
+    // Kills an implementation that scans for "--help" anywhere in the token stream (would see the
+    // first one too) and one that stops walking at the first value flag (would see neither).
+    const scan = scanFlags(["--from", "--help", "--help"], [], ["from"]);
+    expect(scan.helpRequested).toBe(true);
+  });
+
+  it("precedence: a name declared as BOTH boolean and value classifies as boolean, matching parseArgs", () => {
+    const scanned = scanFlags(["--dual", "--"], ["dual"], ["dual"]);
+    // Boolean flags never consume — so the following "--" is visited and IS the delimiter.
+    expect(scanned.endOfFlags).toBe(1);
+
+    const parsed = parseArgs(["--dual", "--"], ["dual"], ["dual"]);
+    expect(parsed.flags.dual).toBe(true);
+    expect(parsed.target).toBeUndefined(); // nothing follows the delimiter
+    expect(parsed.error).toBeUndefined();
   });
 });

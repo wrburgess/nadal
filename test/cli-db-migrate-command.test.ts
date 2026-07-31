@@ -1,6 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import * as client from "../src/db/client.js";
@@ -151,5 +152,89 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
 
     runMigrationsSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+});
+
+// #44 Task 5: the adjacent defect folded into this issue — `db migrate` never parsed its `args` at
+// all, so `tn db migrate --jsno bogus-extra-arg` silently ran the real migration and reported
+// status=ok. Fixed by giving `run` the same `parseArgs` + `emitSummary` treatment every other
+// command already has, which is also what makes `--quiet`/`--json` real here (GRAMMAR.md already
+// promised them for every command).
+describe("tn db migrate rejects unrecognized flags and extra arguments (#44 folded defect)", () => {
+  const fixture = useTnDbPath("arg-parsing.db");
+
+  function tableNames(): string[] {
+    const sqlite = new Database(fixture.path());
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+      name: string;
+    }>;
+    sqlite.close();
+    return rows.map((r) => r.name);
+  }
+
+  it("an unrecognized flag exits 1, reports it on stderr, and applies no migrations", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "--jsno"]);
+
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith('db migrate status=error message="unrecognized flag --jsno"');
+    expect(logSpy).not.toHaveBeenCalled();
+    // The real bug: `runMigrations()` used to run regardless of `args`. Confirm no migration table
+    // exists at all — not just that the exit code looks like failure. (The db FILE itself may
+    // still exist: dispatch's telemetry wrapper opens it independently to log the request and its
+    // own insert then fails on the missing `request_log` table — that failure is expected and
+    // reported as a second stderr line; what must NOT have happened is any table getting created.)
+    expect(tableNames()).toEqual([]);
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("an unexpected extra argument exits 1 and applies no migrations (db migrate takes no positionals)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "extra-arg"]);
+
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^db migrate status=error message=".+"$/));
+    expect(errorSpy.mock.calls[0]?.[0]).toContain("extra-arg");
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(tableNames()).toEqual([]);
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("--quiet applies migrations but writes nothing to stdout — the global GRAMMAR.md promises, now true here too", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "--quiet"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(tableNames()).toContain("players");
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("--json prints a parseable status=ok payload and applies migrations", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["db", "migrate", "--json"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    const parsed = JSON.parse(printed) as { status: string; path: string };
+    expect(parsed.status).toBe("ok");
+    expect(parsed.path).toBe(fixture.path());
+    expect(tableNames()).toContain("players");
+
+    logSpy.mockRestore();
   });
 });
