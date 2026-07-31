@@ -143,6 +143,9 @@ while it still carried the pre-merge `0004_free_warstar` migration. `main` later
 unchanged, so it does **not** name the failing database — you have to identify it yourself:
 
 ```sh
+# This error does not name the database, so the shell's TN_DB_PATH is the best signal available.
+# Confirm it is the one you were using — `echo "${TN_DB_PATH:-data/nadal.db}"` — before running
+# this; a stale value would move and rebuild an unrelated database.
 case "${TN_DB_PATH:-}" in
   /*) DB="$TN_DB_PATH" ;;                                   # set, and absolute — use it as-is
   *)  printf 'absolute path to the database that failed: '  # otherwise paste it; `read -r` takes the

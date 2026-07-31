@@ -29,11 +29,10 @@ database that actually failed — `TN_DB_PATH` if you set it, `data/nadal.db` ot
 **Put the path in a variable; never paste it into quotes, and never use the bare default.**
 
 ```sh
-case "${TN_DB_PATH:-}" in
-  /*) DB="$TN_DB_PATH" ;;                                   # set, and absolute — use it as-is
-  *)  printf 'absolute path to the database that failed: '  # otherwise paste what the ERROR printed
-      IFS= read -r DB || DB= ;;                             # EOF / piped stdin leaves DB empty
-esac
+# The error named the database. Paste THAT path — do not let the shell pick one. A TN_DB_PATH
+# left over in this shell may point somewhere else entirely, and preferring it would move and
+# rebuild an unrelated database while the broken one stays broken.
+printf 'paste the ABSOLUTE path the error named: '; IFS= read -r DB || DB=
 
 case "$DB" in
   /*) export TN_DB_PATH="$DB"   # binds EVERY `tn` below — migrate, re-pull AND restore.
@@ -91,8 +90,10 @@ yours to apply. Every one of them is here because it caught a real defect, so no
   exists from an earlier recovery, use a different suffix. Overwriting it destroys the captain notes
   and availability saved by the *previous* failure — the exact data this whole procedure exists to
   protect, and `-i` will prompt rather than silently clobber if you forget.
-- **Confirm `$DB` is the database that actually failed** — compare it against the path in the error.
-  They differ if you set `TN_DB_PATH` in one shell and recover in another.
+- **`$DB` comes from the error, not from the shell** — that ordering is the point. An earlier draft
+  preferred an already-set `TN_DB_PATH`, and only told you to compare it against the error *after*
+  the move: a stale value pointing at a different database would have displaced that one and left
+  the broken one untouched. Prompting first makes the comparison structural instead of advisory.
 
 **If the error says `(path escaped …)` and the path contains `\u{…}` sequences**, those are escapes
 the error produced, not characters in the filename: the real path holds something that cannot be
@@ -171,7 +172,9 @@ resolve that to an absolute path yourself, and apply every safeguard from the fi
 `--`, both paths quoted, a backup name that is not already taken):
 
 ```sh
-# Same selection as the first recovery above — TN_DB_PATH when absolute, otherwise paste the path.
+# Unlike the first recovery, THIS error does not name the database — so the shell's TN_DB_PATH is
+# the best available signal. Confirm it is the one you were actually using before running this:
+# `echo "${TN_DB_PATH:-data/nadal.db}"`. If it is not, paste the right absolute path at the prompt.
 case "${TN_DB_PATH:-}" in
   /*) DB="$TN_DB_PATH" ;;
   *)  printf 'absolute path to the database that failed: '
