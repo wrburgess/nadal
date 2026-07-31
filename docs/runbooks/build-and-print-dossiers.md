@@ -99,14 +99,13 @@ about an opponent since last time (useful mid-event).
   Run `tn team home "<your team>"` first (#37 / nadal ADR 0001) — once a home team is set, `report
   build` automatically populates this section for every OTHER team's dossier. It stays unavailable
   on the home team's own dossier (comparing a team against itself is not a meaningful section) and
-  on any dossier built before a home team is designated at all. **Read the on-page wording loosely
-  here**: both cases print the identical sentence *"Not available in this build (no home team
-  configured)"* (`src/report/html.ts`/`markdown.ts`), even on the home team's own dossier where a
-  home team plainly IS configured — it is one message doing duty for two different reasons
-  (`versusTeamId` is `undefined` in both, `src/report/write.ts`), not a sign the designation failed
-  to take. Verified against a real build: `IA/Versteeg/40&Over3.5M`'s own dossier printed that exact
-  sentence immediately after `tn team home "IA/Versteeg/40&Over3.5M"` had already run successfully,
-  while `OK/Tulsa Ironwood/40&Over3.5M`'s dossier in the same build populated the section in full.
+  on any dossier built before a home team is designated at all. **The two cases now say which one
+  you are looking at**: the home team's own dossier reads *"Not available on our own team's dossier
+  — this section compares an opponent's roster against ours"*, and only a genuinely unset home team
+  reads *"no home team configured"*. Until #19 both printed the second sentence, so the home team's
+  own dossier announced that no home team was configured immediately after `tn team home` had
+  succeeded — if you are holding a binder printed before that fix, read that line as "this is our
+  team", not as a failed designation.
 - **The predicted lineup is a guess, and the dossier says so.** Every dossier now carries a
   *"Predicted lineup (a guess)"* section (#17 PR B). Read the confidence and the "Based on" column
   before planning against it: a row reading `placed by rating — no shared history` is not a
