@@ -515,7 +515,7 @@ reason to leave something broken, and a defect does not become a findings line b
 toolchain.
 
 This is how the log has actually been kept, which is the check on the rule rather than a restatement of
-it: at this PR's merge base, `bug` is the **largest single type** in
+it: measured at `03c577d`, `bug` is the **largest single type** in
 [`docs/findings.md`](docs/findings.md) — **95 of 222 entries**, a plurality rather than a majority —
 and those are overwhelmingly defects **fixed in the run that found them**, whose *lesson* was then
 logged. A `bug` type on a findings line is not an instruction to file an Issue, and nothing here changes

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `teams_tennisrecord_url_unique` ON `teams` (`tennisrecord_url`) WHERE tennisrecord_url IS NOT NULL;

@@ -2,9 +2,12 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import * as client from "../src/db/client.js";
+import { buildLegacyMigrationsFolder } from "./helpers/legacy-migrations.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 // Unicode line-break characters that are NOT ASCII C0 controls: NEL, Line
@@ -219,6 +222,46 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
     expect(tableNames()).toContain("players");
 
     logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  // MERGE-BORN regression (#46 integrating #44/PR #51). #46 added a detailed, copy-pasteable
+  // recovery to the migration-failure error; PR #51 concurrently moved `db migrate` from a raw
+  // `console.error` onto `emitSummary`'s one-line `key=value` summary, whose `sanitizeValue`
+  // replaces every control character — newlines included — with a space. Both were green alone.
+  // Together, the multi-line recovery collapsed into one ~1200-character run of prose with the `mv`
+  // command buried mid-paragraph: unusable by the human it was written for.
+  //
+  // This asserts the RENDERED CLI line, which is the surface that actually broke — the sibling
+  // assertion in test/db-teams-url-unique-upgrade.test.ts covers the message itself. The defect
+  // lives in the seam, so it is guarded from both sides.
+  it("renders the #46 duplicate-URL recovery command INTACT through the one-line summary", async () => {
+    const dbFile = join(mkdtempSync(join(tmpdir(), "tn-")), "legacy.db");
+    // A database migrated up to 0008 that already holds the duplicate pair 0009 forbids.
+    const legacyDir = buildLegacyMigrationsFolder(8);
+    const seed = new Database(dbFile);
+    try {
+      migrate(drizzle(seed), { migrationsFolder: legacyDir });
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A', 'https://tr/t?a')`);
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A 4.0', 'https://tr/t?a')`);
+    } finally {
+      seed.close();
+    }
+    process.env.TN_DB_PATH = dbFile;
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const code = await dispatch(["db", "migrate"]);
+    expect(code).toBe(1);
+
+    const printed = errorSpy.mock.calls.map((c) => String(c[0])).find((l) => l.includes("db migrate"));
+    expect(printed, "no db migrate summary line was emitted").toBeDefined();
+    const fields = parseSummaryFields(printed as string);
+    expect(fields.status).toBe("error");
+    // The whole recovery command survives as one contiguous, copy-pasteable run — this is what a
+    // collapsed multi-line message destroys.
+    expect(fields.message).toContain(`mv -i -- '${dbFile}' '${dbFile}.pre-0009.bak' && tn db migrate`);
+    expect(fields.message).toContain("docs/runbooks/db-migration-recovery.md");
+
     errorSpy.mockRestore();
   });
 
