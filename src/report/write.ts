@@ -9,7 +9,7 @@
 
 import { asc } from "drizzle-orm";
 import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   assertLeafWritable,
   assertOutputPathSafe,
@@ -190,7 +190,20 @@ type PreparedDossierWrite = {
  * (`writeTeamDossier`, which never passes `dirName`) resolves its own via `resolveDirNameForTeam` —
  * the SAME whole-DB, collision-disambiguated resolution `sectionals` would have produced for this
  * team — rather than a bare `teamSlug` that only sees the one team being built and would happily
- * place it in a slug another team already claims (Finding 2 above). */
+ * place it in a slug another team already claims (Finding 2 above).
+ *
+ * Deliberately does NOT call `mkdirSync` — prepare only VALIDATES and RESOLVES paths, it never
+ * mutates the filesystem (Codex adversarial review, PR #38 round 3, Finding 3 [medium]). The
+ * previous version created `dir` here, so a LATER team's (or the top-level index's) refusal during
+ * this same batch's validation pass left an already-created, empty directory behind for every team
+ * prepared before the one that refused — round 2 only ever fixed the two FILES inside that directory
+ * from being written, never the directory's own creation. `resolveRealOutputPath` below does not
+ * need `dir` to exist to do its job: `realpathOfNearestExisting` (see its doc comment in
+ * `src/fs/output-root.ts`) walks up to the nearest EXISTING ancestor and re-appends the missing
+ * trailing components unresolved — exactly the state a brand-new team's directory is in before its
+ * first write — so validation is complete without creating anything. `commitDossierWrite` below is
+ * the one and only place `mkdirSync` runs for a team dossier now, immediately before the leaves it
+ * guards are written. */
 function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
@@ -205,7 +218,6 @@ function prepareTeamDossierWrite(
   assertReportPathSafe(htmlPath);
   assertReportPathSafe(mdPath);
 
-  mkdirSync(dir, { recursive: true });
   const realHtmlPath = resolveRealOutputPath(reportsRoot(), htmlPath, DEFAULT_REPORTS_DIR);
   const realMdPath = resolveRealOutputPath(reportsRoot(), mdPath, DEFAULT_REPORTS_DIR);
   assertLeafWritable(realHtmlPath);
@@ -222,40 +234,60 @@ function prepareTeamDossierWrite(
 }
 
 /** Writes a `PreparedDossierWrite`'s two leaves — the only place `overwriteOutputFile` is called
- * for a team dossier. By the time this runs, `prepareTeamDossierWrite` has already confirmed both
- * leaves are writable, so this step is not expected to throw; it still goes through
- * `overwriteOutputFile` (not a bare `writeFileSync`) so the no-follow-a-symlink discipline holds
- * even against a leaf that changed on disk between prepare and commit. */
+ * for a team dossier, and (since Finding 3 above moved directory creation out of prepare) the only
+ * place `mkdirSync` runs for one either. Both leaves share one directory, so `dirname(realHtmlPath)`
+ * is created once (`{ recursive: true }`, so a second team landing in an already-existing sibling
+ * directory is a silent no-op, same as before) rather than repeating the derivation for
+ * `realMdPath`. By the time this runs, `prepareTeamDossierWrite` has already confirmed both leaves
+ * are writable, so `overwriteOutputFile` (not a bare `writeFileSync`) is not expected to throw here —
+ * it stays in place anyway so the no-follow-a-symlink discipline holds even against a leaf that
+ * changed on disk between prepare and commit. */
 function commitDossierWrite(prepared: PreparedDossierWrite): string[] {
+  mkdirSync(dirname(prepared.realHtmlPath), { recursive: true });
   overwriteOutputFile(prepared.realHtmlPath, prepared.htmlContent);
   overwriteOutputFile(prepared.realMdPath, prepared.mdContent);
   return [prepared.htmlPath, prepared.mdPath];
 }
 
 /** Renders both forms and writes them under `<reportsRoot>/<team-slug>/`, returning the paths
- * written (2: `index.html`, `index.md`) — every path checked with `assertReportPathSafe` BEFORE
- * anything is written, so a refusal leaves nothing on disk (same discipline as `archivePage`).
+ * written (2: `index.html`, `index.md`).
+ *
+ * The PRECISE guarantee, stated without overclaiming (Codex adversarial review, PR #38 round 3,
+ * Finding 2 [high] — a prior version of this comment claimed "a refusal leaves nothing on disk"
+ * unconditionally, which the code has never actually delivered end to end): every leaf this call
+ * will touch — both `index.html` and `index.md` — is checked with `assertReportPathSafe` and
+ * `assertLeafWritable` (inside `prepareTeamDossierWrite`) BEFORE either is written, so a VALIDATION
+ * refusal (a bad root, a `..` escape, a symlinked leaf, a git-tracked destination) leaves nothing on
+ * disk — no file, and (since `prepareTeamDossierWrite` does not itself call `mkdirSync` either) no
+ * directory. `commitDossierWrite` is the one place that creates the team's directory and writes both
+ * leaves, each leaf via `overwriteOutputFile`'s atomic temp-file-then-rename (see that function's own
+ * doc comment in `src/fs/output-root.ts`), so each INDIVIDUAL leaf is either fully replaced or left
+ * exactly as it was — never partially written, never briefly missing. What that does NOT cover: a
+ * COMMIT-TIME failure (disk full, permissions revoked mid-run) between writing `index.html` and
+ * `index.md` can still leave one leaf updated and the other not, because updating two files is
+ * inherently two separate atomic operations, not one. Reports are cheaply regenerable from the DB by
+ * design, so that narrower, honest guarantee is the one this module is built to provide — full
+ * cross-file transactional atomicity is not.
  *
  * Reports carry the same personal data as raw archive captures and land in the same public repo, so
- * the write is held to `archivePage`'s standard, not just its pre-check: after `mkdirSync` (which
- * silently succeeds over an existing symlinked directory) the path is re-validated and resolved to
- * its REAL location via `resolveRealOutputPath`, and the leaf is written with `overwriteOutputFile`
- * — which refuses to follow an existing symlink at `index.html`/`index.md` rather than writing
- * through it. Unlike `archivePage`'s never-rewritten, timestamped filenames, a dossier IS rewritten
- * in place on every run (byte-identical reruns are a tested guarantee), so the leaf write can't be a
- * bare `flag: "wx"` — `overwriteOutputFile` tolerates and replaces a plain file left by a prior run
- * while still refusing a symlink.
+ * the write is held to `archivePage`'s standard, not just its pre-check: the path is re-validated and
+ * resolved to its REAL location via `resolveRealOutputPath` (which tolerates the directory not
+ * existing yet — see that function's own doc comment), and the leaf is written with
+ * `overwriteOutputFile` — which refuses to follow an existing symlink at `index.html`/`index.md`
+ * rather than writing through it. Unlike `archivePage`'s never-rewritten, timestamped filenames, a
+ * dossier IS rewritten in place on every run (byte-identical reruns are a tested guarantee), so the
+ * leaf write can't be a bare `flag: "wx"` — `overwriteOutputFile` tolerates and replaces a plain file
+ * left by a prior run while still refusing a symlink.
  *
  * BOTH leaves are checked with `assertLeafWritable` before EITHER is written (inside
  * `prepareTeamDossierWrite`, run before `commitDossierWrite`), so a symlink at `index.md` refuses
  * before `index.html` ever touches disk: an earlier version of this function only discovered a
  * symlinked leaf inside `overwriteOutputFile`, AT WRITE TIME, so the html write could already have
- * landed before the md write's symlink check threw, leaving a fresh partial dossier behind despite
- * this function's own "a refusal leaves nothing on disk" promise above (Codex adversarial review,
- * PR #38, Finding 3 [medium]). That promise holds for a single `writeTeamDossier` call; it does NOT
- * by itself extend across a whole batch of teams — see `writeSectionalsDossiers` below, which is why
- * `prepareTeamDossierWrite`/`commitDossierWrite` are split out as their own functions rather than
- * inlined here. */
+ * landed before the md write's symlink check threw, leaving a fresh partial dossier behind (Codex
+ * adversarial review, PR #38, Finding 3 [medium]). That validation-time guarantee holds for a single
+ * `writeTeamDossier` call; it does NOT by itself extend across a whole batch of teams — see
+ * `writeSectionalsDossiers` below, which is why `prepareTeamDossierWrite`/`commitDossierWrite` are
+ * split out as their own functions rather than inlined here. */
 export function writeTeamDossier(
   db: Db,
   teamId: number,
@@ -298,6 +330,20 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * one dossier per team present in the DB, plus a top-level `index.html`/`index.md` linking each.
  * `events` has no writer at all (docs/findings.md, #15), so "every team in the DB" is the only
  * available reading of "the field" — there is no `events` row to scope this to instead.
+ *
+ * The PRECISE guarantee this batch call makes, stated without overclaiming (Codex adversarial
+ * review, PR #38 round 3, Finding 2 [high]): every leaf in the WHOLE batch — every team's html+md
+ * pair, plus the top-level index pair — is validated (`assertReportPathSafe`, `assertLeafWritable`)
+ * before ANY of them is written, and neither phase creates a directory (see Finding 3 [medium] below)
+ * — so a VALIDATION refusal anywhere leaves nothing on disk at all, no files and no directories, for
+ * the entire batch. Each individual leaf is then replaced ATOMICALLY (temp-file-then-rename — see
+ * `overwriteOutputFile`'s doc comment in `src/fs/output-root.ts`), so no single file is ever observed
+ * half-written. What this does NOT cover, and what no design built from independent per-file renames
+ * can cover: a COMMIT-TIME failure (an I/O error — disk full, permissions revoked — partway through
+ * the loop below) can still leave a PARTIALLY-updated batch, some teams' dossiers refreshed and
+ * others not. Reports are cheaply regenerable from the DB by design (re-run the build), so that
+ * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
+ * what this module actually provides, not a stronger one this comment used to imply.
  */
 export function writeSectionalsDossiers(db: Db, options: { since: string }): string[] {
   // Same load-bearing `ORDER BY teams.id` as `resolveDirNameForTeam` above, and for the identical
@@ -308,13 +354,16 @@ export function writeSectionalsDossiers(db: Db, options: { since: string }): str
   const dirNames = resolveTeamDirNames(allTeams.map((t) => ({ teamId: t.id, teamName: t.name })));
 
   // PHASE 1 — validate every leaf this batch will touch, EVERY team's html+md pair plus the
-  // top-level index pair, before writing ANY of them. `writeTeamDossier`'s own "a refusal leaves
-  // nothing on disk" promise is true for one team, but the old version of this function called it
-  // in a loop that WROTE each team as soon as that team's own two leaves checked out — so a LATER
-  // team's symlinked leaf still left every EARLIER team's fresh dossier sitting on disk, discovered
-  // only at write time, one team too late (Codex adversarial review, PR #38 round 2, Finding 3
-  // [medium]; round 1 fixed the html-then-md ordering WITHIN one team but never widened the
-  // guarantee to the whole batch this function drives).
+  // top-level index pair, before writing ANY of them. Deliberately creates nothing on the
+  // filesystem — see `prepareTeamDossierWrite`'s own doc comment (Finding 3 [medium]) for why
+  // directory creation is deferred entirely to `commitDossierWrite`/Phase 2 below. A refusal here
+  // (a symlinked leaf, an unsafe root, a git-tracked destination) therefore leaves the WHOLE batch
+  // untouched: no team's directory or file, and no top-level index either. The old version of this
+  // function called `writeTeamDossier` in a loop that WROTE each team as soon as that team's own two
+  // leaves checked out — so a LATER team's symlinked leaf still left every EARLIER team's fresh
+  // dossier sitting on disk, discovered only at write time, one team too late (Codex adversarial
+  // review, PR #38 round 2, Finding 3 [medium]; round 1 fixed the html-then-md ordering WITHIN one
+  // team but never widened the guarantee to the whole batch this function drives).
   const preparedTeams = allTeams.map((team) => prepareTeamDossierWrite(db, team.id, options, dirNames.get(team.id)));
 
   const entries: TeamIndexEntry[] = allTeams.map((t) => ({
@@ -326,23 +375,35 @@ export function writeSectionalsDossiers(db: Db, options: { since: string }): str
   const indexMdPath = join(reportsRoot(), "index.md");
   assertReportPathSafe(indexHtmlPath);
   assertReportPathSafe(indexMdPath);
-  mkdirSync(reportsRoot(), { recursive: true });
+  // No `mkdirSync` here — same Finding 3 fix as `prepareTeamDossierWrite` above, one layer up:
+  // `resolveRealOutputPath` does not need `reportsRoot()` to already exist (it walks up to the
+  // nearest existing ancestor), so validating the top-level pair never has to create anything. The
+  // previous version's `mkdirSync(reportsRoot(), { recursive: true })` ran here, in the validation
+  // pass, BEFORE the two `assertLeafWritable` calls below — so a symlinked top-level leaf refused
+  // AFTER `reportsRoot()` had already been (re)created, leaving a fresh empty directory behind on a
+  // machine where it did not previously exist (Codex adversarial review, PR #38 round 3, Finding 3
+  // [medium]).
+  const realIndexHtmlPath = resolveRealOutputPath(reportsRoot(), indexHtmlPath, DEFAULT_REPORTS_DIR);
+  const realIndexMdPath = resolveRealOutputPath(reportsRoot(), indexMdPath, DEFAULT_REPORTS_DIR);
   // Same post-mkdir re-check + no-follow-leaf-overwrite discipline as `writeTeamDossier` above — the
   // top-level index names every team on file, so it deserves the identical protection, not a lesser
   // one just because it lives one directory up.
-  const realIndexHtmlPath = resolveRealOutputPath(reportsRoot(), indexHtmlPath, DEFAULT_REPORTS_DIR);
-  const realIndexMdPath = resolveRealOutputPath(reportsRoot(), indexMdPath, DEFAULT_REPORTS_DIR);
   assertLeafWritable(realIndexHtmlPath);
   assertLeafWritable(realIndexMdPath);
 
   // PHASE 2 — every leaf in the batch (every team's pair, and the top-level pair) is now confirmed
-  // writable. Only now does anything actually get written to disk, so a refusal anywhere above this
-  // line leaves the ENTIRE batch untouched, not just the one team or the top-level pair that
-  // triggered it.
+  // writable. Only now does anything actually get written to disk (`commitDossierWrite` below is
+  // also where each team's own directory is finally created), so a VALIDATION refusal anywhere
+  // above this line leaves the ENTIRE batch — files AND directories — untouched, not just the one
+  // team or the top-level pair that triggered it. A COMMIT-time failure (disk full, permissions
+  // changed mid-batch) is a different case this loop cannot protect against once it has started —
+  // see the doc comment on `overwriteOutputFile` in `src/fs/output-root.ts` for the precise boundary
+  // between what is and is not guaranteed once writing begins.
   const written: string[] = [];
   for (const prepared of preparedTeams) {
     written.push(...commitDossierWrite(prepared));
   }
+  mkdirSync(dirname(realIndexHtmlPath), { recursive: true });
   overwriteOutputFile(realIndexHtmlPath, renderIndexHtml(entries));
   overwriteOutputFile(realIndexMdPath, renderIndexMarkdown(entries));
   written.push(indexHtmlPath, indexMdPath);

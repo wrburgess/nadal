@@ -404,6 +404,55 @@ describe("src/report/write.ts", () => {
       }
     });
 
+    // REGRESSION (Codex adversarial review, PR #38 round 3, Finding 3 [medium]). The round-2 fix
+    // above stopped the FIRST team's two FILES from landing on disk, but `prepareTeamDossierWrite`
+    // still calls `mkdirSync(dir, { recursive: true })` for EVERY team as part of validating it — so
+    // Team First's now-empty DIRECTORY is still created and left behind the moment Team First's own
+    // prepare step runs, well before Team Second's symlinked leaf is ever discovered. The round-2
+    // tests only ever asserted files were absent, so they passed while this directory-level leak
+    // shipped unnoticed for a whole review round. Directory creation belongs in the COMMIT phase
+    // (after every leaf in the batch has already been validated), not the prepare/validation phase.
+    it("REGRESSION: a symlinked leaf on the SECOND team must not leave the FIRST team's now-empty DIRECTORY behind either", () => {
+      const teamOne = seedTeamWithRoster("Team Third", []);
+      const teamTwo = seedTeamWithRoster("Team Fourth", []);
+      const dirTwo = join(reportsDir, teamSlug(teamTwo.id, "Team Fourth"));
+      mkdirSync(dirTwo, { recursive: true });
+      const escapeTarget = mkdtempSync(join(tmpdir(), "tn-escape-"));
+      const linkTarget = join(escapeTarget, "leaked.md");
+      symlinkSync(linkTarget, join(dirTwo, "index.md"));
+      const { db, sqlite } = openDb();
+      try {
+        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        const dirOne = join(reportsDir, teamSlug(teamOne.id, "Team Third"));
+        // The stronger assertion round 2 was missing: not just "no files inside dirOne", but "dirOne
+        // itself was never created" — prepare must not mutate the filesystem at all.
+        expect(existsSync(dirOne)).toBe(false);
+      } finally {
+        sqlite.close();
+        rmSync(escapeTarget, { recursive: true, force: true });
+      }
+    });
+
+    // REGRESSION (Codex adversarial review, PR #38 round 3, Finding 3 [medium]), the top-level-index
+    // companion to the test above: a refusal triggered by the TOP-LEVEL index pair must not leave any
+    // team's per-team directory behind either, even though that team's own leaves were perfectly fine
+    // and would have been written without issue if the batch had gone on to commit.
+    it("REGRESSION: a symlinked top-level index.md must not leave any team's per-team DIRECTORY behind either", () => {
+      seedTeamWithRoster("Team Fifth", []);
+      mkdirSync(reportsDir, { recursive: true });
+      const escapeTarget = mkdtempSync(join(tmpdir(), "tn-escape-"));
+      const linkTarget = join(escapeTarget, "leaked-index.md");
+      symlinkSync(linkTarget, join(reportsDir, "index.md"));
+      const { db, sqlite } = openDb();
+      try {
+        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(existsSync(join(reportsDir, "team-fifth"))).toBe(false);
+      } finally {
+        sqlite.close();
+        rmSync(escapeTarget, { recursive: true, force: true });
+      }
+    });
+
     // REGRESSION (Codex adversarial review, PR #38 round 2, Finding 2 [high]). Neither
     // `db.select().from(teams).all()` call this collision scheme depends on (write.ts:115 inside
     // `resolveDirNameForTeam`, write.ts:242 here) carries an `ORDER BY`. SQL makes NO guarantee about

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -152,22 +153,66 @@ type GitTrackedResult = "tracked" | "untracked" | "indeterminate";
  * same missing directory — bypass the guard entirely: ENOENT on `execFileSync`'s own `chdir` looked
  * indistinguishable from "not tracked").
  */
+/**
+ * Every environment variable git itself treats as SELECTING which repository/index/working tree to
+ * operate against — as opposed to ones that merely tweak output (`GIT_PAGER`) or tracing
+ * (`GIT_TRACE*`), which are harmless here and deliberately left alone. This is a DENYLIST BY PREFIX
+ * (`GIT_*` in full) rather than an allowlist of the handful named below, because a future git
+ * version's repository-selection variable this list has never heard of must fail closed (stripped)
+ * by default, not sail through unstripped the way `GIT_INDEX_FILE` did before this fix existed.
+ * Named here anyway, for the record, because "strip everything" without an example invites a future
+ * editor to narrow it back down to only these: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+ * `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
+ * `GIT_CEILING_DIRECTORIES`, `GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_NAMESPACE`, and the whole
+ * `GIT_CONFIG_*`/`GIT_CONFIG` family (config can itself redirect object/index/worktree locations).
+ */
+const GIT_ENV_PREFIX = "GIT_";
+
+/**
+ * The exact child environment `isGitTracked` spawns `git` with: every entry of `process.env` EXCEPT
+ * anything starting with `GIT_` (see `GIT_ENV_PREFIX` above), plus the locale pin below.
+ *
+ * The `GIT_*` strip closes Finding 1 (Codex adversarial review, PR #38 round 3, [critical]): the
+ * previous version spread `process.env` verbatim, so an ambient `GIT_INDEX_FILE` (or `GIT_DIR`,
+ * `GIT_WORK_TREE`, …) rode straight through to the spawned `git` and silently redirected which
+ * repository/index it actually answered `ls-files` against — a DIFFERENT one than the `cwd` this
+ * function's caller deliberately chose (`findGitWorkTreeRoot`'s discovered work-tree root). The
+ * reviewer's exact reproducer: `GIT_INDEX_FILE` pointed at a nonexistent path makes git treat the
+ * index as empty, so `git ls-files --error-unmatch` reports a genuinely tracked absolute path as
+ * "did not match any file(s) known to git" — the literal text this module reads as "untracked" —
+ * because git consulted the bogus empty index instead of the repository's real one. Stripping the
+ * WHOLE `GIT_*` namespace (not just the three variables the reproducer needed) is deliberate: this
+ * guard's entire job is deciding whether a path is tracked in the ONE repository `cwd` points at, and
+ * there is no legitimate reason for the ambient environment to redirect that answer to a different
+ * repository, index, or object store — so nothing in that namespace is trusted through.
+ *
+ * git's error messages are TRANSLATED when it is built with NLS and the environment asks for another
+ * language — under `LC_ALL=fr_FR.UTF-8` the stderr below reads "erreur : le spécificateur de chemin
+ * '…' ne correspond à aucun fichier connu de git", and the English match then fails. Since an
+ * unmatched message resolves to "indeterminate" and the caller FAILS CLOSED, that would refuse every
+ * capture and every dossier write on any machine not running in English, while passing every test on
+ * one that is. That is the PR #31 round-3 defect exactly ("a privacy control that refuses everything
+ * looks identical to a privacy control that works, right up until someone runs it"), so the locale is
+ * pinned rather than assumed: `LC_ALL=C` selects git's untranslated strings, and `LANGUAGE` is
+ * cleared because it overrides LC_ALL for message translation specifically and would otherwise win.
+ */
+function gitChildEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith(GIT_ENV_PREFIX)) continue;
+    env[key] = value;
+  }
+  env.LC_ALL = "C";
+  env.LANGUAGE = "";
+  return env;
+}
+
 function isGitTracked(resolvedPath: string, cwd: string): GitTrackedResult {
   const result = spawnSync("git", ["ls-files", "--error-unmatch", "--", resolvedPath], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
-    // git's error messages are TRANSLATED when it is built with NLS and the environment asks for
-    // another language — under `LC_ALL=fr_FR.UTF-8` the stderr below reads "erreur : le
-    // spécificateur de chemin '…' ne correspond à aucun fichier connu de git", and the English
-    // match then fails. Since an unmatched message resolves to "indeterminate" and the caller
-    // FAILS CLOSED, that would refuse every capture and every dossier write on any machine not
-    // running in English, while passing every test on one that is. That is the PR #31 round-3
-    // defect exactly ("a privacy control that refuses everything looks identical to a privacy
-    // control that works, right up until someone runs it"), so the locale is pinned rather than
-    // assumed: `LC_ALL=C` selects git's untranslated strings, and `LANGUAGE` is cleared because it
-    // overrides LC_ALL for message translation specifically and would otherwise win.
-    env: { ...process.env, LC_ALL: "C", LANGUAGE: "" },
+    env: gitChildEnv(),
   });
   if (result.error !== undefined) return "indeterminate";
   if (result.status === 0) return "tracked";
@@ -302,18 +347,59 @@ export function assertLeafWritable(path: string): void {
 /**
  * Writes `content` to `path` such that an existing SYMLINK at the leaf is never followed — refused
  * outright — while a plain existing file (the normal case for a writer whose output is rewritten in
- * place on every run, e.g. a dossier report) is safely replaced. A bare `{ flag: "wx" }` write (the
- * no-follow idiom `archivePage` uses for its never-rewritten, timestamped filenames) cannot serve a
- * rewrite-in-place caller: `wx` refuses whenever ANYTHING already exists at the leaf, symlink or not,
- * which would break every second run. So: `assertLeafWritable` first (never follows a link itself);
- * a symlink found there is refused unconditionally, before any write is attempted; anything else
- * that exists (an ordinary file left by a prior run) is removed, and ONLY THEN is the fresh file
- * created with `wx` — so the create step itself never silently follows a link either, it always
- * either makes a brand-new leaf or throws.
+ * place on every run, e.g. a dossier report) is safely replaced, and — the property this function
+ * exists to guarantee — `path` is NEVER, even transiently, in a state where it names neither the old
+ * content nor the new: readers see one or the other at every instant, never absence.
+ *
+ * The PREVIOUS implementation unlinked whatever existed at `path` and only then created the
+ * replacement (`writeFileSync(path, content, { flag: "wx" })`) — so a failure in that exact window
+ * (disk full, a permission change mid-batch, anything that makes the create fail after the unlink
+ * already succeeded) deleted a previously GOOD file and put nothing back (Codex adversarial review,
+ * PR #38 round 3, Finding 2 [high]). The fix removes that window rather than narrowing it: `content`
+ * is written in full to a uniquely-named temporary file IN THE SAME DIRECTORY (so the later rename
+ * stays on one filesystem, which is what makes it atomic — the two would otherwise need a `COPY`),
+ * created with `wx` so the create step itself cannot silently follow a link, and ONLY THEN is
+ * `renameSync` used to swing `path` from its old content straight to the new in one atomic
+ * filesystem operation (POSIX `rename(2)`'s defining guarantee) — the destination is either fully
+ * replaced or not touched at all, with nothing in between and no window where it is briefly absent.
+ *
+ * `assertLeafWritable` still runs TWICE, not once: immediately (as before, so a symlinked leaf is
+ * refused before any write is attempted at all — the temp file is not even created), and again right
+ * before the rename. That second check closes the one TOCTOU window this rewrite introduces:
+ * `writeFileSync`ing the temp file's full content is not instantaneous, so a symlink could in
+ * principle be planted at `path` during that window; re-checking immediately before the rename means
+ * the no-follow guarantee holds at the actual moment `path` is touched, not just at the start.
+ *
+ * Any failure past the first `writeFileSync` — the second `assertLeafWritable`, or `renameSync`
+ * itself — cleans up the now-orphaned temp file (best-effort; if even the cleanup fails, the ORIGINAL
+ * error is still what propagates, not the cleanup failure) and rethrows, leaving `path` exactly as it
+ * was found: this function still throws in every case the previous version did, it just no longer
+ * deletes anything on the way to throwing.
+ *
+ * What this function does NOT claim: it guarantees atomicity for THIS ONE leaf. A caller writing
+ * several leaves (`writeTeamDossier`'s html+md pair, `writeSectionalsDossiers`' whole batch) gets
+ * "each individual file is atomically replaced", not "the whole batch commits or rolls back
+ * together" — a commit-time failure partway through a multi-leaf batch can still leave some leaves
+ * updated and others not (each one, individually, in either its old or new state, never both/neither
+ * — but the BATCH as a set can be partially updated). See `writeSectionalsDossiers`'s own doc comment
+ * in `src/report/write.ts` for the precise, non-overclaiming statement of what a batch call
+ * guarantees.
  */
 export function overwriteOutputFile(path: string, content: string): void {
   assertLeafWritable(path);
-  const existing = lstatSync(path, { throwIfNoEntry: false });
-  if (existing !== undefined) unlinkSync(path);
-  writeFileSync(path, content, { encoding: "utf8", flag: "wx" });
+  const dir = dirname(path);
+  const tempPath = join(dir, `.${basename(path)}.tmp-${randomBytes(8).toString("hex")}`);
+  writeFileSync(tempPath, content, { encoding: "utf8", flag: "wx" });
+  try {
+    assertLeafWritable(path);
+    renameSync(tempPath, path);
+  } catch (err) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // Best-effort: the temp file may already be gone, or removable for some unrelated reason.
+      // Either way the ORIGINAL error above is what the caller needs to see, not a cleanup failure.
+    }
+    throw err;
+  }
 }
