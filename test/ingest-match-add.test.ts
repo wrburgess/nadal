@@ -970,4 +970,355 @@ describe("addMatchFromScorecard", () => {
       }
     });
   });
+
+  // Codex adversarial review of PR #54 round 2, High finding A: `upsertCourtMatch`'s id-less
+  // branch reuses the existing court row on a re-ingest, but the participant write loop only ever
+  // UPSERTS the names the NEW payload carries — and `upsertCourtMatchPlayers` deliberately never
+  // deletes (docs/findings.md #15, a Phase-3 invariant `src/ingest/player-pull.ts`'s OWN re-pull
+  // path relies on, and which `derive.ts` is written to tolerate by never assuming an exact
+  // participant count). So a corrected extraction — the runbook's whole loop is photo → payload →
+  // fix a misread name → re-submit — could not RETRACT the wrong-but-roster-valid player it
+  // superseded: the stale participant stayed attached forever, a false match in that player's own
+  // profile and in lineup data. The fix does NOT touch `upsertCourtMatchPlayers` (its "never
+  // deletes" contract stays true for every OTHER caller) — this service explicitly clears the ONE
+  // court it just resolved a fresh participant set for, immediately before writing that set,
+  // because a scorecard payload IS a complete replacement for every court it names.
+  describe("re-ingest correction replaces court participants", () => {
+    it("REGRESSION (Codex High finding A, the reviewer's named case): correcting D1's home pair leaves EXACTLY the four right participants, not the old plus the new", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting, bo, cy, oppTwo, oppThree } = seedStandardRosters(db);
+        const dev = seedRosterPlayer(db, home.id, "Dev Duxbury");
+
+        const firstPayload: ScorecardPayload = {
+          playedOn: "2026-08-28",
+          homeTeam: home.name,
+          visitingTeam: visiting.name,
+          courts: [
+            {
+              slot: "D1",
+              discipline: "doubles",
+              homePlayers: ["Bo Bramwell", "Cy Calder"],
+              visitingPlayers: ["Opp Two", "Opp Three"],
+            },
+          ],
+        };
+        const first = addMatchFromScorecard(db, firstPayload);
+        expect(first.ok).toBe(true);
+
+        // A vision misread ("Bo Bramwell") corrected to the actual player ("Dev Duxbury") — every
+        // name here is a valid roster member, so nothing flags; this is exactly what a re-submitted
+        // correction looks like.
+        const correctedPayload: ScorecardPayload = {
+          ...firstPayload,
+          courts: [{ ...firstPayload.courts[0]!, homePlayers: ["Dev Duxbury", "Cy Calder"] }],
+        };
+        const second = addMatchFromScorecard(db, correctedPayload);
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+
+        const d1 = db.select().from(courtMatches).all().find((c) => c.slot === "D1")!;
+        const participants = db.select().from(courtMatchPlayers).all().filter((p) => p.courtMatchId === d1.id);
+
+        // Identities, not just a count — a count-only assertion would pass if Bo were wrongly kept
+        // and Dev wrongly dropped.
+        expect(participants).toHaveLength(4);
+        const byPlayerId = new Map(participants.map((p) => [p.playerId, p.side]));
+        expect(byPlayerId.get(dev.id)).toBe("home");
+        expect(byPlayerId.get(cy.id)).toBe("home");
+        expect(byPlayerId.get(oppTwo.id)).toBe("visiting");
+        expect(byPlayerId.get(oppThree.id)).toBe("visiting");
+        // The whole point: the superseded player is GONE, not merely outnumbered by the correct one.
+        expect(byPlayerId.has(bo.id)).toBe(false);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a court the second payload OMITS keeps its participants untouched", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+
+        const firstPayload = basePayload(home.name, visiting.name); // S1 + D1
+        const first = addMatchFromScorecard(db, firstPayload);
+        expect(first.ok).toBe(true);
+
+        const s1Before = db.select().from(courtMatches).all().find((c) => c.slot === "S1")!;
+        const s1ParticipantsBefore = db
+          .select()
+          .from(courtMatchPlayers)
+          .all()
+          .filter((p) => p.courtMatchId === s1Before.id);
+
+        // A second payload naming ONLY D1 — S1 is not mentioned at all.
+        const d1OnlyPayload: ScorecardPayload = {
+          ...firstPayload,
+          courts: [{ ...firstPayload.courts[1]!, winnerSide: "visiting", score: "3-6 4-6" }],
+        };
+        const second = addMatchFromScorecard(db, d1OnlyPayload);
+        expect(second.ok).toBe(true);
+
+        const s1After = db.select().from(courtMatches).all().find((c) => c.slot === "S1")!;
+        const s1ParticipantsAfter = db
+          .select()
+          .from(courtMatchPlayers)
+          .all()
+          .filter((p) => p.courtMatchId === s1After.id);
+        expect(s1ParticipantsAfter).toEqual(s1ParticipantsBefore);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("the existing identical-payload idempotency test still holds — replacement must not break idempotency", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const payload = basePayload(home.name, visiting.name);
+
+        const first = addMatchFromScorecard(db, payload);
+        const second = addMatchFromScorecard(db, payload);
+
+        expect(first.ok).toBe(true);
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+
+        expect(db.select().from(teamMatches).all()).toHaveLength(1);
+        expect(db.select().from(courtMatches).all()).toHaveLength(2);
+        expect(db.select().from(courtMatchPlayers).all()).toHaveLength(6);
+        expect(db.select().from(players).all()).toHaveLength(6);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a singles court corrects the same way — exactly 2 participants after, not 4", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting, oppOne } = seedStandardRosters(db);
+        const dev = seedRosterPlayer(db, home.id, "Dev Duxbury");
+
+        const firstPayload: ScorecardPayload = {
+          playedOn: "2026-08-28",
+          homeTeam: home.name,
+          visitingTeam: visiting.name,
+          courts: [{ slot: "S1", discipline: "singles", homePlayers: ["Ada Ashby"], visitingPlayers: ["Opp One"] }],
+        };
+        const first = addMatchFromScorecard(db, firstPayload);
+        expect(first.ok).toBe(true);
+
+        const correctedPayload: ScorecardPayload = {
+          ...firstPayload,
+          courts: [{ ...firstPayload.courts[0]!, homePlayers: ["Dev Duxbury"] }],
+        };
+        const second = addMatchFromScorecard(db, correctedPayload);
+        expect(second.ok).toBe(true);
+
+        const s1 = db.select().from(courtMatches).all().find((c) => c.slot === "S1")!;
+        const participants = db.select().from(courtMatchPlayers).all().filter((p) => p.courtMatchId === s1.id);
+
+        expect(participants).toHaveLength(2);
+        const byPlayerId = new Map(participants.map((p) => [p.playerId, p.side]));
+        expect(byPlayerId.get(dev.id)).toBe("home");
+        expect(byPlayerId.get(oppOne.id)).toBe("visiting");
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  // Codex adversarial review of PR #54 round 2, High finding B — HC decision: "fill in blanks",
+  // scoped to `match-add` only. `upsertTeamMatch`'s own id-less branch requires `scheduledTime`/
+  // `site` to compare EQUAL after normalization before treating two rows as the same fixture —
+  // correct for `team-pull`'s scraped re-pulls, too strict for a photo-correction workflow where an
+  // early, hurried capture commonly omits a detail (the time, say) a later, careful one supplies.
+  // The rule must be SYMMETRIC: it must not matter which of the two ingests (first or second) is
+  // the one missing the detail, and two GENUINELY DIFFERENT supplied values (the doubleheader guard
+  // PR #31 added) must still refuse to merge.
+  describe("lenient parent-match matching (HC decision, Finding B)", () => {
+    it("REGRESSION (the reviewer's case): re-ingesting with a scheduledTime the first ingest omitted fills it in, one TeamMatch, courts not duplicated", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const firstPayload = basePayload(home.name, visiting.name); // no scheduledTime, no site
+
+        const first = addMatchFromScorecard(db, firstPayload);
+        expect(first.ok).toBe(true);
+
+        const second = addMatchFromScorecard(db, { ...firstPayload, scheduledTime: "9:00 AM" });
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.scheduledTime).toBe("9:00 AM");
+        expect(db.select().from(courtMatches).all()).toHaveLength(2); // S1 + D1, not duplicated
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("the reverse: re-ingesting WITHOUT a scheduledTime the first ingest supplied keeps the stored value — the case a one-sided fix would miss", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const firstPayload: ScorecardPayload = { ...basePayload(home.name, visiting.name), scheduledTime: "9:00 AM" };
+
+        const first = addMatchFromScorecard(db, firstPayload);
+        expect(first.ok).toBe(true);
+
+        // The second submission simply omits scheduledTime — the field is absent, not blank text.
+        const secondPayload: ScorecardPayload = { ...firstPayload };
+        delete secondPayload.scheduledTime;
+        const second = addMatchFromScorecard(db, secondPayload);
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.scheduledTime).toBe("9:00 AM"); // never nulled out
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("site-only fill-in: the same rule applies to `site` independently of `scheduledTime`", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const firstPayload = basePayload(home.name, visiting.name); // no site
+
+        expect(addMatchFromScorecard(db, firstPayload).ok).toBe(true);
+        expect(addMatchFromScorecard(db, { ...firstPayload, site: "Court 3" }).ok).toBe(true);
+
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.site).toBe("Court 3");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (the mixed case, exactly as specified): stored (time blank, site set) + incoming (time set, site blank) merges to both set", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const visiting = seedTeam(db, "Report Opponent");
+        seedRosterPlayer(db, home.id, "Ada Ashby");
+        seedRosterPlayer(db, visiting.id, "Opp One");
+
+        const firstPayload: ScorecardPayload = {
+          playedOn: "2026-08-28",
+          homeTeam: home.name,
+          visitingTeam: visiting.name,
+          site: "Court 3",
+          courts: [{ slot: "S1", discipline: "singles", homePlayers: ["Ada Ashby"], visitingPlayers: ["Opp One"] }],
+        };
+        expect(addMatchFromScorecard(db, firstPayload).ok).toBe(true);
+
+        const secondPayload: ScorecardPayload = { ...firstPayload, scheduledTime: "9:00 AM" };
+        delete secondPayload.site;
+        expect(addMatchFromScorecard(db, secondPayload).ok).toBe(true);
+
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.scheduledTime).toBe("9:00 AM");
+        expect(rows[0]!.site).toBe("Court 3");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION: the doubleheader guard still holds — two ingests with DIFFERENT supplied times insert TWO team matches, never merged", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const morningPayload = { ...basePayload(home.name, visiting.name), scheduledTime: "9:00 AM" };
+        const eveningPayload = { ...basePayload(home.name, visiting.name), scheduledTime: "5:00 PM" };
+
+        const morning = addMatchFromScorecard(db, morningPayload);
+        const evening = addMatchFromScorecard(db, eveningPayload);
+
+        expect(morning.ok).toBe(true);
+        expect(evening.ok).toBe(true);
+        if (morning.ok && evening.ok) expect(morning.teamMatchId).not.toBe(evening.teamMatchId);
+
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(2);
+        expect(rows.map((r) => r.scheduledTime).sort()).toEqual(["5:00 PM", "9:00 AM"]);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Found in `verify`'s own read of the Finding B fix, before the Reviewer saw it. Leniency is
+    // meant to fill a gap when nothing better exists — it must never OUTRANK an exact match. With
+    // both a blank-timed row and a row whose time equals the incoming one on file, a plain
+    // find-first matcher merges into whichever the query returns first, which can be the blank row,
+    // leaving the true fixture untouched and the blank one wrongly backfilled. This state is
+    // reachable in production precisely because `team-pull` writes `team_matches` too: a scraped row
+    // carrying a time can coexist with a match-add row that never captured one.
+    it("REGRESSION: an EXACT discriminator match wins over a merely blank-compatible row", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const blankPayload = basePayload(home.name, visiting.name);
+
+        // Row A — written by match-add, no time captured on the first hurried photo.
+        const first = addMatchFromScorecard(db, blankPayload);
+        if (!first.ok) throw new Error("the first (blank) ingest should have succeeded");
+
+        // Row B — the same fixture as ANOTHER writer (e.g. `team-pull`) records it, WITH a time.
+        const exactRow = db
+          .insert(teamMatches)
+          .values({
+            eventId: null,
+            homeTeamId: home.id,
+            visitingTeamId: visiting.id,
+            playedOn: blankPayload.playedOn,
+            scheduledTime: "9:00 AM",
+            site: null,
+            sourceMatchId: null,
+            homeCourtsWon: null,
+            visitingCourtsWon: null,
+          })
+          .returning()
+          .get();
+
+        const timed = addMatchFromScorecard(db, { ...blankPayload, scheduledTime: "9:00 AM" });
+        if (!timed.ok) throw new Error("the timed ingest should have succeeded");
+
+        // Merged into the EXACT row, not the blank one.
+        expect(timed.teamMatchId).toBe(exactRow.id);
+
+        // And the blank row is left exactly as it was — never backfilled with another fixture's time.
+        const blankAfter = db.select().from(teamMatches).where(eq(teamMatches.id, first.teamMatchId)).all()[0];
+        expect(blankAfter?.scheduledTime).toBeNull();
+
+        // No third row was invented either.
+        expect(db.select().from(teamMatches).all()).toHaveLength(2);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("the existing identical-payload idempotency test still holds under the lenient matcher", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const payload = basePayload(home.name, visiting.name);
+
+        const first = addMatchFromScorecard(db, payload);
+        const second = addMatchFromScorecard(db, payload);
+
+        expect(first.ok).toBe(true);
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+        expect(db.select().from(teamMatches).all()).toHaveLength(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
 });

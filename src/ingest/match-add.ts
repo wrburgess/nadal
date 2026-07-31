@@ -2,18 +2,19 @@
 // disk) and the `match_add` MCP tool (the agent's inline extraction) call THIS function — the same
 // service behind two presenters, so the two surfaces cannot drift on what a valid ingest does.
 
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
-import { events, teams } from "../db/schema.js";
+import { courtMatchPlayers, events, teamMatches, teams } from "../db/schema.js";
 import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
 import { findTeamByName, resolveRosterPlayer } from "./identity.js";
 import { slugFromUrl } from "./player-pull.js";
 import type { ScorecardPayload } from "./scorecard.js";
-import { upsertCourtMatch, upsertCourtMatchPlayers, upsertTeamMatch } from "./upsert.js";
+import { normalizeSiteKey, normalizeTimeKey, upsertCourtMatch, upsertCourtMatchPlayers } from "./upsert.js";
 
 type TeamRow = typeof teams.$inferSelect;
+type TeamMatchRow = typeof teamMatches.$inferSelect;
 
 export type MatchAddPlayerFlag = {
   name: string;
@@ -97,6 +98,133 @@ function requireTeam(db: Db, name: string): TeamRow {
 }
 
 /**
+ * The lenient, MATCH-ADD-ONLY parent-match resolver (HC decision on Codex adversarial review of
+ * PR #54 round 2, High finding B — "fill in blanks", scoped to this service; `upsertTeamMatch` and
+ * the `team-pull`/TennisRecord scraping path that calls it are UNTOUCHED). `upsertTeamMatch`'s own
+ * id-less branch requires `scheduledTime`/`site` to compare EQUAL (after normalization) before
+ * treating two rows as the same fixture — correct for a scraped re-pull of an already-complete
+ * page, too strict for a photo-correction workflow, where an early, hurried capture commonly omits
+ * a detail (the time, say) that a later, careful transcription supplies.
+ *
+ * Per discriminator, independently: a BLANK value on EITHER side (stored or incoming) is
+ * compatible with anything on the other — never a mismatch — and `stored ?? incoming` is what gets
+ * written, so a later blank re-ingest can never null out a detail an earlier one supplied, and an
+ * earlier blank is filled in by a later ingest that supplies one. This is symmetric by
+ * construction: which of the two ingests happens to be missing the detail does not matter. Two
+ * SUPPLIED values that disagree after normalization are still a genuinely DIFFERENT fixture — the
+ * doubleheader guard PR #31 added survives intact, because "supplied and different" is a real
+ * conflict, never treated as blank. Shares `normalizeTimeKey`/`normalizeSiteKey` with
+ * `upsertTeamMatch` rather than a second hand-rolled notion of "the same time"/"the same site" —
+ * the exact class of defect #32 already closed once for names ("one ladder, two notions of a
+ * name"). Mirrors `upsertTeamMatch`'s own id-less candidate query (unordered team pair + exact
+ * `playedOn`, no `sourceMatchId`) and, like it, never rewrites `homeTeamId`/`visitingTeamId`
+ * on an update — an existing row's stored orientation is left exactly as first written.
+ * `homeCourtsWon`/`visitingCourtsWon` are likewise left untouched on an update: this service never
+ * computes them (always null on insert), so it has nothing honest to write over whatever another
+ * writer (e.g. `team-pull`, on a fixture this same photo also happens to match) already recorded.
+ *
+ * ACCEPTED RISK (HC-approved trade — record here, and see `docs/findings.md`): a genuine SECOND
+ * same-day fixture between the same two teams whose FIRST ingest omitted a discriminator (say, no
+ * time was captured) will now be silently absorbed into the first match on a later ingest, rather
+ * than creating the second match a strict comparison would have. This is possible ONLY when the
+ * STORED side of a discriminator is blank — two ingests that both SUPPLY a value still discriminate
+ * correctly (a real conflict still inserts a new row, per the doubleheader-guard test) — but within
+ * that narrower "stored side blank" case, this function cannot tell "the same match, filled in"
+ * apart from "a different match that also has no time on file yet". The HC accepted this for
+ * in-event ergonomics: a scorekeeper correcting a scorecard mid-event should not also have to know
+ * whether every discriminator was captured perfectly on the first photo.
+ */
+function upsertLenientTeamMatchForScorecard(
+  db: Db,
+  values: {
+    eventId: number | null;
+    homeTeamId: number;
+    visitingTeamId: number;
+    playedOn: string;
+    scheduledTime: string | null;
+    site: string | null;
+  },
+): TeamMatchRow {
+  const candidates = db
+    .select()
+    .from(teamMatches)
+    .where(
+      and(
+        isNull(teamMatches.sourceMatchId),
+        eq(teamMatches.playedOn, values.playedOn),
+        or(
+          and(eq(teamMatches.homeTeamId, values.homeTeamId), eq(teamMatches.visitingTeamId, values.visitingTeamId)),
+          and(eq(teamMatches.homeTeamId, values.visitingTeamId), eq(teamMatches.visitingTeamId, values.homeTeamId)),
+        ),
+      ),
+    )
+    .all();
+
+  const compatible = (
+    stored: string | null,
+    incoming: string | null,
+    normalize: (v: string | null | undefined) => string,
+  ): boolean => stored === null || incoming === null || normalize(stored) === normalize(incoming);
+
+  // An EXACT discriminator match always wins over a merely blank-compatible one, so the strict pass
+  // runs first and the lenient pass is the fallback. Without the ordering, `find` would take
+  // whichever row the query happened to return first: given a blank-timed row AND a row whose time
+  // equals the incoming one, an incoming ingest could merge into the BLANK row and leave its true
+  // match untouched — reachable because `team-pull` writes `team_matches` too, so a scraped row
+  // carrying a time can coexist with a match-add row that never captured one. Leniency is meant to
+  // fill a gap when nothing better exists, never to outrank an exact fixture match.
+  const exact = (
+    stored: string | null,
+    incoming: string | null,
+    normalize: (v: string | null | undefined) => string,
+  ): boolean =>
+    (stored === null && incoming === null) ||
+    (stored !== null && incoming !== null && normalize(stored) === normalize(incoming));
+
+  const existing =
+    candidates.find(
+      (row) =>
+        exact(row.scheduledTime, values.scheduledTime, normalizeTimeKey) &&
+        exact(row.site, values.site, normalizeSiteKey),
+    ) ??
+    candidates.find(
+      (row) =>
+        compatible(row.scheduledTime, values.scheduledTime, normalizeTimeKey) &&
+        compatible(row.site, values.site, normalizeSiteKey),
+    );
+
+  if (existing === undefined) {
+    return db
+      .insert(teamMatches)
+      .values({
+        eventId: values.eventId,
+        homeTeamId: values.homeTeamId,
+        visitingTeamId: values.visitingTeamId,
+        playedOn: values.playedOn,
+        scheduledTime: values.scheduledTime,
+        site: values.site,
+        sourceMatchId: null,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      })
+      .returning()
+      .get();
+  }
+
+  return db
+    .update(teamMatches)
+    .set({
+      eventId: values.eventId,
+      // Fill in a blank; NEVER null out an already-stored value — the whole point of this function.
+      scheduledTime: existing.scheduledTime ?? values.scheduledTime,
+      site: existing.site ?? values.site,
+    })
+    .where(eq(teamMatches.id, existing.id))
+    .returning()
+    .get();
+}
+
+/**
  * Ingests one scorecard payload: refuses if two courts share a `slot` (Codex adversarial review of
  * PR #54, High finding 2 — see the check itself, below, for why WITHIN one payload `slot` alone is
  * the only thing that can tell two courts apart); resolves both teams and the named event
@@ -118,7 +246,19 @@ function requireTeam(db: Db, name: string): TeamRow {
  * MANDATORY, since `upsertCourtMatch`'s id-less branch dedupes on `(slot, playedOn, teamMatchId)`
  * (`upsert.ts:302-334`); without a parent, two different same-day courts at the same slot would
  * silently collapse into one row — then one `upsertCourtMatch` + `upsertCourtMatchPlayers` per
- * court. Both writers are the id-less branch: a screenshot carries no `mid=` TennisRecord id.
+ * court, the LATTER now preceded by a delete of that one court's stale participants (Codex
+ * adversarial review of PR #54 round 2, High finding A — a re-ingested correction is a COMPLETE
+ * REPLACEMENT for every court it names, never a merge with what was there before; see the delete
+ * call itself for why `upsertCourtMatchPlayers`'s own "never deletes" contract is untouched). Both
+ * writers are the id-less branch: a screenshot carries no `mid=` TennisRecord id.
+ *
+ * On the recurring shape (three rounds now: within a court, across courts in one payload, across
+ * CALLS for the same court): for `court_match_players` specifically, its write key is
+ * `(court_match_id, player_id)`, and every route to a colliding write on that table now goes
+ * through either the within-court dedup check above or the delete-before-insert here — I don't see
+ * a further axis for THIS table. That is not a claim about `team_matches`/`court_matches` beyond
+ * what was already swept in the prior round, and not a claim that a future presenter writing to
+ * this table some other way couldn't reopen it.
  */
 export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMatchFromScorecardResult {
   try {
@@ -221,16 +361,13 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
       // rule as the player-name flags above.
       if (duplicates.length > 0) throw new DuplicatePlayersRefusal(duplicates);
 
-      const teamMatch = upsertTeamMatch(tx, {
+      const teamMatch = upsertLenientTeamMatchForScorecard(tx, {
         eventId,
         homeTeamId: homeTeam.id,
         visitingTeamId: visitingTeam.id,
         playedOn: payload.playedOn,
         scheduledTime: payload.scheduledTime ?? null,
         site: payload.site ?? null,
-        sourceMatchId: null,
-        homeCourtsWon: null,
-        visitingCourtsWon: null,
       });
 
       for (const court of payload.courts) {
@@ -244,6 +381,22 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
           playedOn: payload.playedOn,
           sourceMatchId: null,
         });
+
+        // A scorecard payload is a COMPLETE REPLACEMENT for every court it names (Codex adversarial
+        // review of PR #54 round 2, High finding A). `upsertCourtMatch`'s id-less branch reuses this
+        // SAME court row on a re-ingest/correction, but `upsertCourtMatchPlayers` deliberately never
+        // deletes (docs/findings.md #15) — that invariant is for `src/ingest/player-pull.ts`'s own
+        // re-pull path (whose `derive.ts` consumer is written to tolerate a variable participant
+        // count for exactly that reason) and stays untouched HERE too: this does not change
+        // `upsertCourtMatchPlayers` itself. Instead this service clears the stale rows for THIS ONE
+        // court, immediately before writing the fresh set the current payload actually names, so a
+        // corrected extraction (the runbook's whole loop: photo → payload → fix a misread name →
+        // re-submit) can retract a superseded, roster-valid-but-wrong participant instead of
+        // accumulating them forever. Scoped to `courtMatch.id` alone: a court this payload does NOT
+        // name is never reached by this loop at all, so "the payload omitted this court" (leave it
+        // alone) is never conflated with "the payload said this court now has zero participants"
+        // (which would be a different claim this code does not make).
+        tx.delete(courtMatchPlayers).where(eq(courtMatchPlayers.courtMatchId, courtMatch.id)).run();
 
         for (const name of court.homePlayers) {
           // Safe: every name in `pairs` was resolved above, and the `flags.length > 0` throw
