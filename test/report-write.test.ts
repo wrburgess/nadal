@@ -165,6 +165,34 @@ describe("src/report/write.ts", () => {
       }
     });
 
+    // REGRESSION (verify pass, PR #38, Finding 3 [medium]). `writeTeamDossier`'s doc comment claims
+    // "a refusal leaves nothing on disk". Both paths ARE validated up front with
+    // `assertReportPathSafe`, but the symlink-LEAF refusal lived only inside `overwriteOutputFile`,
+    // which runs at WRITE time — after `index.html` has already been written. With `index.md`
+    // symlinked and `index.html` absent, the html write succeeds, and only the md write throws,
+    // leaving a fresh (untracked but very real) html dossier on disk despite the "throws" contract.
+    // The pre-existing symlink test above only ever symlinks `index.html` — the FIRST leaf written —
+    // so it fails before either write and can never observe this.
+    it("REGRESSION: a symlinked index.md (index.html absent) refuses before index.html is ever written", () => {
+      const team = seedTeamWithRoster("Team SymMd", []);
+      const dir = join(reportsDir, "team-symmd");
+      mkdirSync(dir, { recursive: true });
+      const escapeTarget = mkdtempSync(join(tmpdir(), "tn-escape-"));
+      const linkTarget = join(escapeTarget, "leaked.md");
+      symlinkSync(linkTarget, join(dir, "index.md"));
+      const { db, sqlite } = openDb();
+      try {
+        expect(() => writeTeamDossier(db, team.id, { since: "2026-01-01" })).toThrow(OutputPathError);
+        // The bug this guards against: index.html landing on disk before the index.md symlink is
+        // ever inspected.
+        expect(existsSync(join(dir, "index.html"))).toBe(false);
+        expect(existsSync(linkTarget)).toBe(false);
+      } finally {
+        sqlite.close();
+        rmSync(escapeTarget, { recursive: true, force: true });
+      }
+    });
+
     it("a second run over the same team still succeeds and rewrites both files in place (no bare-'wx' regression)", () => {
       const team = seedTeamWithRoster("Team Rerun", []);
       const { db, sqlite } = openDb();
@@ -312,6 +340,27 @@ describe("src/report/write.ts", () => {
         }
       } finally {
         sqlite.close();
+      }
+    });
+
+    // REGRESSION (verify pass, PR #38, Finding 3 [medium]), same defect one level up: the top-level
+    // `index.html`/`index.md` pair deserves the identical "refusal leaves nothing on disk" guarantee
+    // as a single team's pair, not a lesser one just because it names every team on file rather than
+    // one.
+    it("REGRESSION: a symlinked top-level index.md (index.html absent) refuses before index.html is ever written", () => {
+      seedTeamWithRoster("Team G", []);
+      mkdirSync(reportsDir, { recursive: true });
+      const escapeTarget = mkdtempSync(join(tmpdir(), "tn-escape-"));
+      const linkTarget = join(escapeTarget, "leaked-index.md");
+      symlinkSync(linkTarget, join(reportsDir, "index.md"));
+      const { db, sqlite } = openDb();
+      try {
+        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(existsSync(join(reportsDir, "index.html"))).toBe(false);
+        expect(existsSync(linkTarget)).toBe(false);
+      } finally {
+        sqlite.close();
+        rmSync(escapeTarget, { recursive: true, force: true });
       }
     });
 

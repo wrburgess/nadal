@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -93,6 +94,66 @@ describe("assertOutputPathSafe", () => {
       expect(() =>
         assertOutputPathSafe(join("reports", "team-x", "index.html"), "reports", "reports"),
       ).not.toThrow();
+    });
+  });
+
+  // REGRESSION (Codex adversarial review, PR #38, Finding 1 [critical]). The in-repo exception
+  // above ("<repo>/<permittedDir> is safe because .gitignore covers it") only holds for files git
+  // does not already know about. `.gitignore` has NO effect on a path git is already tracking — if
+  // someone once ran `git add -f reports/team-a/index.html`, that path stays tracked forever
+  // regardless of .gitignore, and this guard would happily wave a rewrite of it through, producing a
+  // TRACKED change containing real people's names, ages and ratings in a PUBLIC repo. That is
+  // exactly the publication this whole module exists to prevent. The fix asks git itself (not
+  // .gitignore, which cannot answer this) whether the destination is currently tracked, and refuses
+  // if so — checked generically against whatever git work tree (if any) the destination lives in, not
+  // hardcoded to this package's own repo, so the guard can be exercised here against an isolated temp
+  // repo rather than mutating this real repository's index.
+  describe("the in-repo exception does not cover a path git already tracks (git add -f survives .gitignore)", () => {
+    let repoDir: string;
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true });
+    });
+
+    function initTrackedFile(relativePath: string): { repoRoot: string; absolutePath: string } {
+      repoDir = mkdtempSync(join(tmpdir(), "tn-git-track-"));
+      execFileSync("git", ["init", "-q"], { cwd: repoDir, stdio: "ignore" });
+      const absolutePath = join(repoDir, relativePath);
+      mkdirSync(resolve(absolutePath, ".."), { recursive: true });
+      writeFileSync(absolutePath, "<html>already tracked</html>");
+      // `-f` mirrors the exact failure mode: force-adding past whatever .gitignore says, which is
+      // the only way a file under a gitignored directory ends up tracked in the first place.
+      execFileSync("git", ["add", "-f", "--", absolutePath], { cwd: repoDir, stdio: "ignore" });
+      return { repoRoot: repoDir, absolutePath };
+    }
+
+    it("refuses a destination git is currently tracking, even though it sits under the permitted directory", () => {
+      const { repoRoot, absolutePath } = initTrackedFile(join("reports", "team-a", "index.html"));
+      expect(() =>
+        assertOutputPathSafe(absolutePath, join(repoRoot, "reports"), "reports"),
+      ).toThrow(OutputPathError);
+    });
+
+    it("an untracked path in the very same directory still writes fine", () => {
+      const { repoRoot, absolutePath } = initTrackedFile(join("reports", "team-a", "index.html"));
+      const untracked = join(repoRoot, "reports", "team-a", "index.md");
+      writeFileSync(untracked, "not tracked");
+      expect(() =>
+        assertOutputPathSafe(absolutePath, join(repoRoot, "reports"), "reports"),
+      ).toThrow(OutputPathError);
+      expect(() =>
+        assertOutputPathSafe(untracked, join(repoRoot, "reports"), "reports"),
+      ).not.toThrow();
+    });
+
+    it("a root outside any git repository at all still works — nothing is tracked because there is no git here", () => {
+      const root = mkdtempSync(join(tmpdir(), "tn-no-git-"));
+      try {
+        const candidate = join(root, "team-x", "index.html");
+        expect(() => assertOutputPathSafe(candidate, root, "reports")).not.toThrow();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
   });
 });

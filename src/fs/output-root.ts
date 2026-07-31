@@ -1,4 +1,5 @@
-import { lstatSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -101,13 +102,82 @@ export function assertNoSymlinkComponents(resolvedRoot: string, resolvedTarget: 
 }
 
 /**
+ * True when `dir`, or any of its ancestors, contains a `.git` entry (a directory for a normal
+ * clone, or a file for a linked worktree — both mark "a git work tree starts here"). A pure
+ * filesystem walk, no subprocess: this exists so `assertNotGitTracked` below can skip shelling out
+ * entirely for the common case (an archive root on an external disk, which is not inside any git
+ * work tree at all) rather than paying a `git` invocation on every single write.
+ */
+function isInsideAnyGitWorkTree(dir: string): boolean {
+  let current = dir;
+  for (;;) {
+    if (existsSync(join(current, ".git"))) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
+/**
+ * Asks git itself — not `.gitignore`, which cannot answer this — whether `resolvedPath` is
+ * currently tracked. `git ls-files --error-unmatch` exits 0 when the path IS tracked and non-zero
+ * otherwise (untracked, git missing, or `dir` not actually inside a work tree despite the `.git`
+ * marker `isInsideAnyGitWorkTree` found). stdio is fully piped so nothing — including git's own
+ * error text — leaks to the console; the exit status alone is read.
+ */
+function isGitTracked(resolvedPath: string): boolean {
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", resolvedPath], {
+      cwd: dirname(resolvedPath),
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The in-repo exception above (`assertRootSafe`'s "safe because `.gitignore` covers it") reasons
+ * from `.gitignore`, but `.gitignore` has NO effect on a path git is already tracking: if someone
+ * once ran `git add -f reports/team-a/index.html`, that path stays tracked forever no matter what
+ * `.gitignore` says, and every other check in this module would wave a rewrite of it straight
+ * through — producing a TRACKED change containing real people's names, ages, and ratings in a
+ * PUBLIC repo, which is precisely the publication this module exists to prevent (Codex adversarial
+ * review, PR #38, Finding 1 [critical]).
+ *
+ * Deliberately generic rather than hardcoded to this package's own repo: it asks whether
+ * `resolvedPath` is tracked in WHATEVER git work tree (if any) it happens to live in, found by a
+ * plain filesystem walk (`isInsideAnyGitWorkTree`) rather than anchoring to `PACKAGE_ROOT`. Two
+ * consequences fall out of that: (1) an archive/report root on an external disk — legitimately not
+ * inside any repo — is detected as such WITHOUT ever shelling out to git, and (2) this check, and
+ * the two callers that share it, can be exercised in tests against an isolated temp git repo rather
+ * than mutating this real repository's own index. `isGitTracked` fails OPEN (git missing, the
+ * directory turning out not to be a real work tree after all, or any other spawn/exit error) rather
+ * than blocking every write for a reason unrelated to the destination itself — the one case this
+ * function exists to catch, a CONFIRMED tracked file, is the only case `git ls-files
+ * --error-unmatch` reports with exit 0, and that is the only case that throws here.
+ */
+function assertNotGitTracked(resolvedPath: string): void {
+  if (!isInsideAnyGitWorkTree(dirname(resolvedPath))) return;
+  if (!isGitTracked(resolvedPath)) return;
+  throw new OutputPathError(
+    `refusing to write a path git already tracks: ${resolvedPath} ` +
+      `(.gitignore does not un-track a file that was previously \`git add -f\`'d — writing here would ` +
+      `produce a tracked change containing personal data in a public repo)`,
+  );
+}
+
+/**
  * `assertOutputPathSafe` is the entire privacy control for personal data written outside version
  * control: a caller writing real people's names, ratings, or match histories to disk (an archived
  * page, a rendered dossier) is safe only as long as every path it touches stays inside its root, and
  * that root itself is either outside the repo or is the one directory `.gitignore` covers for it.
  * Throws `OutputPathError` on any escape — a `..` segment, a resolved path outside `root` for any
- * other reason (including one that happens to land inside the repo working tree), or a symlinked
- * root or component that resolves somewhere it should not.
+ * other reason (including one that happens to land inside the repo working tree), a symlinked
+ * root or component that resolves somewhere it should not, or a path git is already tracking (see
+ * `assertNotGitTracked` — the in-repo exception above holds only for files `.gitignore` actually
+ * keeps untracked).
  */
 export function assertOutputPathSafe(candidatePath: string, root: string, permittedDir: string): void {
   const resolvedRoot = resolve(root);
@@ -122,6 +192,7 @@ export function assertOutputPathSafe(candidatePath: string, root: string, permit
     );
   }
   assertNoSymlinkComponents(resolvedRoot, resolvedCandidate);
+  assertNotGitTracked(resolvedCandidate);
 }
 
 /**
@@ -161,22 +232,41 @@ export function resolveRealOutputPath(root: string, candidatePath: string, permi
 }
 
 /**
+ * `lstat`s `path` (never follows a link itself) and throws `OutputPathError` if a SYMLINK sits at
+ * this exact leaf — refused unconditionally, before anything is written there.
+ *
+ * Pulled out of `overwriteOutputFile` so a multi-leaf writer (`writeTeamDossier`'s `index.html` +
+ * `index.md` pair, `writeSectionalsDossiers`' top-level pair) can validate EVERY leaf it is about to
+ * touch before writing ANY of them (Codex adversarial review, PR #38, Finding 3 [medium]). Before
+ * this split, the symlink-leaf refusal only ever ran inside `overwriteOutputFile` itself, at WRITE
+ * time — so a caller writing two leaves in sequence (html then md) could already have written the
+ * FIRST leaf to disk by the time the SECOND leaf's symlink threw, leaving a fresh, half-written
+ * dossier behind despite `writeTeamDossier`'s doc-comment promise that "a refusal leaves nothing on
+ * disk". `overwriteOutputFile` below still calls this itself too — cheap (one `lstat`), and it keeps
+ * `overwriteOutputFile`'s own doc-comment contract true for any caller that writes a single leaf
+ * directly rather than going through a multi-leaf pre-validation pass first.
+ */
+export function assertLeafWritable(path: string): void {
+  if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new OutputPathError(`refusing to write through a symlinked output path: ${path}`);
+  }
+}
+
+/**
  * Writes `content` to `path` such that an existing SYMLINK at the leaf is never followed — refused
  * outright — while a plain existing file (the normal case for a writer whose output is rewritten in
  * place on every run, e.g. a dossier report) is safely replaced. A bare `{ flag: "wx" }` write (the
  * no-follow idiom `archivePage` uses for its never-rewritten, timestamped filenames) cannot serve a
  * rewrite-in-place caller: `wx` refuses whenever ANYTHING already exists at the leaf, symlink or not,
- * which would break every second run. So: `lstat` the leaf first (never follows a link itself); a
- * symlink found there is refused unconditionally, before any write is attempted; anything else that
- * exists (an ordinary file left by a prior run) is removed, and ONLY THEN is the fresh file created
- * with `wx` — so the create step itself never silently follows a link either, it always either makes
- * a brand-new leaf or throws.
+ * which would break every second run. So: `assertLeafWritable` first (never follows a link itself);
+ * a symlink found there is refused unconditionally, before any write is attempted; anything else
+ * that exists (an ordinary file left by a prior run) is removed, and ONLY THEN is the fresh file
+ * created with `wx` — so the create step itself never silently follows a link either, it always
+ * either makes a brand-new leaf or throws.
  */
 export function overwriteOutputFile(path: string, content: string): void {
+  assertLeafWritable(path);
   const existing = lstatSync(path, { throwIfNoEntry: false });
-  if (existing?.isSymbolicLink()) {
-    throw new OutputPathError(`refusing to write through a symlinked output path: ${path}`);
-  }
   if (existing !== undefined) unlinkSync(path);
   writeFileSync(path, content, { encoding: "utf8", flag: "wx" });
 }

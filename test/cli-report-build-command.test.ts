@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -176,6 +176,53 @@ describe("tn report build (end-to-end via dispatch)", () => {
     const code = await dispatch(["report", "build", "sectionals"]);
 
     expect(code).toBe(1);
+  });
+
+  // REGRESSION (Codex adversarial review, PR #38, Finding 2 [high]). `resolveTeamDirNames`'
+  // collision disambiguation only ran inside `writeSectionalsDossiers`, which has whole-DB
+  // visibility. `writeTeamDossier` called without a `dirName` (exactly what `tn report build
+  // "<team>"` does, see src/cli/commands/report-build.ts) fell back to a BARE `teamSlug()` that only
+  // looks at the one team it was asked to build — so two teams that slug identically ("Team A!!!"
+  // and "Team A???" both -> "team-a") would silently share one directory, and the second build
+  // replaces the first team's dossier, when built one at a time rather than via `sectionals`.
+  it("REGRESSION: two teams that slug-collide land in distinct directories when each is built individually via the CLI (not sectionals)", async () => {
+    const teamTwo = (() => {
+      seedTeamWithRoster("Team A!!!", []);
+      return seedTeamWithRoster("Team A???", []);
+    })();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const codeOne = await dispatch(["report", "build", "Team A!!!"]);
+    const codeTwo = await dispatch(["report", "build", "Team A???"]);
+
+    expect(codeOne).toBe(0);
+    expect(codeTwo).toBe(0);
+
+    const dirOne = join(reportsDir, "team-a");
+    const dirTwo = join(reportsDir, `team-a-${teamTwo.id}`);
+    expect(existsSync(join(dirOne, "index.html"))).toBe(true);
+    expect(existsSync(join(dirTwo, "index.html"))).toBe(true);
+    // The failure mode this guards: both builds landing in `dirOne`, the second silently replacing
+    // the first team's content.
+    expect(readFileSync(join(dirOne, "index.html"), "utf8")).toContain("Team A!!!");
+    expect(readFileSync(join(dirTwo, "index.html"), "utf8")).toContain("Team A???");
+  });
+
+  it("REGRESSION: a single-team build resolves the same collision-safe directory sectionals would choose for it, even without building the other colliding team first", async () => {
+    // "Team A!!!" is only ever seeded, never built directly — a single-team build for "Team A???"
+    // must still see it (whole-DB visibility) to know it needs the "-<id>" suffix, exactly as
+    // `writeSectionalsDossiers` would have assigned it.
+    seedTeamWithRoster("Team A!!!", []);
+    const teamTwo = seedTeamWithRoster("Team A???", []);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["report", "build", "Team A???"]);
+
+    expect(code).toBe(0);
+    expect(existsSync(join(reportsDir, `team-a-${teamTwo.id}`, "index.html"))).toBe(true);
+    // The bug: a single-team build that only consulted its own name would land in the bare "team-a"
+    // slot instead — the same slot `sectionals` would have reserved for the OTHER colliding team.
+    expect(existsSync(join(reportsDir, "team-a", "index.html"))).toBe(false);
   });
 
   it("writes a request_log row with sanitized args on both the ok and the error path", async () => {
