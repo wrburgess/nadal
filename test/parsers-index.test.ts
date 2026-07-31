@@ -23,6 +23,7 @@ describe("src/parsers public surface", () => {
       "setScoreSchema",
       "sourceRefSchema",
       "teamRosterEntrySchema",
+      "teamScheduleRowSchema",
       "tennisRecordHeaderSchema",
       "tennisRecordProfileSchema",
       "tennisRecordTeamSchema",

@@ -1,16 +1,26 @@
 import * as cheerio from "cheerio";
 import type { CheerioAPI } from "cheerio";
-import { assertColumns, collapse, parseNumber, parseWinLoss, tableWithCellText } from "../dom.js";
+import {
+  assertColumns,
+  collapse,
+  hrefParam,
+  parseNumber,
+  parseUsDate,
+  parseWinLoss,
+  tableWithCellText,
+} from "../dom.js";
 import {
   ParseError,
   tennisRecordTeamSchema,
   type SourceRef,
   type TeamRosterEntry,
+  type TeamScheduleRow,
   type TennisRecordTeam,
 } from "../types.js";
 
 const ROSTER_SCOPE = "div.large";
 const ROSTER_COLUMN = "NTRP";
+const SCHEDULE_COLUMN = "Local Schedule";
 
 /**
  * The roster's column contract, in order. Cells are decoded positionally, so the *order* is the
@@ -40,6 +50,19 @@ const ROSTER_COLUMNS: RegExp[] = [
  * tracked separately or "exact cell count" quietly means "at least as many as there are headers".
  */
 const ROSTER_ROW_CELLS = 9;
+
+/**
+ * The local schedule's ordered column contract — team_matches candidates, not court_matches: date,
+ * time, opponent team, site, result. Every header maps 1:1 to a body cell, unlike the roster's
+ * `colspan`'d Rating column.
+ */
+const SCHEDULE_COLUMNS: RegExp[] = [
+  /^localschedule$/,
+  /^time$/,
+  /^opponent$/,
+  /^matchsite$/,
+  /^result$/,
+];
 
 /**
  * Parse a TennisRecord team profile: the team's league context and its roster with ratings.
@@ -100,11 +123,85 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
         localDoubles: parseWinLoss(cells[5]),
         localRecord: parseWinLoss(cells[6]),
         dynamicRating: parseNumber(cells[7]),
+        // The roster row's own href, unmodified — Phase 3's re-pull handle. A row with no link
+        // (no `<a>` around the name) yields null, which the pipeline reports rather than skips.
+        profilePath: $(tr).find("td").first().find("a").attr("href") ?? null,
       } satisfies TeamRosterEntry;
     })
     .get();
 
-  return tennisRecordTeamSchema.parse({ ...header, roster });
+  const schedule = parseSchedule($, source);
+
+  return tennisRecordTeamSchema.parse({ ...header, roster, schedule });
+}
+
+/**
+ * The team's local schedule — a second table on the same page, entirely distinct from the roster:
+ * `team_matches` candidates (date, opponent TEAM, site, result) rather than per-court detail.
+ *
+ * Anchored on its own content marker (the "Local Schedule" header cell) rather than on "the
+ * second `div.large` block" — `div.large` is ambiguous on this page (it wraps both tables), and a
+ * positional selector already caused a Phase-2 defect here (see docs/findings.md).
+ */
+function parseSchedule($: CheerioAPI, source: SourceRef): TeamScheduleRow[] {
+  const table = tableWithCellText($, SCHEDULE_COLUMN, ROSTER_SCOPE);
+  if (table === null) {
+    throw new ParseError(
+      "team schedule table not found",
+      `${ROSTER_SCOPE} table with a "${SCHEDULE_COLUMN}" column`,
+      source.url,
+    );
+  }
+  assertColumns($, table, SCHEDULE_COLUMNS, "team schedule", source);
+
+  return table
+    .find("tr")
+    .filter((_, tr) => $(tr).find("td").length > 0)
+    .map((_, tr) => {
+      const cells = $(tr).find("td");
+      if (cells.length !== SCHEDULE_COLUMNS.length) {
+        throw new ParseError(
+          `schedule row has ${cells.length} cells, expected exactly ${SCHEDULE_COLUMNS.length}`,
+          `${ROSTER_SCOPE} tr td`,
+          source.url,
+        );
+      }
+      const cell = (index: number) => $(cells.get(index));
+
+      const playedOn = parseUsDate(cell(0).text());
+      if (playedOn === null) {
+        throw new ParseError(
+          `unparseable schedule date "${collapse(cell(0).text())}"`,
+          `${ROSTER_SCOPE} tr td:nth-child(1)`,
+          source.url,
+        );
+      }
+      const opponentTeamName = collapse(cell(2).text());
+      if (opponentTeamName === "") {
+        throw new ParseError(
+          `schedule row on ${playedOn} has no opponent team`,
+          `${ROSTER_SCOPE} tr td:nth-child(3)`,
+          source.url,
+        );
+      }
+
+      // An unplayed fixture's result cell carries no result link at all, so a schedule row
+      // legitimately has no `mid=` — unlike a match-history row, whose missing id IS a structural
+      // failure (see `match-history.ts`). What the two DO share is that `mid=` with an empty value
+      // is as unusable an idempotency key as a missing one, so both normalize `""` to null rather
+      // than letting every empty-id row collide under the partial unique index.
+      const rawSourceMatchId = hrefParam(cell(4).find("a").attr("href"), "mid");
+
+      return {
+        playedOn,
+        scheduledTime: collapse(cell(1).text()) || null,
+        opponentTeamName,
+        site: collapse(cell(3).text()) || null,
+        result: collapse(cell(4).text()) || null,
+        sourceMatchId: rawSourceMatchId === "" ? null : rawSourceMatchId,
+      } satisfies TeamScheduleRow;
+    })
+    .get();
 }
 
 /**
@@ -120,7 +217,7 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
 function parseHeader(
   $: CheerioAPI,
   source: SourceRef,
-): Omit<TennisRecordTeam, "roster"> {
+): Omit<TennisRecordTeam, "roster" | "schedule"> {
   const rows = $("table")
     .filter((_, table) => /^Adult|^Mixed|^Senior|^Tri-Level|^Combo/.test(collapse($(table).text())))
     .first()

@@ -15,19 +15,34 @@ escaping the quote after it. Before quoting, every value is sanitized: control c
 OVERRIDE), and the Line/Paragraph Separators U+2028/U+2029 are each replaced with a single space —
 this keeps the line single-line and un-spoofable. Sanitizing does not trim leading/trailing
 whitespace: a quoted value preserves edge whitespace exactly (e.g. a `TN_DB_PATH` with a trailing
-space round-trips unchanged), since quoting already makes it unambiguous. This documents only the
-shipped behavior above — there is no `--` payload terminator and no additional flags beyond the
-three listed.
+space round-trips unchanged), since quoting already makes it unambiguous. There is no `--` payload
+terminator. `team pull` and `player pull` are the exception to "no additional flags beyond the
+three listed" above: they also accept `--players` (team pull only, cascades each roster profile
+link through a player pull), and `--from <path>` / `--source-url <url>` (read a previously-saved
+page instead of fetching live — the two are required together). An unrecognized `--flag` on either
+command is an error, not silently ignored.
+
+`status=` carries a third value beyond `ok` and `error`: **`status=partial`**, emitted by
+`tn team pull --players` when the team itself was written but one or more requested roster cascades
+did not land. It prints to stderr and **exits non-zero**, and names the affected entries in
+`skipped=` / `skippedEntries=`. The team write has already committed and is not rolled back — that
+is precisely why the outcome is `partial` rather than `error`, and why it must not be reported as
+`ok`: a caller that reads only the exit code would otherwise record a success in which zero of the
+requested player pulls happened.
 
 The parity test (`test/cli-grammar-parity.test.ts`) fails CI when this table and the router's
-registry diverge — in either direction.
+registry diverge — in either direction. `dispatch` treats `--help` ANYWHERE in argv as a request
+for help text (checked before the target is parsed), so a target literally spelled `--help` can
+never be reached by any command.
 
 ## Commands
 
 | Command | Summary |
 |---------|---------|
 | `tn db migrate` | Apply pending schema migrations |
+| `tn team pull` | Pull a team roster and schedule from TennisRecord |
+| `tn player pull` | Pull a player's ratings and match history from TennisRecord |
 
-Planned (spec § Interfaces; rows move up as commands land): `team pull/show/list`,
-`player pull/show/note/list`, `match add`, `event show`, `lineup plan`, `report build`,
+Planned (spec § Interfaces; rows move up as commands land): `team show/list`,
+`player show/note/list`, `match add`, `event show`, `lineup plan`, `report build`,
 `db backup/restore`.
