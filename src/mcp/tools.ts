@@ -16,6 +16,7 @@ import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
 import { addEvent } from "../query/events.js";
+import { NoCourtMatchHistoryError, getLineupPlan } from "../query/lineup.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
@@ -225,6 +226,34 @@ export const MCP_TOOLS: McpToolDef[] = [
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
         const result = setAvailability(db, { playerId: resolution.playerId, day, status });
         return { player: target, day, availability: result.status, event: result.eventName };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "lineup_plan",
+    cliCommand: "lineup plan",
+    description: "Predict an opponent's lineup from court-assignment history and ratings",
+    inputShape: { target: z.string().min(1) },
+    handler: async (rawArgs) => {
+      const { target } = rawArgs as { target: string };
+      const { db, sqlite } = openDb();
+      try {
+        const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
+        try {
+          // The structured plan, not the CLI's rendered text: agent chat is where the pairings get
+          // worked (spec § Deliverables 3), and it needs the confidence/basis/support fields to
+          // reason with. The "this is a guess" framing rides in the fields themselves rather than
+          // in prose a model might drop.
+          return getLineupPlan(db, resolution.teamId);
+        } catch (err) {
+          if (!(err instanceof NoCourtMatchHistoryError)) throw err;
+          throw new McpToolError(
+            `no court-match history on file for "${target}" — run the team_pull tool with players: true first`,
+          );
+        }
       } finally {
         sqlite.close();
       }

@@ -1,5 +1,6 @@
 import { dbMigrate } from "./commands/db-migrate.js";
 import { eventAdd } from "./commands/event-add.js";
+import { lineupPlan } from "./commands/lineup-plan.js";
 import { mcpServe } from "./commands/mcp-serve.js";
 import { playerAvail } from "./commands/player-avail.js";
 import { playerNote } from "./commands/player-note.js";
@@ -28,6 +29,7 @@ export const COMMANDS: Command[] = [
   playerAvail,
   playerNote,
   eventAdd,
+  lineupPlan,
   reportBuild,
   mcpServe,
 ];
