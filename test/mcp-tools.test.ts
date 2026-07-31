@@ -284,6 +284,61 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(payload.slots[0]!.players.some((pl) => pl.canonicalName.startsWith("Ada"))).toBe(true);
   });
 
+  // The other half of the MCP boundary (Codex review of PR #47 round 5, rated medium): refusal
+  // messages quote scraped data — `unknown target "<name>"`, `ambiguous target: <candidates>` — so
+  // sanitizing only the success path left a hostile name one failed lookup away from an MCP client.
+  it("sanitizes control and bidi characters out of tool ERROR results too, not only successes", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    const ESC = String.fromCharCode(0x1b);
+    runMigrations();
+    const client = await connectedClient();
+
+    // An unknown target, whose message echoes the caller's string back.
+    const unknown = await client.callTool({
+      name: "team_show",
+      arguments: { target: `No${RTL_OVERRIDE}Such${ESC}[2JTeam` },
+    });
+    expect(unknown.isError).toBe(true);
+    expect(textOf(unknown)).not.toContain(RTL_OVERRIDE);
+    expect(textOf(unknown)).not.toContain(ESC);
+    expect(textOf(unknown), "the diagnostic stays useful").toContain("No");
+  });
+
+  it("sanitizes an ambiguous-target refusal, whose message quotes several scraped names", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    // Both names sit within FUZZY_MAX_DISTANCE (2) of the search term, so the lookup lands on the
+    // AMBIGUOUS tier and its message quotes both candidates — which is the point: here the hostile
+    // characters come from stored rows, not from the caller's own input. The override goes last
+    // because `nameKey` does not strip category-Cf characters (findings-log note), so a mid-name
+    // one would change the key and the test would pass on an "unknown target" refusal instead.
+    db.insert(teams).values({ name: `VersteegA${RTL_OVERRIDE}` }).run();
+    db.insert(teams).values({ name: `VersteegB${RTL_OVERRIDE}` }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "team_show", arguments: { target: "Versteeg" } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).not.toContain(RTL_OVERRIDE);
+    expect(textOf(result)).toContain("ambiguous");
+  });
+
+  it("still records the ORIGINAL error class in telemetry — sanitizing the message must not blur it", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    await client.callTool({ name: "team_show", arguments: { target: `Ghost${String.fromCharCode(0x202e)}Team` } });
+
+    const rows = requestLogRows(dbFixture.path()).filter((r) => r.surface === "mcp" && r.command === "team_show");
+    expect(rows).toHaveLength(1);
+    // `error:McpToolError`, not `error:Error` — the sanitizing catch sits OUTSIDE logMcpTool so the
+    // telemetry row still names the real class.
+    expect(String(rows[0]?.outcome)).toBe("error:McpToolError");
+  });
+
   it("report_build over MCP writes real files via the hardened output-root guard", async () => {
     runMigrations();
     const { db, sqlite } = openDb();

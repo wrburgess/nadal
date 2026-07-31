@@ -11,6 +11,7 @@ import { teamHome } from "./commands/team-home.js";
 import { teamPull } from "./commands/team-pull.js";
 import { teamShow } from "./commands/team-show.js";
 import { logRequest } from "../telemetry/request-log.js";
+import { sanitizeValue } from "../sanitize.js";
 
 export type Command = {
   noun: string;
@@ -72,7 +73,10 @@ export async function dispatch(argv: string[]): Promise<number> {
   const [noun, verb, ...rest] = argv;
   const cmd = COMMANDS.find((c) => c.noun === noun && c.verb === verb);
   if (!cmd) {
-    const target = `${noun} ${verb ?? ""}`.trim();
+    // Echoed straight back from argv, so it is whatever the caller typed — and this write happens
+    // BEFORE any command's formatter exists to sanitize it, which is precisely why it was the last
+    // unguarded terminal sink in the codebase. Found by the independent Codex review of PR #47.
+    const target = sanitizeValue(`${noun} ${verb ?? ""}`.trim());
     console.error(`error: unknown command "tn ${target}". Run tn --help`);
     return 2;
   }
