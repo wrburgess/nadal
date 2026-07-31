@@ -105,10 +105,9 @@ export function formatRatingTrajectory(trajectory: RatingTrajectoryResult): stri
 }
 
 // Human labels for the three `dataGaps` sections — `dataGaps`' keys are the camelCase field names
-// `getPlayerProfile` builds (`captainNotes`), which read awkwardly bare in prose. All three have
-// real writers as of #17 (`setAvailability`, `addCaptainNote` in PR A; `addEvent` in PR B), so
-// "not collected" is now an unusual state rather than the standing one docs/findings.md #15
-// recorded.
+// `getPlayerProfile` builds (`captainNotes`), which read awkwardly bare in prose. `availability`
+// and `captain_notes` gained writers in #17 PR A; `events` still has none that associates a PLAYER
+// with an event, so it remains the one standing "not collected" section.
 const DATA_GAP_LABELS: Record<string, string> = {
   events: "events",
   availability: "availability",

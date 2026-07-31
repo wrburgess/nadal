@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { events, players, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
@@ -241,6 +242,46 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     } finally {
       sqlite.close();
     }
+  });
+
+  // Found by the independent Codex review of PR #47 (rated medium). MCP tool results carry scraped
+  // player and team names and were passed through a bare `JSON.stringify`, which escapes the C0
+  // controls but leaves RIGHT-TO-LEFT OVERRIDE and U+2028/U+2029 intact — so the guard the CLI's
+  // `--json` path had gained did not cover the second transport over the same services.
+  it("sanitizes control and bidi characters out of tool results, matching the CLI --json path", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: `Team${RTL_OVERRIDE}Versteeg` }).returning().get();
+    const p1 = db.insert(players).values({ canonicalName: `Ada${RTL_OVERRIDE}Ashby` }).returning().get();
+    const p2 = db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    for (const p of [p1, p2]) {
+      db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
+    }
+    const cm = upsertCourtMatch(db, {
+      teamMatchId: null,
+      slot: "D1",
+      discipline: "doubles",
+      winnerSide: "home",
+      score: "6-3 6-4",
+      leagueContext: "40+ 3.5",
+      playedOn: "2026-05-01",
+      sourceMatchId: "mcp-hostile-1",
+    });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p1.id, side: "home" });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p2.id, side: "home" });
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "lineup_plan", arguments: { target: team.name } });
+
+    expect(result.isError).not.toBe(true);
+    const text = textOf(result);
+    expect(text, "a bidi override must not reach an MCP client").not.toContain(RTL_OVERRIDE);
+    // Still valid JSON of the same shape — sanitizing is not mangling.
+    const payload = JSON.parse(text) as { slots: { players: { canonicalName: string }[] }[] };
+    expect(payload.slots[0]!.players.some((pl) => pl.canonicalName.startsWith("Ada"))).toBe(true);
   });
 
   it("report_build over MCP writes real files via the hardened output-root guard", async () => {

@@ -11,6 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logMcpTool } from "../telemetry/request-log.js";
 import { MCP_TOOLS } from "./tools.js";
+import { sanitizeJson } from "../sanitize.js";
 
 const SERVER_NAME = "tn";
 const SERVER_VERSION = "0.1.0";
@@ -30,7 +31,13 @@ export function createMcpServer(): McpServer {
         // uncaught crash. Duplicating that conversion here would just be a second, divergent
         // error-formatting path.
         const result = await logMcpTool(tool.name, args, () => tool.handler(args));
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        // Sanitized on the way out, exactly as the CLI's `--json` path is (src/cli/emit.ts):
+        // these results carry scraped player and team names, `JSON.stringify` leaves category-Cf
+        // characters and U+2028/U+2029 intact, and an MCP client renders this text somewhere a
+        // bidi override can reorder it. The CLI and MCP surfaces are the same services behind two
+        // transports, so a guard on one and not the other is a hole, not a difference.
+        // (Found by the independent Codex review of PR #47, rated medium.)
+        return { content: [{ type: "text" as const, text: JSON.stringify(sanitizeJson(result)) }] };
       },
     );
   }

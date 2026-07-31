@@ -124,6 +124,58 @@ describe("predicted-lineup section — HTML", () => {
   });
 });
 
+// Found by the independent Codex review of PR #47 (rated medium). Markdown escaping and HTML
+// entity-escaping each defend their own medium's syntax and say nothing about control, format, or
+// line-separator characters — so a RIGHT-TO-LEFT OVERRIDE inside a scraped name survived both and
+// could visually reorder a rendered dossier, including which player sits on which court. This
+// document is printed and carried to a court, where nobody can check it against the source.
+describe("dossier renderers strip control and bidi characters, not just markup", () => {
+  // From character codes, so this source file contains no literal escape sequence.
+  const RTL_OVERRIDE = String.fromCharCode(0x202e);
+  const LINE_SEPARATOR = String.fromCharCode(0x2028);
+  const ESC = String.fromCharCode(0x1b);
+
+  function dossierWithName(name: string) {
+    const lineup = buildLineupPlan();
+    lineup.slots[0]!.players = [{ playerId: 1, canonicalName: name }];
+    return buildDossier({ lineup });
+  }
+
+  it.each([
+    ["a bidi override", RTL_OVERRIDE],
+    ["a line separator", LINE_SEPARATOR],
+    ["an ANSI escape", ESC],
+  ])("markdown strips %s from a player name", (_label, hostile) => {
+    const md = renderDossierMarkdown(dossierWithName(`Ada${hostile}Ashby`));
+    expect(md).not.toContain(hostile);
+    expect(md).toContain("Ada");
+  });
+
+  it.each([
+    ["a bidi override", RTL_OVERRIDE],
+    ["a line separator", LINE_SEPARATOR],
+    ["an ANSI escape", ESC],
+  ])("HTML strips %s from a player name", (_label, hostile) => {
+    const html = renderDossier(dossierWithName(`Ada${hostile}Ashby`));
+    expect(html).not.toContain(hostile);
+    expect(html).toContain("Ada");
+  });
+
+  it("strips them from the team name too, not only from roster names", () => {
+    const dossier = buildDossier();
+    dossier.team.teamName = `Team${RTL_OVERRIDE}Versteeg`;
+    expect(renderDossierMarkdown(dossier)).not.toContain(RTL_OVERRIDE);
+    expect(renderDossier(dossier)).not.toContain(RTL_OVERRIDE);
+  });
+
+  it("still escapes the markup each medium cares about — sanitizing did not replace escaping", () => {
+    const md = renderDossierMarkdown(dossierWithName("Ada | Ashby"));
+    expect(md).toContain("\\|");
+    const html = renderDossier(dossierWithName("Ada <b> Ashby"));
+    expect(html).toContain("&lt;b&gt;");
+  });
+});
+
 describe("buildTeamDossier wires the real prediction in", () => {
   useTnDbPath();
 

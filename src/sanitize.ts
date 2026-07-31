@@ -29,3 +29,32 @@ const CONTROL_CHARS = new RegExp(
 export function sanitizeValue(value: string): string {
   return value.replace(CONTROL_CHARS, " ");
 }
+
+/**
+ * `sanitizeValue` applied to every string leaf of an arbitrary JSON-shaped value — objects, arrays,
+ * and the strings inside them, at any depth. Keys are sanitized too: every key in this codebase is
+ * code-authored, so it cannot currently matter, but a hostile key would spoof exactly as well as a
+ * hostile value and the guard costs nothing.
+ *
+ * It lives here rather than in a CLI module because THREE different output boundaries need it and
+ * only one of them is the CLI: `tn <cmd> --json` (src/cli/emit.ts), the MCP server's tool results
+ * (src/mcp/server.ts), and — via `sanitizeValue` directly — the dossier renderers. Each serializer
+ * escapes for its own medium and none of them escape this class: `JSON.stringify` handles the C0
+ * controls but passes category-Cf characters (RIGHT-TO-LEFT OVERRIDE) and U+2028/U+2029 straight
+ * through, which is precisely why the gap was invisible — partial escaping reads as escaping.
+ * (Found across rounds 3 and 4 of the independent Codex review of PR #47.)
+ *
+ * Non-JSON types (`Date`, `Map`, `Set`, functions) are returned unchanged: nothing in this codebase
+ * puts one in a serialized payload, and JSON.stringify would flatten or drop them anyway, so
+ * "handling" them here would be inventing a contract no caller has. A cyclic structure is likewise
+ * not guarded — `JSON.stringify` already throws on one, so this function cannot make that outcome
+ * worse, and a silent recursion guard would hide a bug rather than surface it.
+ */
+export function sanitizeJson(value: unknown): unknown {
+  if (typeof value === "string") return sanitizeValue(value);
+  if (Array.isArray(value)) return value.map(sanitizeJson);
+  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [sanitizeValue(k), sanitizeJson(v)]));
+  }
+  return value;
+}

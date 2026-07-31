@@ -1,4 +1,4 @@
-import { sanitizeValue } from "../sanitize.js";
+import { sanitizeJson, sanitizeValue } from "../sanitize.js";
 import { quoteSummaryValue } from "./summary.js";
 
 /**
@@ -44,12 +44,10 @@ export type SummaryField = [string, string | number];
  *
  * `emitSummary` below has sanitized its `--json` payload since PR A, but the three commands that
  * dump an entire profile object (`team show`, `player show`, `lineup plan`) called
- * `JSON.stringify` directly and bypassed it. That is a real gap, not a stylistic one:
- * `JSON.stringify` escapes the C0 controls but leaves category-Cf characters — notably
- * RIGHT-TO-LEFT OVERRIDE (U+202E) — and U+2028/U+2029 completely intact, so a scraped player name
- * carrying a bidi override reaches the terminal unchanged and can visually reorder the output a
- * human is reading. Found by the independent Codex review of PR #47 (rated medium), against the
- * new `lineup plan --json`; the two older commands had it too and go through here as well.
+ * `JSON.stringify` directly and bypassed it — and `JSON.stringify` escapes the C0 controls while
+ * leaving RIGHT-TO-LEFT OVERRIDE and U+2028/U+2029 intact, so a scraped player name carrying a bidi
+ * override reached the terminal unchanged and could visually reorder what a human was reading.
+ * Found by the independent Codex review of PR #47 (rated medium).
  *
  * Yes, this modifies data a machine consumer receives. That trade was already made deliberately for
  * the summary-line payload below, and it is the right one here for the same reason: these are
@@ -57,21 +55,9 @@ export type SummaryField = [string, string | number];
  * character that cannot be rendered safely has no business being echoed to a terminal to protect a
  * fidelity nobody is relying on.
  *
- * Keys are sanitized as well as values — every key here is code-authored today, so this cannot
- * currently matter, but a hostile key would spoof exactly as well as a hostile value and the guard
- * costs nothing.
+ * The traversal itself lives in `src/sanitize.ts` because the MCP server needs the identical guard
+ * on its own tool results — a second output boundary, the same scraped strings.
  */
-export function sanitizeJson(value: unknown): unknown {
-  if (typeof value === "string") return sanitizeValue(value);
-  if (Array.isArray(value)) return value.map(sanitizeJson);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [sanitizeValue(k), sanitizeJson(v)]));
-  }
-  return value;
-}
-
-/** `JSON.stringify` with every string leaf sanitized — the only spelling a CLI command should use
- * to emit a whole object under `--json`. */
 export function emitJson(value: unknown): string {
   return JSON.stringify(sanitizeJson(value));
 }

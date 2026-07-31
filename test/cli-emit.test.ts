@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emitJson, emitSummary, sanitizeJson } from "../src/cli/emit.js";
+import { emitJson, emitSummary } from "../src/cli/emit.js";
+import { sanitizeJson } from "../src/sanitize.js";
 
 describe("emitSummary", () => {
   afterEach(() => {

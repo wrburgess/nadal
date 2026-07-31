@@ -23,13 +23,22 @@ import {
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
+import { sanitizeValue } from "../sanitize.js";
 import type { TeamDossier } from "./types.js";
 
-/** The five XML-significant characters, escaped to their named entities. Order matters: `&` FIRST,
+/**
+ * The five XML-significant characters, escaped to their named entities. Order matters: `&` FIRST,
  * or an entity written by an earlier replacement (e.g. `&lt;`) would itself get re-escaped by a
- * later `&` -> `&amp;` pass. */
+ * later `&` -> `&amp;` pass.
+ *
+ * `sanitizeValue` runs first, for the reason its markdown twin records: entity-escaping markup says
+ * nothing about control, format, or line-separator characters, so a RIGHT-TO-LEFT OVERRIDE inside a
+ * scraped name survives it and visually reorders the rendered dossier — in a document that gets
+ * printed and carried to a court, where the reader cannot check it against the source.
+ * (Found by the independent Codex review of PR #47, rated medium.)
+ */
 export function escapeHtml(value: string): string {
-  return value
+  return sanitizeValue(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -134,9 +143,9 @@ function renderPlayersSectionHtml(dossier: TeamDossier): string {
 
 // Labels for the three `dataGaps` sections — same ones `src/cli/format-profile.ts` uses for the
 // CLI's compact text, kept in sync deliberately rather than re-deriving a second label map here.
-// (All three have real writers as of #17: `setAvailability`, `addCaptainNote` in PR A, `addEvent`
-// in PR B — so "not collected" is now an unusual state rather than the standing one it was when
-// docs/findings.md #15 recorded it.)
+// (`availability` and `captain_notes` gained writers in #17 PR A; `events` still has none that
+// associates a PLAYER with an event, so it remains the one standing "not collected" section — see
+// the `dataGaps` comment in src/query/player-profile.ts.)
 const DATA_GAP_LABELS: Record<string, string> = {
   events: "events",
   availability: "availability",

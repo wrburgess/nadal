@@ -13,6 +13,7 @@ import {
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
+import { sanitizeValue } from "../sanitize.js";
 import type { TeamDossier } from "./types.js";
 
 /**
@@ -34,12 +35,21 @@ import type { TeamDossier } from "./types.js";
  * a bare heading. Backslash-escaping is CommonMark's own mechanism for "this character, literally"
  * — not a bespoke scheme — so the output survives being re-parsed by any standard renderer, not
  * just displayed as raw text by accident.
+ *
+ * **Markdown escaping is not the whole job**, which is why `sanitizeValue` runs FIRST. Backslashing
+ * CommonMark's syntax characters says nothing about control, format, or line-separator characters:
+ * a RIGHT-TO-LEFT OVERRIDE inside a name survives every escape above and visually reorders the
+ * rendered table — including, in a scouting dossier, which player sits on which court. That matters
+ * more here than in a terminal, because this file is printed and carried to a court where nobody
+ * can check it against the source. `sanitizeValue` also subsumes the newline handling this function
+ * used to do itself (CR and LF are both category Cc), so the explicit `\r?\n` replace it carried
+ * was removed rather than left as a branch no input can reach.
+ * (Found by the independent Codex review of PR #47, rated medium.)
  */
 export function escapeMarkdownCell(value: string): string {
-  return value
+  return sanitizeValue(value)
     .replace(/\\/g, "\\\\")
-    .replace(/[|`<>[\]_*]/g, (ch) => `\\${ch}`)
-    .replace(/\r?\n/g, " ");
+    .replace(/[|`<>[\]_*]/g, (ch) => `\\${ch}`);
 }
 
 function renderRosterTableMarkdown(dossier: TeamDossier): string {
