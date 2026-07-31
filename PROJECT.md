@@ -364,17 +364,20 @@ that triage, not `final`, is where a suggestion becomes work.
 **Read this as `final`'s Step 1 procedure for this repo. It replaces both bullets of that step; do not
 run either of them.**
 
-**The append happens *during* the run, not at delivery.** `final` mutates nothing:
-
-1. **Append as you learn, in the phase that learned it.** When any phase — `invoke`, `verify`,
-   `listen` — turns up a Rules-Layer / config learning, append it to
-   [`docs/findings.md`](docs/findings.md) as **one line** then, in that phase's format, and **commit it
-   with that phase's own work.** It rides commits the Reviewer already covers, so it costs **no extra
-   head move and no extra review round.** This mirrors the durable-as-it-arrives rule
-   [`ship`](skills/ship/SKILL.md) already applies to its asks-ledger.
-2. **A findings-log append is never scope creep.** It is pre-sanctioned by this section for every run,
-   so [`verify`](skills/verify/SKILL.md) must not classify a `docs/findings.md` line as unapproved
-   drift, and it needs no separate plan item.
+1. **Every nadal plan carries a standing plan item:** *"append this run's process/config learnings to
+   `docs/findings.md`."* [`devise`](skills/devise/SKILL.md) includes it in the posted plan for every
+   issue. **This is the whole mechanism, and it is deliberately not an exemption:** the append is
+   *inside the approved plan*, so [`verify`](skills/verify/SKILL.md)'s normal drift test passes on it
+   **truthfully** — its self-review can still assert *"only files in the final approved plan changed"*
+   without that record being false. Everything else in the same commit gets the ordinary
+   drift review; nothing is suppressed by filename, so an unplanned change cannot ride along beside a
+   findings line.
+2. **Append as you learn** — in the phase that learned it, committed with that phase's own work, rather
+   than batched at delivery. This mirrors the durable-as-it-arrives rule
+   [`ship`](skills/ship/SKILL.md) already applies to its asks-ledger. **A learning from `assess`,
+   `devise`, or the orchestrator has no branch yet**: record it in that stage's durable artifact (the
+   assessment or plan comment on the issue, where `ship` already records its stops and asks) and
+   transcribe it into `docs/findings.md` in the first phase that has a branch — `invoke`.
 3. **At `final` Step 1: append nothing, commit nothing.** Confirm the run's learnings are already in
    the log, and that is the whole step. Fold nothing (edit no Rules Layer, no skill body, no
    `docs/standards/` file — all vendored). File nothing: no Issue, no PR, no ADR. Wait for nothing —
@@ -384,16 +387,26 @@ run either of them.**
    `Deferred (follow-up): None — N suggestion(s) appended to docs/findings.md during the run`, so the
    section is answered rather than left blank or filled with a follow-up link.
 
-**Why the append is pulled earlier rather than committed at `final`** — a Reviewer finding on
-[PR #55](https://github.com/wrburgess/nadal/pull/55), and the second time that review moved this design.
-An earlier draft had `final` append, commit, and then re-obtain the SHA-bound review. That is wrong in
-two ways at once. **Re-entering [`verify`](skills/verify/SKILL.md) is not a summon-only operation** — it
-re-reads the whole PR against the approved plan, so a `docs/findings.md` commit made after plan approval
-would be classified as unsanctioned scope creep: removing it breaks this step, keeping it leaves a
-finding open. And **it can cycle**, since the extra pass may itself produce a learning, which appends,
-which moves the head, which needs another review. Appending in the phase that learned it dissolves both:
-the line is already inside the diff the Reviewer sees, nothing is added at delivery, and there is no
-second pass to terminate.
+**What this does *not* claim, because two drafts claimed it and were wrong.** A learning that arrives
+**after the Reviewer has responded** — during [`listen`](skills/listen/SKILL.md), or at `final` — moves
+the head when it is committed, and [*Human Gates*](#human-gates) → `attested` then requires a fresh
+review bound to the new head. **That cost is real and is not avoided by anything on this page.** It is
+also not special: it is the standing lifecycle behavior for **any** post-review change, and a `listen`
+round that fixes a finding already pays it. A findings line gets **no** distinct mechanism, no exemption
+from it, and no promise of a free ride. Appending early is a *preference* that usually avoids the extra
+round — not a guarantee that it will.
+
+**And the residual is named rather than papered over.** The lifecycle has no cheap, terminating path for
+a durable append that arrives after the PR-gate summons; `verify` owns the summons
+([ADR 0026](docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)) and
+re-entering it is a full stage, not a summon. **That is a gap in the lifecycle, not something a host
+config can legislate**, and trying to legislate it here produced three successive Reviewer findings on
+[PR #55](https://github.com/wrburgess/nadal/pull/55) — a delivery-time append that was never committed,
+then one that mandated an unowned `verify` re-entry, then a drift exemption that would have made
+`verify`'s own self-review untrue. It belongs upstream with the rest of this section, at
+[wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159). **This section settles the
+*disposition* — where a process learning goes, and where it does not. It does not settle the
+*mechanism*, and no longer pretends to.**
 
 **A learning that genuinely arrives during `final` is an ordinary late change**, handled by the rule
 this project already runs on: make it, re-run *Quality Checks*, and obtain a fresh SHA-bound review
