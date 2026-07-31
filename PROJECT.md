@@ -394,6 +394,17 @@ run either of them.**
    `devise`, or the orchestrator has no branch yet**: record it in that stage's durable artifact (the
    assessment or plan comment on the issue, where `ship` already records its stops and asks) and
    transcribe it into `docs/findings.md` in the first phase that has a branch — `invoke`.
+
+   **If the run never reaches `invoke`, that transcription never happens — so the ending is what has to
+   carry it.** An emergency stop, an abandoned option, or an issue closed without implementation all
+   terminate before any branch exists, and *"it is in an issue comment"* is **not** an acceptable
+   terminal disposition: the issue comment is not the triage artifact, and a learning left only there
+   fails **open**, silently, which is precisely what *"one findings line, always"* must not permit.
+   Before such a run ends it must therefore **name each untranscribed learning in its terminal comment
+   under a literal `Untranscribed findings:` heading**, quoting the line it would have written. Any
+   later run that reaches `invoke` on that issue transcribes every such block it finds, as part of the
+   standing plan task above. **This is the one path on which the line lands late or by the HC's hand,
+   and it is labelled rather than hidden** — the label is what turns a silent loss into a visible debt.
 3. **At `final` Step 1: append nothing, commit nothing.** Confirm the run's learnings are already in
    the log, and that is the whole step. Fold nothing (edit no Rules Layer, no skill body, no
    `docs/standards/` file — all vendored). File nothing: no Issue, no PR, no ADR. Wait for nothing —
