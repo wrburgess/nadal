@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "9ae5dd15-66aa-4795-9396-398372225c81",
-  "prevId": "9e2f48a2-7ba6-4569-bc1d-0a5fb7f41aa6",
+  "id": "456a95af-0e0c-4d06-bfc4-b4f56897de68",
+  "prevId": "9ae5dd15-66aa-4795-9396-398372225c81",
   "tables": {
     "availability": {
       "name": "availability",
@@ -976,6 +976,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "is_home": {
+          "name": "is_home",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "name_key": {
           "name": "name_key",
           "type": "text",
@@ -1002,6 +1009,14 @@
             "name"
           ],
           "isUnique": true
+        },
+        "team_home_unique": {
+          "name": "team_home_unique",
+          "columns": [
+            "is_home"
+          ],
+          "isUnique": true,
+          "where": "is_home = 1"
         },
         "teams_name_key_idx": {
           "name": "teams_name_key_idx",

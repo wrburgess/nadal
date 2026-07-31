@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { nameKey } from "../src/db/name-key.js";
 import {
   courtMatchPlayers,
   courtMatches,
@@ -20,11 +21,11 @@ function freshDb() {
 }
 
 function seedPlayer(db: Db, canonicalName: string) {
-  return db.insert(players).values({ canonicalName }).returning().get();
+  return db.insert(players).values({ canonicalName, nameKey: nameKey(canonicalName) }).returning().get();
 }
 
 function seedTeam(db: Db, name: string) {
-  return db.insert(teams).values({ name }).returning().get();
+  return db.insert(teams).values({ name, nameKey: nameKey(name) }).returning().get();
 }
 
 function seedMembership(db: Db, playerId: number, teamId: number) {
@@ -293,7 +294,12 @@ describe("resolveTeamTarget", () => {
   it("an ambiguous fuzzy team name lists every candidate", () => {
     const { db, sqlite } = freshDb();
     try {
-      db.insert(teams).values([{ name: "Team Alpha" }, { name: "Team Alpho" }]).run();
+      db.insert(teams)
+        .values([
+          { name: "Team Alpha", nameKey: nameKey("Team Alpha") },
+          { name: "Team Alpho", nameKey: nameKey("Team Alpho") },
+        ])
+        .run();
       const result = resolveTeamTarget(db, "Team Alph");
       expect(result.kind).toBe("ambiguous");
       if (result.kind === "ambiguous") {

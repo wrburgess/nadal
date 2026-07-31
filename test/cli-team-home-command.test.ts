@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { runMigrations, openDb } from "../src/db/client.js";
+import { backfillNameKeys } from "../src/db/name-key.js";
 import { teams } from "../src/db/schema.js";
 import { resolveHomeTeam } from "../src/query/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -12,6 +13,7 @@ describe("tn team home (end-to-end via dispatch)", () => {
     runMigrations();
     const { db, sqlite } = openDb();
     const team = db.insert(teams).values({ name }).returning().get();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
     return team;
   }
@@ -70,6 +72,7 @@ describe("tn team home (end-to-end via dispatch)", () => {
     runMigrations();
     const { db, sqlite } = openDb();
     db.insert(teams).values([{ name: "Team Alpha" }, { name: "Team Alpho" }]).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 

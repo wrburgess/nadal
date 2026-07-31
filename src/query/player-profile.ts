@@ -4,6 +4,7 @@
 // lives in `src/query/derive.ts`, not here.
 
 import { eq, inArray } from "drizzle-orm";
+import { nameKey } from "../db/name-key.js";
 import {
   availability,
   captainNotes,
@@ -15,7 +16,7 @@ import {
   teamMemberships,
   teams,
 } from "../db/schema.js";
-import { findPlayerByName } from "../ingest/identity.js";
+import { assertPlayerAliasesKeyed, assertPlayersKeyed, findPlayerByName } from "../ingest/identity.js";
 import type { NameLookup } from "../ingest/identity.js";
 import type { Db } from "../ingest/db-types.js";
 import { dataGaps, partnerFrequency, ratingTrajectory, slotTendencies, windowedRecord } from "./derive.js";
@@ -45,24 +46,38 @@ export type PlayerTargetResolution =
  * CREATE a player, which `show` must never do. This mirrors `resolvePlayer`'s tier-2 exact
  * matching (canonical name OR alias, folded with JS's Unicode-aware `toLowerCase()` — SQLite's
  * `lower()` is ASCII-only, the defect #15 fixed) without ever writing, then falls back to
- * `findPlayerByName`'s own fuzzy tier for a near-miss spelling. `identity.ts` itself is untouched.
+ * `findPlayerByName`'s own fuzzy tier for a near-miss spelling.
+ *
+ * Issue #32: rewritten onto the indexed `name_key` columns instead of loading every player and
+ * every alias into memory on every call — the locally re-declared `fold` this replaced folded case
+ * the same way `nameKey` (src/db/name-key.ts) does, so the matching behavior is unchanged, only how
+ * it's queried.
  */
 function findPlayerByNameOrAlias(db: Db, name: string): NameLookup<PlayerRow> {
-  const fold = (s: string) => s.trim().toLowerCase();
-  const target = fold(name);
+  assertPlayersKeyed(db);
+  assertPlayerAliasesKeyed(db);
+  const key = nameKey(name);
 
-  const allPlayers = db.select().from(players).all();
-  const exactByCanonical = allPlayers.filter((p) => fold(p.canonicalName) === target);
-  const aliasRows = db.select().from(playerAliases).all().filter((a) => fold(a.alias) === target);
-  const exactByAlias = allPlayers.filter((p) => aliasRows.some((a) => a.playerId === p.id));
+  const exactByCanonical = db.select().from(players).where(eq(players.nameKey, key)).all();
+  const aliasPlayerIds = db
+    .select({ playerId: playerAliases.playerId })
+    .from(playerAliases)
+    .where(eq(playerAliases.nameKey, key))
+    .all()
+    .map((r) => r.playerId);
+  const exactByAlias =
+    aliasPlayerIds.length > 0
+      ? db.select().from(players).where(inArray(players.id, aliasPlayerIds)).all()
+      : [];
 
-  const exactIds = new Set([...exactByCanonical, ...exactByAlias].map((p) => p.id));
-  if (exactIds.size === 1) {
-    const row = allPlayers.find((p) => exactIds.has(p.id));
-    if (row !== undefined) return { kind: "found", row };
+  const exactMap = new Map<number, PlayerRow>();
+  for (const row of [...exactByCanonical, ...exactByAlias]) exactMap.set(row.id, row);
+
+  if (exactMap.size === 1) {
+    return { kind: "found", row: [...exactMap.values()][0]! };
   }
-  if (exactIds.size > 1) {
-    return { kind: "ambiguous", candidates: allPlayers.filter((p) => exactIds.has(p.id)) };
+  if (exactMap.size > 1) {
+    return { kind: "ambiguous", candidates: [...exactMap.values()] };
   }
 
   // No exact hit at all (by name or alias) — fall back to the reused fuzzy tier.

@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { nameKey } from "../src/db/name-key.js";
 import {
   availability,
   captainNotes,
@@ -24,7 +25,7 @@ function freshDb() {
 }
 
 function seedPlayer(db: Db, values: Partial<typeof players.$inferInsert> & { canonicalName: string }) {
-  return db.insert(players).values(values).returning().get();
+  return db.insert(players).values({ nameKey: nameKey(values.canonicalName), ...values }).returning().get();
 }
 
 function seedCourtMatch(
@@ -259,8 +260,8 @@ describe("resolvePlayerTarget", () => {
       // Both players independently picked up the same alias spelling — e.g. two rosters each
       // recording a shared nickname. The exact tier must not guess which one "Nickname" means.
       db.insert(playerAliases).values([
-        { playerId: first.id, alias: "Nickname" },
-        { playerId: second.id, alias: "Nickname" },
+        { playerId: first.id, alias: "Nickname", nameKey: nameKey("Nickname") },
+        { playerId: second.id, alias: "Nickname", nameKey: nameKey("Nickname") },
       ]).run();
 
       const result = resolvePlayerTarget(db, "Nickname");
@@ -282,7 +283,9 @@ describe("resolvePlayerTarget", () => {
       // different casing of the SAME accented characters — the exact shape #15 fixed (SQLite's
       // `lower()` is ASCII-only; JS's `toLowerCase()` is Unicode-aware).
       const player = seedPlayer(db, { canonicalName: "Élodie Fontaine" });
-      db.insert(playerAliases).values({ playerId: player.id, alias: "ÉLODIE FONTAINE" }).run();
+      db.insert(playerAliases)
+        .values({ playerId: player.id, alias: "ÉLODIE FONTAINE", nameKey: nameKey("ÉLODIE FONTAINE") })
+        .run();
 
       const byAlias = resolvePlayerTarget(db, "élodie fontaine");
       const byCanonical = resolvePlayerTarget(db, "Élodie Fontaine");
@@ -312,7 +315,12 @@ describe("resolvePlayerTarget", () => {
   it("an ambiguous fuzzy name lists every candidate", () => {
     const { db, sqlite } = freshDb();
     try {
-      db.insert(players).values([{ canonicalName: "Alex Stone" }, { canonicalName: "Alex Stove" }]).run();
+      db.insert(players)
+        .values([
+          { canonicalName: "Alex Stone", nameKey: nameKey("Alex Stone") },
+          { canonicalName: "Alex Stove", nameKey: nameKey("Alex Stove") },
+        ])
+        .run();
       const result = resolvePlayerTarget(db, "Alex Ston");
       expect(result.kind).toBe("ambiguous");
       if (result.kind === "ambiguous") {

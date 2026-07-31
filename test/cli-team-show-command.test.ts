@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { runMigrations, openDb } from "../src/db/client.js";
+import { nameKey } from "../src/db/name-key.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
 import { setHomeTeam } from "../src/query/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -19,9 +20,13 @@ describe("tn team show (end-to-end via dispatch)", () => {
   function seedTeamWithRoster(name: string, playerNames: string[]) {
     runMigrations();
     const { db, sqlite } = openDb();
-    const team = db.insert(teams).values({ name }).returning().get();
+    const team = db.insert(teams).values({ name, nameKey: nameKey(name) }).returning().get();
     for (const playerName of playerNames) {
-      const player = db.insert(players).values({ canonicalName: playerName }).returning().get();
+      const player = db
+        .insert(players)
+        .values({ canonicalName: playerName, nameKey: nameKey(playerName) })
+        .returning()
+        .get();
       db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
     }
     sqlite.close();
@@ -88,7 +93,12 @@ describe("tn team show (end-to-end via dispatch)", () => {
   it("an ambiguous name lists every candidate on stderr and exits 1", async () => {
     runMigrations();
     const { db, sqlite } = openDb();
-    db.insert(teams).values([{ name: "Team Alpha" }, { name: "Team Alpho" }]).run();
+    db.insert(teams)
+      .values([
+        { name: "Team Alpha", nameKey: nameKey("Team Alpha") },
+        { name: "Team Alpho", nameKey: nameKey("Team Alpho") },
+      ])
+      .run();
     sqlite.close();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 

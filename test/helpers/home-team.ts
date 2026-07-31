@@ -3,6 +3,7 @@
 // Domain model), so their write-service tests need a real home team, event, and rostered player
 // rather than re-deriving this setup at each call site.
 
+import { backfillNameKeys } from "../../src/db/name-key.js";
 import { events, players, teamMemberships, teams } from "../../src/db/schema.js";
 import type { Db } from "../../src/ingest/db-types.js";
 import { setHomeTeam } from "../../src/query/home-team.js";
@@ -51,6 +52,14 @@ export function seedHomeTeamFixture(db: Db, options: SeedHomeTeamFixtureOptions 
 
   const player = db.insert(players).values({ canonicalName: playerName }).returning().get();
   db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: event.id }).run();
+
+  // #32 made name resolution index-backed on `name_key`, and the real writers (`tn team pull` /
+  // `tn player pull`) populate it on insert. This fixture inserts rows directly, so without this
+  // every `resolveTeamTarget` / `resolvePlayerTarget` against a fixture row would miss — the same
+  // "testing only the configuration the test invented" trap docs/findings.md logs, one layer over.
+  // Calling #32's own exported backfill rather than recomputing the key here keeps a single
+  // definition of what a name key IS.
+  backfillNameKeys(db);
 
   return {
     homeTeamId: team.id,

@@ -59,6 +59,8 @@ describe("tn team pull (end-to-end via dispatch)", () => {
         tennislinkUrl: null,
         tennisrecordUrl: null,
         isHome: null,
+        nameKey: null,
+        nameKeyLength: null,
       },
       rosterCount: 0,
       matchCount: 0,

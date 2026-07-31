@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { backfillNameKeys } from "../src/db/name-key.js";
 import { events, players, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
 import { createMcpServer } from "../src/mcp/server.js";
@@ -73,6 +74,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const team = db.insert(teams).values({ name: "Team A" }).returning().get();
     const player = db.insert(players).values({ canonicalName: "Player One" }).returning().get();
     db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
 
     const client = await connectedClient();
@@ -145,6 +147,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     runMigrations();
     const { db, sqlite } = openDb();
     const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
 
     const client = await connectedClient();
@@ -161,6 +164,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       .get();
     const player = db2.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
     db2.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: event.id }).run();
+    backfillNameKeys(db2); // #32: index-backed name resolution needs the key populated
     sqlite2.close();
 
     const availResult = await client.callTool({
@@ -182,6 +186,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     runMigrations();
     const { db, sqlite } = openDb();
     db.insert(teams).values({ name: "Team R" }).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
 
     const client = await connectedClient();
@@ -196,6 +201,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     runMigrations();
     const { db, sqlite } = openDb();
     const team = db.insert(teams).values({ name: "Team Solo" }).returning().get();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
 
     const client = await connectedClient();
@@ -209,6 +215,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     runMigrations();
     const { db, sqlite } = openDb();
     db.insert(teams).values([{ name: "Team Alpha" }, { name: "Team Alpho" }]).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
 
     const client = await connectedClient();
@@ -271,6 +278,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const b = db.insert(players).values({ canonicalName: "Player B" }).returning().get();
     db.insert(teamMemberships).values({ playerId: a.id, teamId: team.id, eventId: null }).run();
     db.insert(teamMemberships).values({ playerId: b.id, teamId: team.id, eventId: null }).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
 
     const client = await connectedClient();
@@ -290,6 +298,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const team = db.insert(teams).values({ name: "Solo Team" }).returning().get();
     const a = db.insert(players).values({ canonicalName: "Solo Player" }).returning().get();
     db.insert(teamMemberships).values({ playerId: a.id, teamId: team.id, eventId: null }).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
     sqlite.close();
 
     const client = await connectedClient();
