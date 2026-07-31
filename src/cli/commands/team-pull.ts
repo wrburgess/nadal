@@ -50,6 +50,11 @@ export const teamPull: Command = {
           ["roster", result.rosterCount],
           ["matches", result.matchCount],
           ["archived", result.archivedPath],
+          // Issue #49: retirement REMOVES a player from every current-roster read/write, so it has
+          // to be visible in the command's own output, not only in the database — included in
+          // `fields` (rather than only the `ok` branch below) so the `partial` branch, which
+          // spreads `fields` too, reports it just as honestly.
+          ["retired", result.retiredCount],
         ];
 
         // The team transaction has already committed, so a cascade failure is NOT an error — but it

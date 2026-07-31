@@ -1,7 +1,7 @@
 // DB assembly for a team's dossier (Task 4) — the twin of player-profile.ts. Fetches rows with
 // drizzle, hands them to `derive.ts`, and returns a typed profile; kept thin for the same reason.
 
-import { eq, or } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { players, teamMatches, teamMemberships, teams } from "../db/schema.js";
 import { findTeamByName } from "../ingest/identity.js";
 import type { Db } from "../ingest/db-types.js";
@@ -68,8 +68,12 @@ export type TeamProfile = {
    * `resolveHomeTeam` directly. */
   isHome: boolean;
   /** Alphabetical by canonical name (deterministic regardless of membership insertion order),
-   * tie-broken by playerId — a member with no `team_memberships` row is never included, since the
-   * roster IS that query. */
+   * tie-broken by playerId — a member with no CURRENT `team_memberships` row is never included.
+   * Issue #49: "current" excludes a soft-retired row (`retired_at IS NOT NULL`) as well as a
+   * missing one, since a departed player must read the same as an absent one on every roster read
+   * — the roster is that query filtered to `retired_at IS NULL`, not merely that query. Their
+   * history is NOT similarly hidden: `getPlayerProfile`'s `teamMemberships` still lists a retired
+   * team, and this team's own `teamRecord`/court-match history is untouched by a retirement. */
   roster: RosterMemberProfile[];
   teamRecord: TeamMatchRecordResult;
   /** Per-slot counts aggregated across the whole roster. */
@@ -92,7 +96,7 @@ export function getTeamProfile(
     .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName, ageRange: players.ageRange })
     .from(teamMemberships)
     .innerJoin(players, eq(teamMemberships.playerId, players.id))
-    .where(eq(teamMemberships.teamId, teamId))
+    .where(and(eq(teamMemberships.teamId, teamId), isNull(teamMemberships.retiredAt)))
     .all()
     .sort(
       (a, b) => a.canonicalName.toLowerCase().localeCompare(b.canonicalName.toLowerCase()) || a.playerId - b.playerId,
@@ -105,7 +109,7 @@ export function getTeamProfile(
           .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName })
           .from(teamMemberships)
           .innerJoin(players, eq(teamMemberships.playerId, players.id))
-          .where(eq(teamMemberships.teamId, options.versusTeamId))
+          .where(and(eq(teamMemberships.teamId, options.versusTeamId), isNull(teamMemberships.retiredAt)))
           .all();
   const versusPlayerIds = versusPlayerRows.map((r) => r.playerId);
   // Resolved once here (DB access lives in this assembly layer, not in derive.ts's pure

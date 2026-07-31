@@ -130,6 +130,12 @@ export type PlayerTeamMembershipSummary = {
   teamId: number;
   teamName: string;
   eventId: number | null;
+  /** Issue #49: NOT filtered — unlike the current-roster reads in team-profile.ts/lineup.ts/
+   * availability.ts/captain-notes.ts, "teams this player has been on" is a legitimately historical
+   * statement, and their court matches are untouched (`court_match_players` is a separate table
+   * this change never reads or writes). Non-null when this membership has been soft-retired, so a
+   * presenter can label a former team distinctly (`tn player show`'s "(former)" suffix). */
+  retiredAt: string | null;
 };
 
 export type PlayerProfile = {
@@ -205,7 +211,12 @@ export function getPlayerProfile(db: Db, playerId: number, options: { since: str
   const courtRows = courtMatchRowsForPlayers(db, [playerId]);
 
   const membershipRows: PlayerTeamMembershipSummary[] = db
-    .select({ teamId: teamMemberships.teamId, eventId: teamMemberships.eventId, teamName: teams.name })
+    .select({
+      teamId: teamMemberships.teamId,
+      eventId: teamMemberships.eventId,
+      teamName: teams.name,
+      retiredAt: teamMemberships.retiredAt,
+    })
     .from(teamMemberships)
     .innerJoin(teams, eq(teamMemberships.teamId, teams.id))
     .where(eq(teamMemberships.playerId, playerId))

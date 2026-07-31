@@ -8,7 +8,7 @@
 // module resolves exists so a presenter can print a person rather than a database id — the exact
 // defect #16 shipped and #17 PR A fixed one layer over.
 
-import { eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { courtMatches, players, ratingObservations, teamMatches, teamMemberships, teams } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoCourtMatchHistoryError, predictedLineup } from "./derive.js";
@@ -73,11 +73,15 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getLineupPlan: no team with id ${teamId}`);
 
+  // Issue #49: a retired member must never be predicted onto a court — the headline symptom the
+  // issue was filed for. Filtered here, at the roster read, rather than after the fact: the pure
+  // heuristic in derive.ts's `predictedLineup` only ever sees the players this query hands it, so
+  // a retired player excluded here can never surface in a slot, an unplaced list, or a rating rank.
   const rosterRows = db
     .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName })
     .from(teamMemberships)
     .innerJoin(players, eq(teamMemberships.playerId, players.id))
-    .where(eq(teamMemberships.teamId, teamId))
+    .where(and(eq(teamMemberships.teamId, teamId), isNull(teamMemberships.retiredAt)))
     .all();
 
   const nameById = new Map<number, string>();

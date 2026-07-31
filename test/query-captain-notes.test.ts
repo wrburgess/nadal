@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { captainNotes, players, teamMemberships, teams } from "../src/db/schema.js";
@@ -128,6 +129,46 @@ describe("addCaptainNote", () => {
       expect(() => addCaptainNote(db, { playerId: otherPlayer.id, text: "About an opponent." })).toThrow(
         PlayerNotOnHomeRosterError,
       );
+      expect(rows(db)).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #49. Both call sites in `captain-notes.ts` (the subject player AND the pairing partner)
+  // go through the SAME `isOnHomeRoster` helper, but a test that only covers one of the two call
+  // sites would pass under a fix that filtered just one of them — so both are asserted here,
+  // separately, each pinned by error CLASS rather than message text.
+  it("rejects a note ABOUT a retired subject (PlayerNotOnHomeRosterError)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, fixture.playerId))
+        .run();
+
+      expect(() => addCaptainNote(db, { playerId: fixture.playerId, text: "About a former player." })).toThrow(
+        PlayerNotOnHomeRosterError,
+      );
+      expect(rows(db)).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("rejects a pairing note whose PARTNER is retired, even though the subject player is current", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      const partner = db.insert(players).values({ canonicalName: "Retired Partner" }).returning().get();
+      db.insert(teamMemberships)
+        .values({ playerId: partner.id, teamId: fixture.homeTeamId, eventId: fixture.eventId, retiredAt: "2026-07-01T00:00:00.000Z" })
+        .run();
+
+      expect(() =>
+        addCaptainNote(db, { playerId: fixture.playerId, pairPlayerId: partner.id, text: "About a retired partner." }),
+      ).toThrow(PlayerNotOnHomeRosterError);
       expect(rows(db)).toHaveLength(0);
     } finally {
       sqlite.close();
