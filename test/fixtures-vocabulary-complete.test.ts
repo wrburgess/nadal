@@ -27,6 +27,9 @@ const FIXTURES: { source: "tennisrecord" | "usta"; name: string }[] = [
   { source: "usta", name: "profile-wtn-doubles-only.html" },
 ];
 
+// The 30s budget these cases need is now set ONCE for the whole suite in vitest.config.ts, not
+// per-file here. This file was the first instance of that class to fail (#46); patching it alone
+// left two OTHER files to fail on the next run, which is why the fix moved to the config.
 describe("fixture allow-list policy — vocabulary completeness", () => {
   it.each(FIXTURES)("$source/$name has zero unclassified atoms", ({ source, name }) => {
     const html = readFileSync(join(FIXTURE_ROOT, source, name), "utf8");

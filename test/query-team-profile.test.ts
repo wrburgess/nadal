@@ -10,6 +10,7 @@ import {
   teamMemberships,
   teams,
 } from "../src/db/schema.js";
+import { upsertTeam } from "../src/ingest/upsert.js";
 import { getTeamProfile, resolveTeamTarget } from "../src/query/team-profile.js";
 import { setHomeTeam } from "../src/query/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -394,6 +395,27 @@ describe("resolveTeamTarget", () => {
       if (result.kind === "ambiguous") {
         expect(result.candidates.sort()).toEqual(["Team Alpha", "Team Alpho"]);
       }
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #46: `tr:` selects by `tennisrecord_url`, which the URL branch of `upsertTeam` now keeps
+  // a unique source identity across a rename — this asserts the query-layer target resolution
+  // sees exactly that: one surviving id, with the NEW name.
+  it("resolves the single surviving id after a rename (#46), with the NEW name", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const url = "https://tennisrecord.com/team.aspx?teamname=Springfield%20A";
+      const first = upsertTeam(db, { name: "Springfield A", tennisrecordUrl: url });
+      const renamed = upsertTeam(db, { name: "Springfield A 4.0", tennisrecordUrl: url });
+      expect(renamed.id).toBe(first.id);
+
+      const result = resolveTeamTarget(db, `tr:${url}`);
+      expect(result).toEqual({ kind: "ok", teamId: renamed.id });
+
+      const row = db.select().from(teams).where(eq(teams.id, renamed.id)).all()[0];
+      expect(row?.name).toBe("Springfield A 4.0");
     } finally {
       sqlite.close();
     }
