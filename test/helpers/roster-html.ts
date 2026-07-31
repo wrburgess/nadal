@@ -41,3 +41,80 @@ export function removeAllRosterRows(html: string, names: string[]): string {
   for (const name of names) result = removeRosterRow(result, name);
   return result;
 }
+
+export type RosterPageOptions = {
+  teamName: string;
+  players: string[];
+  seasonName?: string;
+  leagueContext?: string;
+};
+
+/**
+ * Synthesizes a minimal, from-scratch TennisRecord team page: a 3-row header block
+ * (`src/parsers/tennisrecord/team.ts`'s `parseHeader` reads league context / season / team name,
+ * one per row), a roster table satisfying its exact column and row-width contract
+ * (`ROSTER_COLUMNS`/`ROSTER_ROW_CELLS`), and a HEADER-ONLY local schedule table — zero body rows,
+ * which `parseSchedule` tolerates — so pulling this page never creates a phantom opponent team the
+ * way replaying the real captured `team.html` fixture's own ten-row schedule would.
+ *
+ * Built from scratch rather than mutating `team.html` (issue #19's dry run: "aligning the
+ * payload's names with a synthesized roster page is the friction point of this whole task"). The
+ * captured fixture's team name and all 18 roster names are literal text baked into real markup, so
+ * swapping in a scorecard payload's own names in place would still leave every OTHER roster row —
+ * and the header's own team name — pointing at unrelated stand-ins, and its ten schedule rows would
+ * each mint a new opponent team on every pull.
+ */
+export function buildRosterPage(options: RosterPageOptions): string {
+  const seasonName = options.seasonName ?? "2026 Test Season";
+  const leagueContext = options.leagueContext ?? "Adult 18+ Missouri Valley M 4.0";
+  const rows = options.players
+    .map(
+      (name) => `
+        <tr>
+          <td><a class="link" href="/adult/profile.aspx?playername=${name}">${name}</a></td>
+          <td>Somewhere, ZZ</td>
+          <td>4.0</td>
+          <td>5-3</td>
+          <td>2-1</td>
+          <td>1-2</td>
+          <td>3-3</td>
+          <td>4.05</td>
+          <td></td>
+        </tr>`,
+    )
+    .join("\n");
+
+  return `<html><body>
+    <table>
+      <tr><td>${leagueContext}</td></tr>
+      <tr><td>${seasonName}</td></tr>
+      <tr><td>${options.teamName}</td></tr>
+    </table>
+    <div class="large">
+      <table>
+        <tr>
+          <th>Name</th>
+          <th>Location</th>
+          <th>NTRP</th>
+          <th>2026 Record</th>
+          <th>Local Singles</th>
+          <th>Local Doubles</th>
+          <th>Local Record</th>
+          <th colspan="2">Rating</th>
+        </tr>
+        ${rows}
+      </table>
+    </div>
+    <div class="large">
+      <table>
+        <tr>
+          <th>Local Schedule</th>
+          <th>Time</th>
+          <th>Opponent</th>
+          <th>Match Site</th>
+          <th>Result</th>
+        </tr>
+      </table>
+    </div>
+  </body></html>`;
+}
