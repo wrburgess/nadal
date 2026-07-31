@@ -318,7 +318,16 @@ describe("registry-wide: flag-declaration invariants dispatch's scan depends on 
   // only way to declare it is to edit a command module, and this fails the moment someone does.
   // The fix if it is ever genuinely wanted is to reserve the name in `scanFlags` explicitly, not to
   // delete this test.
-  it("no command declares a flag named `help` — dispatch owns that token before any parser sees it", () => {
+  //
+  // Scope, stated exactly: this asserts ONE thing — that no entry in any registered command's
+  // `booleanFlags`/`valueFlags` is named `help`. It does not assert anything about dispatch's
+  // runtime behavior, and "dispatch owns `--help`" would be too wide a claim to attach to it:
+  // dispatch intercepts `--help` only in FLAG position, so a `--help` past the delimiter
+  // (`tn player note Randy -- --help`, a recorded note) or consumed as a declared value flag's
+  // value (`tn player pull X --from --help`) reaches the parser as ordinary data, by design.
+  // Narrowed after the independent Codex review (round 3) flagged the original title as claiming
+  // more than the assertion enforces — the same overclaim this PR already corrected once.
+  it("no registered command declares a flag named `help`", () => {
     for (const c of COMMANDS) {
       const declared = [...(c.booleanFlags ?? []), ...(c.valueFlags ?? [])];
       expect(declared, `tn ${c.noun} ${c.verb} declares a flag named \`help\`, which dispatch intercepts`).not.toContain(
