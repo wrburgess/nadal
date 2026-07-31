@@ -263,31 +263,32 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
     expect(printed, "no db migrate summary line was emitted").toBeDefined();
     const fields = parseSummaryFields(printed as string);
     expect(fields.status).toBe("error");
-    // The two things the reader must be able to act on: the database that actually failed, and the
-    // runbook that carries the recovery.
-    expect(fields.message).toContain(dbFile);
-    expect(fields.message).toContain("docs/runbooks/db-migration-recovery.md");
-    // A multi-TOKEN contiguous run, restoring a property the old
-    // `mv -i -- '<src>' '<bak>' && tn db migrate` assertion had for free. The two assertions above
-    // are single tokens, and a token survives any amount of reflowing, so on their own they would
-    // not notice the actionable guidance being truncated or broken up mid-word.
+    // EXACT EQUALITY on the rendered field — the whole message, after `sanitizeValue` and
+    // `quoteSummaryValue` and back out through `parseSummaryFields`. This is the strongest form the
+    // seam can be guarded in: it catches the payload being truncated, reordered, re-escaped, or
+    // having anything appended to it, rather than asserting that a few chosen substrings are still
+    // findable somewhere in it. The expected text is authored here, independently of
+    // `src/db/client.ts`, so it compares the seam's output against a hand-written expectation.
     //
-    // What this does NOT prove is that the message is single-line — checked by mutation rather than
-    // assumed, because the obvious reading is wrong and would have gone into this comment unexamined.
-    // `sanitizeValue` maps a newline to a SPACE, so a multi-line message whose breaks fall at word
-    // boundaries renders byte-identically here; NO assertion on this side can see it. Inserting
-    // newlines at word boundaries reddens the raw-message control-character assertion in
-    // test/db-teams-url-unique-upgrade.test.ts and nothing in this file — that one is the guard for
-    // single-line-ness, and this one is the guard for the payload still being here and intact. The
-    // old command assertion had the identical blind spot; naming it is the change, not acquiring it.
+    // Coupling to the exact prose is deliberate, and is what the assertion this replaces already
+    // did with the exact `mv -i -- '<src>' '<bak>' && tn db migrate` text. The seam is a string
+    // contract; guarding it means pinning the string.
     //
-    // Coupling to the exact prose is deliberate: the seam is a string contract, and the assertion
-    // this replaces was coupled to the exact command text for the same reason.
-    expect(fields.message).toContain(
-      "Recovery moves this database aside rather than deleting it, but read the runbook FIRST:",
+    // One thing this does NOT prove, checked by mutation rather than assumed: that the RAW message
+    // is single-line. `sanitizeValue` maps a newline to a space, so a multi-line message whose
+    // breaks fall at word boundaries renders byte-identically here and passes even exact equality.
+    // No assertion on this side of the seam can see that; the guard for it is the raw-message
+    // control-character assertion in test/db-teams-url-unique-upgrade.test.ts, which is what
+    // reddens when newlines are injected at word boundaries. The old command assertion had the
+    // identical blind spot — naming it is the change, not acquiring it.
+    expect(fields.message).toBe(
+      "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+        `(${dbFile}) has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
+        "0009's unique index cannot apply. Recovery moves this database aside rather than " +
+        "deleting it, but read the runbook FIRST: captain notes and availability exist ONLY " +
+        "in this file and must be exported from it before you re-pull. " +
+        "docs/runbooks/db-migration-recovery.md",
     );
-    // And no command comes back through this surface (#56).
-    expect(fields.message).not.toMatch(/\bmv\b/);
 
     errorSpy.mockRestore();
   });

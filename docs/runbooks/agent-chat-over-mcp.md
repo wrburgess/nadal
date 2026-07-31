@@ -117,11 +117,28 @@ while it still carried the pre-merge `0004_free_warstar` migration. `main` later
 `0004`, so this branch's home-team migration renumbered to `0005`; a database that recorded the old
 `0004` will try to apply `0005` on top of a column it already has.
 
-**Recovery is one line, and losing the database costs nothing by design:**
+**Recovery is one line, and losing the database costs nothing by design.** This error is rethrown
+unchanged, so it does **not** name the failing database — it is `TN_DB_PATH` if you set it,
+`data/nadal.db` otherwise. Resolve that to an absolute path yourself and substitute it here:
 
 ```sh
-rm data/nadal.db && tn db migrate
+mv -i -- '/abs/path/to/your.db' '/abs/path/to/your.db.pre-0005.bak' && tn db migrate
 ```
+
+Two things this line used to get wrong, both fixed under #56 after the Codex adversarial review found
+the same class one runbook over:
+
+- It said `rm`, which is **destructive** for no benefit — `tn db migrate` only needs the file gone,
+  and the backup is what makes the export procedure in
+  [db-migration-recovery.md](db-migration-recovery.md) → *General note on data at risk* possible
+  *after* you have a working database again rather than only before.
+- It hardcoded `data/nadal.db`, so following it literally while `TN_DB_PATH` pointed elsewhere would
+  have **deleted an unrelated database** and left the failing one untouched. That is the wrong-file
+  class rated critical in issue #46, Codex round 1.
+
+`-i` refuses a silent overwrite, `--` ends option parsing, quoting survives a path with a space, and
+a backup name that is not already taken keeps a *second* recovery from destroying the first backup.
+See [db-migration-recovery.md](db-migration-recovery.md) for why each of those is there.
 
 Then re-pull. The database is a *cache* over `raw/`, not a system of record — spec § Ingestion makes
 every fetch an idempotent upsert and archives every page, precisely so it can be rebuilt at any time.

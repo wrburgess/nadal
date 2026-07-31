@@ -99,11 +99,25 @@ which sits *between* #49's `0006` (`1785511384473`) and its `0007` (`17855158279
 
 So you end up with the roster-retirement columns missing *and* a failed migration.
 
-**Recovery is the same one line, and losing the database costs nothing by design:**
+**Recovery is the same one line, and losing the database costs nothing by design** — but read the
+next paragraph before running it, because this failure gives you less to work with than the one
+above.
+
+This error is **rethrown unchanged**: it does not match `runMigrations`' duplicate-URL predicate, so
+it never passes through the message that names the database. Unlike the case above, **the error does
+not tell you which file failed.** It is `TN_DB_PATH` if you set it, `data/nadal.db` otherwise —
+resolve that to an absolute path yourself, and apply every safeguard from the first section (`-i`,
+`--`, both paths quoted, a backup name that is not already taken):
 
 ```sh
-mv -i -- 'data/nadal.db' 'data/nadal.db.pre-0009.bak' && tn db migrate
+mv -i -- '/abs/path/to/your.db' '/abs/path/to/your.db.pre-0009.bak' && tn db migrate
 ```
+
+**Do not run that line with a literal `data/nadal.db` in it while `TN_DB_PATH` is set.** You would
+move an unrelated database aside while the one that actually failed stays broken — the same
+wrong-file class as the `rm data/nadal.db` this runbook's first draft shipped (issue #46, Codex
+round 1, rated critical). This section carried a hardcoded `data/nadal.db` until the Codex
+adversarial review of #56 found it here, one layer down from where that finding was fixed.
 
 Then re-pull. Read *General note on data at risk* below **first** if you had recorded captain notes
 or availability on that branch.
@@ -121,8 +135,10 @@ at the time of writing.
 Covered in [agent-chat-over-mcp.md](agent-chat-over-mcp.md), in its own "If `tn db migrate` fails
 with..." section — only reachable on a database migrated on a specific pre-merge branch (#17 PR A),
 and closed permanently for every database created after that merge. That section predates this one
-and still writes the recovery as `rm`; prefer the `mv` form above for it too — the end state is
-identical (`tn db migrate` only needs the file gone) and the backup costs nothing.
+and used to write the recovery as a hardcoded `rm data/nadal.db`; #56 brought it onto the same
+non-destructive, path-substituted `mv` form used here, for the same two reasons — the end state is
+identical (`tn db migrate` only needs the file gone), and a hardcoded path names the wrong database
+the moment `TN_DB_PATH` is set.
 
 ## General note on data at risk
 

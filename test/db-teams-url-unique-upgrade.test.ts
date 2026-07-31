@@ -14,6 +14,35 @@ function freshDbPath(): string {
 }
 
 /**
+ * The WHOLE message `runMigrations` must throw for a duplicate-URL failure, authored here
+ * independently of `src/db/client.ts` rather than imported from it — importing the builder would
+ * make the assertion compare the code to itself.
+ *
+ * `where` is how the database is named: `(<abs path>)` when the path can be shown literally, or
+ * `at <escaped> (path escaped — …)` when it cannot.
+ *
+ * Asserting **exact equality** rather than a list of forbidden substrings is the #56 invariant's
+ * only sound form, and it took two adversarial rounds to accept that. A blacklist establishes that
+ * specific things are absent; the property actually needed is that the message contains **no
+ * executable instruction at all**, which is a statement about everything NOT on the list. Two
+ * counterexamples proved the gap rather than argued it — `cp -n <src> <src>.backup` slipped a
+ * named-verb list, and then `node -e "…renameSync…" <src>` slipped the same list *plus* a
+ * structural "the path occurs exactly once" check, since it names the database only once (Codex
+ * adversarial review of #56, rated high). Equality inverts the quantifier: nothing can be added to
+ * this message without reddening, so the next escape nobody has thought of is caught too.
+ */
+function expectedDuplicateUrlMessage(where: string): string {
+  return (
+    "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+    `${where} has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
+    "0009's unique index cannot apply. Recovery moves this database aside rather than " +
+    "deleting it, but read the runbook FIRST: captain notes and availability exist ONLY " +
+    "in this file and must be exported from it before you re-pull. " +
+    "docs/runbooks/db-migration-recovery.md"
+  );
+}
+
+/**
  * Issue #46, Task 5: a pre-existing database holding a duplicate `tennisrecord_url` pair (the
  * exact damage #46 fixes) makes migration 0009's `CREATE UNIQUE INDEX` fail. This models "a real
  * database that was created and used before this PR's partial-unique-index migration existed" the
@@ -95,33 +124,22 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     }
     const message = (caught as Error).message;
 
+    // No executable recovery — the #56 invariant, and the one a future author is most likely to
+    // erode. Held by EXACT EQUALITY against an independently-authored expected message, which is
+    // the only form that can carry the claim in this test's title: see
+    // `expectedDuplicateUrlMessage`'s doc for the two counterexamples that killed the blacklist
+    // this replaced. Nothing can be added to the message without reddening this line.
+    expect(message).toBe(expectedDuplicateUrlMessage(`(${dbPath})`));
+
+    // Everything below is IMPLIED by that equality and cannot independently fail today. They are
+    // kept deliberately, and the reason is the one case equality does not cover: a future author
+    // legitimately rewording the prose updates the expected string, and equality then re-passes on
+    // whatever they wrote. These three survive that edit, so they are what still holds the round-1
+    // finding (name the database that ACTUALLY failed, never the default) and the merge-born
+    // single-line requirement after the string has moved on. Stated rather than left to be
+    // rediscovered as redundancy.
     expect(message).toContain(dbPath);
     expect(message).not.toContain("data/nadal.db");
-    // No executable recovery — the #56 invariant, and the one a future author is most likely to
-    // erode. Held two ways, because a verb list alone is only ever as good as the verbs somebody
-    // thought of: an adversarial pass on the first draft of this block confirmed that a
-    // `cp -n <src> <src>.backup` recovery satisfied EVERY named-verb assertion below.
-    //
-    // (1) The verbs and shell syntax that actually showed up across PR #52's eleven rounds:
-    expect(message).not.toMatch(/\brm\b/);
-    expect(message).not.toMatch(/\bmv\b/);
-    expect(message).not.toContain("&&");
-    expect(message).not.toContain(".bak");
-    // Shell quoting is the tell that a path is being interpolated into a command. Asserted against
-    // THIS path's quoted form rather than against any apostrophe, because the prose legitimately
-    // contains one ("migration 0009's unique index").
-    expect(message).not.toContain(`'${dbPath}'`);
-    // (2) Structural, and this is the one that kills the CLASS rather than a list: every
-    // move-or-copy recovery names the database TWICE — a source and a destination — so pinning the
-    // path to exactly ONE occurrence rejects `cp`, `rsync`, `install`, and whatever else is not on
-    // the list above. It is also the assertion that stays true as the prose is reworded.
-    expect(message.split(dbPath).length - 1).toBe(1);
-    // What this does NOT hold, stated rather than implied: a single-argument command naming some
-    // OTHER path (`rmdir /somewhere/else`). Nothing here can see that, and `rules/testing.md`
-    // forbids a comment claiming coverage the assertions do not enforce — the input class these
-    // hold for is "a recovery that acts on the database this message names".
-    // The runbook is where the command lives now, so the message has to point at it — otherwise
-    // dropping the command leaves the reader with a diagnosis and no recovery.
     expect(message).toContain("docs/runbooks/db-migration-recovery.md");
     // MERGE-BORN regression, caught integrating #44/PR #51. `tn db migrate` renders this message
     // through `emitSummary`'s one-line `key=value` summary, and `sanitizeValue` turns every control
@@ -242,14 +260,23 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     }
     const message = (caught as Error).message;
 
-    // No executable command is offered, so nothing can name the wrong file.
+    // The ESCAPED branch gets the same exact-equality treatment as the literal one, and for the
+    // same reason: a blacklist cannot establish that no executable instruction is present. The
+    // expected escape is authored here (`\n` -> `\u{A}`) rather than by calling `losslessPath`, so
+    // this compares the code to a hand-written expectation instead of to itself.
+    const escaped = dbPath.replace(String.fromCharCode(10), "\\u{A}");
+    expect(message).toBe(
+      expectedDuplicateUrlMessage(
+        `at ${escaped} (path escaped — it contains characters that cannot be shown literally)`,
+      ),
+    );
+
+    // Implied by the equality above, kept for the same reason as in the literal-branch test: these
+    // are what still holds if the prose is reworded and the expected string moves with it.
     expect(message).not.toMatch(/\bmv\b/);
     // The message never names the space-normalized sibling — the whole point of this branch.
     expect(message).not.toContain(sibling);
-    // The real path is still communicated, losslessly and without control characters. Escaped by
-    // `losslessPath`, NOT `JSON.stringify` — round 6 showed the latter leaves DEL/C1/Cf and
-    // U+2028-9 literal for `sanitizeValue` to eat downstream.
-    expect(message).toContain(dbPath.replace(String.fromCharCode(10), '\\u{A}'));
+    expect(message).toContain(escaped);
     expect(sanitizeValue(message)).toBe(message);
     expect(message).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
     // The runbook link survives this branch too — a reader whose path cannot be shown literally
