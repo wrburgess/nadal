@@ -216,6 +216,32 @@ describe("scorecardPayloadSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  // Codex adversarial review (PR #54 round 7, rated Medium): `slot` was accepted as any non-empty
+  // string and compared by raw equality downstream (the duplicate-slot count, the id-less court
+  // upsert's write key), so `"D1"` and `"D1 "` were two DIFFERENT courts as far as either consumer
+  // could tell — evading the duplicate-slot refusal within one payload, and creating a SECOND court
+  // row on a re-ingest correction that used the whitespace-padded spelling instead of replacing the
+  // first. Fixed by canonicalizing ONCE, here, so every downstream consumer sees the identical
+  // trimmed string — the same "one ladder, one notion of a name" shape `nameKey` already closed for
+  // team/player names and `normalizeTimeKey`/`normalizeSiteKey` closed for the parent-match
+  // discriminators, arriving now through a payload field neither of those covers.
+  it("REGRESSION (Codex round 7, rated Medium): a slot with leading/trailing whitespace is trimmed to its canonical form", () => {
+    const payload = fourCourtPayload();
+    payload.courts[0] = { ...payload.courts[0]!, slot: " D1 " };
+    // Give it a distinct slot from the other courts so this parses on its own merits.
+    payload.courts[1] = { ...payload.courts[1]!, slot: "D5" };
+    const result = scorecardPayloadSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.courts[0]?.slot).toBe("D1");
+  });
+
+  it("REGRESSION (Codex round 7): a slot that is whitespace-only fails — trimming it leaves nothing", () => {
+    const payload = fourCourtPayload();
+    payload.courts[0] = { ...payload.courts[0]!, slot: "   " };
+    const result = scorecardPayloadSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
   it("a bare name and a prefix-ID player entry both parse — resolution happens downstream, not here", () => {
     const payload = fourCourtPayload();
     payload.courts[0] = { ...payload.courts[0]!, homePlayers: ["usta:12345"] };

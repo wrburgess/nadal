@@ -21,7 +21,17 @@ function expectedPlayerCount(discipline: "singles" | "doubles"): number {
 
 const scorecardCourtSchema = z
   .object({
-    slot: z.string().min(1),
+    // `.trim()` BEFORE `.min(1)` (Codex adversarial review, PR #54 round 7, rated Medium): `slot`
+    // is a write key — the duplicate-slot count in `src/ingest/match-add.ts` and the id-less court
+    // upsert's dedup both compare it by raw equality — so accepting it as any non-empty string let
+    // `"D1"` and `"D1 "` count as two DIFFERENT courts, evading the duplicate-slot refusal within
+    // one payload and creating a second row on a re-ingest correction that changed only whitespace.
+    // Canonicalized ONCE, here, rather than at each consumer, so every downstream reader sees the
+    // identical trimmed value — the same "one ladder, one notion of a name" shape `nameKey` and
+    // `normalizeTimeKey`/`normalizeSiteKey` already close for names and parent-match discriminators.
+    // Trimming runs before the length check, so a whitespace-only slot (nothing left after trimming)
+    // still fails validation rather than silently becoming a court with no real label.
+    slot: z.string().trim().min(1),
     discipline: z.enum(["singles", "doubles"]),
     homePlayers: z.array(z.string().min(1)),
     visitingPlayers: z.array(z.string().min(1)),

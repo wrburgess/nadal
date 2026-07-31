@@ -23,11 +23,17 @@ import {
   archiveScorecardImage,
   describeMatchAddRefusal,
 } from "../src/ingest/match-add.js";
+import { scorecardPayloadSchema } from "../src/ingest/scorecard.js";
 import type { ScorecardPayload } from "../src/ingest/scorecard.js";
+import { pullTeam } from "../src/ingest/team-pull.js";
 import { upsertTeamMatch } from "../src/ingest/upsert.js";
+import { loadFixture } from "./helpers/fixtures.js";
+import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
 import { useTnScorecardPhotosPath } from "./helpers/tn-scorecard-photos.js";
+
+const tennisrecordTeamFixture = loadFixture("tennisrecord/team");
 
 const FIXTURE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "scorecard");
 
@@ -1046,6 +1052,85 @@ describe("addMatchFromScorecard", () => {
         sqlite.close();
       }
     });
+
+    // Codex adversarial review (PR #54 round 7, rated Medium): `slot` was counted by raw string
+    // equality here, so `"D1"` and `"D1 "` were two DIFFERENT keys in the duplicate-slot count —
+    // evading this exact guard by a whitespace difference the schema now canonicalizes away
+    // (src/ingest/scorecard.ts's `slot: z.string().trim().min(1)`). Payloads below are built through
+    // `scorecardPayloadSchema.parse` rather than hand-typed as `ScorecardPayload` directly, so these
+    // tests exercise the SAME pipeline the CLI/MCP presenters actually run — the fix lives in the
+    // schema, not this service, and a test that skipped parsing would not exercise it at all.
+    it("REGRESSION (Codex round 7, rated Medium): 'D1' and 'D1 ' in ONE payload refuse as a duplicate slot, not two different courts", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const parsed = scorecardPayloadSchema.parse({
+          playedOn: "2026-08-28",
+          homeTeam: home.name,
+          visitingTeam: visiting.name,
+          courts: [
+            {
+              slot: "D1",
+              discipline: "doubles",
+              homePlayers: ["Bo Bramwell", "Cy Calder"],
+              visitingPlayers: ["Opp Two", "Opp Three"],
+            },
+            {
+              slot: "D1 ",
+              discipline: "doubles",
+              homePlayers: ["Bo Bramwell", "Cy Calder"],
+              visitingPlayers: ["Opp Two", "Opp Three"],
+            },
+          ],
+        });
+
+        const result = addMatchFromScorecard(db, parsed);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.kind).toBe("duplicate-slots");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (Codex round 7): a re-ingest correction spelled 'D1 ' updates the SAME court row 'D1' created, not a second one", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const courtBase = {
+          discipline: "doubles" as const,
+          homePlayers: ["Bo Bramwell", "Cy Calder"],
+          visitingPlayers: ["Opp Two", "Opp Three"],
+        };
+
+        const first = addMatchFromScorecard(
+          db,
+          scorecardPayloadSchema.parse({
+            playedOn: "2026-08-28",
+            homeTeam: home.name,
+            visitingTeam: visiting.name,
+            courts: [{ ...courtBase, slot: "D1" }],
+          }),
+        );
+        expect(first.ok).toBe(true);
+
+        const second = addMatchFromScorecard(
+          db,
+          scorecardPayloadSchema.parse({
+            playedOn: "2026-08-28",
+            homeTeam: home.name,
+            visitingTeam: visiting.name,
+            courts: [{ ...courtBase, slot: "D1 " }],
+          }),
+        );
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+
+        expect(db.select().from(courtMatches).all()).toHaveLength(1); // not a second row
+      } finally {
+        sqlite.close();
+      }
+    });
   });
 
   // Codex adversarial review of PR #54 round 2, High finding A: `upsertCourtMatch`'s id-less
@@ -1570,6 +1655,129 @@ describe("addMatchFromScorecard", () => {
 
         expect(db.select().from(teamMatches).all()).toHaveLength(2);
         expect(db.select().from(courtMatches).all()).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Codex adversarial review of PR #54 round 7, rated HIGH: the candidate query above filtered
+    // `isNull(teamMatches.sourceMatchId)`, so it skipped EVERY row `team-pull` already wrote with a
+    // real `mid=` — reachable in the documented workflow, not a corner case: pull a schedule
+    // containing a completed fixture, then submit a scorecard for that same fixture, and the
+    // existing source-backed row was invisible to this function, which inserted a SECOND,
+    // source-less parent for the identical real-world match. Fixed by dropping the `isNull` filter
+    // from the candidate query entirely — a source-backed row is now just another candidate, subject
+    // to the SAME exact-then-lenient precedence and the SAME ambiguity refusal as before. Preserving
+    // `sourceMatchId` needed no new code: the UPDATE's `.set({...})` never mentions that column (a
+    // scorecard payload has no `mid=` of its own to offer), so it is left exactly as stored on every
+    // update, source-backed or not — the same "nothing to fill in with, so nothing changes" shape
+    // `homeTeamId`/`visitingTeamId`/`homeCourtsWon`/`visitingCourtsWon` already have on this path.
+    it("REGRESSION (Codex round 7, rated High): a scorecard attaches to an existing SOURCE-BACKED row for the same fixture rather than duplicating it", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const sourceBacked = db
+          .insert(teamMatches)
+          .values({
+            eventId: null,
+            homeTeamId: home.id,
+            visitingTeamId: visiting.id,
+            playedOn: "2026-08-28",
+            scheduledTime: "9:00 AM",
+            site: "Court 1",
+            sourceMatchId: "181505",
+            homeCourtsWon: 3,
+            visitingCourtsWon: 2,
+          })
+          .returning()
+          .get();
+
+        const payload: ScorecardPayload = {
+          ...basePayload(home.name, visiting.name),
+          scheduledTime: "9:00 AM",
+          site: "Court 1",
+        };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.teamMatchId).toBe(sourceBacked.id);
+
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1); // not duplicated
+        expect(rows[0]!.sourceMatchId).toBe("181505"); // preserved, never nulled out
+
+        expect(
+          db
+            .select()
+            .from(courtMatches)
+            .all()
+            .filter((c) => c.teamMatchId === sourceBacked.id),
+        ).toHaveLength(2); // S1 + D1 attached to the SAME (source-backed) row
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // The reviewer's own named integration regression: through the REAL `pullTeam` path (a genuine
+    // `mid=` parsed off the tennisrecord fixture, not a hand-seeded row), rather than assuming the
+    // unit-level test above generalizes.
+    it("REGRESSION (Codex round 7, integration): a scorecard for a fixture team-pull already recorded with a mid= attaches to it, not a duplicate", async () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const fetchPage = createStubFetcher({
+          [tennisrecordTeamFixture.source.url]: { body: tennisrecordTeamFixture.html },
+        });
+        const pullResult = await pullTeam({ db, fetchPage, target: tennisrecordTeamFixture.source.url });
+        expect(pullResult.kind).toBe("ok");
+
+        const norbury = db.select().from(teams).all().find((t) => t.name === "Norbury, Nova")!;
+        const granborough = db.select().from(teams).all().find((t) => t.name === "Granborough, Galen")!;
+
+        // Sanity: the pull really did write a source-backed parent for this exact fixture, from the
+        // fixture's own schedule row (04/09/2026, 8:00 PM, Clayview Country Club, mid=181505).
+        const pulled = db
+          .select()
+          .from(teamMatches)
+          .all()
+          .filter((m) => m.playedOn === "2026-04-09" && m.homeTeamId === norbury.id && m.visitingTeamId === granborough.id);
+        expect(pulled).toHaveLength(1);
+        expect(pulled[0]?.sourceMatchId).toBe("181505");
+
+        seedRosterPlayer(db, norbury.id, "Ada Ashby");
+        seedRosterPlayer(db, norbury.id, "Bo Bramwell");
+        seedRosterPlayer(db, granborough.id, "Opp One");
+        seedRosterPlayer(db, granborough.id, "Opp Two");
+
+        const payload: ScorecardPayload = {
+          playedOn: "2026-04-09",
+          homeTeam: "Norbury, Nova",
+          visitingTeam: "Granborough, Galen",
+          scheduledTime: "8:00 PM",
+          site: "Clayview Country Club",
+          courts: [{ slot: "S1", discipline: "singles", homePlayers: ["Ada Ashby"], visitingPlayers: ["Opp One"] }],
+        };
+
+        const result = addMatchFromScorecard(db, payload);
+        expect(result.ok).toBe(true);
+
+        const rows = db
+          .select()
+          .from(teamMatches)
+          .all()
+          .filter((m) => m.playedOn === "2026-04-09" && m.homeTeamId === norbury.id && m.visitingTeamId === granborough.id);
+        expect(rows).toHaveLength(1); // still one row, not a duplicate parent
+        expect(rows[0]?.sourceMatchId).toBe("181505"); // intact
+
+        if (result.ok) {
+          const courts = db
+            .select()
+            .from(courtMatches)
+            .all()
+            .filter((c) => c.teamMatchId === rows[0]!.id);
+          expect(courts).toHaveLength(1);
+          expect(courts[0]?.slot).toBe("S1");
+        }
       } finally {
         sqlite.close();
       }

@@ -2,7 +2,7 @@
 // disk) and the `match_add` MCP tool (the agent's inline extraction) call THIS function — the same
 // service behind two presenters, so the two surfaces cannot drift on what a valid ingest does.
 
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { closeSync } from "node:fs";
 import { extname } from "node:path";
 import { courtMatchPlayers, events, teamMatches, teams } from "../db/schema.js";
@@ -146,12 +146,30 @@ function requireTeam(db: Db, name: string): TeamRow {
  * conflict, never treated as blank. Shares `normalizeTimeKey`/`normalizeSiteKey` with
  * `upsertTeamMatch` rather than a second hand-rolled notion of "the same time"/"the same site" —
  * the exact class of defect #32 already closed once for names ("one ladder, two notions of a
- * name"). Mirrors `upsertTeamMatch`'s own id-less candidate query (unordered team pair + exact
- * `playedOn`, no `sourceMatchId`) and, like it, never rewrites `homeTeamId`/`visitingTeamId`
- * on an update — an existing row's stored orientation is left exactly as first written.
+ * name"). The candidate query is UNORDERED team pair + exact `playedOn` — like `upsertTeamMatch`'s
+ * own id-less query, but (round 7 correction, see below) NOT restricted to id-less rows the way
+ * that one is, since this function's whole job is finding the one true parent for a fixture
+ * REGARDLESS of whether team-pull already gave it a source id. Like `upsertTeamMatch`, this never
+ * rewrites `homeTeamId`/`visitingTeamId` on an update — an existing row's stored orientation is
+ * left exactly as first written.
  * `homeCourtsWon`/`visitingCourtsWon` are likewise left untouched on an update: this service never
  * computes them (always null on insert), so it has nothing honest to write over whatever another
  * writer (e.g. `team-pull`, on a fixture this same photo also happens to match) already recorded.
+ *
+ * The candidate query does NOT filter on `sourceMatchId` (Codex adversarial review, PR #54 round 7,
+ * rated High — corrected from an earlier version that mirrored `upsertTeamMatch`'s own id-less query
+ * here too, which excluded every row `team-pull` had already written with a real `mid=`). That was
+ * reachable in the documented workflow, not a corner case: `team-pull` records a completed schedule
+ * fixture WITH its source id, and a scorecard for that exact fixture (same unordered team pair,
+ * date, and normalized time/site) then found no candidate and inserted a SECOND, source-less parent
+ * — one real fixture split across two `team_matches` rows, corrupting every derived read of either.
+ * A source-backed row is now just another candidate, subject to the identical exact-then-lenient
+ * precedence and the identical ambiguity refusal above — no special-casing needed. Preserving
+ * `sourceMatchId` needed no additional code: the UPDATE below never mentions that column (a
+ * scorecard payload has no `mid=` of its own to offer, unlike `eventId`/`scheduledTime`/`site`,
+ * which the payload CAN supply), so it is left exactly as stored on every update, source-backed or
+ * not — the same "nothing to fill in with, so nothing changes" shape `homeTeamId`/`visitingTeamId`
+ * already have on this path, one paragraph up.
  *
  * ACCEPTED RISK (HC-approved trade — record here, and see `docs/findings.md`): a genuine SECOND
  * same-day fixture between the same two teams whose FIRST ingest omitted a discriminator (say, no
@@ -186,7 +204,6 @@ function upsertLenientTeamMatchForScorecard(
     .from(teamMatches)
     .where(
       and(
-        isNull(teamMatches.sourceMatchId),
         eq(teamMatches.playedOn, values.playedOn),
         or(
           and(eq(teamMatches.homeTeamId, values.homeTeamId), eq(teamMatches.visitingTeamId, values.visitingTeamId)),
