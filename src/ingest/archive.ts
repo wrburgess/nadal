@@ -94,9 +94,11 @@ export function archivePage(input: ArchivePageInput): string {
   // alone. Once both hold, a component swapped in AFTER the open cannot redirect the write: the fd is
   // a handle bound to one inode, not a lookup that gets repeated.
   //
-  // CLOSED (#33): un-redacted capture content can no longer be written outside the validated real
-  // root via a directory-component swap between resolution and the write — the bytes go through a
-  // proven fd, not a re-resolved path string. The proof also SAMPLES the link count, so a fd that has
+  // CLOSED (#33), stated as narrowly as the code actually enforces it: un-redacted capture content
+  // can no longer be REDIRECTED to a different inode outside the validated real root by a
+  // directory-component swap between resolution and the write — the bytes go through an fd, which is
+  // a handle bound to one inode, not a path string that gets re-resolved. This is a claim about
+  // redirection, NOT a claim that the bytes are reachable only from inside the root (see REMAINING). The proof also SAMPLES the link count, so a fd that has
   // already acquired a second name outside the root by verification time (a hard link) is refused too,
   // not just a redirected path (Codex adversarial review, PR #48).
   // REMAINING, same review round 2: that link-count check is a point-in-time sample, so a hard link

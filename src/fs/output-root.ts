@@ -353,8 +353,9 @@ function closeQuietly(fd: number): void {
 }
 
 /**
- * Removes `path` ONLY if it still names the exact inode `ours` describes — the file the caller just
- * created and is now abandoning.
+ * Removes `path` only when a check immediately beforehand saw it naming the exact inode `ours`
+ * describes — the file the caller just created and is now abandoning. "Immediately beforehand" is the
+ * whole of the guarantee; see SCOPE below.
  *
  * A bare `unlinkSync(path)` here was a data-loss hole (Codex adversarial review, PR #48, [critical]).
  * `unlink` resolves directory components like every other path call, so when verification failed
@@ -364,18 +365,19 @@ function closeQuietly(fd: number): void {
  * while refusing to write one there is not a smaller version of the same control; it is a different,
  * worse bug.
  *
- * Comparing `{dev, ino}` first makes the deletion self-limiting: if the entry is ours we remove it,
- * and if the path now names anything else — an attacker's file, a replacement, a directory — we leave
- * it completely alone and let the original error propagate. The worst case is a stray empty file we
- * created inside a directory the attacker already controls, which is strictly better than deleting
- * someone else's data.
+ * Comparing `{dev, ino}` first makes the deletion self-limiting: where the check sees anything other
+ * than our own inode — an attacker's file, a replacement, a directory — the path is left alone and the
+ * original error propagates. The common case that used to destroy data (a symlink swap already in
+ * place when cleanup runs) is now skipped rather than followed, and the cost of skipping is a stray
+ * empty file inside a directory the attacker already controls.
  *
  * SCOPE (Codex adversarial review, PR #48 round 2): the `lstat`-then-`unlink` pair is itself two path
  * operations, so an actor who swaps the leaf in the interval BETWEEN them can still have the
  * replacement deleted. This narrows the window rather than closing it — `unlinkat` on a trusted
  * directory handle is not reachable from pure Node — and the failure direction is the safe one:
  * anything that is not a confirmed inode match is skipped, so the guard errs toward leaving files
- * alone. Stated here rather than left to read as a closure.
+ * alone. So this is a large reduction in blast radius, NOT a guarantee that cleanup never deletes a
+ * file it does not own — do not read the first line as promising that.
  */
 function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): void {
   try {
@@ -418,8 +420,12 @@ function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): vo
  *
  * Run TOGETHER, immediately after the open, they establish something neither can alone: no directory
  * component is a symlink NOW, and the fd IS what the path names NOW. A swap that happens AFTER this
- * point cannot redirect the fd — it is a handle, not a lookup — so the bytes this function's caller
- * writes through it are proven to land inside the validated real root.
+ * point cannot REDIRECT the fd — it is a handle, not a lookup — so the bytes this function's caller
+ * writes through it cannot be REDIRECTED to a different inode outside the validated real root.
+ *
+ * That is deliberately narrower than "the bytes land only inside the root", and the difference is not
+ * pedantry: a hard link created after the `nlink` sample below gives the SAME inode a second name,
+ * which may be outside the root. Redirection is closed; exclusivity is sampled, not held.
  *
  * On ANY verification failure the newly-opened fd is closed and the (very likely empty, since the
  * caller has not written anything through it yet) file it created is best-effort unlinked, so a
