@@ -48,6 +48,43 @@ entirely, the same reasoning behind `upsertTeam`'s own `AmbiguousIdentityError` 
 case (issue #46). Rebuilding from `raw/` is the honest alternative to carrying
 merge-reconciliation logic in production for a database that is disposable by design.
 
+## If `tn db migrate` fails with "index `teams_tennisrecord_url_unique` already exists"
+
+Only reachable on a database you migrated **on the `fix/46-team-url-unique-identity` branch before
+it was merged** — i.e. while #46's migration was still numbered `0006`. `main` then landed #49's
+own `0006`/`0007`/`0008`, so #46's renumbered to `0009`, and drizzle's migrator decides what to
+apply by a **timestamp watermark**, not per-migration hashes (`sqlite-core/dialect.js`: apply only
+`if (Number(lastDbMigration.created_at) < migration.folderMillis)`).
+
+That watermark is what breaks: a database carrying the old `0006` recorded `when = 1785511662427`,
+which sits *between* #49's `0006` (`1785511384473`) and its `0007` (`1785515827922`). So on the next
+`tn db migrate`:
+
+| Migration | Outcome |
+|---|---|
+| #49 `0006_married_bug` | **skipped** — its timestamp is below the watermark |
+| #49 `0007_big_blob`, `0008_lame_shaman` | applied |
+| #46 `0009_premium_bruce_banner` | **fails** — the index already exists from the old `0006` |
+
+So you end up with the roster-retirement columns missing *and* a failed migration.
+
+**Recovery is the same one line, and losing the database costs nothing by design:**
+
+```sh
+mv -i -- 'data/nadal.db' 'data/nadal.db.pre-0009.bak' && tn db migrate
+```
+
+Then re-pull. Read *General note on data at risk* below **first** if you had recorded captain notes
+or availability on that branch.
+
+**This cannot happen to a database created after #46 merges**, which applies `0000`..`0009` in order
+against a single consistent journal. No permanent repair path is shipped for it, deliberately and on
+precedent: the same call was made for the `is_home` window below (#17 PR A), for the same reason —
+carrying migration-reconciliation machinery in production forever to serve a window that closes at
+merge, on a database the spec makes a disposable cache over `raw/`, costs more than it protects. The
+reachability was checked rather than assumed before making that call: no `.db` file existed anywhere
+at the time of writing.
+
 ## If `tn db migrate` fails with "duplicate column name: is_home"
 
 Covered in [agent-chat-over-mcp.md](agent-chat-over-mcp.md), in its own "If `tn db migrate` fails
