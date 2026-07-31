@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1766,6 +1766,28 @@ describe("archiveScorecardImage / addMatchFromScorecardWithArchive (Codex round 
     const oversizedPath = writeIntakeFile("huge.png", oversized);
 
     expect(() => archiveScorecardImage(oversizedPath)).toThrow();
+    expect(rawScorecardEntries()).toHaveLength(0);
+  });
+
+  // Codex round 6, rated CRITICAL: a pathname check (containment, symlink-component walk, magic-byte
+  // sniff) proves nothing about a HARDLINK — `lstat` on a hardlinked path reports an ordinary regular
+  // file, indistinguishable from the genuine article, because a hardlink IS the same inode under a
+  // second name. The only thing that can catch it is the link count on the OPENED file descriptor.
+  it("REGRESSION (Codex round 6, rated Critical): a hardlink inside the root to an outside file is refused", () => {
+    const outsidePath = writeOutsideRootFile("real.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+    const linkPath = join(photosPath.path(), "hardlink.png");
+    linkSync(outsidePath, linkPath);
+
+    expect(() => archiveScorecardImage(linkPath)).toThrow();
+    expect(rawScorecardEntries()).toHaveLength(0);
+  });
+
+  it("REGRESSION (Codex round 6): a file with nlink > 1 is refused generally, even when BOTH names sit inside the root — the check is unconditional on link count, not on where the other name happens to be", () => {
+    const firstName = writeIntakeFile("original.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+    const secondName = join(photosPath.path(), "also-original.png");
+    linkSync(firstName, secondName);
+
+    expect(() => archiveScorecardImage(secondName)).toThrow();
     expect(rawScorecardEntries()).toHaveLength(0);
   });
 

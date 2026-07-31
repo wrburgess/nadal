@@ -3,10 +3,10 @@
 // service behind two presenters, so the two surfaces cannot drift on what a valid ingest does.
 
 import { and, eq, isNull, or } from "drizzle-orm";
-import { readFileSync, statSync } from "node:fs";
+import { closeSync } from "node:fs";
 import { extname } from "node:path";
 import { courtMatchPlayers, events, teamMatches, teams } from "../db/schema.js";
-import { assertInputPathSafe } from "../fs/output-root.js";
+import { openInputFileSafely, readBoundedFromFd } from "../fs/output-root.js";
 import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
 import { findTeamByName, resolveRosterPlayer } from "./identity.js";
@@ -606,8 +606,8 @@ function looksLikeSupportedImage(body: Buffer): boolean {
   return false;
 }
 
-/** Every reason `archiveScorecardImage` refuses a `sourceImage` — a bad path (see
- * `assertInputPathSafe`), an oversized file, an extension outside the allow-list, or content that
+/** Every reason `archiveScorecardImage` refuses a `sourceImage` — a bad or unverifiable path (see
+ * `openInputFileSafely`), an oversized file, an extension outside the allow-list, or content that
  * does not sniff as a supported image regardless of what the extension claims. */
 export class ScorecardImageValidationError extends Error {}
 
@@ -618,38 +618,44 @@ export class ScorecardImageValidationError extends Error {}
  * called identically by both).
  *
  * `sourceImagePath` is caller-supplied — over MCP, an agent's own claim about where it saved a
- * photo — and, before this fix, was `readFileSync`'d with NO validation at all: a syntactically
- * valid payload naming `/Users/x/.ssh/id_rsa` or `/etc/hosts` was read and persisted into
- * `raw/scorecard/` regardless of what the rest of the payload said (Codex adversarial review, rated
- * CRITICAL — raised from the reviewer's own High under PROJECT.md's Review Severity Framework,
- * "security hole" ⇒ Critical). Four checks now run, in order, before a single byte of CONTENT is
- * read: containment (`assertInputPathSafe` — the same real-path/symlink-safe primitive
- * `assertOutputPathSafe` uses on the write side, generalized rather than re-hand-rolled), size (via
- * `statSync`, BEFORE reading — an oversized file is refused without ever being loaded into memory),
- * extension (an allow-list — cheap, and never trusted alone), and content (a magic-byte sniff of
- * the bytes actually on disk, independent of what the extension claims). Returns the archived path.
+ * photo. Originally (Codex round 5, rated CRITICAL under PROJECT.md's Review Severity Framework)
+ * this was `readFileSync`'d with NO validation at all: a syntactically valid payload naming
+ * `/Users/x/.ssh/id_rsa` or `/etc/hosts` was read and persisted into `raw/scorecard/` regardless of
+ * what the rest of the payload said. Round 5 added a containment check, a size cap, an extension
+ * allow-list, and a magic-byte sniff — all still PATHNAME-based, and round 6 (also rated Critical)
+ * showed that was not enough: a hardlink inside the configured root to an outside file passes every
+ * pathname check (`lstat` cannot distinguish a hardlink from the genuine article — it IS the same
+ * inode under a second name), and nothing stopped a swap between the check and a later
+ * `readFileSync`/`statSync` reopening the same string. Every check now runs against the OPEN
+ * DESCRIPTOR `openInputFileSafely` returns (containment, symlink-safety, and — the round-6 close —
+ * `nlink === 1`, so a hardlinked source is refused unconditionally, not just one pointing somewhere
+ * this process can prove is outside the root), and the size cap is enforced while READING that same
+ * descriptor (`readBoundedFromFd`), never from a `statSync` that could describe a file already
+ * swapped out from under it. Returns the archived path.
  *
  * Ordering note: this function does not know whether the surrounding ingest will succeed — that is
  * `addMatchFromScorecardWithArchive`'s job (below), which is what both presenters actually call now.
  */
 export function archiveScorecardImage(sourceImagePath: string): string {
-  const resolvedPath = assertInputPathSafe(sourceImagePath, scorecardPhotosRoot());
-
-  const size = statSync(resolvedPath).size;
-  if (size > MAX_SCORECARD_IMAGE_BYTES) {
+  const { fd, realPath } = openInputFileSafely(scorecardPhotosRoot(), sourceImagePath);
+  let body: Buffer;
+  try {
+    body = readBoundedFromFd(fd, MAX_SCORECARD_IMAGE_BYTES);
+  } catch (err) {
     throw new ScorecardImageValidationError(
-      `refusing to archive "${sourceImagePath}": ${size} bytes exceeds the ${MAX_SCORECARD_IMAGE_BYTES}-byte limit`,
+      `refusing to archive "${sourceImagePath}": ${err instanceof Error ? err.message : String(err)}`,
     );
+  } finally {
+    closeSync(fd);
   }
 
-  const extension = extname(resolvedPath);
+  const extension = extname(realPath);
   if (!ALLOWED_SCORECARD_IMAGE_EXTENSIONS.has(extension.toLowerCase())) {
     throw new ScorecardImageValidationError(
       `refusing to archive "${sourceImagePath}": "${extension || "(no extension)"}" is not a supported scorecard image type`,
     );
   }
 
-  const body = readFileSync(resolvedPath);
   if (!looksLikeSupportedImage(body)) {
     throw new ScorecardImageValidationError(
       `refusing to archive "${sourceImagePath}": its content does not match a supported image format (the extension alone is not trusted)`,
