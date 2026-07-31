@@ -146,8 +146,11 @@ describe("getLineupPlan", () => {
       const plan = getLineupPlan(db, teamId);
 
       expect(plan.ratingSource).toBe("ntrp");
-      // Ada has no rating at all, so only Bo and Cy are ranked — Cy (4.0) ahead of Bo (3.2).
       expect(plan.unranked.map((p) => p.canonicalName)).toEqual(["Ada Ashby"]);
+      // THE assertion: Cy (4.0, current) must outrank Bo (3.2, current). Reading Bo's stale
+      // January 4.5 instead inverts this — and asserting only `unranked` above would not notice,
+      // since both players are rated either way.
+      expect(plan.ranked.map((p) => p.canonicalName)).toEqual(["Cy Calder", "Bo Bramwell"]);
     } finally {
       sqlite.close();
     }

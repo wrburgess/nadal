@@ -508,6 +508,30 @@ describe("predictedLineup — sad paths and awkward data", () => {
     ]);
   });
 
+  // A slot carrying BOTH singles and doubles rows is not something a clean source produces, but the
+  // slot vocabulary is open and this codebase's standing rule is to carry unknown data through
+  // rather than drop it. The hazard is placing two players on a slot the data calls singles.
+  it("never puts a pair on a slot whose observed discipline is singles", () => {
+    const rows = [
+      ...singles("S1", 1, 4),
+      // S1 also carries two doubles rows — a minority, so the slot still reads "singles".
+      row("S1", "doubles", [2, 3], opponents(2)),
+      row("S1", "doubles", [2, 3], opponents(2)),
+      ...doubles("D1", [4, 5], 3),
+    ];
+
+    const result = predictedLineup({ rows, rosterPlayerIds: [1, 2, 3, 4, 5], ratings: ratingsFor({}) });
+
+    const s1 = result.slots.find((s) => s.slot === "S1")!;
+    expect(s1.discipline).toBe("singles");
+    expect(s1.playerIds, "a singles court holds exactly one player").toHaveLength(1);
+    // 2 and 3 are a real pair with nowhere singles to go, so they cascade or fall to leftovers —
+    // either way nobody is duplicated and nobody vanishes.
+    const placed = result.slots.flatMap((s) => s.playerIds);
+    expect(new Set(placed).size).toBe(placed.length);
+    expect([...placed, ...result.unplaced.map((u) => u.playerId)].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+  });
+
   it("counts a doubles court once per pair, not once per participant row", () => {
     const rows = [...singles("S1", 1, 2), ...doubles("D1", [2, 3], 3)];
     const result = predictedLineup({ rows, rosterPlayerIds: [1, 2, 3], ratings: ratingsFor({}) });

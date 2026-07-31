@@ -104,6 +104,13 @@ export function buildLineupPlan(overrides: Partial<LineupPlan> = {}): LineupPlan
     ],
     unplaced: [{ playerId: 6, canonicalName: "Ira Inglewood", courtMatches: 1 }],
     ratingSource: "ntrp",
+    ranked: [
+      { playerId: 1, canonicalName: "Ada Ashby" },
+      { playerId: 2, canonicalName: "Bo Bramwell" },
+      { playerId: 3, canonicalName: "Cy Calder" },
+      { playerId: 4, canonicalName: "Del Duxbury" },
+      { playerId: 5, canonicalName: "Emory Ellerby" },
+    ],
     unranked: [{ playerId: 6, canonicalName: "Ira Inglewood" }],
     slotSource: "observed",
     observedCourtMatches: 12,

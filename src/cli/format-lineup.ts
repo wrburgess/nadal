@@ -15,12 +15,16 @@ import type { LineupPlan, LineupPlanSlot } from "../query/lineup.js";
 /** `basis` and `confidence` answer different questions, so both are printed: "low" from two shared
  * matches and "low" from no shared matches at all are not the same claim. */
 function slotEvidence(slot: LineupPlanSlot): string {
-  if (slot.basis === "rating") return "conf: low     placed by rating — no shared history";
+  // `slot.confidence`, never a hardcoded "low" — a rating placement always carries support 0 and
+  // therefore reads low today, but writing the literal here would let this presenter disagree with
+  // the `--json` output and the dossier the moment that stopped being true.
+  const confidence = `conf: ${slot.confidence.padEnd(6)}`;
+  if (slot.basis === "rating") return `${confidence}  placed by rating — no shared history`;
   const noun =
     slot.discipline === "singles"
       ? `singles match${slot.support === 1 ? "" : "es"}`
       : `match${slot.support === 1 ? "" : "es"} together`;
-  return `conf: ${slot.confidence.padEnd(6)}  ${slot.support} ${noun}`;
+  return `${confidence}  ${slot.support} ${noun}`;
 }
 
 export function formatLineupPlan(plan: LineupPlan): string {

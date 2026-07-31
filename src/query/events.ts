@@ -86,16 +86,23 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
     throw new EventRangeInvertedError(`ends-on "${input.endsOn}" is before starts-on "${input.startsOn}"`);
   }
 
+  // The pre-read decides only what to REPORT (`created`); the write itself is an upsert on the
+  // `events.name` unique index, so the database — not this read — is what guarantees one row per
+  // name. A select-then-insert would be a check-then-act race: two concurrent adds of the same
+  // event both read `undefined`, both insert, and the loser dies on a raw constraint violation
+  // instead of the clean idempotent update this service promises (`rules/backend.md`: "a validation
+  // is not a guarantee under concurrency"). Under that race `created` can be optimistically `true`
+  // for the loser, which is cosmetic — the row is correct either way.
   const existing = db.select().from(events).where(eq(events.name, name)).all()[0];
-  const row =
-    existing === undefined
-      ? db.insert(events).values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn }).returning().get()
-      : db
-          .update(events)
-          .set({ kind, startsOn: input.startsOn, endsOn: input.endsOn })
-          .where(eq(events.id, existing.id))
-          .returning()
-          .get();
+  const row = db
+    .insert(events)
+    .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn })
+    .onConflictDoUpdate({
+      target: events.name,
+      set: { kind, startsOn: input.startsOn, endsOn: input.endsOn },
+    })
+    .returning()
+    .get();
 
   return {
     eventId: row.id,

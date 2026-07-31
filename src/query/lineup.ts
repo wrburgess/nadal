@@ -38,6 +38,11 @@ export type LineupPlan = {
   unplaced: (LineupPlanPlayer & { courtMatches: number })[];
   /** The single rating scale every comparison was made within — `null` when nobody is rated. */
   ratingSource: RatingSource | null;
+  /** Roster players ranked within `ratingSource`, strongest first. Carried through rather than
+   * dropped because it is the only observable record of the ORDER every tie-break and every
+   * rating-based pairing used — without it, a caller (or a test) can see which players were rated
+   * but not how they compared, which is the half that actually drives placement. */
+  ranked: LineupPlanPlayer[];
   /** Roster players with no observation in `ratingSource`, by name, so the gap is printable. */
   unranked: LineupPlanPlayer[];
   slotSource: PredictedLineupResult["slotSource"];
@@ -123,6 +128,7 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
     })),
     unplaced: prediction.unplaced.map((u) => ({ ...named(u.playerId), courtMatches: u.courtMatches })),
     ratingSource: prediction.ratingSource,
+    ranked: prediction.rankedPlayerIds.map(named),
     unranked: prediction.unrankedPlayerIds.map(named),
     slotSource: prediction.slotSource,
     observedCourtMatches: prediction.observedCourtMatches,
