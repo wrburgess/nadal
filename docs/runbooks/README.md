@@ -5,6 +5,8 @@ exercises, and runbooks double as HC post-merge checklists.
 
 - [login-assisted-scrape.md](login-assisted-scrape.md) — USTA/WTN pull with HC standing by to log in
 - [build-and-print-dossiers.md](build-and-print-dossiers.md) — `tn report build` → browser → courtside binder
+- [agent-chat-over-mcp.md](agent-chat-over-mcp.md) — point an agent chat at `tn mcp serve`; capture
+  availability and captain notes conversationally
 
 Planned (spec § Testing):
 

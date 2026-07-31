@@ -44,11 +44,18 @@ export const teams = sqliteTable("teams", {
   district: text("district"),
   tennislinkUrl: text("tennislink_url"),
   tennisrecordUrl: text("tennisrecord_url"),       // durable re-pull handle (spec § Ingestion)
+  // "Our team" designation (nadal ADR 0001) — nullable rather than a plain boolean default-false,
+  // so a partial unique index (below) can enforce "at most one true row" at the DATABASE level,
+  // not just in application code (rules/backend.md: "a validation is not a guarantee under
+  // concurrency"). `src/query/home-team.ts` is the only writer; it always clears any prior flag
+  // and sets the new one inside a single transaction, so the index can never observe two set rows.
+  isHome: integer("is_home", { mode: "boolean" }),
   // Issue #32: JS-folded comparison key for name, same rationale as players.nameKey above.
   nameKey: text("name_key"),
   // Same fuzzy-band purpose as players.nameKeyLength above.
   nameKeyLength: integer("name_key_length").generatedAlwaysAs(sql`length(name_key)`, { mode: "virtual" }),
 }, (t) => [
+  uniqueIndex("team_home_unique").on(t.isHome).where(sql`is_home = 1`),
   index("teams_name_key_idx").on(t.nameKey),
   index("teams_name_key_length_idx").on(t.nameKeyLength),
 ]);

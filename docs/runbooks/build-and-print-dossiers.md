@@ -82,10 +82,14 @@ about an opponent since last time (useful mid-event).
 
 ## Known limitations in v1
 
-- **"Prior meetings vs our players" renders as unavailable.** Nothing in the schema designates an
-  own team yet, so the section states that rather than guessing. Tracked as a follow-up.
+- **"Prior meetings vs our players" renders as unavailable until a home team is designated.**
+  Run `tn team home "<your team>"` first (#37 / nadal ADR 0001) — once a home team is set, `report
+  build` automatically populates this section for every OTHER team's dossier. It stays unavailable
+  on the home team's own dossier (comparing a team against itself is not a meaningful section) and
+  on any dossier built before a home team is designated at all.
 - **No predicted lineup.** Spec § Deliverables #1 wants one labeled a guess; the heuristic is
   unspecified and the court-assignment history it needs stays thin until TennisLink (#27). It moves
-  to lineup planning (#17).
-- **Tournament results, availability and captain notes have no writer anywhere yet** — hence the
-  "Not collected yet" block.
+  to lineup planning, PR B of #17.
+- **Tournament results have no writer anywhere yet** — hence the "Not collected yet" block for that
+  section. Availability and captain notes DO have writers now (`tn player avail`, `tn player note`
+  — see [agent-chat-over-mcp.md](agent-chat-over-mcp.md)), scoped to the designated home team only.

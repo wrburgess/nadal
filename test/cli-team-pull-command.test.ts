@@ -58,6 +58,7 @@ describe("tn team pull (end-to-end via dispatch)", () => {
         district: null,
         tennislinkUrl: null,
         tennisrecordUrl: null,
+        isHome: null,
         nameKey: null,
         nameKeyLength: null,
       },

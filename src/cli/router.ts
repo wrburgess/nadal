@@ -1,7 +1,11 @@
 import { dbMigrate } from "./commands/db-migrate.js";
+import { mcpServe } from "./commands/mcp-serve.js";
+import { playerAvail } from "./commands/player-avail.js";
+import { playerNote } from "./commands/player-note.js";
 import { playerPull } from "./commands/player-pull.js";
 import { playerShow } from "./commands/player-show.js";
 import { reportBuild } from "./commands/report-build.js";
+import { teamHome } from "./commands/team-home.js";
 import { teamPull } from "./commands/team-pull.js";
 import { teamShow } from "./commands/team-show.js";
 import { logRequest } from "../telemetry/request-log.js";
@@ -17,9 +21,13 @@ export const COMMANDS: Command[] = [
   dbMigrate,
   teamPull,
   teamShow,
+  teamHome,
   playerPull,
   playerShow,
+  playerAvail,
+  playerNote,
   reportBuild,
+  mcpServe,
 ];
 
 export function helpText(): string {
@@ -39,7 +47,21 @@ export function helpText(): string {
 }
 
 export async function dispatch(argv: string[]): Promise<number> {
-  if (argv.length === 0 || argv.includes("--help")) {
+  // Help detection is DELIMITER-AWARE: `--help` is honored only BEFORE the first bare `--`.
+  //
+  // This check runs before any command's parser, so when it looked at the whole of `argv` it
+  // silently outranked the `--` end-of-flags delimiter that same PR had just added — `tn player
+  // note Randy -- --help` printed help and exited 0 instead of recording the note, for exactly one
+  // token, while the MCP `player_note` tool accepted the identical text. That is the same
+  // lossless-escape failure the delimiter existed to close, and it left the two surfaces
+  // disagreeing. Found by the independent reviewer in round 2 of #17 PR A, reviewing the round-1
+  // fix — the "a round's fix introduces the next round's defect" shape docs/findings.md records.
+  //
+  // Everything before the delimiter is unchanged: `tn player note --help`, `tn --help`, and a
+  // trailing `--help` with no delimiter present all still print help.
+  const terminator = argv.indexOf("--");
+  const beforeTerminator = terminator === -1 ? argv : argv.slice(0, terminator);
+  if (argv.length === 0 || beforeTerminator.includes("--help")) {
     console.log(helpText());
     return 0;
   }

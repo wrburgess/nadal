@@ -44,6 +44,7 @@ export function buildTeamProfile(overrides: Partial<TeamProfile> = {}): TeamProf
   return {
     teamId: 1,
     teamName: "IA/Versteeg/40&Over3.5M",
+    isHome: overrides.isHome ?? false,
     roster: overrides.roster ?? [
       {
         playerId: 1,

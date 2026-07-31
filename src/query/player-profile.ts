@@ -6,6 +6,8 @@
 import { eq, inArray } from "drizzle-orm";
 import { nameKey } from "../db/name-key.js";
 import {
+  availability,
+  captainNotes,
   courtMatchPlayers,
   courtMatches,
   playerAliases,
@@ -238,17 +240,26 @@ export function getPlayerProfile(db: Db, playerId: number, options: { since: str
     slotTendencies: slotTendencies(courtRows, playerId),
     partnerFrequency: partnerNames,
     teamMemberships: membershipRows,
-    // `events`/`availability`/`captain_notes` have NO writer anywhere in the codebase —
-    // `team-pull.ts` passes `eventId: null` at the roster/schedule call sites and nothing ever
-    // inserts into any of the three tables (docs/findings.md, #15/Task 3 rule 6). `hasWriter` is
-    // therefore a static fact about the codebase, not something inferred from a query result: a
-    // populated-but-empty query would read identically to "no writer" if this were computed from
-    // `count === 0` alone, which is exactly the confidently-wrong reading `dataGaps` exists to
-    // prevent.
+    // `events` still has NO writer anywhere in the codebase, so it stays a static `hasWriter: false`
+    // (docs/findings.md, #15/Task 3 rule 6). `availability` and `captain_notes` DO now have writers
+    // (`src/query/availability.ts`'s `setAvailability`, `src/query/captain-notes.ts`'s
+    // `addCaptainNote`, both Tasks 3-4 of #17) — leaving their `hasWriter` hardcoded `false` here
+    // would be exactly the silent lie docs/findings.md warns about: a dossier would keep reporting
+    // "not collected yet" over real data sitting in the table. `hasWriter: true` plus a REAL count
+    // is what lets `dataGaps` correctly distinguish "empty" (a writer exists; nothing recorded yet
+    // for this player) from "has-data", rather than both reading identically to "not-collected".
     dataGaps: dataGaps({
       events: { count: 0, hasWriter: false },
-      availability: { count: 0, hasWriter: false },
-      captainNotes: { count: 0, hasWriter: false },
+      availability: {
+        count: db.select({ id: availability.id }).from(availability).where(eq(availability.playerId, playerId)).all()
+          .length,
+        hasWriter: true,
+      },
+      captainNotes: {
+        count: db.select({ id: captainNotes.id }).from(captainNotes).where(eq(captainNotes.playerId, playerId)).all()
+          .length,
+        hasWriter: true,
+      },
     }),
   };
 }

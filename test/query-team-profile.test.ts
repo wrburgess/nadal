@@ -10,6 +10,7 @@ import {
   teams,
 } from "../src/db/schema.js";
 import { getTeamProfile, resolveTeamTarget } from "../src/query/team-profile.js";
+import { setHomeTeam } from "../src/query/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -152,6 +153,12 @@ describe("getTeamProfile", () => {
       expect(a1VsB1).toMatchObject({ wins: 1, losses: 0, undecided: 0, matches: 1 });
       // The never-met pair still gets an explicit zero row, not an absence.
       expect(a2VsB1).toMatchObject({ wins: 0, losses: 0, undecided: 0, matches: 0 });
+      // Every row carries the OPPONENT'S NAME, not just their id — a rendered dossier prints
+      // "vs player #<id>" otherwise, a raw database id in a printed courtside binder. This was
+      // latent and untested before #17 (headToHead was always null in production until Task 5
+      // wired a real versusTeamId), caught by reading the actual rendered artifact.
+      expect(a1VsB1?.opponentName).toBe("B One");
+      expect(a2VsB1?.opponentName).toBe("B One");
     } finally {
       sqlite.close();
     }
@@ -189,6 +196,46 @@ describe("getTeamProfile", () => {
 
       const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
       expect(profile.slotTendencies).toEqual([{ slot: "S1", count: 2 }]);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+describe("getTeamProfile isHome", () => {
+  useTnDbPath();
+
+  it("reports isHome: true for the designated home team", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Home Team");
+      setHomeTeam(db, team.id);
+      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      expect(profile.isHome).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("reports isHome: false for every other team, including when a different team is home", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const home = seedTeam(db, "Home Team");
+      const other = seedTeam(db, "Other Team");
+      setHomeTeam(db, home.id);
+      const profile = getTeamProfile(db, other.id, { since: "2026-01-01" });
+      expect(profile.isHome).toBe(false);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("reports isHome: false for every team when no home team is designated at all", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Team A");
+      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      expect(profile.isHome).toBe(false);
     } finally {
       sqlite.close();
     }

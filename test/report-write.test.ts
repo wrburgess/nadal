@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
 import { OutputPathError } from "../src/fs/output-root.js";
+import { setHomeTeam } from "../src/query/home-team.js";
 import {
   buildTeamDossier,
   slugify,
@@ -52,6 +53,46 @@ describe("src/report/write.ts", () => {
         expect(dossier.players.map((p) => p.identity.canonicalName)).toEqual(
           dossier.team.roster.map((r) => r.canonicalName),
         );
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  describe("buildTeamDossier — home-team head-to-head wiring (Task 5)", () => {
+    it("populates headToHead against the designated home team when building an OPPONENT's dossier", () => {
+      const home = seedTeamWithRoster("Home Team", ["Home Player"]);
+      const opponent = seedTeamWithRoster("Opponent Team", ["Opponent Player"]);
+      const { db, sqlite } = openDb();
+      try {
+        setHomeTeam(db, home.id);
+        const dossier = buildTeamDossier(db, opponent.id, { since: "2026-01-01" });
+        // Not null — "not requested" must become distinguishable from "requested, nothing found"
+        // now that a home team IS designated (src/query/team-profile.ts's own doc comment on this).
+        expect(dossier.team.headToHead).not.toBeNull();
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("stays null (the existing 'not available' path) when no home team is designated at all", () => {
+      const opponent = seedTeamWithRoster("Opponent Team", ["Opponent Player"]);
+      const { db, sqlite } = openDb();
+      try {
+        const dossier = buildTeamDossier(db, opponent.id, { since: "2026-01-01" });
+        expect(dossier.team.headToHead).toBeNull();
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("stays null when building the HOME team's OWN dossier — never compares a team against itself", () => {
+      const home = seedTeamWithRoster("Home Team", ["Home Player"]);
+      const { db, sqlite } = openDb();
+      try {
+        setHomeTeam(db, home.id);
+        const dossier = buildTeamDossier(db, home.id, { since: "2026-01-01" });
+        expect(dossier.team.headToHead).toBeNull();
       } finally {
         sqlite.close();
       }
