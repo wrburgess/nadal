@@ -83,6 +83,28 @@ the actual if they differ. Use human-readable names, never API ids.
   an umbrella/epic sub-PR — see `AGENTS.md` → *Umbrella sub-PRs and closing keywords*.
 - **Feature-branch autonomy:** commit/edit/refactor without asking on a feature branch; ask before any
   change to a protected branch.
+- **Commit signing, and the fallback when the signer is unavailable.** Commits are signed
+  (`commit.gpgsign=true`, `gpg.format=ssh`, via 1Password's `op-ssh-sign`). That signer needs an
+  **unlocked 1Password**, which a long unattended run cannot guarantee — the agent's commit then fails
+  with `error: 1Password: failed to fill whole buffer` / `fatal: failed to write commit object`, and the
+  run stalls holding finished, verified work it cannot record.
+
+  **When, and only when, the signer fails that way: retry once with `git commit --no-gpg-sign`, and say
+  so — in the run output and in the PR body.** The fallback is **per-commit and visible**. Never set
+  `commit.gpgsign=false` in any config to route around it: a config change is silent, outlives the
+  incident, and would drop signing for the HC's own interactive commits too — the failure this rule
+  exists to avoid is an *unattended stall*, not signing itself.
+
+  Why this is safe here, checked rather than assumed (2026-07-31): nothing requires signed commits —
+  `main` has no branch protection and no rulesets; feature-branch signatures **do not verify on GitHub
+  anyway** (the key is not registered as a *signing* key on the account, so the API reports
+  `verified: false, reason: unknown_key`); and squash-merge discards those commits, replacing them with
+  a merge commit GitHub signs itself (`verified: true`, `reason: valid`). So an unsigned feature commit
+  costs no verifiable provenance that a signed one was providing.
+
+  **This rule expires the moment any of those three facts changes** — if `main` gains a signed-commits
+  requirement, if the signing key is registered on the account, or if the merge strategy stops squashing,
+  re-derive it rather than carrying it forward.
 
 ## Review Severity Framework
 
