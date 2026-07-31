@@ -94,6 +94,71 @@ function renderPriorMeetingsSectionMarkdown(dossier: TeamDossier): string {
   return `## Prior meetings vs our players\n\n${body}`;
 }
 
+/**
+ * Spec § Deliverables #1's "predicted lineup honestly labeled a guess", rendered into the dossier
+ * itself. The heading says "predicted", the sentence under it says "a guess", and every row carries
+ * its own confidence and basis — a table of names with no such framing is the failure mode this
+ * whole section is written against, and it would be read as a lineup card in a courtside binder.
+ *
+ * `lineup === null` prints an explicit absence rather than omitting the section: a missing section
+ * is indistinguishable from one nobody added.
+ */
+function renderPredictedLineupMarkdown(dossier: TeamDossier): string {
+  const heading = "## Predicted lineup (a guess)";
+  const lineup = dossier.lineup;
+  if (lineup === null) {
+    return `${heading}\n\n_No court-match history on file for this team, so there is nothing to predict from._`;
+  }
+
+  const preamble =
+    `_A guess, not a lineup card — inferred from ${lineup.observedCourtMatches} observed court ` +
+    `match${lineup.observedCourtMatches === 1 ? "" : "es"} across a roster of ${lineup.rosterSize}._`;
+
+  const rows = lineup.slots.map((slot) => {
+    const names =
+      slot.players.length === 0
+        ? "_(unfilled — roster exhausted)_"
+        : slot.players.map((p) => escapeMarkdownCell(p.canonicalName)).join(" / ");
+    const evidence =
+      slot.basis === "rating"
+        ? "placed by rating — no shared history"
+        : slot.discipline === "singles"
+          ? `${slot.support} singles match${slot.support === 1 ? "" : "es"}`
+          : `${slot.support} match${slot.support === 1 ? "" : "es"} together`;
+    return `| ${escapeMarkdownCell(slot.slot)} | ${names} | ${slot.confidence} | ${evidence} |`;
+  });
+
+  const footnotes = [
+    lineup.unplaced.length === 0
+      ? null
+      : `**Not placed:** ${lineup.unplaced
+          .map(
+            (p) =>
+              `${escapeMarkdownCell(p.canonicalName)} (${p.courtMatches} court match${p.courtMatches === 1 ? "" : "es"})`,
+          )
+          .join(", ")}`,
+    lineup.ratingSource === null
+      ? "**Ratings:** none on file — ties fell through to a stable ordering, not to strength."
+      : `**Ratings:** ranked within ${escapeMarkdownCell(lineup.ratingSource)}` +
+        (lineup.unranked.length === 0
+          ? "."
+          : `; unrated: ${lineup.unranked.map((p) => escapeMarkdownCell(p.canonicalName)).join(", ")}.`),
+    `**Courts:** ${lineup.slots.length}, taken from this team's observed match history — not from the event format.`,
+  ].filter((line): line is string => line !== null);
+
+  return [
+    heading,
+    "",
+    preamble,
+    "",
+    "| Court | Players | Confidence | Based on |",
+    "|---|---|---|---|",
+    ...rows,
+    "",
+    footnotes.join("  \n"),
+  ].join("\n");
+}
+
 function renderPlayerBlockMarkdown(player: PlayerProfile): string {
   return [
     `### ${escapeMarkdownCell(player.identity.canonicalName)}`,
@@ -140,6 +205,8 @@ export function renderDossierMarkdown(dossier: TeamDossier): string {
     renderRosterTableMarkdown(dossier) +
     "\n\n" +
     renderTeamRecordMarkdown(dossier) +
+    "\n\n" +
+    renderPredictedLineupMarkdown(dossier) +
     "\n\n## Player detail\n\n" +
     renderPlayersSectionMarkdown(dossier) +
     "\n\n" +

@@ -4,6 +4,7 @@
 // like. Every field a renderer might touch is present, following the same hand-built-input
 // discipline `test/query-derive.test.ts` uses rather than routing through a real DB.
 
+import type { LineupPlan } from "../../src/query/lineup.js";
 import type { PlayerProfile } from "../../src/query/player-profile.js";
 import type { TeamProfile } from "../../src/query/team-profile.js";
 import type { TeamDossier } from "../../src/report/types.js";
@@ -62,10 +63,60 @@ export function buildTeamProfile(overrides: Partial<TeamProfile> = {}): TeamProf
   };
 }
 
+/** A predicted lineup with one settled partnership, one thin one, and one player left over — so a
+ * renderer test exercises the confident, the low-confidence and the not-placed paths at once
+ * (#17 PR B). Pass `lineup: null` to `buildDossier` for the no-history case instead. */
+export function buildLineupPlan(overrides: Partial<LineupPlan> = {}): LineupPlan {
+  return {
+    teamId: 1,
+    teamName: "Test Team",
+    slots: [
+      {
+        slot: "S1",
+        discipline: "singles",
+        players: [{ playerId: 1, canonicalName: "Ada Ashby" }],
+        confidence: "high",
+        basis: "history",
+        support: 6,
+      },
+      {
+        slot: "D1",
+        discipline: "doubles",
+        players: [
+          { playerId: 2, canonicalName: "Bo Bramwell" },
+          { playerId: 3, canonicalName: "Cy Calder" },
+        ],
+        confidence: "high",
+        basis: "history",
+        support: 5,
+      },
+      {
+        slot: "D2",
+        discipline: "doubles",
+        players: [
+          { playerId: 4, canonicalName: "Del Duxbury" },
+          { playerId: 5, canonicalName: "Emory Ellerby" },
+        ],
+        confidence: "low",
+        basis: "rating",
+        support: 0,
+      },
+    ],
+    unplaced: [{ playerId: 6, canonicalName: "Ira Inglewood", courtMatches: 1 }],
+    ratingSource: "ntrp",
+    unranked: [{ playerId: 6, canonicalName: "Ira Inglewood" }],
+    slotSource: "observed",
+    observedCourtMatches: 12,
+    rosterSize: 6,
+    ...overrides,
+  };
+}
+
 export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier {
   return {
     team: overrides.team ?? buildTeamProfile(),
     players: overrides.players ?? [buildPlayerProfile()],
+    lineup: overrides.lineup === undefined ? buildLineupPlan() : overrides.lineup,
   };
 }
 
@@ -81,5 +132,8 @@ export function buildEmptyDossier(): TeamDossier {
       headToHead: null,
     }),
     players: [],
+    // No roster and no matches means nothing to predict from — the same `null` `buildTeamDossier`
+    // produces when `getLineupPlan` refuses.
+    lineup: null,
   };
 }

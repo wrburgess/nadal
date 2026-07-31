@@ -18,6 +18,7 @@ import {
 } from "../fs/output-root.js";
 import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "../query/home-team.js";
+import { NoCourtMatchHistoryError, getLineupPlan } from "../query/lineup.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
 import { teams } from "../db/schema.js";
@@ -172,7 +173,21 @@ export function buildTeamDossier(db: Db, teamId: number, options: { since: strin
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
   const team = getTeamProfile(db, teamId, { since: options.since, versusTeamId });
   const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { since: options.since }));
-  return { team, players };
+
+  // #17 PR B: spec § Deliverables #1 puts the predicted lineup in the dossier, not only behind the
+  // `tn lineup plan` command. "No history to predict from" is a normal state for a team that has
+  // been created but not yet pulled, so it is caught and rendered as an explicit absence rather
+  // than being allowed to fail the whole dossier build — a `report build` over five teams must not
+  // die because one of them has no matches yet. Any OTHER error still propagates: a genuine bug in
+  // the heuristic should surface, not be swallowed into a missing section.
+  let lineup: TeamDossier["lineup"] = null;
+  try {
+    lineup = getLineupPlan(db, teamId);
+  } catch (err) {
+    if (!(err instanceof NoCourtMatchHistoryError)) throw err;
+  }
+
+  return { team, players, lineup };
 }
 
 /** Everything `writeTeamDossier` needs to know BEFORE it writes a single byte: the two real,

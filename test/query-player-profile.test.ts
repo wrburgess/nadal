@@ -131,11 +131,12 @@ describe("getPlayerProfile", () => {
       expect(profile.partnerFrequency).toEqual([]);
       expect(profile.ratingTrajectory).toEqual([]);
       expect(profile.teamMemberships).toEqual([]);
-      // dataGaps still reports even with nothing else on file. `events` still has no writer
-      // anywhere in the codebase; `availability`/`captainNotes` (Tasks 3-4) now DO have writers, so
-      // an empty table for THIS player reads as "empty", never "not-collected" — the exact
-      // distinction Task 5 exists to keep truthful (docs/findings.md's "silent-lie risk").
-      expect(profile.dataGaps.events).toBe("not-collected");
+      // dataGaps still reports even with nothing else on file. Every section now HAS a writer
+      // (`addEvent` in #17 PR B joined `setAvailability`/`addCaptainNote` from PR A), so an empty
+      // table for THIS player reads as "empty", never "not-collected" — the exact distinction
+      // docs/findings.md's "silent-lie risk" exists to keep truthful, and the reason no
+      // `hasWriter` here may stay frozen at what was true when it was written.
+      expect(profile.dataGaps.events).toBe("empty");
       expect(profile.dataGaps.availability).toBe("empty");
       expect(profile.dataGaps.captainNotes).toBe("empty");
     } finally {
@@ -143,13 +144,13 @@ describe("getPlayerProfile", () => {
     }
   });
 
-  it("dataGaps reports events as not-collected (no writer anywhere) but availability/captainNotes as merely empty (Task 5: they have writers now — docs/findings.md #15's silent-lie risk)", () => {
+  it("dataGaps reports every section as merely empty now that all three have writers (docs/findings.md #15's silent-lie risk)", () => {
     const { db, sqlite } = freshDb();
     try {
       const player = seedPlayer(db, { canonicalName: "Casey Calder" });
       const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
       expect(profile.dataGaps).toEqual({
-        events: "not-collected",
+        events: "empty",
         availability: "empty",
         captainNotes: "empty",
       });
@@ -185,6 +186,31 @@ describe("getPlayerProfile", () => {
       const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
       expect(profile.dataGaps.availability).toBe("has-data");
       expect(profile.dataGaps.captainNotes).toBe("has-data");
+      // `events` joined them in #17 PR B, and its count is player-scoped like theirs: this player
+      // has one EVENT-SCOPED membership row, so the section has data for them specifically.
+      expect(profile.dataGaps.events).toBe("has-data");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The counterpart to the case above, and the one that makes `events` player-scoped rather than a
+  // global row count: a roster pulled outside an event writes `event_id: null` (docs/findings.md,
+  // #15 — the normal path for every real `tn team pull`), so a player on a team with events on file
+  // but no event-scoped membership of their own still reads "empty". A total-events count would
+  // report "has-data" here and say the same thing about every player in the dossier.
+  it("dataGaps reports events as empty for a player whose only membership is not event-scoped", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = db.insert(teams).values({ name: "Some Team" }).returning().get();
+      db.insert(events)
+        .values({ name: "Event", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .run();
+      const player = seedPlayer(db, { canonicalName: "Elin Eventless" });
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      expect(profile.dataGaps.events).toBe("empty");
     } finally {
       sqlite.close();
     }

@@ -240,16 +240,24 @@ export function getPlayerProfile(db: Db, playerId: number, options: { since: str
     slotTendencies: slotTendencies(courtRows, playerId),
     partnerFrequency: partnerNames,
     teamMemberships: membershipRows,
-    // `events` still has NO writer anywhere in the codebase, so it stays a static `hasWriter: false`
-    // (docs/findings.md, #15/Task 3 rule 6). `availability` and `captain_notes` DO now have writers
-    // (`src/query/availability.ts`'s `setAvailability`, `src/query/captain-notes.ts`'s
-    // `addCaptainNote`, both Tasks 3-4 of #17) — leaving their `hasWriter` hardcoded `false` here
-    // would be exactly the silent lie docs/findings.md warns about: a dossier would keep reporting
-    // "not collected yet" over real data sitting in the table. `hasWriter: true` plus a REAL count
-    // is what lets `dataGaps` correctly distinguish "empty" (a writer exists; nothing recorded yet
-    // for this player) from "has-data", rather than both reading identically to "not-collected".
+    // Every section here now has a real writer, and each `hasWriter` has to keep tracking that
+    // fact about the CODEBASE rather than being frozen at whatever was true when it was written
+    // (docs/findings.md, #15/Task 3 rule 6). Leaving one hardcoded `false` after its writer landed
+    // is exactly the silent lie that rule warns about: the dossier would keep reporting "not
+    // collected yet" over real data sitting in the table. `hasWriter: true` plus a REAL count is
+    // what lets `dataGaps` distinguish "empty" (a writer exists; nothing recorded for this player)
+    // from "has-data", rather than both reading identically to "not-collected".
+    //
+    // `availability` and `captain_notes` got their writers in #17 PR A (`setAvailability`,
+    // `addCaptainNote`); `events` got `addEvent` in #17 PR B, which is what makes the availability
+    // writer reachable at all. Its count is player-scoped like its siblings: the events this player
+    // has an event-scoped `team_memberships` row for — not the total on file, which would report
+    // the same number for every player in the dossier and tell a reader nothing about them.
     dataGaps: dataGaps({
-      events: { count: 0, hasWriter: false },
+      events: {
+        count: membershipRows.filter((m) => m.eventId !== null).length,
+        hasWriter: true,
+      },
       availability: {
         count: db.select({ id: availability.id }).from(availability).where(eq(availability.playerId, playerId)).all()
           .length,

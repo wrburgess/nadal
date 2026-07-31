@@ -8,6 +8,7 @@
 // only names the shape both renderers consume, so their tests can hand-build one directly rather
 // than standing up a DB (the same "pure function, hand-built input" discipline `derive.ts` uses).
 
+import type { LineupPlan } from "../query/lineup.js";
 import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamProfile } from "../query/team-profile.js";
 
@@ -17,4 +18,14 @@ export type TeamDossier = {
    * arrays by index relies on this, so `write.ts` must preserve `team.roster`'s order when building
    * `players`. */
   players: PlayerProfile[];
+  /**
+   * The predicted lineup (#17 PR B) — spec § Deliverables #1's "predicted lineup honestly labeled a
+   * guess", which belongs IN the dossier rather than only behind `tn lineup plan`.
+   *
+   * `null` means the team has no court-match history to predict from (`getLineupPlan` throws
+   * `NoCourtMatchHistoryError`, which `write.ts` catches). Both renderers must print that absence
+   * explicitly: an omitted section is indistinguishable from a section nobody thought to add, and a
+   * silently-empty lineup would read as "we predict nobody plays".
+   */
+  lineup: LineupPlan | null;
 };

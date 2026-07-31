@@ -141,11 +141,87 @@ const DATA_GAP_LABELS: Record<string, string> = {
 };
 
 /**
- * The union of "not-collected" keys across every player in the dossier — in this codebase every
- * player reports the SAME three keys (no writer exists at all for `events`/`availability`/
- * `captain_notes`), but a hand-built test profile can legitimately report none, and the block must
- * genuinely disappear in that case rather than always rendering (Task 3 rule 6's "distinct from
- * zero results" made visible at the presenter layer too).
+ * The markdown twin's counterpart — spec § Deliverables #1's "predicted lineup honestly labeled a
+ * guess", in the dossier itself. Same content, same order, same framing discipline: the heading and
+ * the lede both say "guess", every row carries confidence and what it rests on, and the provenance
+ * footnotes name the rating scale and where the court list came from. This document is printed and
+ * carried to a court, so an unhedged table of names is the exact failure to avoid.
+ *
+ * `lineup === null` renders the absence explicitly rather than omitting the section.
+ */
+function renderPredictedLineupHtml(dossier: TeamDossier): string {
+  const open = '<section id="predicted-lineup"><h2>Predicted lineup (a guess)</h2>';
+  const lineup = dossier.lineup;
+  if (lineup === null) {
+    return (
+      open +
+      "<p>No court-match history on file for this team, so there is nothing to predict from.</p>" +
+      "</section>"
+    );
+  }
+
+  const matches = `${lineup.observedCourtMatches} observed court match${lineup.observedCourtMatches === 1 ? "" : "es"}`;
+  const rows = lineup.slots
+    .map((slot) => {
+      const names =
+        slot.players.length === 0
+          ? "<em>(unfilled — roster exhausted)</em>"
+          : slot.players.map((p) => escapeHtml(p.canonicalName)).join(" / ");
+      const evidence =
+        slot.basis === "rating"
+          ? "placed by rating — no shared history"
+          : slot.discipline === "singles"
+            ? `${slot.support} singles match${slot.support === 1 ? "" : "es"}`
+            : `${slot.support} match${slot.support === 1 ? "" : "es"} together`;
+      return (
+        `<tr><td>${escapeHtml(slot.slot)}</td><td>${names}</td>` +
+        `<td>${escapeHtml(slot.confidence)}</td><td>${escapeHtml(evidence)}</td></tr>`
+      );
+    })
+    .join("");
+
+  const footnotes: string[] = [];
+  if (lineup.unplaced.length > 0) {
+    const listed = lineup.unplaced
+      .map(
+        (p) =>
+          `${escapeHtml(p.canonicalName)} (${p.courtMatches} court match${p.courtMatches === 1 ? "" : "es"})`,
+      )
+      .join(", ");
+    footnotes.push(`<strong>Not placed:</strong> ${listed}`);
+  }
+  footnotes.push(
+    lineup.ratingSource === null
+      ? "<strong>Ratings:</strong> none on file — ties fell through to a stable ordering, not to strength."
+      : `<strong>Ratings:</strong> ranked within ${escapeHtml(lineup.ratingSource)}` +
+        (lineup.unranked.length === 0
+          ? "."
+          : `; unrated: ${lineup.unranked.map((p) => escapeHtml(p.canonicalName)).join(", ")}.`),
+  );
+  footnotes.push(
+    `<strong>Courts:</strong> ${lineup.slots.length}, taken from this team's observed match history — ` +
+      "not from the event format.",
+  );
+
+  return (
+    open +
+    `<p class="guess-note">A guess, not a lineup card — inferred from ${matches} across a roster of ` +
+    `${lineup.rosterSize}.</p>` +
+    '<table class="roster"><thead><tr><th>Court</th><th>Players</th><th>Confidence</th>' +
+    "<th>Based on</th></tr></thead><tbody>" +
+    rows +
+    "</tbody></table>" +
+    footnotes.map((f) => `<p>${f}</p>`).join("") +
+    "</section>"
+  );
+}
+
+/**
+ * The union of "not-collected" keys across every player in the dossier. As of #17 PR B every
+ * section HAS a writer, so this is normally empty in production — but the block must still
+ * genuinely disappear rather than always rendering, and a hand-built test profile can legitimately
+ * report a not-collected key (Task 3 rule 6's "distinct from zero results", made visible at the
+ * presenter layer too).
  */
 function notCollectedKeys(dossier: TeamDossier): string[] {
   const keys = new Set<string>();
@@ -177,6 +253,8 @@ const STYLE = `
   table.roster { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
   table.roster th, table.roster td { border: 1px solid #ccc; padding: 0.25rem 0.5rem; text-align: left; font-size: 0.9rem; }
   .player-block { border-top: 1px solid #ddd; padding: 0.5rem 0; page-break-inside: avoid; }
+  .guess-note { font-style: italic; color: #555; }
+  #predicted-lineup { page-break-inside: avoid; }
   @media print {
     body { margin: 0; }
     .player-block { page-break-inside: avoid; }
@@ -200,6 +278,7 @@ export function renderDossier(dossier: TeamDossier): string {
     renderRosterTableHtml(dossier) +
     renderTeamRecordHtml(dossier) +
     "</section>" +
+    renderPredictedLineupHtml(dossier) +
     '<section id="players"><h2>Player detail</h2>' +
     renderPlayersSectionHtml(dossier) +
     "</section>" +
