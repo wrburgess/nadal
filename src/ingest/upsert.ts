@@ -420,6 +420,37 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
       .returning()
       .get();
   }
+  // Codex adversarial review (PR #54 round 8, rated High): this branch wrote `eventId: values.eventId
+  // ?? null` unconditionally — the SAME shape round 5 already fixed a few lines up, in this
+  // function's OTHER branch, and left standing here. Round 7 made it reachable: a scorecard can now
+  // attach to (and set an event on) a `mid=`-bearing row, so re-pulling that same `mid=` — which
+  // always supplies `eventId: null`, per team-pull's one call site — silently erased the event the
+  // scorecard had just linked. `onConflictDoUpdate` has no separate SELECT step to hang a JS
+  // `existing.eventId ?? values.eventId` off of the way the id-less branch above does, so a
+  // PRE-SELECT runs first: better-sqlite3 is fully synchronous, so nothing can interleave between
+  // this select and the upsert immediately below it (no separate-connection race the way a
+  // multi-writer database would have). Two DIFFERENT non-null events refuse with the SAME error
+  // shape the id-less branch throws; otherwise the SAME JS expression that branch already uses
+  // (`existing?.eventId ?? values.eventId ?? null`) is computed here too and handed to `set` as a
+  // plain value — one shared notion of "how an event is written" between the two branches, not two
+  // independently-invented ones. Every OTHER column here keeps its existing "overwrite
+  // unconditionally" policy: unlike the id-less branch (which reconciles two POSSIBLY-STALE
+  // observations of an unidentified fixture), a `mid=`-keyed conflict means team-pull just re-scraped
+  // the SAME identified page, and a fresh authoritative parse of it is exactly what should win for
+  // orientation/courts-won — only `eventId` is a detail team-pull can never truthfully report on.
+  const existingBySource = db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, values.sourceMatchId)).all()[0];
+  if (
+    existingBySource !== undefined &&
+    existingBySource.eventId !== null &&
+    values.eventId !== null &&
+    values.eventId !== undefined &&
+    existingBySource.eventId !== values.eventId
+  ) {
+    throw new Error(
+      `upsertTeamMatch: conflicting event for existing team match id ${existingBySource.id}: stored event id ${existingBySource.eventId} vs incoming event id ${values.eventId}`,
+    );
+  }
+
   return db
     .insert(teamMatches)
     .values(values)
@@ -427,7 +458,7 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
       target: teamMatches.sourceMatchId,
       targetWhere: sql`source_match_id IS NOT NULL`,
       set: {
-        eventId: values.eventId ?? null,
+        eventId: existingBySource?.eventId ?? values.eventId ?? null,
         homeTeamId: values.homeTeamId,
         visitingTeamId: values.visitingTeamId,
         playedOn: values.playedOn ?? null,

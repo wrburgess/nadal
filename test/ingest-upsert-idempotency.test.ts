@@ -516,6 +516,145 @@ describe("id-less team matches preserve a stored event link (Codex round 5, HC-a
   });
 });
 
+// Codex adversarial review (PR #54 round 8, rated High): round 5 fixed event preservation in the
+// ID-LESS branch above but left its SIBLING — the `sourceMatchId`-keyed `onConflictDoUpdate` branch
+// a few lines below it, in the SAME function — writing `eventId: values.eventId ?? null`
+// unconditionally, exactly the shape round 5 already fixed once. Round 7 made this reachable in a
+// way it was not before: a scorecard can now attach to (and set an event on) a `mid=`-bearing row,
+// so a re-pull of that SAME `mid=` (which always passes `eventId: null`, per team-pull's one call
+// site) silently erased the event the scorecard had just linked. Fixed with the identical
+// preserve/fill/refuse semantics, expressed differently because this branch has no separate
+// SELECT-then-UPDATE step to hang a JS `existing.eventId ?? values.eventId` off of the way the
+// id-less branch does: a PRE-SELECT by `sourceMatchId` runs first (better-sqlite3 is fully
+// synchronous, so there is no interleaving window between this select and the upsert that follows —
+// unlike a multi-connection database, nothing else can run in between), throwing the SAME conflict
+// error on two different non-null events, and computing the SAME JS expression
+// (`existing?.eventId ?? values.eventId ?? null`) the id-less branch already uses, fed into
+// `onConflictDoUpdate`'s `set` clause as a plain value rather than a hand-rolled SQL `coalesce` —
+// one shared notion of "how an event is written," not two independently-invented ones.
+describe("source-backed team matches preserve a stored event link (Codex round 8)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function seedEvent(db: ReturnType<typeof openDb>["db"], name: string) {
+    return db
+      .insert(events)
+      .values({ name, kind: "tournament", startsOn: "2026-08-01", endsOn: "2026-08-31" })
+      .returning()
+      .get();
+  }
+
+  it("REGRESSION (Codex round 8, rated High): an event-linked source-backed row survives a later re-pull of the SAME mid= (team-pull's own shape)", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-28", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181505" };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      // The exact shape team-pull's own call site uses: eventId: null, unconditionally.
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id); // survives, not erased
+      expect(rows[0]?.homeCourtsWon).toBe(3); // the rest of the re-pull still applies
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the reverse ordering: a source-backed row with no event is filled in by a later re-pull that supplies one", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-29", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181506" };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REGRESSION (Codex round 8): two DIFFERENT non-null events on the same mid= refuse, nothing overwritten", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const eventB = seedEvent(db, "Event B");
+      const base = { playedOn: "2026-08-30", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181507" };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      expect(() =>
+        upsertTeamMatch(db, {
+          ...base,
+          eventId: eventB.id,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          homeCourtsWon: 3,
+          visitingCourtsWon: 2,
+        }),
+      ).toThrow();
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id); // untouched
+      expect(rows[0]?.homeCourtsWon).toBeNull(); // nothing partially applied
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
 // Codex adversarial review, PR #31 round 2 [high]: the unordered-pair key fixed the duplicate but
 // over-merged — date alone cannot tell two same-day fixtures apart, and the pipeline was discarding
 // the schedule's Time and Match Site columns that could.

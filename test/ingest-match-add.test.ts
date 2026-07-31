@@ -1131,6 +1131,83 @@ describe("addMatchFromScorecard", () => {
         sqlite.close();
       }
     });
+
+    // Codex adversarial review (PR #54 round 8, rated Medium): round 7's fix trimmed whitespace but
+    // left CASE unfolded, so `"D1"` and `"d1"` still counted as two different courts — the identical
+    // duplicate-slot and re-ingest-idempotency defects, reachable through a different variant of the
+    // same "two spellings, one identity" shape. `scorecardPayloadSchema.parse` now uppercases too
+    // (src/ingest/scorecard.ts), so these two mirror round 7's whitespace pair exactly, for case.
+    it("REGRESSION (Codex round 8, rated Medium): 'D1' and 'd1' in ONE payload refuse as a duplicate slot, not two different courts", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const parsed = scorecardPayloadSchema.parse({
+          playedOn: "2026-08-28",
+          homeTeam: home.name,
+          visitingTeam: visiting.name,
+          courts: [
+            {
+              slot: "D1",
+              discipline: "doubles",
+              homePlayers: ["Bo Bramwell", "Cy Calder"],
+              visitingPlayers: ["Opp Two", "Opp Three"],
+            },
+            {
+              slot: "d1",
+              discipline: "doubles",
+              homePlayers: ["Bo Bramwell", "Cy Calder"],
+              visitingPlayers: ["Opp Two", "Opp Three"],
+            },
+          ],
+        });
+
+        const result = addMatchFromScorecard(db, parsed);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.kind).toBe("duplicate-slots");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (Codex round 8): a re-ingest correction spelled 'd1' updates the SAME court row 'D1' created, not a second one", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const courtBase = {
+          discipline: "doubles" as const,
+          homePlayers: ["Bo Bramwell", "Cy Calder"],
+          visitingPlayers: ["Opp Two", "Opp Three"],
+        };
+
+        const first = addMatchFromScorecard(
+          db,
+          scorecardPayloadSchema.parse({
+            playedOn: "2026-08-28",
+            homeTeam: home.name,
+            visitingTeam: visiting.name,
+            courts: [{ ...courtBase, slot: "D1" }],
+          }),
+        );
+        expect(first.ok).toBe(true);
+
+        const second = addMatchFromScorecard(
+          db,
+          scorecardPayloadSchema.parse({
+            playedOn: "2026-08-28",
+            homeTeam: home.name,
+            visitingTeam: visiting.name,
+            courts: [{ ...courtBase, slot: "d1" }],
+          }),
+        );
+        expect(second.ok).toBe(true);
+        if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
+
+        expect(db.select().from(courtMatches).all()).toHaveLength(1); // not a second row
+      } finally {
+        sqlite.close();
+      }
+    });
   });
 
   // Codex adversarial review of PR #54 round 2, High finding A: `upsertCourtMatch`'s id-less

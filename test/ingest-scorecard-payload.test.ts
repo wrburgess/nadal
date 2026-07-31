@@ -242,6 +242,23 @@ describe("scorecardPayloadSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  // Codex adversarial review (PR #54 round 8, rated Medium): round 7's `trim()` closed the
+  // whitespace variant of "two spellings, one identity" but left the CASE variant standing —
+  // `"D1"` and `"d1"` still compared unequal downstream, so the identical duplicate-slot and
+  // re-ingest-idempotency defects round 7 fixed for whitespace were still reachable through case.
+  // Deliberately NOT a slot grammar (an S/D token allow-list): spec:13 states court-slot format is
+  // per-event data, never a constant (Tulsa 2025 ran S1+D1-D4 against Springfield's four) — this
+  // canonicalizes the REPRESENTATION of whatever slot string a court names, without constraining
+  // the VOCABULARY of what a slot may be.
+  it("REGRESSION (Codex round 8, rated Medium): a lowercase slot is canonicalized to uppercase", () => {
+    const payload = fourCourtPayload();
+    payload.courts[0] = { ...payload.courts[0]!, slot: "d1" };
+    payload.courts[1] = { ...payload.courts[1]!, slot: "D5" };
+    const result = scorecardPayloadSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.courts[0]?.slot).toBe("D1");
+  });
+
   it("a bare name and a prefix-ID player entry both parse — resolution happens downstream, not here", () => {
     const payload = fourCourtPayload();
     payload.courts[0] = { ...payload.courts[0]!, homePlayers: ["usta:12345"] };

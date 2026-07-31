@@ -21,17 +21,27 @@ function expectedPlayerCount(discipline: "singles" | "doubles"): number {
 
 const scorecardCourtSchema = z
   .object({
-    // `.trim()` BEFORE `.min(1)` (Codex adversarial review, PR #54 round 7, rated Medium): `slot`
-    // is a write key — the duplicate-slot count in `src/ingest/match-add.ts` and the id-less court
-    // upsert's dedup both compare it by raw equality — so accepting it as any non-empty string let
-    // `"D1"` and `"D1 "` count as two DIFFERENT courts, evading the duplicate-slot refusal within
-    // one payload and creating a second row on a re-ingest correction that changed only whitespace.
-    // Canonicalized ONCE, here, rather than at each consumer, so every downstream reader sees the
-    // identical trimmed value — the same "one ladder, one notion of a name" shape `nameKey` and
+    // `.trim().toUpperCase()` BEFORE `.min(1)` (Codex adversarial review, PR #54 round 7 rated
+    // Medium, extended round 8 also rated Medium): `slot` is a write key — the duplicate-slot count
+    // in `src/ingest/match-add.ts` and the id-less court upsert's dedup both compare it by raw
+    // equality — so accepting it as any non-empty string let `"D1"`/`"D1 "` (round 7, whitespace)
+    // and `"D1"`/`"d1"` (round 8, case) each count as two DIFFERENT courts, evading the
+    // duplicate-slot refusal within one payload and creating a second row on a re-ingest correction
+    // that changed only whitespace or case. Canonicalized ONCE, here, rather than at each consumer,
+    // so every downstream reader (CLI and MCP alike — both parse through this one schema) sees the
+    // identical canonical value — the same "one ladder, one notion of a name" shape `nameKey` and
     // `normalizeTimeKey`/`normalizeSiteKey` already close for names and parent-match discriminators.
+    // Deliberately NOT a slot grammar (an S/D token allow-list), even though one would also close
+    // this: spec:13 states court-slot format is per-event data, never a constant (Tulsa 2025 ran
+    // S1+D1-D4 against Springfield's four courts) — canonicalizing the REPRESENTATION of whatever
+    // string a court names must not slide into constraining the VOCABULARY of what it may be.
     // Trimming runs before the length check, so a whitespace-only slot (nothing left after trimming)
-    // still fails validation rather than silently becoming a court with no real label.
-    slot: z.string().trim().min(1),
+    // still fails validation rather than silently becoming a court with no real label; case-folding
+    // uses `.toUpperCase()` specifically (not a bespoke fold) so the canonical form stays a real,
+    // displayable slot label ("D1", not a lowercase or otherwise-transformed variant) — this is
+    // storage-key canonicalization, not name-comparison folding, so it need not survive Unicode
+    // case-folding edge cases the way `nameKey` does for real people's names.
+    slot: z.string().trim().toUpperCase().min(1),
     discipline: z.enum(["singles", "doubles"]),
     homePlayers: z.array(z.string().min(1)),
     visitingPlayers: z.array(z.string().min(1)),
