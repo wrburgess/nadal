@@ -195,6 +195,52 @@ describe("predictedLineup — collisions and cascades", () => {
     expect(d2.basis).toBe("history");
   });
 
+  // Found by the independent Codex adversarial review of PR #47 (rated high). The first
+  // implementation resolved contention in TWO phases: every pair contended only for its MODAL slot,
+  // and only once all of those were settled did the losers cascade — into whatever was left, by
+  // slot order, contesting nobody. So a pair that lost D1 could never contend for D2 against D2's
+  // own claimant, however much better its combined rating. That contradicts the stated rule
+  // ("a contested slot goes to the better combined rating rank"), because a cascader and a primary
+  // claimant genuinely DO contest the same slot.
+  //
+  // Here 2/3 lose D1 to the stronger 4/5, then contest D2 — where they have five shared matches and
+  // a better combined rank than 6/7, who have four. Under the two-phase algorithm 6/7 took D2
+  // unopposed and 2/3 went unplaced entirely, which is the inversion this test pins down.
+  it("lets a pair that lost its modal slot contest its next-most-shared slot, and win it on rating", () => {
+    const rows = [
+      ...singles("S1", 1, 3),
+      ...doubles("D1", [2, 3], 6),
+      ...doubles("D2", [2, 3], 5),
+      ...doubles("D1", [4, 5], 7), // strongest pair, modal D1 — takes it from 2/3
+      ...doubles("D2", [6, 7], 4), // D2's primary claimant, but the weakest pair on the roster
+    ];
+
+    const result = predictedLineup({
+      rows,
+      rosterPlayerIds: FOUR_COURT_ROSTER,
+      ratings: ratingsFor({
+        1: { ntrp: 3.0 },
+        2: { ntrp: 4.3 },
+        3: { ntrp: 4.2 },
+        4: { ntrp: 4.5 },
+        5: { ntrp: 4.4 },
+        6: { ntrp: 3.5 },
+        7: { ntrp: 3.4 },
+      }),
+    });
+
+    expect(placement(result).D1, "the strongest pair takes its modal slot").toEqual([4, 5]);
+    expect(placement(result).D2, "the cascader contests D2 and wins it on combined rating").toEqual([2, 3]);
+    // 2/3 keep their FULL partnership evidence, not just the five matches at this slot.
+    expect(result.slots.find((s) => s.slot === "D2")!.support).toBe(11);
+    expect(result.slots.find((s) => s.slot === "D2")!.basis).toBe("history");
+    // Only three courts were ever fielded, so the pair that lost the contest is listed, not dropped.
+    expect(result.unplaced).toEqual([
+      { playerId: 6, courtMatches: 4 },
+      { playerId: 7, courtMatches: 4 },
+    ]);
+  });
+
   it("cascades a pair with nowhere historical left to any open slot, still as a history-based pairing", () => {
     const rows = [
       ...singles("S1", 1, 4),

@@ -554,19 +554,42 @@ export function predictedLineup(input: PredictedLineupInput): PredictedLineupRes
   // is D2, purely because D1 sorts first — splitting exactly the partnership the pair-first rule
   // exists to protect (the load-bearing test in test/query-derive-lineup.test.ts).
   //
-  // So each round proposes one winner per open slot (rating decides the contention), then commits
-  // only the single strongest proposal (partnership count decides the order), and re-proposes —
-  // because committing one pair can make another slot's winner unavailable and hand that slot to
-  // its runner-up. The roster is at most a couple of dozen players, so the repeated pass is free.
+  // So each round asks every still-available pair for its CURRENT preference — its highest-count
+  // slot among those still open — resolves each contested slot by combined rating rank, commits
+  // only the single strongest proposal (partnership count decides which slot settles first), and
+  // re-asks.
+  //
+  // "Current preference", not "modal slot", is the load-bearing part, and it is the second bug this
+  // loop has had (found by the independent Codex review of PR #47, rated high). An earlier version
+  // let each pair contend only for its MODAL slot and cascaded the losers afterwards, into whatever
+  // was left, contesting nobody. That silently exempted cascaders from the collision rule: a pair
+  // that lost D1 could not contend for D2 against D2's own claimant however much better its
+  // combined rating, so a weaker pair kept a slot a stronger one had real history at. Re-deriving
+  // the preference each round is what makes a cascade a genuine re-entry into contention rather
+  // than a consolation placement.
+  //
+  // Terminates: every iteration either commits one pair (shrinking `remainingPairs`) or breaks.
+  // The roster is at most a couple of dozen players, so the repeated pass is free.
   for (;;) {
-    const proposals: { slot: string; pair: PairCandidate }[] = [];
-    for (const slot of slotOrder) {
-      if (placed.has(slot) || slotDiscipline.get(slot) === "singles") continue;
-      const winner = Array.from(remainingPairs)
-        .filter((p) => pairAvailable(p) && p.bySlot[0]?.slot === slot)
-        .sort(byStrength)[0];
-      if (winner !== undefined) proposals.push({ slot, pair: winner });
+    const openDoubles = new Set(
+      slotOrder.filter((slot) => !placed.has(slot) && slotDiscipline.get(slot) !== "singles"),
+    );
+    const contendersBySlot = new Map<string, PairCandidate[]>();
+    for (const pair of remainingPairs) {
+      if (!pairAvailable(pair)) continue;
+      // `bySlot` is already ordered by shared count descending, so the first still-open entry IS
+      // this pair's best remaining historical slot.
+      const preference = pair.bySlot.find((entry) => openDoubles.has(entry.slot));
+      if (preference === undefined) continue; // nowhere it has ever played is open — handled below
+      const list = contendersBySlot.get(preference.slot) ?? [];
+      list.push(pair);
+      contendersBySlot.set(preference.slot, list);
     }
+
+    const proposals = Array.from(contendersBySlot.entries()).map(([slot, contenders]) => ({
+      slot,
+      pair: [...contenders].sort(byStrength)[0]!,
+    }));
     if (proposals.length === 0) break;
 
     proposals.sort(
@@ -578,18 +601,16 @@ export function predictedLineup(input: PredictedLineupInput): PredictedLineupRes
     remainingPairs.delete(pair);
   }
 
-  // 2b. Pairs that lost a collision cascade — first to their own next-most-shared open slot, then
-  // to any open doubles slot. They are still real partnerships, so the basis stays "history".
+  // 2b. Pairs with no open slot they have ever shared. They are still real partnerships, so they
+  // take an open court ahead of the rating-built pairings below, and keep `basis: "history"`.
   for (const pair of Array.from(remainingPairs).sort(byStrength)) {
     if (!pairAvailable(pair)) {
       remainingPairs.delete(pair);
       continue;
     }
-    const historical = pair.bySlot.find((s) => !placed.has(s.slot) && slotDiscipline.get(s.slot) !== "singles");
     const fallback = slotOrder.find((s) => !placed.has(s) && slotDiscipline.get(s) !== "singles");
-    const slot = historical?.slot ?? fallback;
-    if (slot === undefined) continue; // every slot filled — this pair falls through to `unplaced`
-    place(slot, [pair.low, pair.high], pair.count, "history");
+    if (fallback === undefined) continue; // every slot filled — this pair falls through to `unplaced`
+    place(fallback, [pair.low, pair.high], pair.count, "history");
     remainingPairs.delete(pair);
   }
 
