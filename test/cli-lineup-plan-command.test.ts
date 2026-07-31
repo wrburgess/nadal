@@ -161,6 +161,34 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
     expect(payload.slots.find((s) => s.slot === "D3")).toMatchObject({ basis: "rating", support: 0 });
   });
 
+  // The end-to-end half of the --json sanitization fix (Codex review of PR #47, rated medium):
+  // the emitJson unit tests prove the helper works, this proves the command actually uses it.
+  it("--json strips a bidi override out of a scraped player name", async () => {
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "IA/Versteeg/40&Over3.5M" }).returning().get();
+    const hostile = `Ada${RTL_OVERRIDE}Ashby`;
+    const p1 = db.insert(players).values({ canonicalName: hostile }).returning().get();
+    const p2 = db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    for (const p of [p1, p2]) {
+      db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
+    }
+    play(db, "D1", "doubles", [p1.id, p2.id], 3);
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M", "--json"]);
+
+    expect(code).toBe(0);
+    const line = logSpy.mock.calls.at(-1)?.[0] as string;
+    expect(line, "a bidi override must not reach the terminal through --json").not.toContain(RTL_OVERRIDE);
+    // Still valid JSON carrying the same record, just with the hostile character neutralized.
+    const payload = JSON.parse(line) as { slots: { players: { canonicalName: string }[] }[] };
+    expect(payload.slots[0]!.players.map((pl) => pl.canonicalName).some((n) => n.startsWith("Ada"))).toBe(true);
+  });
+
   it("--quiet suppresses stdout but still exits 0", async () => {
     seedVersteeg({ withRatings: true });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);

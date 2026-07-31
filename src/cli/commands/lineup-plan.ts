@@ -3,7 +3,7 @@ import { openDb } from "../../db/client.js";
 import { NoCourtMatchHistoryError, getLineupPlan } from "../../query/lineup.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
-import { emitSummary } from "../emit.js";
+import { emitJson, emitSummary } from "../emit.js";
 import { formatLineupPlan } from "../format-lineup.js";
 
 /**
@@ -69,7 +69,7 @@ export const lineupPlan: Command = {
       }
 
       if (!opts.quiet) {
-        console.log(opts.json ? JSON.stringify(plan) : formatLineupPlan(plan));
+        console.log(opts.json ? emitJson(plan) : formatLineupPlan(plan));
       }
       return 0;
     } finally {

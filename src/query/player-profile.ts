@@ -240,24 +240,28 @@ export function getPlayerProfile(db: Db, playerId: number, options: { since: str
     slotTendencies: slotTendencies(courtRows, playerId),
     partnerFrequency: partnerNames,
     teamMemberships: membershipRows,
-    // Every section here now has a real writer, and each `hasWriter` has to keep tracking that
-    // fact about the CODEBASE rather than being frozen at whatever was true when it was written
-    // (docs/findings.md, #15/Task 3 rule 6). Leaving one hardcoded `false` after its writer landed
-    // is exactly the silent lie that rule warns about: the dossier would keep reporting "not
-    // collected yet" over real data sitting in the table. `hasWriter: true` plus a REAL count is
-    // what lets `dataGaps` distinguish "empty" (a writer exists; nothing recorded for this player)
-    // from "has-data", rather than both reading identically to "not-collected".
+    // `hasWriter` is a fact about the CODEBASE — "can anything, anywhere, populate this section for
+    // a player?" — and it has to keep tracking that fact rather than freezing at whatever was true
+    // when it was written (docs/findings.md, #15/Task 3 rule 6). `availability` and `captain_notes`
+    // got their writers in #17 PR A (`setAvailability`, `addCaptainNote`), so both are `true` with a
+    // REAL count, which is what lets `dataGaps` distinguish "empty" (a writer exists; nothing
+    // recorded for this player) from "has-data".
     //
-    // `availability` and `captain_notes` got their writers in #17 PR A (`setAvailability`,
-    // `addCaptainNote`); `events` got `addEvent` in #17 PR B, which is what makes the availability
-    // writer reachable at all. Its count is player-scoped like its siblings: the events this player
-    // has an event-scoped `team_memberships` row for — not the total on file, which would report
-    // the same number for every player in the dossier and tell a reader nothing about them.
+    // `events` stays `false`, and the reason is narrower than it used to be. #17 PR B added
+    // `addEvent`, so the `events` TABLE now has a production writer — but this section is about a
+    // PLAYER's events, and the thing that would associate the two is an event-scoped
+    // `team_memberships` row. Nothing writes one: `tn team pull` passes `eventId: null` at both of
+    // its call sites (docs/findings.md, #15), and `addEvent` does not touch memberships at all. So
+    // for every real player this section is not "empty", it is genuinely *not collected*, and
+    // saying otherwise would be the same silent lie in the opposite direction.
+    //
+    // An earlier revision of this comment flipped it to `true` on the strength of `addEvent`
+    // existing, counting event-scoped memberships that no production path ever creates — a stale
+    // literal replaced with an unreachable one. Caught by the independent Codex review of PR #47.
+    // Flip this to `true` when a writer populates `team_memberships.event_id` (TennisLink, #27, is
+    // the likely source), not when some adjacent table gains a writer.
     dataGaps: dataGaps({
-      events: {
-        count: membershipRows.filter((m) => m.eventId !== null).length,
-        hasWriter: true,
-      },
+      events: { count: 0, hasWriter: false },
       availability: {
         count: db.select({ id: availability.id }).from(availability).where(eq(availability.playerId, playerId)).all()
           .length,

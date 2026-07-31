@@ -3,7 +3,7 @@ import { openDb } from "../../db/client.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../../query/player-profile.js";
 import type { PlayerProfile } from "../../query/player-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
-import { emitSummary } from "../emit.js";
+import { emitJson, emitSummary } from "../emit.js";
 import { formatDataGapsLine, formatName, formatPartnerFrequency, formatRatingTrajectory, formatRecord, formatSlotTendencies } from "../format-profile.js";
 import { sixMonthsAgo } from "../window.js";
 
@@ -73,7 +73,7 @@ export const playerShow: Command = {
       // `--quiet` wins over `--json` (GRAMMAR.md), same as `emitSummary` — checked here rather
       // than routed through `emitSummary` itself, since neither success form is a `key=value` line.
       if (!opts.quiet) {
-        console.log(opts.json ? JSON.stringify(profile) : formatPlayerProfileText(profile));
+        console.log(opts.json ? emitJson(profile) : formatPlayerProfileText(profile));
       }
       return 0;
     } finally {

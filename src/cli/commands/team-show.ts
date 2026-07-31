@@ -3,7 +3,7 @@ import { openDb } from "../../db/client.js";
 import { getTeamProfile, resolveTeamTarget } from "../../query/team-profile.js";
 import type { TeamProfile } from "../../query/team-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
-import { emitSummary } from "../emit.js";
+import { emitJson, emitSummary } from "../emit.js";
 import { formatName, formatRecord, formatSlotTendencies } from "../format-profile.js";
 import { sixMonthsAgo } from "../window.js";
 
@@ -68,7 +68,7 @@ export const teamShow: Command = {
       const profile = getTeamProfile(db, resolution.teamId, { since: sixMonthsAgo() });
 
       if (!opts.quiet) {
-        console.log(opts.json ? JSON.stringify(profile) : formatTeamProfileText(profile));
+        console.log(opts.json ? emitJson(profile) : formatTeamProfileText(profile));
       }
       return 0;
     } finally {
