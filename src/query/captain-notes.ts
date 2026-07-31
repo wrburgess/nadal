@@ -3,7 +3,7 @@
 // (Task 3, an idempotent upsert), notes are APPEND-ONLY — a journal, not a current-state table —
 // so two calls about the same player produce two rows, deliberately, never a merge.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { captainNotes, teamMemberships } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { requireHomeTeam } from "./home-team.js";
@@ -25,12 +25,22 @@ export type AddCaptainNoteInput = {
   text: string;
 };
 
+// Issue #49: shared by BOTH call sites below (the subject player and the pairing partner) — a
+// retired row is not a CURRENT roster row, so a note about (or paired with) someone the last
+// successful pull did not see refuses exactly like a note about a stranger, at both call sites at
+// once, since both go through this one function.
 function isOnHomeRoster(db: Db, playerId: number, homeTeamId: number): boolean {
   return (
     db
       .select({ id: teamMemberships.id })
       .from(teamMemberships)
-      .where(and(eq(teamMemberships.playerId, playerId), eq(teamMemberships.teamId, homeTeamId)))
+      .where(
+        and(
+          eq(teamMemberships.playerId, playerId),
+          eq(teamMemberships.teamId, homeTeamId),
+          isNull(teamMemberships.retiredAt),
+        ),
+      )
       .all().length > 0
   );
 }

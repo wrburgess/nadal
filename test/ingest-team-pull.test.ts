@@ -1,6 +1,7 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
-import { teamMatches, teamMemberships, teams } from "../src/db/schema.js";
+import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { hrefParam } from "../src/parsers/dom.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
 import { pullTeam } from "../src/ingest/team-pull.js";
@@ -62,6 +63,47 @@ function buildFetcher(names = ROSTER_NAMES) {
     fixtures[matchHistoryUrlFor(name, year)] = { body: syntheticEmptyMatchHistory(name) };
   }
   return { fetcher: createStubFetcher(fixtures), year };
+}
+
+/**
+ * Removes ONE roster row (bounded by its nearest enclosing `<tr>...</tr>`) whose profile link
+ * carries `playerName`, synthesizing "this player no longer appears on the roster page" without a
+ * second captured fixture — the same `team.html.replace(...)` mutation approach already used above
+ * (`syntheticEmptyMatchHistory`'s callers, the unplayed-fixture regression in
+ * `ingest-upsert-idempotency.test.ts`), which keeps the fixture-vocabulary allow-list
+ * (`tools/fixture-policy.ts`) out of the critical path. Bounded by literal `<tr`/`</tr>` markers
+ * rather than a hand-copied string so it survives incidental whitespace in the committed fixture;
+ * this is test-fixture surgery, not a parser, so a plain string search is proportionate here.
+ * Returns `null` (rather than throwing) when no such row is found, so a caller can loop to remove
+ * every occurrence of a name that legitimately repeats on the page (this fixture repeats its whole
+ * roster table for a second, unused view).
+ */
+function removeOneRosterRow(html: string, playerName: string): string | null {
+  const anchor = `<a class="link" href="/adult/profile.aspx?playername=${playerName}`;
+  const anchorIndex = html.indexOf(anchor);
+  if (anchorIndex === -1) return null;
+  const rowStart = html.lastIndexOf("<tr", anchorIndex);
+  const rowEnd = html.indexOf("</tr>", anchorIndex);
+  if (rowStart === -1 || rowEnd === -1) {
+    throw new Error(`removeOneRosterRow: could not bound the <tr> for "${playerName}"`);
+  }
+  return html.slice(0, rowStart) + html.slice(rowEnd + "</tr>".length);
+}
+
+/** Removes the FIRST occurrence of `playerName`'s roster row — the one `parseTennisRecordTeam`
+ * actually reads (`tableWithCellText` matches the first `div.large` table with an NTRP column). */
+function removeRosterRow(html: string, playerName: string): string {
+  const result = removeOneRosterRow(html, playerName);
+  if (result === null) throw new Error(`removeRosterRow: no roster row found for "${playerName}"`);
+  return result;
+}
+
+/** Removes every `names` entry's row from the FIRST (parsed) roster table, one call per name —
+ * used to synthesize a roster page that parses to zero members. */
+function removeAllRosterRows(html: string, names: string[]): string {
+  let result = html;
+  for (const name of names) result = removeRosterRow(result, name);
+  return result;
 }
 
 describe("pullTeam", () => {
@@ -209,6 +251,160 @@ describe("pullTeam", () => {
       expect(memberships).toHaveLength(18);
 
       warnSpy.mockRestore();
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Issue #49, Task 3: the reconcile against the just-parsed roster, run inside `pullTeam`'s existing
+// transaction. `removeRosterRow`/`removeAllRosterRows` above synthesize a changed roster page
+// without a second captured fixture.
+describe("pullTeam roster retirement (issue #49)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  it("a member absent from a re-pulled roster is retired; the other 17 are untouched; retiredCount reports it", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const first = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
+        target: team.source.url,
+      });
+      expect(first.kind).toBe("ok");
+      if (first.kind !== "ok") throw new Error("expected ok");
+      expect(first.retiredCount).toBe(0);
+
+      const withoutEllis = removeRosterRow(team.html, "Ellis Eastwick");
+      expect(withoutEllis).not.toBe(team.html);
+      const second = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: withoutEllis } }),
+        target: team.source.url,
+      });
+
+      expect(second.kind).toBe("ok");
+      if (second.kind !== "ok") throw new Error("expected ok");
+      expect(second.rosterCount).toBe(17);
+      expect(second.retiredCount).toBe(1);
+
+      // Soft-retire: no row is deleted. Still 18 membership rows, one of them now retired.
+      const memberships = db.select().from(teamMemberships).all();
+      expect(memberships).toHaveLength(18);
+      const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+      const ellisMembership = memberships.find((m) => m.playerId === ellis.id)!;
+      expect(ellisMembership.retiredAt).not.toBeNull();
+      const others = memberships.filter((m) => m.playerId !== ellis.id);
+      expect(others.every((m) => m.retiredAt === null), "the other 17 are untouched").toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a member who returns to the roster after being absent is un-retired, and remains one row", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
+        target: team.source.url,
+      });
+      const withoutEllis = removeRosterRow(team.html, "Ellis Eastwick");
+      await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: withoutEllis } }),
+        target: team.source.url,
+      });
+
+      const restored = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
+        target: team.source.url,
+      });
+
+      expect(restored.kind).toBe("ok");
+      if (restored.kind !== "ok") throw new Error("expected ok");
+      expect(restored.retiredCount).toBe(0);
+
+      const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+      const ellisRows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
+      expect(ellisRows, "still one row, never a second one created by the un-retire").toHaveLength(1);
+      expect(ellisRows[0]!.retiredAt).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a pull whose parse yields a zero-length roster retires nobody (the empty-observed-set guard, at the integration level)", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
+        target: team.source.url,
+      });
+      const before = db.select().from(teamMemberships).all();
+      expect(before).toHaveLength(18);
+
+      const emptyRoster = removeAllRosterRows(team.html, ROSTER_NAMES);
+      const result = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: emptyRoster } }),
+        target: team.source.url,
+      });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.rosterCount).toBe(0);
+      expect(result.retiredCount, "an empty observed roster must not read as 'everyone left'").toBe(0);
+
+      const after = db.select().from(teamMemberships).all();
+      expect(after).toEqual(before);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a pull that aborts on an ambiguous roster entry mid-loop leaves memberships EXACTLY as they were", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const first = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
+        target: team.source.url,
+      });
+      expect(first.kind).toBe("ok");
+      const before = db.select().from(teamMemberships).all();
+      expect(before).toHaveLength(18);
+
+      // "Yuma Yarrowby" (the 4th of 18 — mid-loop, not first) is respelled to a name one edit away
+      // from the ALREADY-ON-FILE "Yuma Yarrowby" — not an exact match (tier 2 misses), but fuzzy-
+      // close enough that resolvePlayer's tier 3 refuses to guess and returns ambiguous, aborting
+      // the whole transaction. The three roster entries processed before it in loop order
+      // (Ellis/Emory/Ira) must not "stick" either, and — the regression this test exists for —
+      // `retireAbsentMemberships` (which runs AFTER the roster loop, still inside the transaction)
+      // must never be reached at all, so none of the OTHER 17 pre-existing memberships are retired
+      // on the strength of a partial, aborted roster.
+      const mutated = team.html.replace(
+        '<a class="link" href="/adult/profile.aspx?playername=Yuma Yarrowby">Yuma Yarrowby</a>',
+        '<a class="link" href="/adult/profile.aspx?playername=Yuma Yarrowbyy">Yuma Yarrowbyy</a>',
+      );
+      expect(mutated).not.toBe(team.html);
+
+      const result = await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: mutated } }),
+        target: team.source.url,
+      });
+
+      expect(result.kind).toBe("ambiguous");
+      const after = db.select().from(teamMemberships).all();
+      expect(after).toEqual(before);
     } finally {
       sqlite.close();
     }

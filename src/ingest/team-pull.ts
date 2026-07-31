@@ -8,7 +8,7 @@ import { AmbiguousIdentityError } from "./errors.js";
 import type { PageFetcher } from "./fetch.js";
 import { findTeamByName, resolvePlayer, resolveTeam } from "./identity.js";
 import { matchHistoryUrlFor, pullPlayer, slugFromUrl } from "./player-pull.js";
-import { upsertMembership, upsertTeam, upsertTeamMatch } from "./upsert.js";
+import { retireAbsentMemberships, upsertMembership, upsertTeam, upsertTeamMatch } from "./upsert.js";
 import { sanitizeValue } from "../sanitize.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -33,6 +33,12 @@ export type TeamPullResult =
       matchCount: number;
       archivedPath: string;
       skippedRosterEntries: string[];
+      /** Issue #49: how many pre-existing roster rows this pull just soft-retired (present before,
+       * absent from this parse). Surfaced on the result — not only in the database — because
+       * retirement removes a player from every current-roster read/write, and a caller relying on
+       * `rosterCount` alone would have no way to notice a roster shrank rather than merely failed
+       * to grow. */
+      retiredCount: number;
     }
   | { kind: "unknown-target"; message: string }
   | { kind: "ambiguous"; candidates: string[] }
@@ -121,8 +127,9 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
   }
 
   let team: TeamRow;
+  let retiredCount: number;
   try {
-    team = db.transaction((tx) => {
+    const txResult = db.transaction((tx) => {
       const upserted = upsertTeam(tx, {
         name: parsed.teamName,
         section: parsed.section,
@@ -130,13 +137,36 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
         tennisrecordUrl: url,
       });
 
+      const observedPlayerIds: number[] = [];
       for (const entry of parsed.roster) {
         const resolved = resolvePlayer(tx, { name: entry.name });
         if (resolved.kind === "ambiguous") {
           throw new AmbiguousIdentityError(resolved.candidates.map((p) => p.canonicalName));
         }
         upsertMembership(tx, { playerId: resolved.row.id, teamId: upserted.id, eventId: null });
+        observedPlayerIds.push(resolved.row.id);
       }
+
+      // Issue #49: reconcile departures against the JUST-PARSED roster, still inside this same
+      // transaction — a mid-pull failure (the ambiguous-identity throw above, or the schedule loop
+      // below) must never retire against a partial roster.
+      //
+      // This is what makes the abort-on-ambiguity behavior a few lines up NEWLY load-bearing: an
+      // ambiguous roster entry throws and rolls back the whole transaction before this line ever
+      // runs, so `retireAbsentMemberships` only ever sees a COMPLETE `observedPlayerIds`. If a
+      // future change ever made an ambiguous entry non-fatal (skip-and-continue, say), this call
+      // would silently retire real members whose names merely came later in page order than the
+      // skipped one — a partial-roster hazard the empty-set guard INSIDE `retireAbsentMemberships`
+      // cannot see, because a partial roster is not an empty one.
+      const observedRetiredCount = retireAbsentMemberships(tx, {
+        teamId: upserted.id,
+        observedPlayerIds,
+        // The pull's single already-computed timestamp (`source.fetchedAt` above), not a fresh
+        // `new Date()` — every retirement this pull records shares one instant, so a re-run a
+        // moment later cannot introduce clock skew between memberships that were, in truth, all
+        // last (not) observed by the same fetch.
+        retiredAt: source.fetchedAt,
+      });
 
       for (const row of parsed.schedule) {
         const opponent = resolveTeam(tx, { name: row.opponentTeamName });
@@ -157,8 +187,10 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
         });
       }
 
-      return upserted;
+      return { team: upserted, retiredCount: observedRetiredCount };
     });
+    team = txResult.team;
+    retiredCount = txResult.retiredCount;
   } catch (err) {
     if (err instanceof AmbiguousIdentityError) return { kind: "ambiguous", candidates: err.candidates };
     return { kind: "error", message: err instanceof Error ? err.message : String(err) };
@@ -193,5 +225,6 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     matchCount: parsed.schedule.length,
     archivedPath,
     skippedRosterEntries,
+    retiredCount,
   };
 }

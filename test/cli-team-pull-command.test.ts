@@ -42,8 +42,45 @@ describe("tn team pull (end-to-end via dispatch)", () => {
     expect(code).toBe(0);
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0]?.[0]).toMatch(
-      /^team pull status=ok team=".+" roster=18 matches=10 archived=".+"$/,
+      /^team pull status=ok team=".+" roster=18 matches=10 archived=".+" retired=0$/,
     );
+  });
+
+  // Issue #49: retirement is a data-REMOVING effect and must be visible in the command's own
+  // output, not only in the database — a caller reading `roster=17` alone has no way to tell
+  // "one fewer person pulled" from "this page never had that person to begin with".
+  it("reports retired=N in the summary when a re-pull no longer observes a previously-pulled member", async () => {
+    runMigrations();
+    // Remove Ellis Eastwick's WHOLE roster row (not just the profile link) — a missing link alone
+    // still leaves the person on the roster, which `test/ingest-team-pull.test.ts`'s "no profile
+    // link" case already covers; this needs the person genuinely absent from the parsed roster.
+    const anchor = '<a class="link" href="/adult/profile.aspx?playername=Ellis Eastwick">Ellis Eastwick</a>';
+    const anchorIndex = team.html.indexOf(anchor);
+    expect(anchorIndex).toBeGreaterThan(-1);
+    const rowStart = team.html.lastIndexOf("<tr", anchorIndex);
+    const rowEnd = team.html.indexOf("</tr>", anchorIndex) + "</tr>".length;
+    const withoutEllis = team.html.slice(0, rowStart) + team.html.slice(rowEnd);
+    expect(withoutEllis).not.toBe(team.html);
+
+    let call = 0;
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: (() => {
+        call += 1;
+        return call === 1 ? team.html : withoutEllis;
+      })(),
+      fetchedAt: new Date().toISOString(),
+    }));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await dispatch(["team", "pull", team.source.url]);
+    const secondCode = await dispatch(["team", "pull", team.source.url]);
+
+    expect(secondCode).toBe(0);
+    const secondLine = logSpy.mock.calls[1]?.[0] as string;
+    expect(secondLine).toMatch(/roster=17/);
+    expect(secondLine).toMatch(/retired=1/);
   });
 
   it("round-trips a team name containing a double quote, a backslash, and a newline, un-spoofed", async () => {
@@ -66,6 +103,7 @@ describe("tn team pull (end-to-end via dispatch)", () => {
       matchCount: 0,
       archivedPath: "raw/tennisrecord/x.html",
       skippedRosterEntries: [],
+      retiredCount: 0,
     });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 

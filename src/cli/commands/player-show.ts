@@ -29,7 +29,13 @@ function formatPlayerProfileText(profile: PlayerProfile): string {
     `  doubles: ${formatRecord(profile.doublesRecord.sixMonth)} (6mo) / ${formatRecord(profile.doublesRecord.allTime)} (all-time)`,
     `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
     `  partners: ${formatPartnerFrequency(profile.partnerFrequency)}`,
-    `  teams: ${profile.teamMemberships.map((m) => formatName(m.teamName)).join(", ") || "none"}`,
+    // Issue #49: a retired membership is history, not hidden (player-profile.ts never filters it) —
+    // labelled "(former)" so a captain reading the profile can tell a former team from a current one.
+    `  teams: ${
+      profile.teamMemberships
+        .map((m) => `${formatName(m.teamName)}${m.retiredAt !== null ? " (former)" : ""}`)
+        .join(", ") || "none"
+    }`,
   ];
   if (gapsLine !== null) lines.push(`  not collected yet: ${gapsLine}`);
   return lines.join("\n");

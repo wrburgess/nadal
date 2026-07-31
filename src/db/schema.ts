@@ -74,6 +74,16 @@ export const teamMemberships = sqliteTable("team_memberships", {
   playerId: integer("player_id").notNull().references(() => players.id),
   teamId: integer("team_id").notNull().references(() => teams.id),
   eventId: integer("event_id").references(() => events.id),
+  // Issue #49: soft-retire a departed roster member rather than leave this table append-only
+  // forever (docs/findings.md, #49's original review note — "a departed player stays on every
+  // roster read"). Nullable for the same SQLite reason as players.nameKey above (:13-19): `ALTER
+  // TABLE ... ADD COLUMN ... NOT NULL DEFAULT '' CHECK (...)` rejects a populated table, and the
+  // load-bearing half is that NULL means "not retired" ANYWAY — the migration backfills every
+  // pre-existing row to NULL rather than inventing a departure date nobody observed. Set by
+  // `retireAbsentMemberships` (src/ingest/upsert.ts) when a `tn team pull` no longer observes the
+  // player on the roster it just parsed, and cleared back to NULL by `upsertMembership` the moment
+  // the player is observed again — retirement is reversible by construction, never a second row.
+  retiredAt: text("retired_at"),
 }, (t) => [
   uniqueIndex("membership_unique").on(t.playerId, t.teamId, t.eventId),
   // SQLite treats NULLs as distinct even under a UNIQUE index/constraint, so the 3-column index

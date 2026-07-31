@@ -7,6 +7,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import Database from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -91,6 +92,33 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       sqlite2.close();
     }
     expect(payload).toEqual(expected);
+  });
+
+  // Issue #49: an explicit wire-shape pin. `player_show`'s handler returns `getPlayerProfile`
+  // VERBATIM (src/mcp/tools.ts), so the new `retiredAt` field is additive and automatic — but
+  // `test/mcp-tool-parity.test.ts` only checks tool-name/command parity, not payload shape, so
+  // nothing else in the suite would notice a silent regression here.
+  it("player_show carries retiredAt on a team membership — the new field survives the real MCP wire", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Former Team" }).returning().get();
+    const player = db.insert(players).values({ canonicalName: "Departed Player" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    db.update(teamMemberships)
+      .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+      .where(eq(teamMemberships.playerId, player.id))
+      .run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "player_show", arguments: { target: player.canonicalName } });
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(result)) as { teamMemberships: { teamId: number; retiredAt: string | null }[] };
+
+    expect(payload.teamMemberships).toEqual([
+      { teamId: team.id, teamName: "Former Team", eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" },
+    ]);
   });
 
   it("a required argument missing returns a structured error result, not a crash — and the server keeps working afterward", async () => {

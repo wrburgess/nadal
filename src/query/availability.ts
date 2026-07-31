@@ -5,7 +5,7 @@
 // taken as a fourth caller-supplied field (Task 3 decision 2): the event whose `starts_on`..`ends_on`
 // range contains the day, inclusive at both ends.
 
-import { and, eq, gte, isNotNull, lte } from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import { availability, events, teamMemberships } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
@@ -154,12 +154,15 @@ function selectEvent(db: Db, day: string, candidates: EventRow[], eventName?: st
  * half the upsert key, so an unnormalized one silently splits a single day across rows); no home
  * team is designated at all; the day resolves to zero events, or to more than one with no
  * `eventName` given to choose between them, or to an `eventName` that is unknown or does not cover
- * the day; or the player is not on the home team's roster. "On the roster" is ANY
- * `team_memberships` row for (playerId, homeTeamId) regardless of `event_id` — including a NULL
- * `event_id`, which is what every roster `tn team pull` actually writes (docs/findings.md, #15) —
- * not a row scoped to the SAME event `day` resolved to; requiring that exact match would refuse
- * availability for every real pulled roster, since nothing in the current ingest pipeline ever
- * writes an event-scoped membership.
+ * the day; or the player is not on the home team's CURRENT roster. "On the roster" is ANY
+ * non-retired `team_memberships` row for (playerId, homeTeamId) regardless of `event_id` —
+ * including a NULL `event_id`, which is what every roster `tn team pull` actually writes
+ * (docs/findings.md, #15) — not a row scoped to the SAME event `day` resolved to; requiring that
+ * exact match would refuse availability for every real pulled roster, since nothing in the current
+ * ingest pipeline ever writes an event-scoped membership. Issue #49: "current" is the newer half of
+ * that sentence — a soft-retired row (`retired_at IS NOT NULL`) no longer counts as "on the
+ * roster" either, so `tn player avail` now refuses for a player the last successful `tn team pull`
+ * did not see — a new refusal on a previously-working command, by design (stated in the PR body).
  */
 export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailabilityResult {
   const statusResult = availabilityStatusSchema.safeParse(input.status);
@@ -194,7 +197,16 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
       tx
         .select({ id: teamMemberships.id })
         .from(teamMemberships)
-        .where(and(eq(teamMemberships.playerId, input.playerId), eq(teamMemberships.teamId, homeTeam.id)))
+        .where(
+          and(
+            eq(teamMemberships.playerId, input.playerId),
+            eq(teamMemberships.teamId, homeTeam.id),
+            // Issue #49: a retired row is not a CURRENT roster row — recording availability for a
+            // player the last successful pull did not see is the same error as printing them on
+            // the roster.
+            isNull(teamMemberships.retiredAt),
+          ),
+        )
         .all().length > 0;
     if (!onRoster) {
       throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);

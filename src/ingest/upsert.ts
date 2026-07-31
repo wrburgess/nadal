@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, notInArray, or, sql } from "drizzle-orm";
 import { nameKey } from "../db/name-key.js";
 import {
   courtMatchPlayers,
@@ -121,34 +121,82 @@ export function upsertPlayer(db: Db, values: UpsertPlayerFields): PlayerRow {
  * `membership_unique` when `eventId` is a real event, or the partial `membership_unique_no_event`
  * when it is null (SQLite treats NULLs as distinct, so the 3-column index alone fails open there).
  *
- * Membership carries no other mutable column, so the `set` re-assigns `playerId` to itself — a
- * genuine no-op, chosen over `onConflictDoNothing` because SQLite's upsert grammar puts a target's
- * `WHERE` clause (needed to match the PARTIAL no-event index) before `DO ...`, and drizzle's
- * `onConflictDoNothing` only ever emits it after `DO NOTHING`, which SQLite rejects outright for a
- * targeted conflict — confirmed empirically, not assumed from the docs.
+ * Issue #49: on conflict, `set: { retiredAt: null }` UN-RETIRES the row. Observing a player on a
+ * roster IS the un-retire — it needs no separate call site and cannot be forgotten, since every
+ * writer of `team_memberships` goes through this function. Before retirement existed, membership
+ * carried no other mutable column at all, so this `set` re-assigned `playerId` to itself — a
+ * genuine no-op kept only because SQLite's upsert grammar puts a target's `WHERE` clause (needed to
+ * match the PARTIAL no-event index) before `DO ...`, and drizzle's `onConflictDoNothing` only ever
+ * emits it after `DO NOTHING`, which SQLite rejects outright for a targeted conflict — confirmed
+ * empirically, not assumed from the docs. `retiredAt` now gives that `set` real work to do; the
+ * reason `onConflictDoUpdate` is used at all is unchanged.
  */
 export function upsertMembership(db: Db, values: TeamMembershipInsert): TeamMembershipRow {
   if (values.eventId === null || values.eventId === undefined) {
     return db
       .insert(teamMemberships)
-      .values({ ...values, eventId: null })
+      .values({ ...values, eventId: null, retiredAt: null })
       .onConflictDoUpdate({
         target: [teamMemberships.teamId, teamMemberships.playerId],
         targetWhere: sql`event_id IS NULL`,
-        set: { playerId: values.playerId },
+        set: { retiredAt: null },
       })
       .returning()
       .get();
   }
   return db
     .insert(teamMemberships)
-    .values(values)
+    .values({ ...values, retiredAt: null })
     .onConflictDoUpdate({
       target: [teamMemberships.playerId, teamMemberships.teamId, teamMemberships.eventId],
-      set: { playerId: values.playerId },
+      set: { retiredAt: null },
     })
     .returning()
     .get();
+}
+
+/**
+ * Issue #49: retires every `teamId` roster row whose player was NOT observed on the just-parsed
+ * roster. Called once per `pullTeam` (Task 3), inside the SAME transaction as every other write
+ * that pull makes, so a mid-pull failure can never retire against a partial roster.
+ *
+ * Two guards live HERE rather than in the caller, so a future second caller inherits both:
+ *
+ *  - An EMPTY `observedPlayerIds` is a no-op that writes nothing and returns 0, checked BEFORE any
+ *    SQL is built. A roster page that parsed to zero members is far more likely a changed page
+ *    shape than an actually-empty roster, and "everyone left" is not a conclusion this function is
+ *    willing to draw from that signal alone — the over-retiring risk the assessment named. (This
+ *    guard also sidesteps SQLite's `NOT IN ()` footgun: an empty array handed to `notInArray` would
+ *    build a condition that matches every row, which is exactly backwards here.)
+ *  - `retired_at IS NULL` in the predicate means an already-retired row keeps its ORIGINAL
+ *    timestamp — a repeated pull that still doesn't observe the player does not keep rewriting when
+ *    their departure was first noticed.
+ *
+ * Scoped to `event_id IS NULL`: a team pull observes the league roster, never an event roster
+ * (nothing writes an event-scoped membership in production today —
+ * src/query/player-profile.ts's `dataGaps.events.hasWriter: false`), so it must not retire one.
+ */
+export function retireAbsentMemberships(
+  db: Db,
+  options: { teamId: number; observedPlayerIds: number[]; retiredAt: string },
+): number {
+  const { teamId, observedPlayerIds, retiredAt } = options;
+  if (observedPlayerIds.length === 0) return 0;
+
+  const result = db
+    .update(teamMemberships)
+    .set({ retiredAt })
+    .where(
+      and(
+        eq(teamMemberships.teamId, teamId),
+        isNull(teamMemberships.eventId),
+        isNull(teamMemberships.retiredAt),
+        notInArray(teamMemberships.playerId, observedPlayerIds),
+      ),
+    )
+    .run();
+
+  return result.changes;
 }
 
 /**
