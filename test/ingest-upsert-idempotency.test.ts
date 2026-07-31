@@ -13,6 +13,7 @@ import { resolvePlayer } from "../src/ingest/identity.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
 import { pullTeam } from "../src/ingest/team-pull.js";
 import {
+  normalizeSiteKey,
   normalizeTimeKey,
   upsertCourtMatch,
   upsertRatingObservation,
@@ -467,13 +468,55 @@ describe("id-less team matches — equivalent time/site formatting", () => {
 
   it("normalizeTimeKey maps equivalent renderings together and keeps AM/PM apart", () => {
     expect(normalizeTimeKey("9:00 AM")).toBe(normalizeTimeKey("09:00 am"));
-    expect(normalizeTimeKey("9:00 AM")).toBe("09:00");
-    expect(normalizeTimeKey("12:00 AM")).toBe("00:00");
-    expect(normalizeTimeKey("12:00 PM")).toBe("12:00");
+    expect(normalizeTimeKey("9:00 AM")).toBe("clock:09:00");
+    expect(normalizeTimeKey("12:00 AM")).toBe("clock:00:00");
+    expect(normalizeTimeKey("12:00 PM")).toBe("clock:12:00");
     expect(normalizeTimeKey("9:00 AM")).not.toBe(normalizeTimeKey("9:00 PM"));
-    expect(normalizeTimeKey(null)).toBe("");
     // An unrecognised rendering still compares equal to itself rather than collapsing to "".
-    expect(normalizeTimeKey("TBD")).toBe("tbd");
+    expect(normalizeTimeKey("TBD")).toBe("raw:tbd");
     expect(normalizeTimeKey("TBD")).not.toBe(normalizeTimeKey(null));
+  });
+});
+
+// Codex adversarial review, PR #31 round 4 [high]: stripping non-alphanumerics mapped a
+// punctuation-only value onto the SAME key null used, so a dash-rendered "time not set yet" merged
+// with a fixture that genuinely had no time — and one real row was lost.
+describe("id-less key domains are disjoint", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  it("REGRESSION: a punctuation-only value never collides with the null key", () => {
+    expect(normalizeTimeKey("—")).not.toBe(normalizeTimeKey(null));
+    expect(normalizeSiteKey("---")).not.toBe(normalizeSiteKey(null));
+    // ...and two different punctuation-only values stay distinct from each other, too.
+    expect(normalizeTimeKey("—")).not.toBe(normalizeTimeKey("---"));
+    // A recognised clock time can never be confused with a raw or null key.
+    expect(normalizeTimeKey("9:00 AM").startsWith("clock:")).toBe(true);
+  });
+
+  it("REGRESSION: a dash-timed fixture and a null-timed fixture stay two rows", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const base = {
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        playedOn: "2026-06-01",
+        site: "Clayview Country Club",
+        sourceMatchId: null,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      };
+
+      upsertTeamMatch(db, { ...base, scheduledTime: null });
+      upsertTeamMatch(db, { ...base, scheduledTime: "—" });
+
+      expect(db.select().from(teamMatches).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
   });
 });
