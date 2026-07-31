@@ -263,11 +263,29 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
     expect(printed, "no db migrate summary line was emitted").toBeDefined();
     const fields = parseSummaryFields(printed as string);
     expect(fields.status).toBe("error");
-    // The two things the reader must be able to act on survive as contiguous runs: the database
-    // that actually failed, and the runbook that carries the recovery. A collapsed multi-line
-    // message is what destroys contiguity, so this is the assertion that catches the seam moving.
+    // The two things the reader must be able to act on: the database that actually failed, and the
+    // runbook that carries the recovery.
     expect(fields.message).toContain(dbFile);
     expect(fields.message).toContain("docs/runbooks/db-migration-recovery.md");
+    // A multi-TOKEN contiguous run, restoring a property the old
+    // `mv -i -- '<src>' '<bak>' && tn db migrate` assertion had for free. The two assertions above
+    // are single tokens, and a token survives any amount of reflowing, so on their own they would
+    // not notice the actionable guidance being truncated or broken up mid-word.
+    //
+    // What this does NOT prove is that the message is single-line — checked by mutation rather than
+    // assumed, because the obvious reading is wrong and would have gone into this comment unexamined.
+    // `sanitizeValue` maps a newline to a SPACE, so a multi-line message whose breaks fall at word
+    // boundaries renders byte-identically here; NO assertion on this side can see it. Inserting
+    // newlines at word boundaries reddens the raw-message control-character assertion in
+    // test/db-teams-url-unique-upgrade.test.ts and nothing in this file — that one is the guard for
+    // single-line-ness, and this one is the guard for the payload still being here and intact. The
+    // old command assertion had the identical blind spot; naming it is the change, not acquiring it.
+    //
+    // Coupling to the exact prose is deliberate: the seam is a string contract, and the assertion
+    // this replaces was coupled to the exact command text for the same reason.
+    expect(fields.message).toContain(
+      "Recovery moves this database aside rather than deleting it, but read the runbook FIRST:",
+    );
     // And no command comes back through this surface (#56).
     expect(fields.message).not.toMatch(/\bmv\b/);
 

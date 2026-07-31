@@ -97,10 +97,12 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
 
     expect(message).toContain(dbPath);
     expect(message).not.toContain("data/nadal.db");
-    // NO executable recovery of any kind — the #56 invariant, and the one a future author is most
-    // likely to erode. Pinned as a SET rather than as `mv` alone, because the defect class is "this
-    // message hands a human something to paste", and a narrower check would go green again the
-    // moment someone reached for `rm`, a `&&` chain, or a shell-quoted path instead.
+    // No executable recovery — the #56 invariant, and the one a future author is most likely to
+    // erode. Held two ways, because a verb list alone is only ever as good as the verbs somebody
+    // thought of: an adversarial pass on the first draft of this block confirmed that a
+    // `cp -n <src> <src>.backup` recovery satisfied EVERY named-verb assertion below.
+    //
+    // (1) The verbs and shell syntax that actually showed up across PR #52's eleven rounds:
     expect(message).not.toMatch(/\brm\b/);
     expect(message).not.toMatch(/\bmv\b/);
     expect(message).not.toContain("&&");
@@ -109,6 +111,15 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     // THIS path's quoted form rather than against any apostrophe, because the prose legitimately
     // contains one ("migration 0009's unique index").
     expect(message).not.toContain(`'${dbPath}'`);
+    // (2) Structural, and this is the one that kills the CLASS rather than a list: every
+    // move-or-copy recovery names the database TWICE — a source and a destination — so pinning the
+    // path to exactly ONE occurrence rejects `cp`, `rsync`, `install`, and whatever else is not on
+    // the list above. It is also the assertion that stays true as the prose is reworded.
+    expect(message.split(dbPath).length - 1).toBe(1);
+    // What this does NOT hold, stated rather than implied: a single-argument command naming some
+    // OTHER path (`rmdir /somewhere/else`). Nothing here can see that, and `rules/testing.md`
+    // forbids a comment claiming coverage the assertions do not enforce — the input class these
+    // hold for is "a recovery that acts on the database this message names".
     // The runbook is where the command lives now, so the message has to point at it — otherwise
     // dropping the command leaves the reader with a diagnosis and no recovery.
     expect(message).toContain("docs/runbooks/db-migration-recovery.md");
