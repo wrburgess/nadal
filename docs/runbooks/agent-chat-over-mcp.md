@@ -96,6 +96,10 @@ positionals by name.
 > DB="${TN_DB_PATH:-data/nadal.db}"      # double-quoted everywhere below, so a space or an
 >                                         # apostrophe in the path is safe
 > ```
+>
+> The relative default is correct *here* — unlike the recovery above — because you are inspecting a
+> running server's database from the repo root, not identifying a file a failed process named from
+> some other directory.
 
 - Every tool call writes a `request_log` row with `surface="mcp"` — `sqlite3 "$DB" "select
   surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
@@ -130,13 +134,21 @@ while it still carried the pre-merge `0004_free_warstar` migration. `main` later
 `0004` will try to apply `0005` on top of a column it already has.
 
 **Recovery is one line, and losing the database costs nothing by design.** This error is rethrown
-unchanged, so it does **not** name the failing database. Let the shell resolve it rather than
-pasting a path — `TN_DB_PATH` if you set it, `data/nadal.db` otherwise:
+unchanged, so it does **not** name the failing database — you have to identify it yourself:
 
 ```sh
-DB="${TN_DB_PATH:-data/nadal.db}"
+DB="$TN_DB_PATH"                              # if TN_DB_PATH is set IN THIS SHELL, this is exact
+
+printf 'database path: '; IFS= read -r DB     # otherwise: the ABSOLUTE path to the database that
+                                              # failed. `read -r` takes the line verbatim, so
+                                              # spaces and apostrophes need no escaping.
+
 mv -i -- "$DB" "$DB.pre-0005.bak" && tn db migrate
 ```
+
+**Resolve it to an absolute path.** The `data/nadal.db` default is *relative* and resolves against
+the working directory of the process, so recovering from a different directory than the failed run
+used would move a different file entirely.
 
 Two things this line used to get wrong, both fixed under #56 after the Codex adversarial review found
 the same class one runbook over:

@@ -26,21 +26,31 @@ SQLite's bare "UNIQUE constraint failed: teams.tennisrecord_url".
 database that actually failed — `TN_DB_PATH` if you set it, `data/nadal.db` otherwise — as an
 **absolute** path.
 
-**Let the shell expand the path; do not paste it into quotes yourself.** This form works for both
-cases and needs no editing:
+**Put the path in a variable; never paste it into quotes, and never use the bare default.**
 
 ```sh
-DB="${TN_DB_PATH:-data/nadal.db}"
+DB="$TN_DB_PATH"                              # if TN_DB_PATH is set IN THIS SHELL, this is exact
+
+printf 'database path: '; IFS= read -r DB     # otherwise: paste the path the ERROR printed
+
 mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate
 ```
 
-Pasting the path into a single-quoted template instead is a real hazard, not a style preference: a
-perfectly legal `TN_DB_PATH=/tmp/O'Brien.db` yields `mv -i -- '/tmp/O'Brien.db' …`, whose apostrophe
-closes the quote — the command then fails outright at best, and with a crafted name can be made to
-parse as something else entirely. This runbook shipped exactly that template until the Codex
-adversarial review of #56 caught it, which is a pointed lesson: #56 removed a shell-quoting surface
-from the code and promptly recreated it as an *instruction*. A variable expansion has no such
-surface, because the shell never re-parses the value.
+Both of those forms exist because the two obvious shortcuts are each wrong, and each was caught by
+the Codex adversarial review of #56 after this runbook shipped it:
+
+- **Do not paste the path into a single-quoted template.** A perfectly legal
+  `TN_DB_PATH=/tmp/O'Brien.db` yields `mv -i -- '/tmp/O'Brien.db' …`, whose apostrophe closes the
+  quote — the command fails outright at best, and a crafted name can make it parse as something else.
+  `IFS= read -r` takes the line **verbatim**, so there is no quoting to get right at all: paste a path
+  with spaces, apostrophes or backslashes and it lands in `$DB` unchanged. This one is pointed: #56
+  removed a shell-quoting surface from the code and promptly recreated it as an *instruction*.
+- **Do not fall back to `data/nadal.db`.** That default is **relative**, and `dbPath()` resolves it
+  against the working directory of the process — so it names whatever `data/nadal.db` sits under
+  *your current* directory, which need not be the one the failed run used. The error deliberately
+  prints an **absolute** path for exactly this reason; use that, not the default. (Recovering from
+  the repo root after a run that failed in `/tmp/a` would otherwise move `<repo>/data/nadal.db` and
+  leave the broken database untouched — the wrong-file class again, one layer further out.)
 
 The error deliberately does **not** print this command filled in for you, though it used to
 (issue #56). Emitting it meant `src/db/client.ts` permanently owned a shell-quoting surface, a
@@ -81,12 +91,22 @@ appears there as `…we\\u{A}ird.db` — doubled, and one un-escaping away from 
 `tn db migrate --json | jq …` silently gives you nothing:
 
 ```sh
-tn db migrate --json 2>&1 | jq -r .message      # carries the escape exactly as produced
+tn db migrate --json 2>&1 | grep -m1 '^{' | jq -r .message
 ```
 
-That `2>&1` is the whole instruction — this runbook shipped the command without it until the Codex
-adversarial review of #56, where it was the only route offered for recovering a control-character
-path and therefore blocked that recovery entirely.
+Two pieces, each earning its place (both found by the Codex adversarial review of #56):
+
+- **`2>&1`** — without it you pipe an empty stream. A *failed* run writes its payload to stderr, so
+  the obvious `tn db migrate --json | jq …` silently yields nothing. This runbook shipped it that
+  way, and since this was the only route offered for reading an escaped path, it blocked that
+  recovery entirely.
+- **`grep -m1 '^{'`** — merging stderr can merge in *more than* the payload. A duplicate-URL failure
+  emits exactly one stderr line today (checked), because the database opened fine and so telemetry's
+  own write succeeds. But if telemetry also fails — a full disk, a read-only directory, precisely the
+  degraded conditions someone reads a recovery runbook in — a plain-text
+  `telemetry: request_log write failed: …` lands on the same stream, and `jq` errors after the first
+  object. Taking the first `{`-line is one pipe stage and removes the dependency on that never
+  happening.
 
 Deleting would work too — `tn db migrate` only needs the file gone — but there is no reason to make
 the recovery destructive, and keeping the backup is what makes the export step below possible
@@ -185,45 +205,57 @@ a `select *` dump is unrestorable by construction: the numbers in it will point 
 Events must carry `kind`, `starts_on` and `ends_on` too, because those are the arguments
 `tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` requires to recreate one.
 
-**Point `BAK` at the backup you actually created** in the recovery step above — the same
-`"$DB.pre-0009.bak"`, which is absolute and may not be under `data/` at all if you set `TN_DB_PATH`.
-Every command below reads `"$BAK"`, double-quoted, for the same reason the recovery does: a pasted
-path breaks on a space or an apostrophe, and a *wrong* path is worse than a broken one here —
-`sqlite3` **creates** an empty database at a path that does not exist, so a mistyped backup name
-yields four empty CSVs and no error, which reads as "there was nothing to export".
+**Point `BAK` at the backup you actually created**, and note that the suffix depends on *which*
+recovery you ran — this block is shared by both:
+
+| Recovery | Backup suffix |
+|---|---|
+| duplicate-URL, on this page | `.pre-0009.bak` |
+| `duplicate column name: is_home`, in [agent-chat-over-mcp.md](agent-chat-over-mcp.md) | `.pre-0005.bak` |
+
+So `BAK` is read rather than computed. A *wrong* path is worse than a broken one here: `sqlite3`
+**creates** an empty database at a path that does not exist, so a mistyped or wrong-suffix backup
+name yields four empty CSVs and no error — which reads as "there was nothing to restore" at the
+exact moment that conclusion is most costly. The guard below therefore wraps the exports rather than
+preceding them; an earlier draft used `test -s "$BAK" || { echo …; }`, which prints its warning and
+**exits 0**, so execution continued straight into the very sqlite3 calls it was meant to stop (Codex
+adversarial review of #56, round 4 — a guard that failed open, written to close this exact hazard).
 
 ```sh
-BAK="${TN_DB_PATH:-data/nadal.db}.pre-0009.bak"
-test -s "$BAK" || { echo "no backup at $BAK — do not continue"; }
+printf 'backup path: '; IFS= read -r BAK      # verbatim — quotes and apostrophes need no escaping
 
-# 0. The home team and the events — without these, steps below have nothing to attach to.
-sqlite3 -header -csv "$BAK" "
-  select name from teams where is_home = 1" > home-team-backup.csv
+if ! test -s "$BAK"; then
+  echo "STOP: no readable backup at $BAK. Do not run the exports — sqlite3 would CREATE an empty database there." >&2
+else
+  # 0. The home team and the events — without these, steps below have nothing to attach to.
+  sqlite3 -header -csv "$BAK" "
+    select name from teams where is_home = 1" > home-team-backup.csv
 
-sqlite3 -header -csv "$BAK" "
-  select name, kind, starts_on, ends_on
-  from events
-  order by starts_on" > events-backup.csv
+  sqlite3 -header -csv "$BAK" "
+    select name, kind, starts_on, ends_on
+    from events
+    order by starts_on" > events-backup.csv
 
-sqlite3 -header -csv "$BAK" "
-  select p.canonical_name        as player,
-         pp.canonical_name       as pair_player,
-         n.note,
-         n.created_at
-  from captain_notes n
-  join players p        on p.id  = n.player_id
-  left join players pp  on pp.id = n.pair_player_id
-  order by n.created_at" > captain-notes-backup.csv
+  sqlite3 -header -csv "$BAK" "
+    select p.canonical_name        as player,
+           pp.canonical_name       as pair_player,
+           n.note,
+           n.created_at
+    from captain_notes n
+    join players p        on p.id  = n.player_id
+    left join players pp  on pp.id = n.pair_player_id
+    order by n.created_at" > captain-notes-backup.csv
 
-sqlite3 -header -csv "$BAK" "
-  select p.canonical_name as player,
-         e.name           as event,
-         a.day,
-         a.status
-  from availability a
-  join players p on p.id = a.player_id
-  join events  e on e.id = a.event_id
-  order by a.day" > availability-backup.csv
+  sqlite3 -header -csv "$BAK" "
+    select p.canonical_name as player,
+           e.name           as event,
+           a.day,
+           a.status
+    from availability a
+    join players p on p.id = a.player_id
+    join events  e on e.id = a.event_id
+    order by a.day" > availability-backup.csv
+fi
 ```
 
 `pair_player` is `LEFT JOIN`ed because `captain_notes.pair_player_id` is nullable — a note about one
