@@ -220,6 +220,49 @@ describe("pullTeam", () => {
       sqlite.close();
     }
   });
+
+  // Issue #46, at the pipeline level: re-pulling the SAME URL with a RENAMED team page must not
+  // split the roster/schedule across two team rows. Before the fix, `upsertTeam` conflicted only
+  // on `teams.name`, so the second pull inserted a second team row sharing the same
+  // tennisrecord_url, and `resolveTeamTarget`/tier-1 `resolveTeam` would then pick between the two
+  // arbitrarily.
+  it("REGRESSION (#46): re-pulling the same URL with a RENAMED team keeps memberships and team_matches on ONE row", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const fetcher1 = createStubFetcher({ [team.source.url]: { body: team.html } });
+      const first = await pullTeam({ db, fetchPage: fetcher1, target: team.source.url });
+      expect(first.kind).toBe("ok");
+      if (first.kind !== "ok") throw new Error("expected ok");
+
+      const renamedHtml = team.html.replace(
+        '<td style="text-align:left;" class="padding10">Norbury, Nova</td>',
+        '<td style="text-align:left;" class="padding10">Norbury, Nova 4.0</td>',
+      );
+      expect(renamedHtml).not.toBe(team.html);
+      const fetcher2 = createStubFetcher({ [team.source.url]: { body: renamedHtml } });
+      const second = await pullTeam({ db, fetchPage: fetcher2, target: team.source.url });
+      expect(second.kind).toBe("ok");
+      if (second.kind !== "ok") throw new Error("expected ok");
+
+      const teamRows = db.select().from(teams).where(eq(teams.tennisrecordUrl, team.source.url)).all();
+      expect(teamRows).toHaveLength(1);
+      expect(teamRows[0]?.id).toBe(first.team.id);
+      expect(teamRows[0]?.name).toBe("Norbury, Nova 4.0");
+
+      const memberships = db
+        .select()
+        .from(teamMemberships)
+        .where(eq(teamMemberships.teamId, first.team.id))
+        .all();
+      expect(memberships).toHaveLength(18);
+
+      const matches = db.select().from(teamMatches).where(eq(teamMatches.homeTeamId, first.team.id)).all();
+      expect(matches).toHaveLength(10);
+    } finally {
+      sqlite.close();
+    }
+  });
 });
 
 // Issue #49, Task 3: the reconcile against the just-parsed roster, run inside `pullTeam`'s existing

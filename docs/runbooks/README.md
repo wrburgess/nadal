@@ -11,6 +11,8 @@ exercises, and runbooks double as HC post-merge checklists.
   critically; record availability behind `tn event add`
 - [in-event-screenshot-ingest.md](in-event-screenshot-ingest.md) — scorecard photo → agent →
   `match_add` → verified rows → what to do when a name is flagged
+- [db-migration-recovery.md](db-migration-recovery.md) — `tn db migrate` fails on an existing
+  database; the one-line recovery and why losing the database costs nothing by design
 
 Planned (spec § Testing):
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { nameKey } from "../src/db/name-key.js";
 import {
   courtMatchPlayers,
   courtMatches,
@@ -9,6 +10,7 @@ import {
   teams,
 } from "../src/db/schema.js";
 import { hrefParam } from "../src/parsers/dom.js";
+import { AmbiguousIdentityError } from "../src/ingest/errors.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
 import { pullTeam } from "../src/ingest/team-pull.js";
@@ -539,6 +541,145 @@ describe("id-less key domains are disjoint", () => {
       upsertTeamMatch(db, { ...base, scheduledTime: "—" });
 
       expect(db.select().from(teamMatches).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Issue #46: a non-null `teams.tennisrecord_url` is a unique source identity. Before this fix,
+// `upsertTeam` conflicted only on `teams.name`, so a re-pull of a RENAMED team (the same URL,
+// parsed to a new name) missed the old row entirely and inserted a second row carrying the SAME
+// tennisrecord_url — the exact case the assessment for #46 traced from #42.
+describe("upsertTeam resolves by tennisrecord_url first (#46)", () => {
+  useTnDbPath();
+
+  it("REGRESSION: re-upserting a renamed team by the same tennisrecord_url updates the SAME row, not a second one", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const url = "https://tennisrecord.com/team.aspx?teamname=Springfield%20A";
+      const first = upsertTeam(db, { name: "Springfield A", tennisrecordUrl: url });
+      const second = upsertTeam(db, { name: "Springfield A 4.0", tennisrecordUrl: url });
+
+      expect(second.id).toBe(first.id);
+      expect(second.name).toBe("Springfield A 4.0");
+      // A stale name_key is the same silent-duplicate failure as never setting it at all
+      // (upsert.ts's existing rationale for seeding `set.nameKey` unconditionally).
+      expect(second.nameKey).toBe(nameKey("Springfield A 4.0"));
+
+      const rows = db.select().from(teams).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.name).toBe("Springfield A 4.0");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The reachable sad path: `resolveTeam` creates opponent teams by NAME with a null
+  // tennisrecord_url (team-pull.ts's schedule loop) — the schedule is the only source of that
+  // identity. A rename that collides with such a stub is a merge decision, out of bounds per
+  // spec § Ingestion, so it must throw rather than silently pick a row.
+  it("REGRESSION: renaming into a name a DIFFERENT row already holds throws AmbiguousIdentityError and mutates nothing", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const url = "https://tennisrecord.com/team.aspx?teamname=Springfield%20A";
+      const renamed = upsertTeam(db, { name: "Springfield A", tennisrecordUrl: url });
+      const opponent = upsertTeam(db, { name: "Springfield B" });
+
+      let caught: unknown;
+      try {
+        upsertTeam(db, { name: "Springfield B", tennisrecordUrl: url });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(AmbiguousIdentityError);
+      if (caught instanceof AmbiguousIdentityError) {
+        expect(caught.candidates.slice().sort()).toEqual(["Springfield A", "Springfield B"]);
+      }
+
+      // NO row mutated, NO row inserted — re-read both rows rather than trusting the throw alone.
+      const rows = db.select().from(teams).all();
+      expect(rows).toHaveLength(2);
+      expect(rows.find((r) => r.id === renamed.id)?.name).toBe("Springfield A");
+      expect(rows.find((r) => r.id === opponent.id)?.name).toBe("Springfield B");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The existing NAME-branch test at :260 guards only that branch — this guards that the URL
+  // branch's null-skipping `set` (upsert.ts:65-73) survives unchanged, so a re-pull that carries
+  // `section: null` cannot erase another source's value on this path either.
+  //
+  // The RENAME is load-bearing and was missing in this test's first draft (Codex adversarial
+  // review, rated medium, raised to high here — `PROJECT.md` scores a missing required test as
+  // High). With both writes under the SAME name, reverting the whole URL branch still routes the
+  // second write through the old name-conflict update, which has the same null-skipping `set` — so
+  // the test stayed green while proving nothing about the new path. Renaming forces the URL branch:
+  // the old name-conflict target matches no row under the new name, so a revert INSERTS a second
+  // row and both the id and the row-count assertions go red.
+  //
+  // All three optional columns are asserted, not just `section`: `district` and `tennislink_url`
+  // are the two the upsertTeam doc comment actually names as at risk ("a TennisRecord pull knows
+  // nothing about tennislink_url and passes district: null unconditionally"), so a test that omits
+  // them guards the rationale's example rather than its claim.
+  it("REGRESSION: re-upserting a RENAMED team via the tennisrecord_url branch with every optional column null preserves all of them", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const url = "https://tennisrecord.com/team.aspx?teamname=Springfield%20A";
+      const first = upsertTeam(db, {
+        name: "Springfield A",
+        tennisrecordUrl: url,
+        section: "Missouri Valley",
+        district: "Central",
+        tennislinkUrl: "https://tennislink.usta.com/team/1",
+      });
+
+      // The rename is what routes this through the URL branch rather than the name-conflict path.
+      const after = upsertTeam(db, {
+        name: "Springfield A 4.0",
+        tennisrecordUrl: url,
+        section: null,
+        district: null,
+        tennislinkUrl: null,
+      });
+
+      expect(after.id).toBe(first.id);
+      expect(after.name).toBe("Springfield A 4.0");
+      expect(after.section).toBe("Missouri Valley");
+      expect(after.district).toBe("Central");
+      expect(after.tennislinkUrl).toBe("https://tennislink.usta.com/team/1");
+      expect(db.select().from(teams).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("two teams with no tennisrecord_url coexist (the partial unique index must not collapse un-URL'd teams)", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      upsertTeam(db, { name: "Team No URL A" });
+      upsertTeam(db, { name: "Team No URL B" });
+
+      expect(db.select().from(teams).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("idempotence unchanged: the same URL and name upserted twice is one row and no error", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const url = "https://tennisrecord.com/team.aspx?teamname=Springfield%20A";
+      upsertTeam(db, { name: "Springfield A", tennisrecordUrl: url });
+      expect(() => upsertTeam(db, { name: "Springfield A", tennisrecordUrl: url })).not.toThrow();
+
+      expect(db.select().from(teams).all()).toHaveLength(1);
     } finally {
       sqlite.close();
     }
