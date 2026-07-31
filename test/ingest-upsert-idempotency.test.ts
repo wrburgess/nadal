@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
@@ -651,6 +652,146 @@ describe("source-backed team matches preserve a stored event link (Codex round 8
       expect(rows[0]?.homeCourtsWon).toBeNull(); // nothing partially applied
     } finally {
       sqlite.close();
+    }
+  });
+});
+
+// Codex adversarial review (PR #54 round 9, rated Medium): round 8's fix (a JS pre-select, then a
+// JS-computed decision fed into `onConflictDoUpdate`) is safe within ONE synchronous connection —
+// nothing else can run between the select and the write in a single process — but NOT across two
+// separate connections, which is exactly how the MCP server and a CLI invocation reach this table:
+// as separate processes, each with its OWN connection. Concrete interleaving: `mid=181505` stored
+// with `eventId=null`; connection A pre-selects (sees null); connection B pre-selects (ALSO sees
+// null, since A hasn't written yet) and upserts event 102; A then upserts event 101 using ITS
+// pre-selected (now STALE) null, silently overwriting B's write with neither call ever throwing.
+//
+// Testing note, not glossed over: a black-box call to `upsertTeamMatch` cannot literally reproduce
+// this interleaving, because the vulnerable OLD shape's own pre-select ran synchronously, fresh, at
+// the START of THAT call — there is no way for test code to pause a synchronous JS function mid-body
+// to let another connection commit in between. The FIRST test below reconstructs the vulnerable
+// two-statement shape directly, with raw table operations standing in for what the OLD code did
+// internally, to demonstrate the hazard is real independent of any one function's implementation —
+// this is what actually justifies collapsing conflict-check-and-write into ONE atomic SQL statement,
+// rather than trusting a description of the bug. The SECOND test exercises the ACTUAL, FIXED
+// `upsertTeamMatch` across two real connections and confirms the invariant now holds even when a
+// later-arriving connection's own read reflects an earlier state than the one that actually commits
+// first — which is the property the fix guarantees structurally (there is no separate pre-select
+// left in the fixed code for a second connection's write to race against).
+describe("source-id event conflict check is atomic ACROSS CONNECTIONS (Codex round 9, rated Medium)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function seedEvent(db: ReturnType<typeof openDb>["db"], name: string) {
+    return db
+      .insert(events)
+      .values({ name, kind: "tournament", startsOn: "2026-08-01", endsOn: "2026-08-31" })
+      .returning()
+      .get();
+  }
+
+  it("CHARACTERIZATION: a select-then-decide-then-write shape across two connections silently corrupts the invariant (the hazard this fix closes)", () => {
+    runMigrations();
+    const connA = openDb();
+    const connB = openDb();
+    try {
+      const a = upsertTeam(connA.db, { name: "Team A" });
+      const b = upsertTeam(connA.db, { name: "Team B" });
+      const eventA = seedEvent(connA.db, "Event A");
+      const eventB = seedEvent(connA.db, "Event B");
+      connA.db
+        .insert(teamMatches)
+        .values({
+          eventId: null,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          playedOn: "2026-08-28",
+          sourceMatchId: "181505",
+        })
+        .run();
+
+      // Both connections independently see the SAME blank state before either decides anything —
+      // reproducing the exact moment the OLD pre-select-based code made its decision from.
+      const seenByA = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      const seenByB = connB.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(seenByA.eventId).toBeNull();
+      expect(seenByB.eventId).toBeNull();
+
+      // Connection B decides (from its own null read) that it is safe to set event B, and commits.
+      connB.db.update(teamMatches).set({ eventId: eventB.id }).where(eq(teamMatches.id, seenByB.id)).run();
+
+      // Connection A now acts on ITS pre-selected (now stale) `seenByA.eventId === null` — exactly
+      // what the OLD `upsertTeamMatch` shape did: decide from the read, THEN write, with no
+      // re-check. Nothing here throws, and the write silently succeeds.
+      connA.db.update(teamMatches).set({ eventId: eventA.id }).where(eq(teamMatches.id, seenByA.id)).run();
+
+      // The invariant IS violated: two different non-null events were both accepted, one silently
+      // clobbering the other, with no error at any point — this is the corruption the atomic fix
+      // (a single statement, re-evaluated against whatever is actually current) closes.
+      const final = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(final.eventId).toBe(eventA.id); // B's committed event, silently overwritten
+    } finally {
+      connA.sqlite.close();
+      connB.sqlite.close();
+    }
+  });
+
+  it("REGRESSION (Codex round 9, rated Medium): the REAL upsertTeamMatch refuses a conflicting event across two connections, even though a stale read happened first", () => {
+    runMigrations();
+    const connA = openDb();
+    const connB = openDb();
+    try {
+      const a = upsertTeam(connA.db, { name: "Team A" });
+      const b = upsertTeam(connA.db, { name: "Team B" });
+      const eventA = seedEvent(connA.db, "Event A");
+      const eventB = seedEvent(connA.db, "Event B");
+      const base = { playedOn: "2026-08-28", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: "181505" };
+
+      upsertTeamMatch(connA.db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      // Both connections read the blank row before either sets an event — same setup as above.
+      const seenByA = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      const seenByB = connB.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(seenByA.eventId).toBeNull();
+      expect(seenByB.eventId).toBeNull();
+
+      // Connection B commits event B through the real function.
+      const afterB = upsertTeamMatch(connB.db, {
+        ...base,
+        eventId: eventB.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+      expect(afterB.eventId).toBe(eventB.id);
+
+      // Connection A now attempts event A. The fixed function does NOT consult `seenByA` (or any
+      // other stale JS value) — its conflict check and its write are ONE atomic SQL statement,
+      // evaluated against whatever `teamMatches` actually holds the instant it executes, so it sees
+      // B's committed event and refuses rather than silently overwriting it.
+      expect(() =>
+        upsertTeamMatch(connA.db, {
+          ...base,
+          eventId: eventA.id,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          homeCourtsWon: null,
+          visitingCourtsWon: null,
+        }),
+      ).toThrow();
+
+      const final = connA.db.select().from(teamMatches).where(eq(teamMatches.sourceMatchId, "181505")).all()[0]!;
+      expect(final.eventId).toBe(eventB.id); // survives, untouched by A's refused attempt
+    } finally {
+      connA.sqlite.close();
+      connB.sqlite.close();
     }
   });
 });

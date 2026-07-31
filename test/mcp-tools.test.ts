@@ -532,6 +532,63 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     }
   });
 
+  // Codex adversarial review (PR #54 round 9, rated Medium, again specifically flagged as an
+  // MCP-surface regression): `trim().toUpperCase()` (round 7/8) does no Unicode compatibility
+  // normalization, so a full-width spelling ("ｄ１") reached the service as a genuinely different
+  // string from its plain-ASCII form ("D1"/"d1") — the schema now runs `.normalize("NFKC")` first
+  // (src/ingest/scorecard.ts), folding the compatibility variant to the same canonical value. Proves
+  // that fold reaches a real `match_add` tool call too, mirroring the round-8 case test above.
+  it("match_add canonicalizes a FULL-WIDTH slot too, over MCP — 'D1' then 'ｄ１' update the SAME court, not a second one", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const home = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    const visiting = db.insert(teams).values({ name: "Report Opponent" }).returning().get();
+    for (const [teamId, name] of [
+      [home.id, "Bo Bramwell"],
+      [home.id, "Cy Calder"],
+      [visiting.id, "Opp Two"],
+      [visiting.id, "Opp Three"],
+    ] as const) {
+      const player = db.insert(players).values({ canonicalName: name }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId, eventId: null }).run();
+    }
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const courtBase = { discipline: "doubles" as const, homePlayers: ["Bo Bramwell", "Cy Calder"], visitingPlayers: ["Opp Two", "Opp Three"] };
+
+    const first = await client.callTool({
+      name: "match_add",
+      arguments: {
+        playedOn: "2026-08-28",
+        homeTeam: home.name,
+        visitingTeam: visiting.name,
+        courts: [{ ...courtBase, slot: "D1" }],
+      },
+    });
+    expect(first.isError).toBeFalsy();
+
+    const second = await client.callTool({
+      name: "match_add",
+      arguments: {
+        playedOn: "2026-08-28",
+        homeTeam: home.name,
+        visitingTeam: visiting.name,
+        courts: [{ ...courtBase, slot: "ｄ１" }],
+      },
+    });
+    expect(second.isError).toBeFalsy();
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(teamMatches).all()).toHaveLength(1);
+      expect(check.db.select().from(courtMatches).all()).toHaveLength(1); // not a second row
+    } finally {
+      check.sqlite.close();
+    }
+  });
+
   // Found by the independent Codex review of PR #47 (rated medium). MCP tool results carry scraped
   // player and team names and were passed through a bare `JSON.stringify`, which escapes the C0
   // controls but leaves RIGHT-TO-LEFT OVERRIDE and U+2028/U+2029 intact — so the guard the CLI's

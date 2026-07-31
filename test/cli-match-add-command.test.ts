@@ -351,4 +351,39 @@ describe("tn match add (end-to-end via dispatch)", () => {
     expect(code).toBe(1);
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --source-url"));
   });
+
+  // Codex adversarial review (PR #54 round 9, rated Medium), regression through the CLI surface
+  // specifically (a matching MCP-surface test lives in test/mcp-tools.test.ts): a full-width slot
+  // spelling ("ｄ１") canonicalizes to the same value ("D1") as its plain-ASCII form, so a re-ingest
+  // correction spelled with the full-width form updates the SAME court row rather than creating a
+  // second one.
+  it("REGRESSION (Codex round 9, rated Medium): a re-ingest correction spelled with a full-width slot ('ｄ１') updates the SAME court row 'D1' created, not a second one", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const { home, visiting } = seedRosters(db);
+    sqlite.close();
+
+    const firstPayload = { ...validPayload(home.name, visiting.name) };
+    const firstPath = writeTempFile("payload-first.json", JSON.stringify(firstPayload));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const first = await dispatch(["match", "add", firstPath]);
+    expect(first).toBe(0);
+
+    const secondPayload = {
+      ...validPayload(home.name, visiting.name),
+      courts: [{ ...validPayload(home.name, visiting.name).courts[1], slot: "ｄ１" }],
+    };
+    const secondPath = writeTempFile("payload-second.json", JSON.stringify(secondPayload));
+
+    const second = await dispatch(["match", "add", secondPath]);
+    expect(second).toBe(0);
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(courtMatches).all()).toHaveLength(2); // S1 + D1, not 3
+    } finally {
+      check.sqlite.close();
+    }
+  });
 });

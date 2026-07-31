@@ -259,6 +259,26 @@ describe("scorecardPayloadSchema", () => {
     if (result.success) expect(result.data.courts[0]?.slot).toBe("D1");
   });
 
+  // Codex adversarial review (PR #54 round 9, rated Medium): `trim().toUpperCase()` (round 7/8) does
+  // no Unicode COMPATIBILITY normalization, so a full-width spelling — "ｄ１" (FULLWIDTH LATIN SMALL
+  // LETTER D, FULLWIDTH DIGIT ONE) — reaches the service as "Ｄ１", not "D1": a real, distinct string
+  // from the plain-ASCII spelling as far as the duplicate-slot count or the id-less court upsert's
+  // write key can tell, even though it renders as the same court to a human eye (and to a vision
+  // model transcribing a photo, which has no reason to prefer one Unicode form over the other).
+  // Confirmed NOT the Turkish-locale `toUpperCase` class of bug — `toUpperCase()` is
+  // locale-independent here; this is a fold gap one step earlier, at normalization. Fixed by
+  // `.normalize("NFKC")` BEFORE `.toUpperCase()`, folding compatibility variants (full-width, among
+  // others) to their canonical form first. Still not a slot grammar — this canonicalizes the
+  // REPRESENTATION of whatever string a court names, the same standing decision as round 7/8.
+  it("REGRESSION (Codex round 9, rated Medium): a full-width slot canonicalizes to the same value as its plain-ASCII spelling", () => {
+    const payload = fourCourtPayload();
+    payload.courts[0] = { ...payload.courts[0]!, slot: "ｄ１" };
+    payload.courts[1] = { ...payload.courts[1]!, slot: "D5" };
+    const result = scorecardPayloadSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.courts[0]?.slot).toBe("D1");
+  });
+
   it("a bare name and a prefix-ID player entry both parse — resolution happens downstream, not here", () => {
     const payload = fourCourtPayload();
     payload.courts[0] = { ...payload.courts[0]!, homePlayers: ["usta:12345"] };
