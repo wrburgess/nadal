@@ -12,7 +12,13 @@ import { hrefParam } from "../src/parsers/dom.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
 import { pullTeam } from "../src/ingest/team-pull.js";
-import { upsertCourtMatch, upsertRatingObservation, upsertTeam, upsertTeamMatch } from "../src/ingest/upsert.js";
+import {
+  normalizeTimeKey,
+  upsertCourtMatch,
+  upsertRatingObservation,
+  upsertTeam,
+  upsertTeamMatch,
+} from "../src/ingest/upsert.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -397,5 +403,77 @@ describe("id-less team matches — same-day doubleheader", () => {
     } finally {
       sqlite.close();
     }
+  });
+});
+
+// Codex adversarial review, PR #31 round 3 [high]: comparing time and site as exact strings made the
+// id-less key FORMAT-sensitive — the same fixture re-rendered as "09:00 AM" missed its stored row and
+// duplicated, breaking re-pull idempotency for exactly the rows with no mid= to fall back on.
+describe("id-less team matches — equivalent time/site formatting", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  it("REGRESSION: a re-pull rendering the same time differently does NOT duplicate", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const base = {
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        playedOn: "2026-06-01",
+        sourceMatchId: null,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      };
+
+      upsertTeamMatch(db, { ...base, scheduledTime: "9:00 AM", site: "Clayview Country Club" });
+      upsertTeamMatch(db, { ...base, scheduledTime: "09:00 AM", site: "Clayview Country Club" });
+      upsertTeamMatch(db, { ...base, scheduledTime: "9:00am", site: "Clayview  Country-Club" });
+
+      expect(db.select().from(teamMatches).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("still tells a genuine doubleheader apart after normalization", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const base = {
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        playedOn: "2026-06-01",
+        site: "Clayview Country Club",
+        sourceMatchId: null,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      };
+
+      upsertTeamMatch(db, { ...base, scheduledTime: "9:00 AM" });
+      upsertTeamMatch(db, { ...base, scheduledTime: "9:00 PM" });
+
+      expect(db.select().from(teamMatches).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("normalizeTimeKey maps equivalent renderings together and keeps AM/PM apart", () => {
+    expect(normalizeTimeKey("9:00 AM")).toBe(normalizeTimeKey("09:00 am"));
+    expect(normalizeTimeKey("9:00 AM")).toBe("09:00");
+    expect(normalizeTimeKey("12:00 AM")).toBe("00:00");
+    expect(normalizeTimeKey("12:00 PM")).toBe("12:00");
+    expect(normalizeTimeKey("9:00 AM")).not.toBe(normalizeTimeKey("9:00 PM"));
+    expect(normalizeTimeKey(null)).toBe("");
+    // An unrecognised rendering still compares equal to itself rather than collapsing to "".
+    expect(normalizeTimeKey("TBD")).toBe("tbd");
+    expect(normalizeTimeKey("TBD")).not.toBe(normalizeTimeKey(null));
   });
 });

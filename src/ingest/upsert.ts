@@ -134,6 +134,29 @@ export function upsertMembership(db: Db, values: TeamMembershipInsert): TeamMemb
 }
 
 /**
+ * A stable comparison key for a schedule time. `"9:00 AM"`, `"09:00 AM"` and `"9:00am"` are the same
+ * fixture; only the rendering differs. Parsed to 24-hour `HH:MM` when the shape is recognisable, and
+ * otherwise reduced to case-folded alphanumerics — so an unrecognised format still compares equal to
+ * itself rather than throwing away the discriminator entirely.
+ */
+export function normalizeTimeKey(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  const match = /^\s*(\d{1,2})\s*:\s*(\d{2})\s*([ap])\.?m\.?\s*$/i.exec(value);
+  if (match !== null) {
+    const rawHour = Number(match[1]) % 12;
+    const hour = match[3]!.toLowerCase() === "p" ? rawHour + 12 : rawHour;
+    return `${String(hour).padStart(2, "0")}:${match[2]}`;
+  }
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Same idea for a site name: case and punctuation are presentation, not identity. */
+export function normalizeSiteKey(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
  * `source_match_id` (the `mid=` id) identifies the TEAM match and is the whole idempotency key —
  * partial predicate for the same NULLs-are-distinct reason as every other partial index here. A
  * row with no `source_match_id` (outside a TennisRecord pull) is always a plain insert: there is
@@ -156,18 +179,24 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
     // doubleheader at 09:00 and 17:00) would collapse into one row and the second would be lost
     // with nothing left to detect it by. (Codex adversarial review, PR #31, rated high.) Scheduled
     // time and site are now persisted precisely so they can discriminate here.
+    //
+    // Time and site DISCRIMINATE in JS, not in SQL. Comparing them as exact strings makes the key
+    // format-sensitive: the same fixture re-rendered as "09:00 AM" instead of "9:00 AM", or with
+    // cosmetically different site punctuation, misses the stored row and inserts a duplicate —
+    // re-pull idempotency broken for exactly the rows that have no `mid=` to fall back on. (Codex
+    // adversarial review, PR #31 round 3, rated high.) The SQL narrows on the indexable, stable
+    // parts (both teams, the date, no source id); the normalized comparison then picks the match
+    // out of that small candidate set. The stored columns keep their DISPLAY values.
     const matchesColumn = (column: AnySQLiteColumn, value: string | null | undefined) =>
       value === null || value === undefined ? isNull(column) : eq(column, value);
 
-    const existing = db
+    const candidates = db
       .select()
       .from(teamMatches)
       .where(
         and(
           isNull(teamMatches.sourceMatchId),
           matchesColumn(teamMatches.playedOn, values.playedOn),
-          matchesColumn(teamMatches.scheduledTime, values.scheduledTime),
-          matchesColumn(teamMatches.site, values.site),
           or(
             and(
               eq(teamMatches.homeTeamId, values.homeTeamId),
@@ -180,7 +209,13 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
           ),
         ),
       )
-      .all()[0];
+      .all();
+
+    const existing = candidates.find(
+      (row) =>
+        normalizeTimeKey(row.scheduledTime) === normalizeTimeKey(values.scheduledTime) &&
+        normalizeSiteKey(row.site) === normalizeSiteKey(values.site),
+    );
     if (existing === undefined) return db.insert(teamMatches).values(values).returning().get();
     // The stored row may hold the OPPOSITE orientation (it was first written from the other team's
     // page). Court counts are orientation-bound, so they are swapped to match the stored row rather

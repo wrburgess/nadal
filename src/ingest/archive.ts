@@ -179,9 +179,15 @@ export function archivePage(input: ArchivePageInput): string {
   // swap a component between this resolution and the write can still win the race, and pure Node
   // has no `openat`/`O_NOFOLLOW` directory-handle write to close it (a native helper would be a new
   // dependency the plan forbids). See the tracked follow-up and `docs/findings.md`.
-  const realDir = realpathOfNearestExisting(resolve(dir));
-  assertRawRootSafe(realDir);
+  // The allowlist applies to the ROOT; containment applies to the directory beneath it. Running
+  // `assertRawRootSafe` on the descendant instead broke the DOCUMENTED DEFAULT outright: with
+  // TN_RAW_PATH unset the root is `<repo>/raw`, the directory is `<repo>/raw/tennisrecord`, and the
+  // root-only allowlist ("inside the repo, and not exactly <repo>/raw") rejected it — so every pull
+  // threw before writing a byte. Every test set TN_RAW_PATH to a temp dir, so nothing exercised the
+  // one configuration the README documents. (Codex adversarial review, PR #31 round 3.)
   const realRoot = realpathOfNearestExisting(resolve(rawRoot()));
+  assertRawRootSafe(realRoot);
+  const realDir = realpathOfNearestExisting(resolve(dir));
   if (!isWithin(realRoot, realDir)) {
     throw new ArchivePathError(`refusing to write outside the resolved raw root "${realRoot}": ${realDir}`);
   }

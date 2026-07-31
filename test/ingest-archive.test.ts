@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   ArchivePathError,
   archivePage,
@@ -206,5 +206,37 @@ describe("archive guard vs the filesystem (symlinks)", () => {
 
     const written = archivePage({ sourceSet: "tennisrecord", slug: "x", url: "https://example.test", body: "ok", httpStatus: 200 });
     expect(existsSync(written)).toBe(true);
+  });
+});
+
+// Codex adversarial review, PR #31 round 3 [high, and Critical by PROJECT.md's framework — it ships
+// broken]: EVERY test above sets TN_RAW_PATH to a temp dir, so not one of them exercised the
+// configuration the docs actually describe. The realpath hardening applied the root-only allowlist to
+// a DESCENDANT directory, and every pull threw before writing a byte.
+describe("archivePage under the DOCUMENTED DEFAULT (TN_RAW_PATH unset)", () => {
+  const original = process.env.TN_RAW_PATH;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.TN_RAW_PATH;
+    else process.env.TN_RAW_PATH = original;
+    rmSync(resolve("raw"), { recursive: true, force: true });
+  });
+
+  it("REGRESSION: writes to <repo>/raw/<sourceSet>/ instead of throwing", () => {
+    delete process.env.TN_RAW_PATH;
+
+    const htmlPath = archivePage({
+      sourceSet: "tennisrecord",
+      slug: "default-root",
+      url: "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=X",
+      body: "<html>default</html>",
+      httpStatus: 200,
+    });
+
+    // Resolved before comparing: with TN_RAW_PATH unset the returned path is repo-relative, which is
+    // the pre-existing contract (rawRoot() defaults to the bare string "raw").
+    expect(resolve(htmlPath).startsWith(join(resolve("raw"), "tennisrecord"))).toBe(true);
+    expect(readFileSync(htmlPath, "utf8")).toBe("<html>default</html>");
+    expect(existsSync(`${htmlPath}.provenance.json`)).toBe(true);
   });
 });
