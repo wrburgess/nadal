@@ -3,9 +3,10 @@
 // service behind two presenters, so the two surfaces cannot drift on what a valid ingest does.
 
 import { and, eq, isNull, or } from "drizzle-orm";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { extname } from "node:path";
 import { courtMatchPlayers, events, teamMatches, teams } from "../db/schema.js";
+import { assertInputPathSafe } from "../fs/output-root.js";
 import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
 import { findTeamByName, resolveRosterPlayer } from "./identity.js";
@@ -563,16 +564,98 @@ export function describeMatchAddRefusal(result: Extract<AddMatchFromScorecardRes
     .join("; ")}`;
 }
 
+const DEFAULT_SCORECARD_PHOTOS_DIR = "scorecard-photos";
+
 /**
- * Archives a scorecard photo exactly like every other raw capture (Task 4/5/6, #18) — BEFORE
- * anything else touches it, into the same `raw/` substrate, so a re-parse or a dispute has the
- * original bytes on file. Shared by the CLI command and the MCP tool so the two surfaces cannot
- * drift (mirrors `addMatchFromScorecard` itself, called identically by both). Returns the archived
- * path.
+ * Mirrors `dbPath()`/`rawRoot()`/`reportsRoot()`: an explicit env var when set, a repo-relative
+ * default otherwise — no new flag, matching the existing `TN_DB_PATH`/`TN_RAW_PATH`/
+ * `TN_REPORTS_PATH` idiom. Deliberately NOT named "intake" anywhere in this: that word already
+ * names the Generic Baseline's own Intake Pipeline (Watchlist voices, `scout`/`clip` — see
+ * AGENTS.md), an unrelated subsystem, and reusing it here for "where scorecard photos wait to be
+ * read" would be exactly the kind of same-word-different-meaning collision that idiom already
+ * warns against.
+ */
+export function scorecardPhotosRoot(): string {
+  return process.env.TN_SCORECARD_PHOTOS_PATH ?? DEFAULT_SCORECARD_PHOTOS_DIR;
+}
+
+/**
+ * A generous ceiling for a single phone photo (even an uncompressed, high-resolution one) while
+ * still bounding what `archiveScorecardImage` will read wholesale into memory and copy — the
+ * concrete defense against a `sourceImage` naming an arbitrarily large file (Codex adversarial
+ * review, rated Critical).
+ */
+export const MAX_SCORECARD_IMAGE_BYTES = 25 * 1024 * 1024;
+
+/** Extension allow-list — belt to the magic-byte sniff's suspenders below, never a substitute for
+ * it: an extension is just a string the payload supplies and proves nothing about the bytes
+ * actually on disk. JPEG and PNG only; HEIC/WEBP are a stated, deliberate gap (docs/findings.md),
+ * not a silent omission. */
+const ALLOWED_SCORECARD_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * Sniffs the actual bytes rather than trusting the extension (Codex adversarial review, rated
+ * Critical): a `.png`-named file whose content is not real image bytes must still refuse. JPEG's
+ * signature is its first 3 bytes (`FF D8 FF`); PNG's is the full 8-byte magic number above.
+ */
+function looksLikeSupportedImage(body: Buffer): boolean {
+  if (body.length >= 3 && body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff) return true;
+  if (body.length >= PNG_SIGNATURE.length && body.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return true;
+  return false;
+}
+
+/** Every reason `archiveScorecardImage` refuses a `sourceImage` — a bad path (see
+ * `assertInputPathSafe`), an oversized file, an extension outside the allow-list, or content that
+ * does not sniff as a supported image regardless of what the extension claims. */
+export class ScorecardImageValidationError extends Error {}
+
+/**
+ * Archives a scorecard photo exactly like every other raw capture (Task 4/5/6, #18), into the same
+ * `raw/` substrate, so a re-parse or a dispute has the original bytes on file. Shared by the CLI
+ * command and the MCP tool so the two surfaces cannot drift (mirrors `addMatchFromScorecard` itself,
+ * called identically by both).
+ *
+ * `sourceImagePath` is caller-supplied — over MCP, an agent's own claim about where it saved a
+ * photo — and, before this fix, was `readFileSync`'d with NO validation at all: a syntactically
+ * valid payload naming `/Users/x/.ssh/id_rsa` or `/etc/hosts` was read and persisted into
+ * `raw/scorecard/` regardless of what the rest of the payload said (Codex adversarial review, rated
+ * CRITICAL — raised from the reviewer's own High under PROJECT.md's Review Severity Framework,
+ * "security hole" ⇒ Critical). Four checks now run, in order, before a single byte of CONTENT is
+ * read: containment (`assertInputPathSafe` — the same real-path/symlink-safe primitive
+ * `assertOutputPathSafe` uses on the write side, generalized rather than re-hand-rolled), size (via
+ * `statSync`, BEFORE reading — an oversized file is refused without ever being loaded into memory),
+ * extension (an allow-list — cheap, and never trusted alone), and content (a magic-byte sniff of
+ * the bytes actually on disk, independent of what the extension claims). Returns the archived path.
+ *
+ * Ordering note: this function does not know whether the surrounding ingest will succeed — that is
+ * `addMatchFromScorecardWithArchive`'s job (below), which is what both presenters actually call now.
  */
 export function archiveScorecardImage(sourceImagePath: string): string {
-  const body = readFileSync(sourceImagePath);
-  const extension = extname(sourceImagePath);
+  const resolvedPath = assertInputPathSafe(sourceImagePath, scorecardPhotosRoot());
+
+  const size = statSync(resolvedPath).size;
+  if (size > MAX_SCORECARD_IMAGE_BYTES) {
+    throw new ScorecardImageValidationError(
+      `refusing to archive "${sourceImagePath}": ${size} bytes exceeds the ${MAX_SCORECARD_IMAGE_BYTES}-byte limit`,
+    );
+  }
+
+  const extension = extname(resolvedPath);
+  if (!ALLOWED_SCORECARD_IMAGE_EXTENSIONS.has(extension.toLowerCase())) {
+    throw new ScorecardImageValidationError(
+      `refusing to archive "${sourceImagePath}": "${extension || "(no extension)"}" is not a supported scorecard image type`,
+    );
+  }
+
+  const body = readFileSync(resolvedPath);
+  if (!looksLikeSupportedImage(body)) {
+    throw new ScorecardImageValidationError(
+      `refusing to archive "${sourceImagePath}": its content does not match a supported image format (the extension alone is not trusted)`,
+    );
+  }
+
   return archivePage({
     sourceSet: "scorecard",
     slug: slugFromUrl(sourceImagePath),
@@ -581,4 +664,51 @@ export function archiveScorecardImage(sourceImagePath: string): string {
     httpStatus: 200,
     extension: extension === "" ? undefined : extension,
   });
+}
+
+/** What both presenters need from one combined call: the service outcome, plus whatever happened
+ * with the photo. `archivedPath` and `archiveError` are mutually exclusive — set only when
+ * `serviceResult.ok` is true AND `sourceImage` was supplied. */
+export type MatchAddWithArchiveOutcome = {
+  serviceResult: AddMatchFromScorecardResult;
+  archivedPath?: string;
+  archiveError?: string;
+};
+
+/**
+ * Both presenters (`tn match add`, `match_add`) need the SAME two steps in the SAME order, so this
+ * is the one place that order lives, rather than being duplicated (and risking drift) in each.
+ *
+ * Order, and why (Codex adversarial review, rated Critical — raised from the reviewer's own High):
+ * archiving used to run BEFORE `addMatchFromScorecard`, so a payload that named a real, readable,
+ * validly-imaged `sourceImage` but then refused for an unrelated reason (an unknown team, an
+ * unresolved player) still persisted the photo — "a refused ingest must persist nothing" did not
+ * hold for it. Archiving now runs AFTER the service call, and only when it succeeded.
+ *
+ * The interaction this reorder creates, stated rather than left implicit (per review): the database
+ * write can no longer share a single failure boundary with the archive step, because by the time
+ * archiving runs, the write has ALREADY COMMITTED. If `archiveScorecardImage` then throws — a bad
+ * path, an oversized or non-image file, anything — there is no transaction left to roll back into;
+ * the match rows exist whether or not the photo does. Two shapes were available: surface that as an
+ * opaque thrown error (the caller sees only "failed", loses the fact that `teamMatchId` already
+ * exists, and might reasonably conclude a retry is required to record the match at all), or report
+ * the outcome exactly as it happened — a successful ingest, PLUS a named archive failure. This
+ * function takes the second: `serviceResult` is exactly what `addMatchFromScorecard` returned
+ * (including `ok: true`), and a post-commit archive failure is surfaced as `archiveError` alongside
+ * it, never swallowed and never inflated into an overall failure — mirroring the existing
+ * `TeamPullResult` shape, whose `ok` variant already carries `skippedRosterEntries` (an imperfect
+ * detail WITHIN an overall-successful pull, `status=partial` at the CLI, never `status=error`)
+ * rather than converting it into an unrelated failure. A caller that fixes the path (or drops
+ * `sourceImage` entirely) and re-runs the identical payload is safe either way: the ingest is
+ * idempotent on `(playedOn, the team pair, slot)`, so the retry updates/no-ops the existing match
+ * rather than creating a second one.
+ */
+export function addMatchFromScorecardWithArchive(db: Db, payload: ScorecardPayload): MatchAddWithArchiveOutcome {
+  const serviceResult = addMatchFromScorecard(db, payload);
+  if (!serviceResult.ok || payload.sourceImage === undefined) return { serviceResult };
+  try {
+    return { serviceResult, archivedPath: archiveScorecardImage(payload.sourceImage) };
+  } catch (err) {
+    return { serviceResult, archiveError: err instanceof Error ? err.message : String(err) };
+  }
 }

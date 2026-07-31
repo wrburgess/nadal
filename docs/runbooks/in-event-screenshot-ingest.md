@@ -41,8 +41,21 @@ event, `S1`/`D1`-`D4` at a five-court one like Tulsa 2025) — it is never assum
 Over MCP, the agent calls the `match_add` tool with that payload inline — it has no file to hand,
 which is the whole reason this tool exists alongside the CLI command below. If a `sourceImage` path
 is available (the photo saved to disk), including it archives the original bytes to `raw/`
-(gitignored) before anything else touches them, exactly like every other raw capture this repo
-makes.
+(gitignored), exactly like every other raw capture this repo makes — with two conditions specific
+to this path, both hardened after a Codex adversarial review found `sourceImage` was otherwise an
+arbitrary local-file-read primitive (rated Critical):
+
+- **The photo must already sit inside the configured scorecard-photos root** —
+  `TN_SCORECARD_PHOTOS_PATH` if set, `scorecard-photos/` (gitignored) relative to the repo
+  otherwise, mirroring `TN_DB_PATH`/`TN_RAW_PATH`/`TN_REPORTS_PATH`. A path outside that root, or a
+  symlink anywhere in the chain to it, is refused rather than read. Save (or move) the photo there
+  before calling `match_add`.
+- **Archiving happens AFTER the match is recorded, not before.** A refused ingest (an unknown team,
+  an unresolved player, anything) persists nothing — the photo is read only once the database write
+  has already succeeded. A photo that then fails to archive (a bad path, an oversized file, content
+  that does not sniff as a real image) does NOT undo the match: the CLI reports `status=partial`
+  (`match_add` returns `archiveError` alongside a normal successful result) rather than pretending
+  nothing happened, since the match rows genuinely exist either way.
 
 ### Alternative: a payload file, from the CLI
 
@@ -105,3 +118,7 @@ correctly the first time — it simply succeeds where it previously refused.
 - **The general event↔team association is out of scope here** (`docs/findings.md`): a payload
   naming a known event links the match to it; naming none writes a match with no event at all,
   same as every other id-less team match on file today.
+- **`sourceImage` only accepts JPEG and PNG**, sniffed from content rather than trusted from the
+  extension, up to 25 MiB. HEIC (the default format on many phones) and WEBP are not yet supported —
+  convert or re-save the photo first, or supply the payload without `sourceImage` and archive it
+  separately.

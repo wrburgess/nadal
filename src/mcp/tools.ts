@@ -11,7 +11,7 @@ import { teams } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { pullArchivedUstaProfile } from "../ingest/archived.js";
 import { fetchPage } from "../ingest/fetch.js";
-import { addMatchFromScorecard, archiveScorecardImage, describeMatchAddRefusal } from "../ingest/match-add.js";
+import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../ingest/match-add.js";
 import { pullPlayer } from "../ingest/player-pull.js";
 import { scorecardPayloadSchema } from "../ingest/scorecard.js";
 import type { ScorecardPayload } from "../ingest/scorecard.js";
@@ -348,11 +348,15 @@ export const MCP_TOOLS: McpToolDef[] = [
       const payload = rawArgs as ScorecardPayload;
       const { db, sqlite } = openDb();
       try {
-        const archivedPath =
-          payload.sourceImage === undefined ? undefined : archiveScorecardImage(payload.sourceImage);
-        const result = addMatchFromScorecard(db, payload);
+        // Ordering: the DB write runs FIRST, and the photo is archived only after it succeeds — a
+        // refused ingest must persist nothing (Codex adversarial review, rated Critical). See
+        // `addMatchFromScorecardWithArchive`'s own doc comment in src/ingest/match-add.ts for why a
+        // post-commit archive failure is returned as `archiveError` rather than thrown: the write
+        // has already committed by then, so throwing would hide a successful `teamMatchId` behind
+        // what reads as a total failure.
+        const { serviceResult: result, archivedPath, archiveError } = addMatchFromScorecardWithArchive(db, payload);
         if (!result.ok) throw new McpToolError(describeMatchAddRefusal(result));
-        return { teamMatchId: result.teamMatchId, courts: result.courts, archivedPath };
+        return { teamMatchId: result.teamMatchId, courts: result.courts, archivedPath, archiveError };
       } finally {
         sqlite.close();
       }

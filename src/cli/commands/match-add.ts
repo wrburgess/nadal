@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
-import { addMatchFromScorecard, archiveScorecardImage, describeMatchAddRefusal } from "../../ingest/match-add.js";
+import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../../ingest/match-add.js";
 import { scorecardPayloadSchema } from "../../ingest/scorecard.js";
 import type { ScorecardPayload } from "../../ingest/scorecard.js";
 import { globalFlags, parseArgs } from "../args.js";
@@ -85,9 +85,11 @@ export const matchAdd: Command = {
 
     const { db, sqlite } = openDb();
     try {
-      const archivedPath = payload.sourceImage === undefined ? undefined : archiveScorecardImage(payload.sourceImage);
-
-      const result = addMatchFromScorecard(db, payload);
+      // Ordering: the DB write runs FIRST, and the photo is archived only after it succeeds — a
+      // refused ingest must persist nothing (Codex adversarial review, rated Critical). See
+      // `addMatchFromScorecardWithArchive`'s own doc comment in src/ingest/match-add.ts for the
+      // full reasoning, including the deliberate choice below for a post-commit archive failure.
+      const { serviceResult: result, archivedPath, archiveError } = addMatchFromScorecardWithArchive(db, payload);
       if (!result.ok) {
         emitSummary("match add", "error", [["message", describeMatchAddRefusal(result)]], opts);
         return 1;
@@ -101,6 +103,16 @@ export const matchAdd: Command = {
         ["courts", result.courts],
       ];
       if (archivedPath !== undefined) fields.push(["archivedPath", archivedPath]);
+
+      // The match write already committed by the time archiving can fail, so this is NOT
+      // `status=error` (that would read as "nothing happened" when the match was, in fact,
+      // recorded) — same shape as `tn team pull`'s existing `status=partial` for a
+      // requested-but-unfulfilled roster cascade alongside an already-committed team write.
+      if (archiveError !== undefined) {
+        emitSummary("match add", "partial", [...fields, ["archiveError", archiveError]], opts);
+        return 1;
+      }
+
       emitSummary("match add", "ok", fields, opts);
       return 0;
     } finally {

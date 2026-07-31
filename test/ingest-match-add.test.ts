@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -15,10 +16,18 @@ import {
   teamMemberships,
   teams,
 } from "../src/db/schema.js";
-import { addMatchFromScorecard, describeMatchAddRefusal } from "../src/ingest/match-add.js";
+import {
+  MAX_SCORECARD_IMAGE_BYTES,
+  addMatchFromScorecard,
+  addMatchFromScorecardWithArchive,
+  archiveScorecardImage,
+  describeMatchAddRefusal,
+} from "../src/ingest/match-add.js";
 import type { ScorecardPayload } from "../src/ingest/scorecard.js";
 import { upsertTeamMatch } from "../src/ingest/upsert.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
+import { useTnRawPath } from "./helpers/tn-raw.js";
+import { useTnScorecardPhotosPath } from "./helpers/tn-scorecard-photos.js";
 
 const FIXTURE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "scorecard");
 
@@ -1668,6 +1677,180 @@ describe("addMatchFromScorecard", () => {
         const rows = db.select().from(teamMatches).all();
         expect(rows).toHaveLength(1);
         expect(rows[0]!.eventId).toBe(eventA.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+});
+
+// Codex adversarial review (PR #54 round 5), rated CRITICAL under PROJECT.md's Review Severity
+// Framework ("security hole" ⇒ Critical, raised from the reviewer's own High): `sourceImage` was
+// validated only as a non-empty string, then `readFileSync`'d and archived BEFORE
+// `addMatchFromScorecard` ever ran — a syntactically valid payload naming an arbitrary local file
+// (an SSH key, `/etc/hosts`) got that file's bytes copied into `raw/scorecard/`, and a refused
+// ingest still persisted them regardless. `archiveScorecardImage` now validates the source path
+// (containment in a configured root, no symlinks anywhere in the chain), its size, and its actual
+// content (a magic-byte sniff, never extension alone) before reading anything; the new
+// `addMatchFromScorecardWithArchive` defers archiving until AFTER a successful service call, so a
+// refused ingest persists nothing — see that function's own doc comment in src/ingest/match-add.ts
+// for the ordering-interaction decision (a post-commit archive failure surfaces as `archiveError`
+// rather than an opaque throw, since the DB write cannot be rolled back by that point).
+describe("archiveScorecardImage / addMatchFromScorecardWithArchive (Codex round 5, sourceImage hardening, rated Critical)", () => {
+  useTnDbPath();
+  const rawPath = useTnRawPath();
+  const photosPath = useTnScorecardPhotosPath();
+
+  const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  function writeFileAt(path: string, contents: Buffer): string {
+    writeFileSync(path, contents);
+    return path;
+  }
+
+  /** Every fixture below writes inside the configured scorecard-photos root by default — a source
+   * path a test wants to fail containment writes elsewhere instead (see the "outside the root"
+   * tests). */
+  function writeIntakeFile(name: string, contents: Buffer): string {
+    return writeFileAt(join(photosPath.path(), name), contents);
+  }
+
+  function writeOutsideRootFile(name: string, contents: Buffer): string {
+    const outsideDir = mkdtempSync(join(tmpdir(), "tn-outside-scorecard-photos-"));
+    return writeFileAt(join(outsideDir, name), contents);
+  }
+
+  /** `archivePage` only creates `raw/scorecard/` on an actual write, so "nothing archived" is
+   * exactly "this directory does not exist" as much as "it exists and is empty". */
+  function rawScorecardEntries(): string[] {
+    const dir = join(rawPath.path(), "scorecard");
+    return existsSync(dir) ? readdirSync(dir) : [];
+  }
+
+  it("archives a valid PNG inside the configured root, with its provenance sidecar", () => {
+    const sourceBytes = Buffer.concat([PNG_MAGIC, Buffer.from([1, 2, 3])]);
+    const sourcePath = writeIntakeFile("court1.png", sourceBytes);
+
+    const archivedPath = archiveScorecardImage(sourcePath);
+
+    expect(existsSync(archivedPath)).toBe(true);
+    expect(readFileSync(archivedPath)).toEqual(sourceBytes);
+    expect(existsSync(`${archivedPath}.provenance.json`)).toBe(true);
+  });
+
+  it("refuses a source path outside the configured scorecard-photos root", () => {
+    const outsidePath = writeOutsideRootFile("court1.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+
+    expect(() => archiveScorecardImage(outsidePath)).toThrow();
+    expect(rawScorecardEntries()).toHaveLength(0);
+  });
+
+  it("refuses a symlink pointing outside the configured root", () => {
+    const outsidePath = writeOutsideRootFile("real.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+    const linkPath = join(photosPath.path(), "link.png");
+    symlinkSync(outsidePath, linkPath);
+
+    expect(() => archiveScorecardImage(linkPath)).toThrow();
+    expect(rawScorecardEntries()).toHaveLength(0);
+  });
+
+  it("refuses a non-image file with a .png name — the magic-byte sniff decides, not the extension", () => {
+    const notAnImage = writeIntakeFile("scorecard.png", Buffer.from("just some ordinary text, not an image", "utf8"));
+
+    expect(() => archiveScorecardImage(notAnImage)).toThrow();
+    expect(rawScorecardEntries()).toHaveLength(0);
+  });
+
+  it("refuses a file over the size limit", () => {
+    const oversized = Buffer.concat([PNG_MAGIC, Buffer.alloc(MAX_SCORECARD_IMAGE_BYTES)]); // one byte over the cap
+    const oversizedPath = writeIntakeFile("huge.png", oversized);
+
+    expect(() => archiveScorecardImage(oversizedPath)).toThrow();
+    expect(rawScorecardEntries()).toHaveLength(0);
+  });
+
+  describe("addMatchFromScorecardWithArchive — ordering (a refused ingest persists nothing)", () => {
+    it("an unknown-team refusal leaves nothing archived, even with a valid sourceImage", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const visiting = seedTeam(db, "Report Opponent");
+        seedRosterPlayer(db, visiting.id, "Opp One");
+        seedRosterPlayer(db, visiting.id, "Opp Two");
+        seedRosterPlayer(db, visiting.id, "Opp Three");
+        const sourcePath = writeIntakeFile("court1.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+        const payload: ScorecardPayload = { ...basePayload("No Such Team", visiting.name), sourceImage: sourcePath };
+
+        const outcome = addMatchFromScorecardWithArchive(db, payload);
+
+        expect(outcome.serviceResult.ok).toBe(false);
+        if (!outcome.serviceResult.ok) expect(outcome.serviceResult.kind).toBe("unknown-team");
+        expect(outcome.archivedPath).toBeUndefined();
+        expect(outcome.archiveError).toBeUndefined();
+        expect(rawScorecardEntries()).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("an unresolved-player refusal leaves nothing archived, even with a valid sourceImage", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const home = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const visiting = seedTeam(db, "Report Opponent");
+        // Deliberately no roster seeded at all — every name in basePayload will flag as unresolved.
+        const sourcePath = writeIntakeFile("court1.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+        const payload: ScorecardPayload = { ...basePayload(home.name, visiting.name), sourceImage: sourcePath };
+
+        const outcome = addMatchFromScorecardWithArchive(db, payload);
+
+        expect(outcome.serviceResult.ok).toBe(false);
+        if (!outcome.serviceResult.ok) expect(outcome.serviceResult.kind).toBe("unresolved-players");
+        expect(outcome.archivedPath).toBeUndefined();
+        expect(outcome.archiveError).toBeUndefined();
+        expect(rawScorecardEntries()).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("the happy path archives AFTER the DB write succeeds", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const sourcePath = writeIntakeFile("court1.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+        const payload: ScorecardPayload = { ...basePayload(home.name, visiting.name), sourceImage: sourcePath };
+
+        const outcome = addMatchFromScorecardWithArchive(db, payload);
+
+        expect(outcome.serviceResult.ok).toBe(true);
+        expect(outcome.archivedPath).toBeDefined();
+        expect(outcome.archiveError).toBeUndefined();
+        expect(rawScorecardEntries()).toHaveLength(2); // the archived leaf plus its provenance sidecar
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("an archive failure AFTER a successful DB write surfaces as archiveError rather than an opaque throw — the write already committed and is NOT rolled back", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        // A source path OUTSIDE the configured root: guaranteed to fail archiving, isolating the
+        // "committed write, failed archive" interaction from anything else that could go wrong.
+        const outsidePath = writeOutsideRootFile("court1.png", Buffer.concat([PNG_MAGIC, Buffer.from([1])]));
+        const payload: ScorecardPayload = { ...basePayload(home.name, visiting.name), sourceImage: outsidePath };
+
+        const outcome = addMatchFromScorecardWithArchive(db, payload);
+
+        expect(outcome.serviceResult.ok).toBe(true);
+        expect(outcome.archivedPath).toBeUndefined();
+        expect(outcome.archiveError).toBeDefined();
+        expect(rawScorecardEntries()).toHaveLength(0);
+
+        // The DB write is NOT rolled back — the match rows genuinely exist despite the archive
+        // failure, which is the whole reason this is surfaced rather than thrown as one opaque error.
+        const rows = db.select().from(teamMatches).all();
+        expect(rows).toHaveLength(1);
       } finally {
         sqlite.close();
       }

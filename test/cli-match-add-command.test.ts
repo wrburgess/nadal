@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { nameKey } from "../src/db/name-key.js";
 import { courtMatches, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
+import { useTnScorecardPhotosPath } from "./helpers/tn-scorecard-photos.js";
 
 // Task 5, #18: `tn match add <payload-file>` end-to-end through `dispatch`, mirroring
 // `test/cli-event-add-command.test.ts`'s shape.
@@ -60,8 +61,16 @@ function writeTempFile(name: string, contents: string | Uint8Array): string {
 
 describe("tn match add (end-to-end via dispatch)", () => {
   useTnDbPath();
-  useTnRawPath();
+  const rawPath = useTnRawPath();
+  const scorecardPhotos = useTnScorecardPhotosPath();
   afterEach(() => vi.restoreAllMocks());
+
+  /** `archivePage` only creates `raw/scorecard/` on an actual write, so "nothing archived" is
+   * exactly "this directory does not exist" as much as "it exists and is empty". */
+  function rawScorecardEntries(): string[] {
+    const dir = join(rawPath.path(), "scorecard");
+    return existsSync(dir) ? readdirSync(dir) : [];
+  }
 
   it("writes the match and prints a deterministic summary line, exit 0", async () => {
     runMigrations();
@@ -218,9 +227,13 @@ describe("tn match add (end-to-end via dispatch)", () => {
     sqlite.close();
 
     // A small synthetic buffer, never a photograph (test/fixtures/README.md: no scorecard photo is
-    // ever committed).
-    const sourceBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
-    const imagePath = writeTempFile("court1.png", sourceBytes);
+    // ever committed) — but a REAL 8-byte PNG signature (Codex round 5: archiveScorecardImage now
+    // sniffs magic bytes, so a fake/truncated signature would refuse this test's own happy path).
+    // Written inside the configured scorecard-photos root (Codex round 5: sourceImage must resolve
+    // there now, not to an arbitrary temp directory).
+    const sourceBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const imagePath = join(scorecardPhotos.path(), "court1.png");
+    writeFileSync(imagePath, sourceBytes);
     const payload = { ...validPayload(home.name, visiting.name), sourceImage: imagePath };
     const payloadPath = writeTempFile("payload.json", JSON.stringify(payload));
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -239,6 +252,83 @@ describe("tn match add (end-to-end via dispatch)", () => {
     expect(existsSync(archivedPath)).toBe(true);
     expect(new Uint8Array(readFileSync(archivedPath))).toEqual(sourceBytes);
     expect(existsSync(`${archivedPath}.provenance.json`)).toBe(true);
+  });
+
+  // Codex adversarial review (PR #54 round 5), rated Critical: `archiveScorecardImage` used to run
+  // BEFORE `addMatchFromScorecard`, so a payload naming a real, valid `sourceImage` that then
+  // refused for an unrelated reason (an unknown team here) still persisted the photo — "a refused
+  // ingest must persist nothing" did not hold for it. Archiving now runs only AFTER the service call
+  // succeeds (src/ingest/match-add.ts's `addMatchFromScorecardWithArchive`).
+  it("REGRESSION (Codex round 5, rated Critical): a refused ingest (unknown team) leaves the sourceImage photo unarchived", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const visiting = db
+      .insert(teams)
+      .values({ name: "Report Opponent", nameKey: nameKey("Report Opponent") })
+      .returning()
+      .get();
+    sqlite.close();
+
+    const sourceBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+    const imagePath = join(scorecardPhotos.path(), "court1.png");
+    writeFileSync(imagePath, sourceBytes);
+    const payload = { ...validPayload("No Such Team", visiting.name), sourceImage: imagePath };
+    const payloadPath = writeTempFile("payload.json", JSON.stringify(payload));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["match", "add", payloadPath]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("status=error"));
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(teamMatches).all()).toHaveLength(0);
+    } finally {
+      check.sqlite.close();
+    }
+    // The assertion that actually proves the fix: before it, this ran unconditionally BEFORE the
+    // service call and left a file here even on this exact refusal.
+    expect(rawScorecardEntries()).toHaveLength(0);
+  });
+
+  // The ordering-interaction Codex explicitly asked to be a deliberate, documented decision rather
+  // than an implicit one: once archiving moves AFTER the DB write, a post-commit archive failure can
+  // no longer share the write's failure boundary — the match rows already exist. Chosen shape:
+  // report it like `tn team pull`'s existing `status=partial` (a requested-but-unfulfilled detail
+  // alongside an otherwise-successful, already-committed write), never an opaque `status=error` that
+  // would read as "nothing happened" when the match was, in fact, recorded.
+  it("REGRESSION (Codex round 5 ordering decision): an archive failure AFTER a successful write reports status=partial with the match rows still committed", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const { home, visiting } = seedRosters(db);
+    sqlite.close();
+
+    // A source path OUTSIDE the configured scorecard-photos root — guaranteed to fail archiving,
+    // isolating the "committed write, failed archive" interaction from anything else.
+    const outsideImagePath = writeTempFile(
+      "court1.png",
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]),
+    );
+    const payload = { ...validPayload(home.name, visiting.name), sourceImage: outsideImagePath };
+    const payloadPath = writeTempFile("payload.json", JSON.stringify(payload));
+    // `emitSummary` sends anything other than `status=ok` to stderr (src/cli/emit.ts), same as
+    // every other non-ok status this command already emits.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["match", "add", payloadPath]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("status=partial"));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("archiveError="));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("teamMatchId="));
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(teamMatches).all()).toHaveLength(1);
+    } finally {
+      check.sqlite.close();
+    }
   });
 
   it("refuses a short invocation with the usage line", async () => {

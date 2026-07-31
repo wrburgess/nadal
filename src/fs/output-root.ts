@@ -583,6 +583,75 @@ export function writeNewOutputFile(
 }
 
 /**
+ * The READ-side counterpart to `assertOutputPathSafe`: validates that `candidatePath` names an
+ * existing, non-symlinked regular file inside `root`, for a caller about to READ a file rather than
+ * create one. Written for `archiveScorecardImage`'s `sourceImage` (#18, Codex adversarial review,
+ * rated Critical): before this existed, a scorecard payload's caller-supplied `sourceImage` was
+ * `readFileSync`'d with NO path validation at all, so ANY local file the process could open — an
+ * SSH key, `/etc/hosts`, anything — was read and then persisted into `raw/scorecard/` by the
+ * archive step that followed, regardless of what the rest of the payload said. Reuses this module's
+ * own real-path/symlink machinery (`assertNoSymlinkComponents`, `isWithin`) rather than a second,
+ * hand-rolled notion of "is this path safe" — the one thing it deliberately does NOT reuse is
+ * `assertRootSafe`'s "an in-repo root must be the one permitted directory" clause: that clause
+ * exists to stop personal data being WRITTEN into tracked source, which has no analogue for a root
+ * this function only ever reads FROM.
+ *
+ * Differs from the write side in one structural way: an output leaf does not exist yet (the write
+ * is about to create it), so nothing on that side checks the LEAF itself for being a symlink — only
+ * the directory components leading to it. An input leaf already exists, and a symlinked leaf is
+ * exactly as dangerous as a symlinked directory component (it can point anywhere the process can
+ * read), so this checks the leaf too, via `lstat` (which never follows the final component) —
+ * refused unconditionally, regardless of where the link itself resolves to, same as the write side
+ * refuses any symlinked directory component regardless of where IT resolves.
+ *
+ * `root` must ALREADY exist — unlike an output root, which a caller may be about to create for the
+ * first time, an input root names wherever files are expected to already be waiting, so a missing
+ * root is a configuration error, refused rather than silently widened to the nearest existing
+ * ancestor the way `realpathOfNearestExisting` widens an output root that does not exist yet: doing
+ * that here would wrongly ADMIT anything under that ancestor, not just under the intended root.
+ *
+ * Returns the resolved candidate path, ready to pass to a plain read (`readFileSync`/`statSync`). A
+ * full fd-anchored open+verify (the write side's `openNewOutputFileSafely`) is not applied here,
+ * since nothing is created and the caller reads the bytes once rather than holding a check-then-use
+ * window open across a multi-step write — a residual, not a claim this is as hardened as the write
+ * path; recorded in `docs/findings.md`.
+ */
+export function assertInputPathSafe(candidatePath: string, root: string): string {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidatePath);
+
+  let realRoot: string;
+  try {
+    realRoot = realpathSync.native(resolvedRoot);
+  } catch {
+    throw new OutputPathError(`refusing: the configured source root does not exist: ${resolvedRoot}`);
+  }
+
+  const leafStat = lstatSync(resolvedCandidate, { throwIfNoEntry: false });
+  if (leafStat === undefined) {
+    throw new OutputPathError(`refusing an unreadable source path: ${resolvedCandidate}`);
+  }
+  if (leafStat.isSymbolicLink()) {
+    throw new OutputPathError(`refusing a symlinked source path: ${resolvedCandidate}`);
+  }
+  if (!leafStat.isFile()) {
+    throw new OutputPathError(`refusing a non-regular-file source path: ${resolvedCandidate}`);
+  }
+
+  // Same rule as the write side's `assertNoSymlinkComponents`: no DIRECTORY component between the
+  // root and the leaf may be a symlink either — checked on the lexical pair first, exactly like
+  // `resolveRealOutputPath` does, before the real-root containment check below.
+  assertNoSymlinkComponents(resolvedRoot, resolvedCandidate);
+
+  const realDir = realpathSync.native(dirname(resolvedCandidate));
+  if (!isWithin(realRoot, realDir)) {
+    throw new OutputPathError(`refusing source path outside root "${realRoot}": ${resolvedCandidate}`);
+  }
+
+  return resolvedCandidate;
+}
+
+/**
  * `lstat`s `path` (never follows a link itself) and throws `OutputPathError` if a SYMLINK sits at
  * this exact leaf — refused unconditionally, before anything is written there.
  *

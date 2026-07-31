@@ -384,10 +384,35 @@ export function upsertTeamMatch(db: Db, values: TeamMatchInsert): TeamMatchRow {
     const reversed = existing.homeTeamId === values.visitingTeamId && existing.visitingTeamId === values.homeTeamId;
     const incomingHome = values.homeCourtsWon ?? null;
     const incomingVisiting = values.visitingCourtsWon ?? null;
+
+    // Codex adversarial review (PR #54 round 5), HC-approved exception to the earlier
+    // `upsertTeamMatch`/`team-pull.ts` scoping boundary: `team-pull` passes `eventId: null`
+    // UNCONDITIONALLY for every parsed schedule row (see its one call site), so writing
+    // `values.eventId ?? null` straight through here silently ERASED an event a scorecard ingest
+    // had already linked, the moment either team was next re-pulled. Fixed with the identical
+    // fill-in-blanks idiom `upsertLenientTeamMatchForScorecard` (src/ingest/match-add.ts) already
+    // uses for `scheduledTime`/`site`: a blank (null/undefined) incoming value never clobbers a
+    // stored one, a blank stored value is filled in by a supplied incoming one, and two DIFFERENT
+    // non-null values are a genuine conflict — refused rather than silently decided. A plain `Error`
+    // matches this file's own existing posture for an unexpected write (`upsertPlayer` above), not a
+    // new refusal type: `upsertTeamMatch` has no candidate-list/ambiguity shape to extend, and
+    // team-pull's own catch-all (`catch (err) { ... return { kind: "error", message: ... } }`)
+    // already surfaces any thrown error without needing a new branch.
+    if (
+      existing.eventId !== null &&
+      values.eventId !== null &&
+      values.eventId !== undefined &&
+      existing.eventId !== values.eventId
+    ) {
+      throw new Error(
+        `upsertTeamMatch: conflicting event for existing team match id ${existing.id}: stored event id ${existing.eventId} vs incoming event id ${values.eventId}`,
+      );
+    }
+
     return db
       .update(teamMatches)
       .set({
-        eventId: values.eventId ?? null,
+        eventId: existing.eventId ?? values.eventId ?? null,
         homeCourtsWon: reversed ? incomingVisiting : incomingHome,
         visitingCourtsWon: reversed ? incomingHome : incomingVisiting,
       })

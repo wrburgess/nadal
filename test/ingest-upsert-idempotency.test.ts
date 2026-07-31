@@ -4,6 +4,7 @@ import { nameKey } from "../src/db/name-key.js";
 import {
   courtMatchPlayers,
   courtMatches,
+  events,
   ratingObservations,
   teamMatches,
   teamMemberships,
@@ -366,6 +367,149 @@ describe("id-less team matches across opposing perspectives", () => {
       expect(rows[0]?.homeTeamId).toBe(a.id);
       expect(rows[0]?.homeCourtsWon).toBe(3);
       expect(rows[0]?.visitingCourtsWon).toBe(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Codex adversarial review (PR #54 round 5), the second round-5 finding: `team-pull` passes
+// `eventId: null` UNCONDITIONALLY for every parsed schedule row (verified at its one call site,
+// src/ingest/team-pull.ts:301 — a hardcoded literal, not derived from anything parsed), and the
+// id-less update branch above used to write `values.eventId ?? null` straight through with no
+// regard for what the STORED row already held. So: ingest a scorecard for an event-linked fixture
+// (`addMatchFromScorecard`/`match-add`, which supplies a real `eventId`), then re-pull either team
+// from a schedule containing that SAME id-less fixture — the event link on the parent row is
+// SILENTLY ERASED, even though the lenient matching PR #54 round 2 added never lets team-pull MOVE
+// the event to a different one (`upsertTeamMatch`'s own matching logic is untouched by that
+// change). HC-ruled in scope for #18 (relaxing the earlier "upsertTeamMatch/team-pull.ts stay
+// untouched" boundary for this ONE change): the fix is the identical fill-in-blanks idiom the
+// scorecard-specific updater (`upsertLenientTeamMatchForScorecard` in src/ingest/match-add.ts)
+// already uses for `scheduledTime`/`site` — `existing.eventId ?? values.eventId`, and two
+// DIFFERENT non-null event ids refuse rather than silently overwrite, matching this file's own
+// existing error posture (a bare `Error`, same as `upsertPlayer` above) rather than inventing a new
+// refusal mechanism that would ripple into every caller of `upsertTeamMatch`.
+describe("id-less team matches preserve a stored event link (Codex round 5, HC-approved exception)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function seedEvent(db: ReturnType<typeof openDb>["db"], name: string) {
+    return db
+      .insert(events)
+      .values({ name, kind: "tournament", startsOn: "2026-08-01", endsOn: "2026-08-31" })
+      .returning()
+      .get();
+  }
+
+  it("REGRESSION: an event-linked row survives a later id-less update supplying no event (team-pull's own shape)", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-28", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: null };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      // The exact shape team-pull's own call site uses: eventId: null, unconditionally.
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+      // The rest of the update still applies — this is not a "reject the whole write" guard.
+      expect(rows[0]?.homeCourtsWon).toBe(3);
+      expect(rows[0]?.visitingCourtsWon).toBe(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the reverse ordering: a stored row with no event is filled in by a later update that supplies one", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const base = { playedOn: "2026-08-29", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: null };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: null,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: 3,
+        visitingCourtsWon: 2,
+      });
+
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REGRESSION: two DIFFERENT non-null events on the same id-less fixture refuse, nothing overwritten", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const a = upsertTeam(db, { name: "Team A" });
+      const b = upsertTeam(db, { name: "Team B" });
+      const eventA = seedEvent(db, "Event A");
+      const eventB = seedEvent(db, "Event B");
+      const base = { playedOn: "2026-08-30", scheduledTime: "9:00 AM", site: "Court 1", sourceMatchId: null };
+
+      upsertTeamMatch(db, {
+        ...base,
+        eventId: eventA.id,
+        homeTeamId: a.id,
+        visitingTeamId: b.id,
+        homeCourtsWon: null,
+        visitingCourtsWon: null,
+      });
+
+      expect(() =>
+        upsertTeamMatch(db, {
+          ...base,
+          eventId: eventB.id,
+          homeTeamId: a.id,
+          visitingTeamId: b.id,
+          homeCourtsWon: 3,
+          visitingCourtsWon: 2,
+        }),
+      ).toThrow();
+
+      // Nothing moved or partially applied: the stored row is untouched.
+      const rows = db.select().from(teamMatches).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventId).toBe(eventA.id);
+      expect(rows[0]?.homeCourtsWon).toBeNull();
+      expect(rows[0]?.visitingCourtsWon).toBeNull();
     } finally {
       sqlite.close();
     }
