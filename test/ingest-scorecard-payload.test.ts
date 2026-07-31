@@ -72,7 +72,13 @@ describe("scorecardPayloadSchema", () => {
     const result = scorecardPayloadSchema.safeParse(withOptionals);
     expect(result.success).toBe(true);
     if (result.success) {
+      // All six named fields, not just the three the title used to claim without checking —
+      // scheduledTime/site/sourceImage previously round-tripped only by the schema's own good
+      // behavior, never by anything this test actually verified.
       expect(result.data.event).toBe("Springfield Sectionals 2026");
+      expect(result.data.scheduledTime).toBe("9:00 AM");
+      expect(result.data.site).toBe("Clayview Country Club");
+      expect(result.data.sourceImage).toBe("/tmp/scorecard.png");
       expect(result.data.courts[0]?.winnerSide).toBe("home");
       expect(result.data.courts[0]?.score).toBe("6-3 6-4");
     }
@@ -108,7 +114,25 @@ describe("scorecardPayloadSchema", () => {
     }
   });
 
-  it("a court marked defaulted is exempt from the cardinality invariant (nobody played it)", () => {
+  it("a court marked defaulted is exempt from the cardinality invariant when BOTH sides are empty (nobody played it)", () => {
+    const payload = fourCourtPayload();
+    payload.courts[1] = {
+      slot: "D1",
+      discipline: "doubles",
+      homePlayers: [],
+      visitingPlayers: [],
+      defaulted: true,
+    };
+    const result = scorecardPayloadSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  // Codex adversarial review of PR #54 round 3, High finding 3: `defaulted: true` used to skip the
+  // cardinality check ENTIRELY, so a payload could claim "nobody played" while still supplying (and
+  // persisting) a full, roster-valid set of participants — a 3-vs-1 doubles court, say. `defaulted`
+  // means nobody played, which means no participants; it is not merely an escape hatch from the
+  // per-discipline COUNT rule.
+  it("REGRESSION (Codex High finding 3): a defaulted court with players still present on either side fails — nobody played means no participants", () => {
     const payload = fourCourtPayload();
     payload.courts[1] = {
       slot: "D1",
@@ -118,7 +142,43 @@ describe("scorecardPayloadSchema", () => {
       defaulted: true,
     };
     const result = scorecardPayloadSchema.safeParse(payload);
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.includes("homePlayers"))).toBe(true);
+    }
+  });
+
+  it("REGRESSION (Codex High finding 3, the reviewer's concrete case): defaulted D1 with home [Ada, Bo, Cy] and visiting [Opp One] fails, not just an unbalanced count", () => {
+    const payload = fourCourtPayload();
+    payload.courts[1] = {
+      slot: "D1",
+      discipline: "doubles",
+      homePlayers: ["Ada Ashby", "Bo Bramwell", "Cy Calder"],
+      visitingPlayers: ["Opp One"],
+      defaulted: true,
+    };
+    const result = scorecardPayloadSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.includes("homePlayers"))).toBe(true);
+      expect(result.error.issues.some((i) => i.path.includes("visitingPlayers"))).toBe(true);
+    }
+  });
+
+  it("a defaulted court with only ONE side non-empty still fails — both sides must be empty, not just balanced", () => {
+    const payload = fourCourtPayload();
+    payload.courts[1] = {
+      slot: "D1",
+      discipline: "doubles",
+      homePlayers: [],
+      visitingPlayers: ["Opp Two"],
+      defaulted: true,
+    };
+    const result = scorecardPayloadSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.includes("visitingPlayers"))).toBe(true);
+    }
   });
 
   it("sad: zero courts fails", () => {

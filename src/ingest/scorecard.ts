@@ -27,16 +27,39 @@ const scorecardCourtSchema = z
     visitingPlayers: z.array(z.string().min(1)),
     winnerSide: z.enum(["home", "visiting"]).optional(),
     score: z.string().min(1).optional(),
-    /** True when nobody played this court (a walkover/no-show). Relaxes the cardinality invariant
-     * below entirely — mirrors the TennisRecord parser's own exemption for the identical case
+    /** True when nobody played this court (a walkover/no-show). Replaces the per-discipline COUNT
+     * invariant below with a stricter one — both sides must be EMPTY, not merely a different count
+     * (Codex adversarial review of PR #54 round 3, High finding 3: the original version returned
+     * before checking anything at all, so a schema-valid `defaulted: true` court could still carry
+     * a full, roster-valid participant list — a claim of "nobody played" alongside a persisted
+     * 3-vs-1 doubles court). Mirrors the TennisRecord parser's own exemption for the identical case
      * (src/parsers/tennisrecord/match-history.ts: "the participant check enforces cardinality by
-     * discipline ... except on an explicit default"). Not persisted: `court_matches` has no column
-     * for it, and an empty/short player list plus a null score already says "nobody played" to
-     * every downstream reader. */
+     * discipline ... except on an explicit default"), but that precedent exempts a default from the
+     * COUNT rule, not from having a rule at all. Not persisted: `court_matches` has no column for
+     * it, so an empty player list is what tells a downstream reader "nobody played" — a non-empty
+     * one would read as an ordinary, incomplete court instead. `winnerSide`/`score` are left
+     * unconstrained here deliberately: a walkover still has a winner by rule, and some sources record
+     * the score cell as literal text like "Default", so neither field contradicts "nobody played". */
     defaulted: z.boolean().optional(),
   })
   .superRefine((court, ctx) => {
-    if (court.defaulted === true) return;
+    if (court.defaulted === true) {
+      if (court.homePlayers.length !== 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: `court "${court.slot}": a defaulted court must have no home players (nobody played), got ${court.homePlayers.length}`,
+          path: ["homePlayers"],
+        });
+      }
+      if (court.visitingPlayers.length !== 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: `court "${court.slot}": a defaulted court must have no visiting players (nobody played), got ${court.visitingPlayers.length}`,
+          path: ["visitingPlayers"],
+        });
+      }
+      return;
+    }
     const expected = expectedPlayerCount(court.discipline);
     if (court.homePlayers.length !== expected) {
       ctx.addIssue({

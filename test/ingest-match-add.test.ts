@@ -17,6 +17,7 @@ import {
 } from "../src/db/schema.js";
 import { addMatchFromScorecard, describeMatchAddRefusal } from "../src/ingest/match-add.js";
 import type { ScorecardPayload } from "../src/ingest/scorecard.js";
+import { upsertTeamMatch } from "../src/ingest/upsert.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 const FIXTURE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "scorecard");
@@ -161,6 +162,23 @@ describe("describeMatchAddRefusal", () => {
   it("names every duplicate court slot together", () => {
     expect(describeMatchAddRefusal({ ok: false, kind: "duplicate-slots", slots: ["S1", "D2"] })).toBe(
       "duplicate court slot(s) in one payload: S1, D2",
+    );
+  });
+
+  it("names every ambiguous-parent-match candidate together", () => {
+    expect(
+      describeMatchAddRefusal({
+        ok: false,
+        kind: "ambiguous-parent-match",
+        candidates: [
+          { teamMatchId: 1, scheduledTime: null, site: "Court 1" },
+          { teamMatchId: 2, scheduledTime: "9:00 AM", site: null },
+        ],
+      }),
+    ).toBe(
+      "ambiguous parent match — 2 existing team matches are each compatible: " +
+        "id 1 (scheduledTime=blank, site=Court 1); id 2 (scheduledTime=9:00 AM, site=blank) — " +
+        "supply the missing scheduledTime/site to disambiguate",
     );
   });
 });
@@ -1316,6 +1334,111 @@ describe("addMatchFromScorecard", () => {
         expect(second.ok).toBe(true);
         if (first.ok && second.ok) expect(second.teamMatchId).toBe(first.teamMatchId);
         expect(db.select().from(teamMatches).all()).toHaveLength(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Codex adversarial review of PR #54 round 3, High finding 2: after the exact pass finds
+    // nothing, the lenient fallback used to take the FIRST blank-compatible candidate with no
+    // ambiguity check. Two source-less rows for the SAME team pair and date — `(time=null,
+    // site="Court 1")` and `(time="9:00 AM", site=null)` — can coexist today precisely because
+    // `team-pull`'s STRICT matching never merges a blank-time row with a blank-site row (they are
+    // not equal to each other, so upsertTeamMatch treats them as two distinct fixtures). An
+    // incoming `(time="9:00 AM", site="Court 1")` is EXACT with neither (so the exact pass finds
+    // nothing) and lenient-COMPATIBLE with BOTH — so a silent `.find()` would attach this payload's
+    // courts to whichever row SQLite happened to return first, backfilling only that one and
+    // leaving the other stranded, half-filled, forever. This must refuse instead.
+    it("REGRESSION (Codex High finding 2): two pre-existing, lenient-compatible parent candidates refuse as ambiguous rather than picking one silently", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        // Simulates two rows `team-pull`'s own strict matching could plausibly have produced for
+        // the same team pair and date — its equality is exact, so a blank-time row and a
+        // blank-site row are never merged into one.
+        const rowA = upsertTeamMatch(db, {
+          homeTeamId: home.id,
+          visitingTeamId: visiting.id,
+          playedOn: "2026-08-28",
+          scheduledTime: null,
+          site: "Court 1",
+          sourceMatchId: null,
+          homeCourtsWon: null,
+          visitingCourtsWon: null,
+        });
+        const rowB = upsertTeamMatch(db, {
+          homeTeamId: home.id,
+          visitingTeamId: visiting.id,
+          playedOn: "2026-08-28",
+          scheduledTime: "9:00 AM",
+          site: null,
+          sourceMatchId: null,
+          homeCourtsWon: null,
+          visitingCourtsWon: null,
+        });
+        expect(db.select().from(teamMatches).all()).toHaveLength(2); // sanity: genuinely two rows
+
+        const payload: ScorecardPayload = {
+          ...basePayload(home.name, visiting.name),
+          scheduledTime: "9:00 AM",
+          site: "Court 1",
+        };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok && result.kind === "ambiguous-parent-match") {
+          expect(result.candidates.map((c) => c.teamMatchId).sort()).toEqual([rowA.id, rowB.id].sort());
+        } else {
+          throw new Error("expected an ambiguous-parent-match refusal");
+        }
+
+        // Nothing new written — still exactly the two pre-existing rows, no courts/participants.
+        expect(db.select().from(teamMatches).all()).toHaveLength(2);
+        expect(db.select().from(courtMatches).all()).toHaveLength(0);
+        expect(db.select().from(courtMatchPlayers).all()).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("an EXACT discriminator match still wins outright, even when a lenient-only candidate also exists — no ambiguity, since the exact pass runs first", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const exactRow = upsertTeamMatch(db, {
+          homeTeamId: home.id,
+          visitingTeamId: visiting.id,
+          playedOn: "2026-08-28",
+          scheduledTime: "9:00 AM",
+          site: "Court 1",
+          sourceMatchId: null,
+          homeCourtsWon: null,
+          visitingCourtsWon: null,
+        });
+        // A second, lenient-only candidate (blank site) that would ALSO be compatible were the
+        // exact match not already decisive.
+        upsertTeamMatch(db, {
+          homeTeamId: home.id,
+          visitingTeamId: visiting.id,
+          playedOn: "2026-08-28",
+          scheduledTime: "9:00 AM",
+          site: null,
+          sourceMatchId: null,
+          homeCourtsWon: null,
+          visitingCourtsWon: null,
+        });
+
+        const payload: ScorecardPayload = {
+          ...basePayload(home.name, visiting.name),
+          scheduledTime: "9:00 AM",
+          site: "Court 1",
+        };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.teamMatchId).toBe(exactRow.id);
       } finally {
         sqlite.close();
       }

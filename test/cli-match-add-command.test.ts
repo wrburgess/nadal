@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -207,7 +207,11 @@ describe("tn match add (end-to-end via dispatch)", () => {
     expect(parsed).toMatchObject({ status: "error" });
   });
 
-  it("archives the sourceImage photo before writing, and reports the archived path", async () => {
+  // Codex adversarial review of PR #54 round 3, Medium finding 4's own sweep (a title claiming more
+  // than the assertion enforces): this test previously only checked that the summary line CONTAINED
+  // the substring `archivedPath=`, which passes even if the code fabricated that string without ever
+  // archiving anything. Strengthened to actually read the archived file's bytes back off disk.
+  it("archives the sourceImage photo and reports the archived path, with the original bytes intact", async () => {
     runMigrations();
     const { db, sqlite } = openDb();
     const { home, visiting } = seedRosters(db);
@@ -215,7 +219,8 @@ describe("tn match add (end-to-end via dispatch)", () => {
 
     // A small synthetic buffer, never a photograph (test/fixtures/README.md: no scorecard photo is
     // ever committed).
-    const imagePath = writeTempFile("court1.png", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    const sourceBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const imagePath = writeTempFile("court1.png", sourceBytes);
     const payload = { ...validPayload(home.name, visiting.name), sourceImage: imagePath };
     const payloadPath = writeTempFile("payload.json", JSON.stringify(payload));
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -223,7 +228,17 @@ describe("tn match add (end-to-end via dispatch)", () => {
     const code = await dispatch(["match", "add", payloadPath]);
 
     expect(code).toBe(0);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("archivedPath="));
+    const line = logSpy.mock.calls.find((call) => typeof call[0] === "string" && call[0].includes("archivedPath="))?.[0] as
+      | string
+      | undefined;
+    expect(line, "expected a summary line containing archivedPath=").toBeDefined();
+    const match = /archivedPath="([^"]+)"/.exec(line!);
+    expect(match, `expected a quoted archivedPath value in: ${line}`).not.toBeNull();
+    const archivedPath = match![1]!;
+
+    expect(existsSync(archivedPath)).toBe(true);
+    expect(new Uint8Array(readFileSync(archivedPath))).toEqual(sourceBytes);
+    expect(existsSync(`${archivedPath}.provenance.json`)).toBe(true);
   });
 
   it("refuses a short invocation with the usage line", async () => {

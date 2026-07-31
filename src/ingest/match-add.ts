@@ -38,6 +38,11 @@ export type MatchAddDuplicatePlayerFlag = {
   occurrences: MatchAddDuplicateOccurrence[];
 };
 
+/** One pre-existing, source-less `team_matches` row that is lenient-COMPATIBLE with the incoming
+ * payload but not an EXACT match for it (Codex adversarial review of PR #54 round 3, High finding
+ * 2) — named so the operator can supply the missing discriminator and pick the right one. */
+export type MatchAddAmbiguousParentCandidate = { teamMatchId: number; scheduledTime: string | null; site: string | null };
+
 export type AddMatchFromScorecardResult =
   | { ok: true; teamMatchId: number; courts: number }
   | { ok: false; kind: "unknown-team"; team: string; candidates: string[] }
@@ -45,7 +50,8 @@ export type AddMatchFromScorecardResult =
   | { ok: false; kind: "unresolved-players"; flags: MatchAddPlayerFlag[] }
   | { ok: false; kind: "same-team"; team: string }
   | { ok: false; kind: "duplicate-players"; duplicates: MatchAddDuplicatePlayerFlag[] }
-  | { ok: false; kind: "duplicate-slots"; slots: string[] };
+  | { ok: false; kind: "duplicate-slots"; slots: string[] }
+  | { ok: false; kind: "ambiguous-parent-match"; candidates: MatchAddAmbiguousParentCandidate[] };
 
 /** Thrown inside the transaction to abort it — better-sqlite3/drizzle roll back automatically on a
  * thrown error, same "no partial write" precedent as `AmbiguousIdentityError`
@@ -82,6 +88,11 @@ class DuplicatePlayersRefusal extends Error {
 class DuplicateSlotsRefusal extends Error {
   constructor(readonly slots: string[]) {
     super(`duplicate court slot(s): ${slots.join(", ")}`);
+  }
+}
+class AmbiguousParentMatchRefusal extends Error {
+  constructor(readonly candidates: MatchAddAmbiguousParentCandidate[]) {
+    super(`ambiguous parent match: ${candidates.length} lenient-compatible candidates`);
   }
 }
 
@@ -125,14 +136,20 @@ function requireTeam(db: Db, name: string): TeamRow {
  *
  * ACCEPTED RISK (HC-approved trade — record here, and see `docs/findings.md`): a genuine SECOND
  * same-day fixture between the same two teams whose FIRST ingest omitted a discriminator (say, no
- * time was captured) will now be silently absorbed into the first match on a later ingest, rather
- * than creating the second match a strict comparison would have. This is possible ONLY when the
- * STORED side of a discriminator is blank — two ingests that both SUPPLY a value still discriminate
- * correctly (a real conflict still inserts a new row, per the doubleheader-guard test) — but within
- * that narrower "stored side blank" case, this function cannot tell "the same match, filled in"
- * apart from "a different match that also has no time on file yet". The HC accepted this for
- * in-event ergonomics: a scorekeeper correcting a scorecard mid-event should not also have to know
- * whether every discriminator was captured perfectly on the first photo.
+ * time was captured) can be silently absorbed into that first match on a later ingest, rather than
+ * creating the second match a strict comparison would have. This risk runs in BOTH directions —
+ * corrected from an earlier, narrower claim (Codex adversarial review of PR #54 round 3, High
+ * finding 1: the original wording here said "ONLY when the STORED side is blank", which is FALSE,
+ * since `compatible` accepts a blank on EITHER side). A later fixture that OMITS a discriminator
+ * can just as easily be absorbed into an EARLIER one that SUPPLIED it, as an earlier blank can be
+ * filled in by a later supplied value — `compatible` does not know or care which ingest came first,
+ * only which side (if either) is blank right now. The ONLY case that reliably discriminates two
+ * genuinely different fixtures is BOTH sides SUPPLIED and DIFFERENT after normalization (a real
+ * conflict still inserts a new row, per the doubleheader-guard test) — every other combination
+ * involving a blank on either side is, by this function's own design, treated as the same match.
+ * The HC accepted this for in-event ergonomics: a scorekeeper correcting a scorecard mid-event
+ * should not also have to know whether every discriminator was captured perfectly on the first
+ * photo, on either the first or a later submission.
  */
 function upsertLenientTeamMatchForScorecard(
   db: Db,
@@ -181,17 +198,36 @@ function upsertLenientTeamMatchForScorecard(
     (stored === null && incoming === null) ||
     (stored !== null && incoming !== null && normalize(stored) === normalize(incoming));
 
-  const existing =
-    candidates.find(
-      (row) =>
-        exact(row.scheduledTime, values.scheduledTime, normalizeTimeKey) &&
-        exact(row.site, values.site, normalizeSiteKey),
-    ) ??
-    candidates.find(
+  const exactMatch = candidates.find(
+    (row) =>
+      exact(row.scheduledTime, values.scheduledTime, normalizeTimeKey) &&
+      exact(row.site, values.site, normalizeSiteKey),
+  );
+
+  let existing = exactMatch;
+  if (existing === undefined) {
+    // The lenient fallback, only reached when NO exact match exists. If MORE THAN ONE candidate is
+    // lenient-compatible (Codex adversarial review of PR #54 round 3, High finding 2), a silent
+    // `.find()` would attach this payload's courts to whichever row the query happens to return
+    // first and leave the OTHER equally-compatible row stranded, half-filled, with no error at
+    // all. Concretely: a blank-time row and a blank-site row for the same team pair and date can
+    // coexist today — `team-pull`'s own matching is STRICT, so it never merges them into one — and
+    // an incoming payload supplying BOTH fields is lenient-compatible with both, exact with
+    // neither. Refuse instead, naming every candidate so the operator can supply the missing
+    // discriminator and disambiguate explicitly — the same "error with candidates, never guess"
+    // posture every other ambiguity in this service already takes.
+    const lenientMatches = candidates.filter(
       (row) =>
         compatible(row.scheduledTime, values.scheduledTime, normalizeTimeKey) &&
         compatible(row.site, values.site, normalizeSiteKey),
     );
+    if (lenientMatches.length > 1) {
+      throw new AmbiguousParentMatchRefusal(
+        lenientMatches.map((row) => ({ teamMatchId: row.id, scheduledTime: row.scheduledTime, site: row.site })),
+      );
+    }
+    existing = lenientMatches[0];
+  }
 
   if (existing === undefined) {
     return db
@@ -423,6 +459,9 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
       return { ok: false, kind: "duplicate-players", duplicates: err.duplicates };
     }
     if (err instanceof DuplicateSlotsRefusal) return { ok: false, kind: "duplicate-slots", slots: err.slots };
+    if (err instanceof AmbiguousParentMatchRefusal) {
+      return { ok: false, kind: "ambiguous-parent-match", candidates: err.candidates };
+    }
     throw err;
   }
 }
@@ -451,6 +490,11 @@ export function describeMatchAddRefusal(result: Extract<AddMatchFromScorecardRes
   }
   if (result.kind === "duplicate-slots") {
     return `duplicate court slot(s) in one payload: ${result.slots.join(", ")}`;
+  }
+  if (result.kind === "ambiguous-parent-match") {
+    return `ambiguous parent match — ${result.candidates.length} existing team matches are each compatible: ${result.candidates
+      .map((c) => `id ${c.teamMatchId} (scheduledTime=${c.scheduledTime ?? "blank"}, site=${c.site ?? "blank"})`)
+      .join("; ")} — supply the missing scheduledTime/site to disambiguate`;
   }
   return `unresolved player name(s): ${result.flags
     .map((f) => {

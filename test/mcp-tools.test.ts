@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
+import { courtMatchPlayers, courtMatches, events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
@@ -257,9 +257,11 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       [visiting.id, "Opp Two"],
       [visiting.id, "Opp Three"],
     ];
+    const playerIdByName = new Map<string, number>();
     for (const [teamId, name] of rosterNames) {
       const player = db.insert(players).values({ canonicalName: name }).returning().get();
       db.insert(teamMemberships).values({ playerId: player.id, teamId, eventId: null }).run();
+      playerIdByName.set(name, player.id);
     }
     backfillNameKeys(db);
     sqlite.close();
@@ -286,11 +288,52 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     });
 
     expect(result.isError).not.toBe(true);
-    expect(JSON.parse(textOf(result))).toMatchObject({ courts: 2 });
+    const parsed = JSON.parse(textOf(result)) as { teamMatchId: number; courts: number };
+    expect(parsed).toMatchObject({ courts: 2 });
 
+    // Codex adversarial review of PR #54 round 3, Medium finding 4: asserting only `{courts: 2}`
+    // (the echoed input count) and a single team_matches row would stay green even if the handler
+    // wrote the parent and NOTHING else — zero court_matches, zero court_match_players. Assert the
+    // actual rows instead: both courts, their result fields, and all six participants by side.
     const check = openDb();
     try {
-      expect(check.db.select().from(teamMatches).all()).toHaveLength(1);
+      const teamMatchRows = check.db.select().from(teamMatches).all();
+      expect(teamMatchRows).toHaveLength(1);
+      expect(teamMatchRows[0]!.id).toBe(parsed.teamMatchId);
+
+      const courtRows = check.db.select().from(courtMatches).all();
+      expect(courtRows).toHaveLength(2);
+      expect(courtRows.every((c) => c.teamMatchId === parsed.teamMatchId)).toBe(true);
+
+      const s1 = courtRows.find((c) => c.slot === "S1")!;
+      expect(s1).toMatchObject({ discipline: "singles", winnerSide: null, score: null });
+      const d1 = courtRows.find((c) => c.slot === "D1")!;
+      expect(d1).toMatchObject({ discipline: "doubles", winnerSide: "home", score: "6-3 6-4" });
+
+      const participantRows = check.db.select().from(courtMatchPlayers).all();
+      expect(participantRows).toHaveLength(6);
+
+      const s1Sides = new Map(
+        participantRows.filter((p) => p.courtMatchId === s1.id).map((p) => [p.playerId, p.side]),
+      );
+      expect(s1Sides).toEqual(
+        new Map([
+          [playerIdByName.get("Ada Ashby")!, "home"],
+          [playerIdByName.get("Opp One")!, "visiting"],
+        ]),
+      );
+
+      const d1Sides = new Map(
+        participantRows.filter((p) => p.courtMatchId === d1.id).map((p) => [p.playerId, p.side]),
+      );
+      expect(d1Sides).toEqual(
+        new Map([
+          [playerIdByName.get("Bo Bramwell")!, "home"],
+          [playerIdByName.get("Cy Calder")!, "home"],
+          [playerIdByName.get("Opp Two")!, "visiting"],
+          [playerIdByName.get("Opp Three")!, "visiting"],
+        ]),
+      );
     } finally {
       check.sqlite.close();
     }
