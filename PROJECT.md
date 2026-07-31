@@ -422,14 +422,21 @@ The override is scoped to **process/operational findings**. It is not a rule aga
 
 ### The limits of this statement, stated plainly
 
-**Nothing in *Quality Checks* parses this section, and no check can observe the behavior it governs.**
-Stated exactly, since a limit stated loosely is the failure this whole section is about:
-`scripts/parity_check.rb` asserts structure — the required `##` sections, skill frontmatter, resolvable
-links, and the gate/reviewer **values**. It does read a little prose, but only three fixed patterns: a
-heading advertising itself as unenforceable, and whether a skill body names the `Human Gates` and
-*Reviewer* host values. It parses nothing below, and — the part that matters — the violation this rule
-forbids happens in a GitHub artifact and in an agent's judgment, so **no in-repo check could see it
-even if one were written.**
+**Nothing in *Quality Checks* parses this section.** Stated exactly, since a limit stated loosely is the
+failure this whole section is about: `scripts/parity_check.rb` asserts structure — the required `##`
+sections, skill frontmatter, resolvable links, and the gate/reviewer **values**. It does read a little
+prose, but only three fixed patterns: any heading advertising itself as unenforceable (this file's
+headings included), and whether a skill body names the `Human Gates` and *Reviewer* host values. None of
+that reads the rule stated here.
+
+Nor could a check fully replace it, though **the honest answer is "partly", not "no"**: of the four
+banned spawn targets, a new file under `rules/` or a new ADR would leave an in-repo trace a check
+*could* catch — but an **Issue** and a **PR** live on GitHub, and the decision that produces them lives
+in an agent's judgment, so the two targets that have actually been violated are the two nothing in the
+tree can see. That asymmetry is why a mechanical check is logged in
+[`docs/findings.md`](docs/findings.md) as a real idea worth triage rather than dismissed — and also why
+it was not shipped as *this* rule's remedy, since it would have gone green against every violation on
+record.
 
 This section's force therefore comes from being read, not from being checked; do not mistake it for a
 guardrail. What it removes is the **conflicting instruction** an agent was previously following, which
