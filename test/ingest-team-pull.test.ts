@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { hrefParam } from "../src/parsers/dom.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
@@ -824,6 +825,82 @@ describe("an untrusted snapshot cannot revive a retired member (issue #49, Codex
       });
 
       expect(ellisRetiredAt(db), "a trusted newer roster listing Ellis un-retires them").toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Issue #49, Codex adversarial review of PR #53 round 5 (rated high). Migrations 0007/0008 add both
+// watermark columns as NULL, so EVERY team in an upgraded database starts with no roster provenance.
+// If a missing baseline read as "trusted", the first `tn team pull` after an upgrade — pointed, say,
+// at a prior season's URL — would retire legacy members on the strength of a year-old roster. That
+// needs only ONE pull, so it is not the two-pull re-baselining residual deferred to issue #46.
+// The migration half of this (upgraded teams really do have NULL watermarks) is pinned in
+// test/db-membership-retirement-upgrade.test.ts.
+describe("a team with no established baseline is not authoritative (issue #49, Codex round 5)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function fetcherObservedAt(body: string, fetchedAt: string) {
+    return async (url: string) => ({ url, status: 200, body, fetchedAt });
+  }
+
+  it("the first pull after an upgrade retires nobody, even from an arbitrary prior-season URL", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Exactly the post-upgrade state: a team with current memberships and NULL watermarks. Seeded
+      // directly rather than by re-running the migrations, which the sibling test already covers.
+      const teamRow = db.insert(teams).values({ name: "Norbury, Nova" }).returning().get();
+      const ellis = db.insert(players).values({ canonicalName: "Ellis Eastwick" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: ellis.id, teamId: teamRow.id, eventId: null }).run();
+      // `runMigrations` backfills name keys on a real upgrade (db/client.ts), so a legacy row is
+      // resolvable by the fail-closed identity probe. Seeding directly skips that, so do it here —
+      // otherwise this test would fail on identity resolution rather than on the guard it names.
+      backfillNameKeys(db);
+      expect(teamRow.rosterObservedUrl, "the post-upgrade precondition").toBeNull();
+
+      // A prior-season page for the same team name, omitting Ellis. Its stamp is brand new and
+      // there is no watermark to compare against, so ONLY the no-baseline rule can stop it.
+      const priorYearUrl = team.source.url.replace("year=2026", "year=2025");
+      const first = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), "2026-07-31T00:00:00.000Z"),
+        target: priorYearUrl,
+      });
+
+      expect(first.kind).toBe("ok");
+      if (first.kind !== "ok") throw new Error("expected ok");
+      expect(first.retiredCount, "a first snapshot establishes a baseline, it does not assert departures").toBe(0);
+      const rows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
+      expect(rows[0]!.retiredAt, "a legacy member survives the first post-upgrade pull").toBeNull();
+
+      // The baseline IS established, so the pull was not simply discarded.
+      const after = db.select().from(teams).where(eq(teams.id, teamRow.id)).all()[0]!;
+      expect(after.rosterObservedUrl).toBe(priorYearUrl);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the SECOND pull from that established source reconciles normally", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-01T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      const second = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), "2026-07-02T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      expect(second.kind).toBe("ok");
+      if (second.kind !== "ok") throw new Error("expected ok");
+      expect(second.retiredCount, "retirement works once a baseline exists").toBe(1);
     } finally {
       sqlite.close();
     }

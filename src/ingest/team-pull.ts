@@ -189,7 +189,23 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       // member, but could still REVIVE one the authoritative roster had correctly retired — the very
       // defect this issue exists to fix, arriving through the opposite door.
       // (Codex adversarial review of PR #53, round 4, rated high.)
-      const trustedSnapshot = from === undefined && !staleSnapshot && !differentSource;
+      //
+      // NO BASELINE = NOT TRUSTED. A NULL `rosterObservedUrl` means no snapshot has ever established
+      // what this team's roster source IS — which is the state of EVERY team in a database upgraded
+      // from before this change, since 0007/0008 add both columns as NULL. Without this, the first
+      // pull after an upgrade is trusted by default, so a single `tn team pull <prior-season URL>`
+      // would retire legacy members on the strength of a year-old roster. That needs only ONE pull,
+      // so it is not the two-pull re-baselining residual deferred to the team-identity issue.
+      //
+      // Uniform rather than a legacy special case: a brand-new team's first pull has no baseline
+      // either, and suppressing reconciliation there costs nothing (it has no memberships to
+      // retire). So the rule is simply "the first snapshot establishes the baseline and asserts
+      // nothing about departures", and the watermark update below still runs.
+      // (Codex adversarial review of PR #53, round 5, rated high.)
+      const noBaseline = lastUrl === null;
+
+      const trustedSnapshot =
+        from === undefined && !staleSnapshot && !differentSource && !noBaseline;
 
       const observedPlayerIds: number[] = [];
       for (const entry of parsed.roster) {

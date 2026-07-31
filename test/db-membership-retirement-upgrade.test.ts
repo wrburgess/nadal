@@ -63,6 +63,40 @@ describe("upgrading an existing pre-#49 database gains a nullable retired_at, ba
     }
   });
 
+  // Issue #49, Codex adversarial review round 5. The PRECONDITION half of that finding: an upgraded
+  // database has no roster provenance for any pre-existing team. The consequence half — that a team
+  // with no baseline must not be treated as authoritative — is pinned in
+  // test/ingest-team-pull.test.ts ("a team with no established baseline ...").
+  it("leaves every pre-existing team WITHOUT a roster provenance baseline (both watermarks NULL)", () => {
+    const dbPath = freshDbPath();
+    applyPre0006Schema(dbPath);
+
+    const seed = new Database(dbPath);
+    seed.exec(`INSERT INTO players (canonical_name) VALUES ('Jane Doe')`);
+    seed.exec(`INSERT INTO teams (name) VALUES ('Team A')`);
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`);
+    seed.close();
+
+    runMigrations(dbPath);
+
+    const after = new Database(dbPath);
+    try {
+      const columns = (after.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>).map((c) => c.name);
+      expect(columns).toContain("roster_observed_at");
+      expect(columns).toContain("roster_observed_url");
+
+      const row = after
+        .prepare("SELECT roster_observed_at, roster_observed_url FROM teams WHERE name = 'Team A'")
+        .get() as { roster_observed_at: string | null; roster_observed_url: string | null };
+      // Nothing is invented here either — but it means a legacy team's FIRST pull cannot be trusted
+      // to assert departures, which is what the ingest-side guard turns on.
+      expect(row.roster_observed_at).toBeNull();
+      expect(row.roster_observed_url).toBeNull();
+    } finally {
+      after.close();
+    }
+  });
+
   it("is idempotent — running the migration a second time changes nothing and does not throw", () => {
     const dbPath = freshDbPath();
     applyPre0006Schema(dbPath);
