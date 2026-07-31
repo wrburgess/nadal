@@ -137,13 +137,16 @@ while it still carried the pre-merge `0004_free_warstar` migration. `main` later
 unchanged, so it does **not** name the failing database — you have to identify it yourself:
 
 ```sh
-DB="$TN_DB_PATH"                              # if TN_DB_PATH is set IN THIS SHELL, this is exact
+case "${TN_DB_PATH:-}" in
+  /*) DB="$TN_DB_PATH" ;;                                   # set, and absolute — use it as-is
+  *)  printf 'absolute path to the database that failed: '  # otherwise paste it; `read -r` takes the
+      IFS= read -r DB || DB= ;;                             # line verbatim, so quotes need no care
+esac
 
-printf 'database path: '; IFS= read -r DB     # otherwise: the ABSOLUTE path to the database that
-                                              # failed. `read -r` takes the line verbatim, so
-                                              # spaces and apostrophes need no escaping.
-
-mv -i -- "$DB" "$DB.pre-0005.bak" && tn db migrate
+case "$DB" in
+  /*) mv -i -- "$DB" "$DB.pre-0005.bak" && tn db migrate ;;
+  *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
+esac
 ```
 
 **Resolve it to an absolute path.** The `data/nadal.db` default is *relative* and resolves against

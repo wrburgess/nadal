@@ -29,11 +29,16 @@ database that actually failed — `TN_DB_PATH` if you set it, `data/nadal.db` ot
 **Put the path in a variable; never paste it into quotes, and never use the bare default.**
 
 ```sh
-DB="$TN_DB_PATH"                              # if TN_DB_PATH is set IN THIS SHELL, this is exact
+case "${TN_DB_PATH:-}" in
+  /*) DB="$TN_DB_PATH" ;;                                   # set, and absolute — use it as-is
+  *)  printf 'absolute path to the database that failed: '  # otherwise paste what the ERROR printed
+      IFS= read -r DB || DB= ;;                             # EOF / piped stdin leaves DB empty
+esac
 
-printf 'database path: '; IFS= read -r DB     # otherwise: paste the path the ERROR printed
-
-mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate
+case "$DB" in
+  /*) mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
+  *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
+esac
 ```
 
 Both of those forms exist because the two obvious shortcuts are each wrong, and each was caught by
@@ -151,8 +156,17 @@ resolve that to an absolute path yourself, and apply every safeguard from the fi
 `--`, both paths quoted, a backup name that is not already taken):
 
 ```sh
-DB="${TN_DB_PATH:-data/nadal.db}"
-mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate
+# Same selection as the first recovery above — TN_DB_PATH when absolute, otherwise paste the path.
+case "${TN_DB_PATH:-}" in
+  /*) DB="$TN_DB_PATH" ;;
+  *)  printf 'absolute path to the database that failed: '
+      IFS= read -r DB || DB= ;;
+esac
+
+case "$DB" in
+  /*) mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
+  *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
+esac
 ```
 
 **Do not run that line with a literal `data/nadal.db` in it while `TN_DB_PATH` is set.** You would
@@ -216,26 +230,37 @@ recovery you ran — this block is shared by both:
 So `BAK` is read rather than computed. A *wrong* path is worse than a broken one here: `sqlite3`
 **creates** an empty database at a path that does not exist, so a mistyped or wrong-suffix backup
 name yields four empty CSVs and no error — which reads as "there was nothing to restore" at the
-exact moment that conclusion is most costly. The guard below therefore wraps the exports rather than
-preceding them; an earlier draft used `test -s "$BAK" || { echo …; }`, which prints its warning and
-**exits 0**, so execution continued straight into the very sqlite3 calls it was meant to stop (Codex
-adversarial review of #56, round 4 — a guard that failed open, written to close this exact hazard).
+exact moment that conclusion is most costly. This guard took three attempts, and the two failures are worth naming because each *looked* right:
+
+1. `test -s "$BAK" || { echo …; }` — prints its warning and **exits 0**, so execution continued
+   straight into the sqlite3 calls it existed to stop (round 4).
+2. Wrapping those calls in `if test -s "$BAK"` — better, but `test -s` only proves "a non-empty
+   filesystem object". It is true for a **directory**, and for any text file. A wrong-but-present
+   `BAK` sailed into the export branch, and since a shell redirection **truncates its target before
+   the command runs**, four empty CSVs appeared even though every query failed (round 5).
+
+What actually works is asking SQLite whether it can read the file, and publishing the CSVs only
+after all four queries succeed — below.
 
 ```sh
-printf 'backup path: '; IFS= read -r BAK      # verbatim — quotes and apostrophes need no escaping
+printf 'backup path: '; IFS= read -r BAK || BAK=   # verbatim — quotes/apostrophes need no escaping
 
-if ! test -s "$BAK"; then
-  echo "STOP: no readable backup at $BAK. Do not run the exports — sqlite3 would CREATE an empty database there." >&2
+# `test -s` is NOT enough: it is true for a directory, for a text file, for anything non-empty.
+# Ask SQLite itself whether it can read the thing.
+if ! sqlite3 "$BAK" 'select count(*) from sqlite_master' >/dev/null 2>&1; then
+  echo "STOP: '$BAK' is not a readable SQLite database. Nothing below would work." >&2
 else
-  # 0. The home team and the events — without these, steps below have nothing to attach to.
+  # Written to a temp directory and published only if ALL FOUR succeed. A shell redirection opens
+  # (and truncates) its target BEFORE the command runs, so exporting straight into the working
+  # directory leaves four empty CSVs behind when a query fails — the exact false-empty outcome this
+  # whole guard exists to prevent.
+  OUT=$(mktemp -d) &&
   sqlite3 -header -csv "$BAK" "
-    select name from teams where is_home = 1" > home-team-backup.csv
-
+    select name from teams where is_home = 1" > "$OUT/home-team-backup.csv" &&
   sqlite3 -header -csv "$BAK" "
     select name, kind, starts_on, ends_on
     from events
-    order by starts_on" > events-backup.csv
-
+    order by starts_on" > "$OUT/events-backup.csv" &&
   sqlite3 -header -csv "$BAK" "
     select p.canonical_name        as player,
            pp.canonical_name       as pair_player,
@@ -244,8 +269,7 @@ else
     from captain_notes n
     join players p        on p.id  = n.player_id
     left join players pp  on pp.id = n.pair_player_id
-    order by n.created_at" > captain-notes-backup.csv
-
+    order by n.created_at" > "$OUT/captain-notes-backup.csv" &&
   sqlite3 -header -csv "$BAK" "
     select p.canonical_name as player,
            e.name           as event,
@@ -254,7 +278,9 @@ else
     from availability a
     join players p on p.id = a.player_id
     join events  e on e.id = a.event_id
-    order by a.day" > availability-backup.csv
+    order by a.day" > "$OUT/availability-backup.csv" &&
+  mv "$OUT"/*.csv . && echo "exported 4 CSVs into $(pwd)" ||
+  echo "STOP: an export failed — nothing was published. Partial files: $OUT" >&2
 fi
 ```
 
