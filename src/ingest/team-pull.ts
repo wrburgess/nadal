@@ -201,16 +201,44 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       // mistaken for a stale one.
       // (Found by the independent Codex adversarial review of this PR, round 2, rated high.)
       const lastObserved = upserted.rosterObservedAt;
-      const staleSnapshot = observedAt !== null && lastObserved !== null && observedAt < lastObserved;
+      const lastUrl = upserted.rosterObservedUrl;
+
+      // NOT-NEWER, not merely older: `<=` fails CLOSED on an equal stamp. `fetchedAt` has
+      // millisecond precision, so two snapshots with DIFFERENT content can carry the same string,
+      // and nothing then orders them — retiring on a coin flip is the one outcome worth ruling out.
+      // Skipping costs at most a delay: memberships are still upserted, and the next pull (with a
+      // later stamp) reconciles. (Codex round 3, rated medium — my first cut used `<` on the
+      // reasoning that a same-millisecond re-pull should still apply, which weighed the harmless
+      // case over the harmful one.)
+      const staleSnapshot = observedAt !== null && lastObserved !== null && observedAt <= lastObserved;
+
+      // A snapshot from a DIFFERENT source cannot be ordered against this team's watermark at all.
+      // TennisRecord team URLs carry a `year` and `tn team pull` accepts an arbitrary URL, so
+      // freshly fetching a PRIOR SEASON's page produces a valid roster with a brand-new fetch time
+      // — newer than the watermark, and authoritative-looking, while describing a roster that is a
+      // year out of date. It would retire everyone who joined since.
+      //
+      // Such a pull RE-BASELINES rather than being ignored forever: it refreshes memberships,
+      // retires nobody, and records the new (url, observedAt) pair, so the NEXT pull from that same
+      // source reconciles normally. That matters because the canonical URL legitimately changes
+      // when a season rolls over — a rule that merely refused a new source would silently disable
+      // retirement for that team for good. (Codex round 3, rated high.)
+      const differentSource = lastUrl !== null && lastUrl !== url;
+
       if (staleSnapshot) {
         console.warn(
-          `team pull: roster snapshot observed ${sanitizeValue(observedAt ?? "")} is older than the ` +
+          `team pull: roster snapshot observed ${sanitizeValue(observedAt ?? "")} is not newer than the ` +
             `applied ${sanitizeValue(lastObserved ?? "")} — memberships refreshed, retirement skipped`,
+        );
+      } else if (differentSource) {
+        console.warn(
+          `team pull: roster came from ${sanitizeValue(url)}, not the source that last reconciled ` +
+            `(${sanitizeValue(lastUrl ?? "")}) — memberships refreshed, retirement skipped, baseline moved`,
         );
       }
 
       const observedRetiredCount =
-        from !== undefined || staleSnapshot
+        from !== undefined || staleSnapshot || differentSource
           ? 0
           : retireAbsentMemberships(tx, {
               teamId: upserted.id,
@@ -225,8 +253,15 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       // Advance the watermark only when this snapshot actually reconciled. A replay (`--from`) has
       // no observation time to record, and a stale snapshot must not move the mark forward — doing
       // either would let the NEXT genuinely-newer pull be rejected as stale.
+      // Recorded as a PAIR — the stamp is meaningless without the source it came from. Advanced on
+      // a normal reconcile AND on a re-baseline (a different source), but never by a stale snapshot,
+      // which must not move the mark and cause the next genuinely-newer pull to be rejected in turn.
+      // `--from` records nothing at all: a replayed archive has no observation time to offer.
       if (from === undefined && !staleSnapshot && observedAt !== null) {
-        tx.update(teams).set({ rosterObservedAt: observedAt }).where(eq(teams.id, upserted.id)).run();
+        tx.update(teams)
+          .set({ rosterObservedAt: observedAt, rosterObservedUrl: url })
+          .where(eq(teams.id, upserted.id))
+          .run();
       }
 
       for (const row of parsed.schedule) {

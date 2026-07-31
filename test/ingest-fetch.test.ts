@@ -33,6 +33,26 @@ describe("fetchPage", () => {
     expect(page.fetchedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 
+  // Issue #49 (Codex adversarial review of PR #53, round 3, rated high). `fetchedAt` is the token
+  // that orders roster snapshots for the retirement guard in team-pull.ts, so it must record when
+  // the request WENT OUT, not when the body finished arriving: a request issued first that receives
+  // an upstream/CDN-cached STALE body can finish downloading last, and a completion-time stamp
+  // would then rank the stalest content newest. Pinned through the injected clock rather than by
+  // timing a slow response, so there is no wall-clock wait to be flaky (rules/testing.md) — the
+  // stamp must equal the injected send time exactly, which a `new Date()` read after the body
+  // could never produce.
+  it("stamps fetchedAt from the SEND time, not from body completion", async () => {
+    const base = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html>ok</html>");
+    });
+
+    const sentAtMs = 1_000_000;
+    const page = await fetchPage(`${base}/team`, { politenessMs: 0, clock: { now: () => sentAtMs } });
+
+    expect(page.fetchedAt).toBe(new Date(sentAtMs).toISOString());
+  });
+
   it("sends the shared capture-fixture user-agent header", async () => {
     let seenUserAgent: string | undefined;
     const base = await listen((req, res) => {

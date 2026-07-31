@@ -605,3 +605,107 @@ describe("pullTeam is monotonic in observation time (issue #49, Codex review rou
     }
   });
 });
+
+
+// Issue #49, Codex adversarial review of PR #53 round 3. Two more ways a reconcile could act on
+// evidence it cannot actually order.
+describe("pullTeam reconcile provenance (issue #49, Codex review round 3)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function fetcherObservedAt(body: string, fetchedAt: string) {
+    return async (url: string) => ({ url, status: 200, body, fetchedAt });
+  }
+
+  it("an EQUAL observation stamp retires nobody — ties fail closed rather than on commit order", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const stamp = "2026-07-20T12:00:00.123Z";
+      await pullTeam({ db, fetchPage: fetcherObservedAt(team.html, stamp), target: team.source.url });
+
+      // Same millisecond, conflicting content. Nothing orders these two, so neither may remove.
+      const tied = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), stamp),
+        target: team.source.url,
+      });
+
+      expect(tied.kind).toBe("ok");
+      if (tied.kind !== "ok") throw new Error("expected ok");
+      expect(tied.retiredCount, "an unordered tie must not retire").toBe(0);
+      const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+      const rows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
+      expect(rows[0]!.retiredAt).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("freshly fetching a PRIOR-SEASON url retires nobody, even though its fetch time is newer", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // The current season establishes the roster and the baseline.
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-20T00:00:00.000Z"),
+        target: team.source.url,
+      });
+
+      // Same team name, PRIOR season url, fetched NOW — a valid roster that is a year out of date.
+      // Its stamp is newer than the watermark, so only the source check can stop it.
+      const priorYearUrl = team.source.url.replace("year=2026", "year=2025");
+      expect(priorYearUrl).not.toBe(team.source.url);
+      const priorSeason = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), "2026-07-31T00:00:00.000Z"),
+        target: priorYearUrl,
+      });
+
+      expect(priorSeason.kind).toBe("ok");
+      if (priorSeason.kind !== "ok") throw new Error("expected ok");
+      expect(priorSeason.retiredCount, "a different source may refresh, never remove").toBe(0);
+      const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+      const rows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
+      expect(rows[0]!.retiredAt).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a different source RE-BASELINES, so the next pull from it reconciles normally", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-20T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      const nextSeasonUrl = team.source.url.replace("year=2026", "year=2027");
+
+      // First pull from the new source: re-baseline, retire nobody.
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-21T00:00:00.000Z"),
+        target: nextSeasonUrl,
+      });
+      const teamRow = db.select().from(teams).where(eq(teams.name, "Norbury, Nova")).all()[0]!;
+      expect(teamRow.rosterObservedUrl, "the baseline moved to the new source").toBe(nextSeasonUrl);
+
+      // Second pull from the SAME new source reconciles normally — proving the source check is a
+      // one-pull transition, not a permanent disabling of retirement when a season rolls over.
+      const settled = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), "2026-07-22T00:00:00.000Z"),
+        target: nextSeasonUrl,
+      });
+      expect(settled.kind).toBe("ok");
+      if (settled.kind !== "ok") throw new Error("expected ok");
+      expect(settled.retiredCount, "retirement resumes once the new source is the baseline").toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
