@@ -14,9 +14,12 @@ Known local deltas reapplied after any re-sync:
 Local statements awaiting an upstream fix — **collapse into the canonical text when it arrives**,
 rather than carrying both:
 - `PROJECT.md` → *Findings-Log Discipline* + *Rule-suggestion disposition* → *How nadal reads it*
-  (#35). These override three vendored instructions that direct the opposite disposition for a
-  process finding — `rules/self-review.md` → *Anti-Patterns*, `final` Step 1, and the `scout` /
-  Learnings-Log reflex. The canonical fix is
+  (#35). These override four vendored instructions that direct the opposite disposition for a
+  process finding — `rules/self-review.md` → *Anti-Patterns*, `rules/self-review.md`'s asks-ledger
+  ("delivered or handed to a tracked follow-up", also executable in `ship`'s `asks_ledger` contract),
+  `final` Step 1, and the `scout` / Learnings-Log reflex. They also declare a **nadal-local
+  rule-suggestion value, `log-and-continue`**, which is deliberately not one of the two shipped
+  values. The canonical fix is
   [wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159); **on the re-sync that carries it,
   check whether the vendored text now states the discipline itself, and if so delete the local
   statement instead of reapplying it.** `PROJECT.md` is preserved automatically, so this delta

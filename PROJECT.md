@@ -328,10 +328,10 @@ parser default; the flip lives in the shipped file, not in that default.)
 How [`final`](skills/final/SKILL.md) handles the Rules-Layer / config improvements it learns during
 implementation, now that a hands-off run reaches the merge gate on its own
 ([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). The shipped default is
-`autonomous-fold`; allowed values `autonomous-fold | present-to-hc`. **nadal sets it to
-`present-to-hc`** — see *How nadal reads it* below. This is a **documentary** value — prose, **not** a
-row in the gate table above (the parser reads a two-row table and must stay two-row), so a host changes
-it by editing this paragraph.
+`autonomous-fold`; the shipped values are `autonomous-fold | present-to-hc`. **nadal sets it to
+`log-and-continue`, which is deliberately neither of them** — see *How nadal reads it* below. This is a
+**documentary** value — prose, **not** a row in the gate table above (the parser reads a two-row table
+and must stay two-row), so a host changes it by editing this paragraph.
 
 - **`autonomous-fold`** (shipped default) — `final` **folds** well-scoped, low-risk Rules-Layer/config
   improvements into the **same PR a human merges**, so the merge gate stays the backstop for them, and
@@ -350,17 +350,33 @@ would mean editing the vendored Rules Layer, and this project writes **zero** lo
 Rules-Layer follow-up, and was closed `not planned` and converted back into findings entries in
 `59a34c3`. The setting produced the violation, so the setting changes.
 
-Under nadal's `present-to-hc`, `final` **appends the suggestion to
-[`docs/findings.md`](docs/findings.md) as one line and continues.** It folds nothing, files nothing, and
-blocks on nothing. The findings log **is** this project's HC-presentation surface: the HC's own
-enumerated steps include *"triage the findings log at will"*, and that triage — not `final` — is where a
+**`present-to-hc` is not the answer either, and nadal does not claim it.** That value means `final`
+presents the suggestions **and waits**. nadal does not wait: its operating loop states that *nothing
+waits on the HC* outside the six enumerated HC steps, so a blocking wait would contradict the same spec
+this section enforces.
+
+**So nadal declares a third value: `log-and-continue`.** Under it, `final` **appends the suggestion to
+[`docs/findings.md`](docs/findings.md) as one line and continues.** It folds nothing, files nothing,
+waits on nothing. The findings log **is** this project's HC-presentation surface — the HC's own
+enumerated steps include *"triage the findings log at will"*, and that triage, not `final`, is where a
 suggestion becomes work.
 
-One word of the shipped value is **deliberately reinterpreted, and named rather than smuggled**: the
-baseline's `present-to-hc` says `final` presents **and waits**. nadal does not wait. Its operating loop
-states that *nothing waits on the HC* except the six enumerated HC steps, so a blocking wait here would
-contradict the spec that the rest of this section enforces. Everything else about the value — edit no
-Rules Layer or config without approval — holds unchanged, and that is the part doing the work.
+**Why a new name instead of redefining `present-to-hc`** — this was a Reviewer finding on
+[PR #55](https://github.com/wrburgess/nadal/pull/55), and it changed the answer. An earlier draft set
+`present-to-hc` and redefined its "and waits" clause, on the reasoning that staying inside the shipped
+value set avoided drift. That reasoning was wrong: `final`'s canonical body defines `present-to-hc` as
+*present and wait*, so an agent executing `final` would hold **two authoritative, mutually exclusive
+meanings for one token** — and the in-set name would make the divergence look like conformance instead
+of announcing it. Nothing parses this value (`grep -rn "autonomous-fold" scripts/` → 0), so being
+"in the set" bought no mechanical safety at all; it bought only the appearance of it. A token `final`
+does **not** recognize forces a reader to this paragraph, which is the correct outcome.
+
+**This value is nadal-local and wants canonicalizing upstream** — the same destination as the rest of
+this section, tracked at [wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159) and recorded
+in [`docs/ace-sync-manifest.md`](docs/ace-sync-manifest.md). Until an upstream value exists, the
+divergence is stated here in the open rather than hidden inside a redefined word. Everything else the
+shipped values require — **edit no Rules Layer or config without approval** — holds unchanged, and that
+is the part doing the work.
 
 This value governs only `final`'s rule-suggestion step. It does **not** touch the intake/authoring
 "a human disposes" gates — [`scout`](skills/scout/SKILL.md), [`clip`](skills/clip/SKILL.md),
@@ -387,38 +403,50 @@ is *"triage the findings log at will."*
 That sentence is the rule. An agent that has just learned something process-shaped writes **one line**
 and continues.
 
-### Precedence — this overrides three instructions that say otherwise
+### Precedence — this overrides four instructions that say otherwise
 
-The instruction chain does not merely omit the rule above; in three places it **directs the opposite** —
-and each sits where an agent is standing at the moment it decides. The first is Tier-1 Lean Core, so it
-is resident on every run; the second is a step [`final`](skills/final/SKILL.md) executes at every
-delivery; the third is the only logging pattern the Config Bundle ships at all. All three are
-**vendored** — nadal never edits `rules/`, `skills/`, or `docs/standards/` — so they are overridden here,
-from the host's own config layer, which is what that layer exists for. For a **process/operational**
-finding in nadal, none of the following applies:
+The instruction chain does not merely omit the rule above; in four places it **directs the opposite** —
+and each sits where an agent is standing at the moment it decides. All four are **vendored** — nadal
+never edits `rules/`, `skills/`, or `docs/standards/` — so they are overridden here, from the host's own
+config layer, which is what that layer exists for. For a **process/operational** finding in nadal, none
+of the following applies:
 
 | Vendored instruction | What it says | Here |
 |---|---|---|
-| [`rules/self-review.md`](rules/self-review.md) → *Anti-Patterns* | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
-| [`final`](skills/final/SKILL.md) Step 1 | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `present-to-hc`. |
-| [`scout`](skills/scout/SKILL.md) / the Learnings Log | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
+| [`rules/self-review.md`](rules/self-review.md) → *Anti-Patterns* (Tier-1 Lean Core, resident on every run) | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
+| [`rules/self-review.md`](rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and executable in [`ship`](skills/ship/SKILL.md)'s `asks_ledger` contract as `status: "handed-off"` with a `ref` | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
+| [`final`](skills/final/SKILL.md) Step 1 (executed at every delivery) | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`. |
+| [`scout`](skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
 
-The third row is the one most likely to be missed, and it is why the first two are so easy to obey: the
-only logging pattern the Config Bundle ships has the **opposite** disposition, so an agent applying its
-trained reflex lands on exactly the banned behavior. Recognizing which of the two logs is in hand is the
-whole judgment.
+Two of these are easy to miss for opposite reasons. The **last** row is the trained reflex: the only
+logging pattern the bundle ships has the opposite disposition, so an agent pattern-matching on "I
+learned something, I should log it" lands on "…and open a PR." The **second** row is the completion
+rule: it fires at the moment an agent is trying to *finish*, and "handed to a tracked follow-up" reads
+as the responsible option precisely when dropping something feels like the alternative. Naming the
+findings line as **delivery** removes that pressure — there is no third state to be anxious about.
 
-### What this does not cover
+### What this does not cover — and how to tell
 
-The override is scoped to **process/operational findings**. It is not a rule against filing work:
+The override is scoped to **process/operational findings**. It is not a rule against filing work. The
+discriminator is **not what the observation *is*, it is what it *asks for*** — because "is it a bug?"
+and "is it operational?" are not opposites, and asking the first question is how the adjudication this
+section exists to remove creeps back in. An observation can be a *bug in the delivery process*, and it
+is both.
 
-- A **defect** discovered during a run is still fixed in that run's PR — the standing fold rule is
-  unchanged, and a defect is not a process finding.
-- A genuine **Springfield feature gap or bug** is still a tracked Issue. The spec's test is
-  *"PRs must advance Springfield or fix defects. Everything else is a findings line."*
-- The **HC may promote** any finding at triage — that is the `do-now` disposition, and it is the only
-  path from this log to tracked work. [#35](https://github.com/wrburgess/nadal/issues/35) is itself an
-  instance: opened at explicit HC direction, and therefore **not precedent** for an agent doing the same.
+| The observation asks for… | Disposition |
+|---|---|
+| A change to **nadal the product** — schema, CLI, parsers, queries, reports, MCP surface, its data | **Work.** Fix it in the running PR when the fix is in hand (the standing fold rule); a tracked Issue when it is not. |
+| A change to **how agents work** — process, rules, config, skills, the lifecycle, review practice, tooling discipline | **One findings line. Always** — including when the observation is also, accurately, a bug. |
+| **Both** | **Split it.** The product part is work; the process lesson is a line. If they genuinely cannot be separated, the product part may be filed and the process lesson **still** goes to the log. |
+
+This is how the log has actually been kept, which is the check on the rule rather than a restatement of
+it: [`docs/findings.md`](docs/findings.md) carries a large majority of `bug`-typed entries, nearly all
+of them defects that were **fixed in the run that found them** and whose *lesson* was then logged. A
+`bug` type on a findings line has never meant "file an Issue," and nothing here changes that.
+
+The **HC may promote** any finding at triage — that is the `do-now` disposition, and it is the only path
+from this log to tracked work. [#35](https://github.com/wrburgess/nadal/issues/35) is itself an
+instance: opened at explicit HC direction, and therefore **not precedent** for an agent doing the same.
 
 ### The limits of this statement, stated plainly
 
