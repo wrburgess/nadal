@@ -8,6 +8,7 @@
 // The closing-the-loop test at the bottom is the one that matters: a unit test of `addEvent` alone
 // would pass while the dead path stayed dead.
 
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { events, players, teamMemberships, teams } from "../src/db/schema.js";
@@ -247,6 +248,74 @@ describe("addEvent will not move a range off availability already recorded again
       );
     } finally {
       sqlite.close();
+    }
+  });
+});
+
+// Found by the independent Codex review of PR #47 round 12, rated high: the range guard above is a
+// read-then-write, and `better-sqlite3` being synchronous only rules out interleaving within ONE
+// event loop. nadal runs an MCP server against the same WAL database a CLI invocation uses, so an
+// agent chat writing availability and a terminal correcting event dates are genuinely concurrent
+// PROCESSES — and an availability row committed between the guard's read and the upsert would be
+// stranded by the very update the guard was meant to police.
+describe("addEvent's range guard is atomic against another process", () => {
+  const dbFixture = useTnDbPath();
+
+  it("holds the write lock across the check and the update, so a concurrent writer cannot slip between them", () => {
+    runMigrations();
+
+    // A SECOND connection to the same file — a different process, for locking purposes.
+    const other = new Database(dbFixture.path());
+    other.pragma("journal_mode = WAL");
+    other.pragma("busy_timeout = 0"); // fail fast rather than waiting, so the test cannot hang
+
+    let sawBegin = false;
+    let attempted = false;
+    let interleavedWriteSucceeded: boolean | null = null;
+
+    // `openDb`'s `verbose` hook is the observation seam (see its doc comment in src/db/client.ts).
+    // better-sqlite3 invokes it JUST BEFORE each statement runs, so the write lock is not held yet
+    // while `BEGIN IMMEDIATE` itself is being announced — the injection has to happen on the NEXT
+    // statement, by which point the transaction is genuinely open and the guard is mid-read. (The
+    // first draft of this test injected on the BEGIN itself, saw the write succeed, and would have
+    // reported a real fix as broken.)
+    const { db, sqlite } = openDb(dbFixture.path(), {
+      verbose: (message) => {
+        if (attempted || typeof message !== "string") return;
+        if (!sawBegin) {
+          sawBegin = message.toLowerCase().includes("begin immediate");
+          return;
+        }
+        attempted = true;
+        try {
+          other.prepare("insert into events (name, kind, starts_on, ends_on) values (?,?,?,?)").run(
+            "Injected By Another Process",
+            "league",
+            "2026-01-01",
+            "2026-01-02",
+          );
+          interleavedWriteSucceeded = true;
+        } catch {
+          interleavedWriteSucceeded = false;
+        }
+      },
+    });
+
+    try {
+      addEvent(db, SPRINGFIELD);
+
+      expect(sawBegin, "the transaction must actually be BEGIN IMMEDIATE, not deferred").toBe(true);
+      expect(attempted, "the interleaving must actually have been attempted mid-transaction").toBe(true);
+      expect(
+        interleavedWriteSucceeded,
+        "another process must NOT be able to commit a write while the guard's transaction is open",
+      ).toBe(false);
+
+      // And the legitimate write still landed.
+      expect(db.select().from(events).all().map((e) => e.name)).toEqual(["Springfield Sectionals 2026"]);
+    } finally {
+      sqlite.close();
+      other.close();
     }
   });
 });

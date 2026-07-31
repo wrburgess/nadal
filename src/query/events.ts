@@ -95,57 +95,69 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
     throw new EventRangeInvertedError(`ends-on "${input.endsOn}" is before starts-on "${input.startsOn}"`);
   }
 
-  // The pre-read decides only what to REPORT (`created`); the write itself is an upsert on the
-  // `events.name` unique index, so the database — not this read — is what guarantees one row per
-  // name. A select-then-insert would be a check-then-act race: two concurrent adds of the same
-  // event both read `undefined`, both insert, and the loser dies on a raw constraint violation
-  // instead of the clean idempotent update this service promises (`rules/backend.md`: "a validation
-  // is not a guarantee under concurrency"). Under that race `created` can be optimistically `true`
-  // for the loser, which is cosmetic — the row is correct either way.
-  const existing = db.select().from(events).where(eq(events.name, name)).all()[0];
+  // Everything below runs in ONE `BEGIN IMMEDIATE` transaction, because the range guard is a
+  // read-then-write and the two halves must not be separable.
+  //
+  // `better-sqlite3` is synchronous, so nothing can interleave within one Node event loop — but
+  // that is not the threat. nadal runs an MCP server (`tn mcp serve`) against the same WAL database
+  // a CLI invocation uses, so an agent chat recording availability and a terminal correcting event
+  // dates are genuinely concurrent PROCESSES. Without this, `setAvailability` can resolve the OLD
+  // range and commit between the check below and the upsert, and the update then strands the row it
+  // just wrote — reintroducing the exact invisible defect the guard exists to prevent, in the one
+  // deployment shape this app actually has. `IMMEDIATE` (not the default deferred) takes the write
+  // lock up front, so the guard's read is already serialized against any other writer rather than
+  // upgrading mid-transaction and losing the race it was meant to win.
+  // (Found by the independent Codex review of PR #47: rated medium as a check-then-act on `created`
+  // in round 4, then high as a cross-process TOCTOU on the range guard in round 12.)
+  return db.transaction((tx) => {
+    // The pre-read decides only what to REPORT (`created`); the write itself is an upsert on the
+    // `events.name` unique index, so the database — not this read — is what guarantees one row per
+    // name even if this transaction were ever removed.
+    const existing = tx.select().from(events).where(eq(events.name, name)).all()[0];
 
-  // Narrowing or moving an existing range must not strand availability that was recorded against
-  // it. `setAvailability` checks coverage only when a row is WRITTEN, so without this a routine
-  // date correction would silently leave rows attached to an event that no longer contains their
-  // day — invisible until someone reads per-event-day availability and finds days the event never
-  // covered. Refusing (rather than deleting the rows, or silently keeping them) is the only option
-  // that does not destroy data or invent a policy: which of the two the operator meant is genuinely
-  // ambiguous, so the diagnostic names the days and lets them decide.
-  // (Found by the independent Codex review of PR #47, rated medium.)
-  if (existing !== undefined) {
-    const orphanedDays = db
-      .select({ day: availability.day })
-      .from(availability)
-      .where(eq(availability.eventId, existing.id))
-      .all()
-      .map((r) => r.day)
-      .filter((day) => day < input.startsOn || day > input.endsOn)
-      .sort();
-    if (orphanedDays.length > 0) {
-      throw new EventRangeExcludesAvailabilityError(
-        `event "${name}" has availability recorded on ${orphanedDays.join(", ")}, which the new range ` +
-          `${input.startsOn}..${input.endsOn} does not cover — widen the range, or remove that availability first`,
-        orphanedDays,
-      );
+    // Narrowing or moving an existing range must not strand availability recorded against it.
+    // `setAvailability` checks coverage only when a row is WRITTEN, so without this a routine date
+    // correction would silently leave rows attached to an event that no longer contains their day —
+    // invisible until someone reads per-event-day availability and finds days the event never
+    // covered. Refusing (rather than deleting the rows, or silently keeping them) is the only option
+    // that neither destroys data nor invents a policy: which of the two the operator meant is
+    // genuinely ambiguous, so the diagnostic names the days and lets them decide.
+    if (existing !== undefined) {
+      const orphanedDays = tx
+        .select({ day: availability.day })
+        .from(availability)
+        .where(eq(availability.eventId, existing.id))
+        .all()
+        .map((r) => r.day)
+        .filter((day) => day < input.startsOn || day > input.endsOn)
+        .sort();
+      if (orphanedDays.length > 0) {
+        // Thrown inside the transaction, so it rolls back rather than leaving a partial edit.
+        throw new EventRangeExcludesAvailabilityError(
+          `event "${name}" has availability recorded on ${orphanedDays.join(", ")}, which the new range ` +
+            `${input.startsOn}..${input.endsOn} does not cover — widen the range, or remove that availability first`,
+          orphanedDays,
+        );
+      }
     }
-  }
 
-  const row = db
-    .insert(events)
-    .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn })
-    .onConflictDoUpdate({
-      target: events.name,
-      set: { kind, startsOn: input.startsOn, endsOn: input.endsOn },
-    })
-    .returning()
-    .get();
+    const row = tx
+      .insert(events)
+      .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn })
+      .onConflictDoUpdate({
+        target: events.name,
+        set: { kind, startsOn: input.startsOn, endsOn: input.endsOn },
+      })
+      .returning()
+      .get();
 
-  return {
-    eventId: row.id,
-    name: row.name,
-    kind,
-    startsOn: input.startsOn,
-    endsOn: input.endsOn,
-    created: existing === undefined,
-  };
+    return {
+      eventId: row.id,
+      name: row.name,
+      kind,
+      startsOn: input.startsOn,
+      endsOn: input.endsOn,
+      created: existing === undefined,
+    };
+  }, { behavior: "immediate" });
 }
