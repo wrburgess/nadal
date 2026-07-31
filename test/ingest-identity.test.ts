@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { nameKey } from "../src/db/name-key.js";
 import { playerAliases, players, teams } from "../src/db/schema.js";
 import { resolvePlayer, resolveTeam } from "../src/ingest/identity.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -48,9 +49,9 @@ describe("resolvePlayer", () => {
   it("tier 2: matches via player_aliases, case-insensitively", () => {
     const { db, sqlite } = freshDb();
     try {
-      db.insert(players).values({ canonicalName: "Jane Doe" }).run();
+      db.insert(players).values({ canonicalName: "Jane Doe", nameKey: nameKey("Jane Doe") }).run();
       const seeded = db.select().from(players).all()[0]!;
-      db.insert(playerAliases).values({ playerId: seeded.id, alias: "JD" }).run();
+      db.insert(playerAliases).values({ playerId: seeded.id, alias: "JD", nameKey: nameKey("JD") }).run();
 
       const result = resolvePlayer(db, { name: "jd" });
 
@@ -66,7 +67,10 @@ describe("resolvePlayer", () => {
     const { db, sqlite } = freshDb();
     try {
       db.insert(players)
-        .values([{ canonicalName: "Alex Stone" }, { canonicalName: "Alex Stove" }])
+        .values([
+          { canonicalName: "Alex Stone", nameKey: nameKey("Alex Stone") },
+          { canonicalName: "Alex Stove", nameKey: nameKey("Alex Stove") },
+        ])
         .run();
       const before = db.select().from(players).all();
 
@@ -147,7 +151,7 @@ describe("resolveTeam", () => {
   it("matches an existing team by exact case-insensitive name", () => {
     const { db, sqlite } = freshDb();
     try {
-      db.insert(teams).values({ name: "Norbury, Nova" }).run();
+      db.insert(teams).values({ name: "Norbury, Nova", nameKey: nameKey("Norbury, Nova") }).run();
       const result = resolveTeam(db, { name: "norbury, nova" });
 
       expect(result.kind).toBe("matched");
@@ -183,7 +187,9 @@ describe("identity ladder — Unicode case folding", () => {
     try {
       const created = resolvePlayer(db, { name: "Jane Smith" });
       if (created.kind === "ambiguous") throw new Error("unexpected ambiguous");
-      db.insert(playerAliases).values({ playerId: created.row.id, alias: "Élodie Ünwin" }).run();
+      db.insert(playerAliases)
+        .values({ playerId: created.row.id, alias: "Élodie Ünwin", nameKey: nameKey("Élodie Ünwin") })
+        .run();
 
       const resolved = resolvePlayer(db, { name: "élodie ünwin" });
 
