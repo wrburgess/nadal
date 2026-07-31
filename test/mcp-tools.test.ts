@@ -7,6 +7,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import Database from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
 import { sixMonthsAgo } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
+import { removeRosterRow } from "./helpers/roster-html.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
 
@@ -91,6 +93,33 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       sqlite2.close();
     }
     expect(payload).toEqual(expected);
+  });
+
+  // Issue #49: an explicit wire-shape pin. `player_show`'s handler returns `getPlayerProfile`
+  // VERBATIM (src/mcp/tools.ts), so the new `retiredAt` field is additive and automatic — but
+  // `test/mcp-tool-parity.test.ts` only checks tool-name/command parity, not payload shape, so
+  // nothing else in the suite would notice a silent regression here.
+  it("player_show carries retiredAt on a team membership — the new field survives the real MCP wire", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Former Team" }).returning().get();
+    const player = db.insert(players).values({ canonicalName: "Departed Player" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    db.update(teamMemberships)
+      .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+      .where(eq(teamMemberships.playerId, player.id))
+      .run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "player_show", arguments: { target: player.canonicalName } });
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(result)) as { teamMemberships: { teamId: number; retiredAt: string | null }[] };
+
+    expect(payload.teamMemberships).toEqual([
+      { teamId: team.id, teamName: "Former Team", eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" },
+    ]);
   });
 
   it("a required argument missing returns a structured error result, not a crash — and the server keeps working afterward", async () => {
@@ -404,6 +433,39 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(textOf(result)) as { team: string; rosterCount: number };
     expect(payload.rosterCount).toBeGreaterThan(0);
+
+    vi.restoreAllMocks();
+  });
+
+  // Issue #49. The MCP handler hand-builds its result object rather than spreading `pullTeam`'s,
+  // so a field added to the CLI summary does NOT reach MCP on its own — the first cut of this PR
+  // reported `retired=N` on the CLI while the MCP tool silently omitted it, letting an MCP-driven
+  // pull retire real teammates with nothing in the response to say so. Asserted with a real
+  // retirement (not `toBe(0)` on a first pull, which a hardcoded zero would also satisfy).
+  it("team_pull over MCP reports retiredCount, so an MCP-driven pull cannot silently retire a departed member", async () => {
+    runMigrations();
+    const teamFixture = loadFixture("tennisrecord/team");
+    let body = teamFixture.html;
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body,
+      fetchedAt: new Date().toISOString(),
+    }));
+
+    const client = await connectedClient();
+    const first = await client.callTool({ name: "team_pull", arguments: { target: teamFixture.source.url } });
+    expect(first.isError).not.toBe(true);
+    expect((JSON.parse(textOf(first)) as { retiredCount: number }).retiredCount).toBe(0);
+
+    // Same URL, a roster page that no longer lists one member — the departure this must surface.
+    body = removeRosterRow(teamFixture.html, "Ellis Eastwick");
+    expect(body).not.toBe(teamFixture.html);
+    const second = await client.callTool({ name: "team_pull", arguments: { target: teamFixture.source.url } });
+    expect(second.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(second)) as { rosterCount: number; retiredCount: number };
+    expect(payload.rosterCount).toBe(17);
+    expect(payload.retiredCount).toBe(1);
 
     vi.restoreAllMocks();
   });

@@ -4,6 +4,7 @@
 // attached, that a duplicate membership row does not clone a player onto two courts, and that a
 // team with no history refuses rather than returning an empty lineup.
 
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
@@ -326,6 +327,68 @@ describe("getLineupPlan", () => {
     const { db, sqlite } = freshDb();
     try {
       expect(() => getLineupPlan(db, 9999)).toThrow(/no team with id 9999/);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #49: the headline symptom from the issue — a departed player predicted onto a court.
+  it("a retired member is absent from the predicted lineup entirely — never placed, never unplaced, never ranked", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 6, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 5, ourMatch);
+
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, ids["Ada Ashby"]!))
+        .run();
+
+      const plan = getLineupPlan(db, teamId);
+
+      expect(plan.rosterSize, "3 roster rows minus the 1 retired one").toBe(2);
+      const retiredId = ids["Ada Ashby"]!;
+      const everyPlacedId = plan.slots.flatMap((s) => s.players.map((p) => p.playerId));
+      expect(everyPlacedId).not.toContain(retiredId);
+      expect(plan.unplaced.map((p) => p.playerId)).not.toContain(retiredId);
+      expect(plan.ranked.map((p) => p.playerId)).not.toContain(retiredId);
+      expect(plan.unranked.map((p) => p.playerId)).not.toContain(retiredId);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #49: asserts the CONFIDENCE path, not just the absence — a naive fix that merely hid the
+  // retired player from the printed roster while leaving their partnership evidence intact could
+  // still silently substitute a phantom partner (or keep reporting "high confidence" for a pairing
+  // that no longer exists). The right answer is a DEGRADE: the surviving player alone, at low
+  // confidence, on a rating-only basis — never a fabricated partner and never the old confidence.
+  it("a lineup whose only high-confidence pairing involved a retired member degrades rather than silently substituting", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Bo Bramwell", "Cy Calder"]);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 6, ourMatch);
+
+      const before = getLineupPlan(db, teamId);
+      expect(before.slots).toEqual([
+        expect.objectContaining({ slot: "D1", confidence: "high", basis: "history", support: 6 }),
+      ]);
+
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, ids["Cy Calder"]!))
+        .run();
+
+      const after = getLineupPlan(db, teamId);
+
+      expect(after.rosterSize).toBe(1);
+      const slot = after.slots.find((s) => s.discipline === "doubles")!;
+      expect(slot.players.map((p) => p.playerId)).toEqual([ids["Bo Bramwell"]]);
+      expect(slot.confidence, "degraded, not the old high confidence").toBe("low");
+      expect(slot.basis, "no fabricated partnership survives the retirement").toBe("rating");
+      expect(slot.support).toBe(0);
+      expect(JSON.stringify(after)).not.toContain("Cy Calder");
     } finally {
       sqlite.close();
     }

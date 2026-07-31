@@ -427,22 +427,27 @@ findings line as **delivery** removes that pressure — there is no third state 
 
 ### What this does not cover — and how to tell
 
-The override is scoped to **process/operational findings**. It is not a rule against filing work. The
-discriminator is **not what the observation *is*, it is what it *asks for*** — because "is it a bug?"
-and "is it operational?" are not opposites, and asking the first question is how the adjudication this
-section exists to remove creeps back in. An observation can be a *bug in the delivery process*, and it
-is both.
+The override is scoped to **process/operational findings**. It is not a rule against filing work, and it
+never withholds a work path from something that is **broken**. Ask the two questions in order:
 
-| The observation asks for… | Disposition |
+| Ask, in this order | Disposition |
 |---|---|
-| A change to **nadal the product** — schema, CLI, parsers, queries, reports, MCP surface, its data | **Work.** Fix it in the running PR when the fix is in hand (the standing fold rule); a tracked Issue when it is not. |
-| A change to **how agents work** — process, rules, config, skills, the lifecycle, review practice, tooling discipline | **One findings line. Always** — including when the observation is also, accurately, a bug. |
-| **Both** | **Split it.** The product part is work; the process lesson is a line. If they genuinely cannot be separated, the product part may be filed and the process lesson **still** goes to the log. |
+| **1. Is something broken** — does it not work as it must? This covers nadal the product (schema, CLI, parsers, queries, reports, MCP surface, its data) **and the repo's own infrastructure** (CI workflows, `scripts/`, git hooks, a config value that does not do what it says). | **It is a defect, and defects get fixed.** Fix it in the running PR when the fix is in hand (the standing fold rule); a tracked Issue when it is not. Filing that Issue is **correct**, not a violation — nothing on this page forbids it. |
+| **2. Otherwise — is it a learning, or a proposal about how agents should work?** Process, rules, config, skills, the lifecycle, review practice, tooling discipline. | **One findings line. Always** — including when the learning arose *from* a bug, and including when you are certain the proposal is right. |
+| **Both** (a real defect that also taught a lesson — the common case) | **Split it.** The fix is work; the lesson is a line. If they genuinely cannot be separated, the fix is still work and the lesson **still** goes to the log. |
+
+Question 1 comes first deliberately. Asking "is this process-shaped?" first is what would strand a
+broken CI workflow or a broken script in a log that nothing spawns from — the rule is about
+**learnings and proposals**, never about things that are simply broken. "Being process-shaped" is not a
+reason to leave something broken, and a defect does not become a findings line by being located in the
+toolchain.
 
 This is how the log has actually been kept, which is the check on the rule rather than a restatement of
-it: [`docs/findings.md`](docs/findings.md) carries a large majority of `bug`-typed entries, nearly all
-of them defects that were **fixed in the run that found them** and whose *lesson* was then logged. A
-`bug` type on a findings line has never meant "file an Issue," and nothing here changes that.
+it: at this PR's merge base, `bug` is the **largest single type** in
+[`docs/findings.md`](docs/findings.md) — **95 of 222 entries**, a plurality rather than a majority —
+and those are overwhelmingly defects **fixed in the run that found them**, whose *lesson* was then
+logged. A `bug` type on a findings line is not an instruction to file an Issue, and nothing here changes
+that.
 
 The **HC may promote** any finding at triage — that is the `do-now` disposition, and it is the only path
 from this log to tracked work. [#35](https://github.com/wrburgess/nadal/issues/35) is itself an

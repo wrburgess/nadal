@@ -92,7 +92,71 @@ describe("getPlayerProfile", () => {
         expect.arrayContaining([{ slot: "S1", count: 1 }, { slot: "D1", count: 1 }]),
       );
       expect(profile.partnerFrequency).toEqual([{ partnerId: partner.id, count: 1, canonicalName: "Kai Kestrel" }]);
-      expect(profile.teamMemberships).toEqual([{ teamId: team.id, teamName: "Team A", eventId: null }]);
+      expect(profile.teamMemberships).toEqual([
+        { teamId: team.id, teamName: "Team A", eventId: null, retiredAt: null },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #49: "teams this player has been on" is a legitimately HISTORICAL statement — a retired
+  // membership must still be LISTED here (never filtered, unlike the current-roster reads in
+  // team-profile.ts/lineup.ts/availability.ts/captain-notes.ts), carrying its `retiredAt` so a
+  // presenter can label it distinctly (`tn player show`'s "(former)" suffix).
+  it("teamMemberships still lists a retired team, carrying retiredAt — history is preserved, not hidden", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Departed Player" });
+      const team = db.insert(teams).values({ name: "Former Team" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, player.id))
+        .run();
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+
+      expect(profile.teamMemberships).toEqual([
+        { teamId: team.id, teamName: "Former Team", eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The sharp edge of "retired ≠ deleted": a player's own court-match history and partner
+  // frequencies must be untouched by a retirement — `court_match_players` is a separate table this
+  // change never reads or writes.
+  it("court-match history and partner frequency are unchanged by a retirement", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Departed Player" });
+      const partner = seedPlayer(db, { canonicalName: "Steady Partner" });
+      const opponent = seedPlayer(db, { canonicalName: "Some Opponent" });
+      const team = db.insert(teams).values({ name: "Former Team" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      seedCourtMatch(
+        db,
+        { slot: "D1", discipline: "doubles", winnerSide: "home", playedOn: "2026-06-01" },
+        [
+          { playerId: player.id, side: "home" },
+          { playerId: partner.id, side: "home" },
+          { playerId: opponent.id, side: "visiting" },
+        ],
+      );
+
+      const before = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, player.id))
+        .run();
+
+      const after = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      expect(after.doublesRecord).toEqual(before.doublesRecord);
+      expect(after.partnerFrequency).toEqual(before.partnerFrequency);
+      expect(after.partnerFrequency).toEqual([{ partnerId: partner.id, count: 1, canonicalName: "Steady Partner" }]);
     } finally {
       sqlite.close();
     }
