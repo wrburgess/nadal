@@ -364,14 +364,24 @@ that triage, not `final`, is where a suggestion becomes work.
 **Read this as `final`'s Step 1 procedure for this repo. It replaces both bullets of that step; do not
 run either of them.**
 
-1. **Every nadal plan carries a standing plan item:** *"append this run's process/config learnings to
-   `docs/findings.md`."* [`devise`](skills/devise/SKILL.md) includes it in the posted plan for every
-   issue. **This is the whole mechanism, and it is deliberately not an exemption:** the append is
-   *inside the approved plan*, so [`verify`](skills/verify/SKILL.md)'s normal drift test passes on it
-   **truthfully** — its self-review can still assert *"only files in the final approved plan changed"*
-   without that record being false. Everything else in the same commit gets the ordinary
-   drift review; nothing is suppressed by filename, so an unplanned change cannot ride along beside a
-   findings line.
+1. **On a run that posts a plan, the plan carries a standing item:** *"append this run's process/config
+   learnings to `docs/findings.md`."* [`devise`](skills/devise/SKILL.md) includes it in every plan it
+   posts. **This is deliberately not an exemption:** the append is *inside the approved plan*, so
+   [`verify`](skills/verify/SKILL.md)'s normal drift test passes on it **truthfully** — its self-review
+   can still assert *"only files in the final approved plan changed"* without that record being false.
+   Everything else in the same commit gets the ordinary drift review; nothing is suppressed by
+   filename, so an unplanned change cannot ride along beside a findings line.
+
+   **On a run with no plan, the append inherits the authorization the run itself has.** The lifecycle
+   expressly permits compressing a **trivial fix** past Plan and a **documentation-only change** past
+   both Assess and Plan, and that compression is *the HC's call, not the AC's*. On such a run there is
+   no approved plan for **anything** in the diff — not for the findings line and not for the fix it
+   accompanies — so `verify` has no plan-alignment baseline to assert against in either direction. The
+   findings line is therefore **exactly as sanctioned as the change it rides with, and no more**: it
+   claims no exemption the rest of that diff does not already have, and it is not "unplanned drift"
+   relative to a plan that does not exist. What a compressed run does **not** change is the
+   *disposition*: the learning is still one line in [`docs/findings.md`](docs/findings.md), and still
+   never an Issue, PR, rule, or ADR.
 2. **Append as you learn** — in the phase that learned it, committed with that phase's own work, rather
    than batched at delivery. This mirrors the durable-as-it-arrives rule
    [`ship`](skills/ship/SKILL.md) already applies to its asks-ledger. **A learning from `assess`,
