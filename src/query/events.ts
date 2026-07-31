@@ -12,7 +12,7 @@
 
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { events } from "../db/schema.js";
+import { availability, events } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { isIsoDay } from "./iso-day.js";
 
@@ -20,6 +20,14 @@ export class MissingEventNameError extends Error {}
 export class InvalidEventKindError extends Error {}
 export class InvalidEventDayError extends Error {}
 export class EventRangeInvertedError extends Error {}
+export class EventRangeExcludesAvailabilityError extends Error {
+  constructor(
+    message: string,
+    readonly orphanedDays: string[],
+  ) {
+    super(message);
+  }
+}
 
 const eventKindSchema = z.enum(["league", "tournament"]);
 
@@ -48,8 +56,9 @@ export type AddEventResult = {
  * schema), so re-running a setup script does not grow the table.
  *
  * Refuses, naming the reason via a distinct error class, when: the name is blank; the kind is not
- * `league` or `tournament`; either endpoint is not a real `YYYY-MM-DD` calendar date; or the range
- * is inverted. Every check runs BEFORE any write, so a refusal leaves the table untouched.
+ * `league` or `tournament`; either endpoint is not a real `YYYY-MM-DD` calendar date; the range is
+ * inverted; or an UPDATE would move the range off availability already recorded against this event.
+ * Every check runs BEFORE any write, so a refusal leaves the table untouched.
  *
  * Both endpoints go through the shared `isIsoDay` rule rather than a local copy. `starts_on` and
  * `ends_on` are compared as TEXT by `setAvailability`'s day lookup, so a malformed endpoint here
@@ -94,6 +103,33 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
   // is not a guarantee under concurrency"). Under that race `created` can be optimistically `true`
   // for the loser, which is cosmetic — the row is correct either way.
   const existing = db.select().from(events).where(eq(events.name, name)).all()[0];
+
+  // Narrowing or moving an existing range must not strand availability that was recorded against
+  // it. `setAvailability` checks coverage only when a row is WRITTEN, so without this a routine
+  // date correction would silently leave rows attached to an event that no longer contains their
+  // day — invisible until someone reads per-event-day availability and finds days the event never
+  // covered. Refusing (rather than deleting the rows, or silently keeping them) is the only option
+  // that does not destroy data or invent a policy: which of the two the operator meant is genuinely
+  // ambiguous, so the diagnostic names the days and lets them decide.
+  // (Found by the independent Codex review of PR #47, rated medium.)
+  if (existing !== undefined) {
+    const orphanedDays = db
+      .select({ day: availability.day })
+      .from(availability)
+      .where(eq(availability.eventId, existing.id))
+      .all()
+      .map((r) => r.day)
+      .filter((day) => day < input.startsOn || day > input.endsOn)
+      .sort();
+    if (orphanedDays.length > 0) {
+      throw new EventRangeExcludesAvailabilityError(
+        `event "${name}" has availability recorded on ${orphanedDays.join(", ")}, which the new range ` +
+          `${input.startsOn}..${input.endsOn} does not cover — widen the range, or remove that availability first`,
+        orphanedDays,
+      );
+    }
+  }
+
   const row = db
     .insert(events)
     .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn })

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { events, players, teamMemberships, teams } from "../src/db/schema.js";
 import {
+  EventRangeExcludesAvailabilityError,
   EventRangeInvertedError,
   InvalidEventDayError,
   InvalidEventKindError,
@@ -19,6 +20,7 @@ import {
   addEvent,
 } from "../src/query/events.js";
 import { setAvailability } from "../src/query/availability.js";
+import { availability } from "../src/db/schema.js";
 import { setHomeTeam } from "../src/query/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -158,6 +160,94 @@ describe("addEvent", () => {
         sqlite.close();
       }
     });
+  });
+});
+
+// Found by the independent Codex review of PR #47 (rated medium). `addEvent` promises an in-place
+// update, and `setAvailability` validates day-within-range only when a row is WRITTEN — so moving or
+// narrowing a range afterwards would strand availability on an event that no longer contains its
+// day, invisibly, until someone read per-event-day availability and found days the event never
+// covered.
+describe("addEvent will not move a range off availability already recorded against it", () => {
+  useTnDbPath();
+
+  function seedWithAvailability(day: string) {
+    const { db, sqlite } = freshDb();
+    const team = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    setHomeTeam(db, team.id);
+    const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    addEvent(db, SPRINGFIELD);
+    setAvailability(db, { playerId: player.id, day, status: "available" });
+    return { db, sqlite };
+  }
+
+  it("refuses an update whose new range excludes a recorded day, naming the days", () => {
+    const { db, sqlite } = seedWithAvailability("2026-08-29");
+    try {
+      let thrown: unknown;
+      try {
+        addEvent(db, { ...SPRINGFIELD, startsOn: "2026-09-01", endsOn: "2026-09-03" });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(EventRangeExcludesAvailabilityError);
+      expect((thrown as EventRangeExcludesAvailabilityError).orphanedDays).toEqual(["2026-08-29"]);
+
+      // A refusal leaves BOTH tables untouched — the event keeps its original range and the
+      // availability row is still valid against it.
+      const event = db.select().from(events).all()[0]!;
+      expect(event).toMatchObject({ startsOn: "2026-08-28", endsOn: "2026-08-30" });
+      expect(db.select().from(availability).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses a NARROWING that drops a boundary day, not only a wholesale move", () => {
+    const { db, sqlite } = seedWithAvailability("2026-08-30");
+    try {
+      // 28..29 still overlaps the original range, but 08-30 falls outside it.
+      expect(() => addEvent(db, { ...SPRINGFIELD, endsOn: "2026-08-29" })).toThrow(
+        EventRangeExcludesAvailabilityError,
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("allows an update that still covers every recorded day, including a widening", () => {
+    const { db, sqlite } = seedWithAvailability("2026-08-29");
+    try {
+      const widened = addEvent(db, { ...SPRINGFIELD, startsOn: "2026-08-27", endsOn: "2026-08-31" });
+      expect(widened.created).toBe(false);
+      expect(widened.startsOn).toBe("2026-08-27");
+
+      // And a no-op re-add of the identical range is still idempotent.
+      expect(addEvent(db, { ...SPRINGFIELD, startsOn: "2026-08-27", endsOn: "2026-08-31" }).created).toBe(false);
+      expect(db.select().from(events).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("does not block a DIFFERENT event whose range moves off an unrelated event's availability", () => {
+    const { db, sqlite } = seedWithAvailability("2026-08-29");
+    try {
+      // The guard is scoped to the event being updated, not to availability in general.
+      const other = addEvent(db, {
+        name: "Some Other Event",
+        kind: "league",
+        startsOn: "2026-03-01",
+        endsOn: "2026-06-30",
+      });
+      expect(other.created).toBe(true);
+      expect(addEvent(db, { ...other, name: "Some Other Event", startsOn: "2026-04-01", endsOn: "2026-04-02" }).created).toBe(
+        false,
+      );
+    } finally {
+      sqlite.close();
+    }
   });
 });
 

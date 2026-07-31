@@ -109,7 +109,11 @@ legitimately carry a different status for each overlapping event.
 shape `tn player avail` uses, so this adds no flags. The date range is **inclusive at both ends**,
 matching the day lookup `tn player avail` resolves its event through, and a single-day event
 (`starts-on` equal to `ends-on`) is legal. A repeat under the same name **updates in place** rather
-than duplicating (`events.name` is unique). This is the one target-taking command that does not
+than duplicating (`events.name` is unique) — except that an update whose new range no longer covers
+a day this event already has availability recorded for is **refused**, naming those days. Moving or
+narrowing a range is otherwise a silent way to strand availability on an event that no longer
+contains it, and which the operator meant — widen the range, or drop that availability — is not
+something the command should decide. This is the one target-taking command that does not
 resolve its target against existing rows — it is the writer that creates them. It exists because
 nothing in production wrote an `events` row before it, which made `tn player avail` unreachable: the
 availability writer resolves its event from the day, and there were never any events to find.

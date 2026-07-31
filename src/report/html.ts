@@ -235,11 +235,12 @@ function renderPredictedLineupHtml(dossier: TeamDossier): string {
 }
 
 /**
- * The union of "not-collected" keys across every player in the dossier. As of #17 PR B every
- * section HAS a writer, so this is normally empty in production — but the block must still
- * genuinely disappear rather than always rendering, and a hand-built test profile can legitimately
- * report a not-collected key (Task 3 rule 6's "distinct from zero results", made visible at the
- * presenter layer too).
+ * The union of "not-collected" keys across every player in the dossier. In production that is
+ * currently exactly one key — `events` — because `availability` and `captain_notes` gained writers
+ * in #17 PR A while nothing yet writes a player-to-event association (see the `dataGaps` comment in
+ * `src/query/player-profile.ts`). The block must still genuinely disappear when the set is empty
+ * rather than always rendering, and a hand-built test profile can report any combination
+ * (Task 3 rule 6's "distinct from zero results", made visible at the presenter layer too).
  */
 function notCollectedKeys(dossier: TeamDossier): string[] {
   const keys = new Set<string>();

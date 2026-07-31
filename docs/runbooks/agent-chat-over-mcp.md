@@ -73,11 +73,15 @@ positionals by name.
    The agent should end up calling `player_avail` twice (`day: "2026-08-30"`, `status:
    "unavailable"`; `day: "2026-08-31"`, `status: "uncertain"`) and `player_note` twice — once plain,
    once with `pairTarget: "Kai Kestrel"`. **Read back what it recorded** rather than assuming intent
-   translated correctly — `player_show` or `report build` shows exactly what landed.
+   translated correctly — the tool results themselves are the readback (`player_avail` returns the
+   stored status *and the event it resolved to*; `player_note` returns the stored text). Not
+   `player_show` or `report build`: those report only a data-gap *status*, never the values, so they
+   cannot tell you whether the right day or the right event was written. See *Verifying what a write
+   actually recorded* below for the row-level SQL when you need it.
 5. **Re-render and check.** Call `report_build` again and re-open the dossier; the "prior meetings vs
    our players" section (populated once a home team is designated — Task 5, #17) and the "not
-   collected yet" block (now truthful about which sections actually have writers — Task 5's other
-   fix) are both worth a second look here, not just the availability you just added.
+   collected yet" block (truthful about which sections actually have writers — it should now list
+   `events` alone) are both worth a second look here, not just the availability you just added.
 
 ## Verifying it landed
 

@@ -1,6 +1,7 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import {
+  EventRangeExcludesAvailabilityError,
   EventRangeInvertedError,
   InvalidEventDayError,
   InvalidEventKindError,
@@ -14,12 +15,18 @@ import { emitSummary } from "../emit.js";
  * which should still surface as an uncaught throw rather than a tidy `status=error` line. */
 function isEventRefusal(
   err: unknown,
-): err is MissingEventNameError | InvalidEventKindError | InvalidEventDayError | EventRangeInvertedError {
+): err is
+  | MissingEventNameError
+  | InvalidEventKindError
+  | InvalidEventDayError
+  | EventRangeInvertedError
+  | EventRangeExcludesAvailabilityError {
   return (
     err instanceof MissingEventNameError ||
     err instanceof InvalidEventKindError ||
     err instanceof InvalidEventDayError ||
-    err instanceof EventRangeInvertedError
+    err instanceof EventRangeInvertedError ||
+    err instanceof EventRangeExcludesAvailabilityError
   );
 }
 

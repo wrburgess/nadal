@@ -118,6 +118,37 @@ describe("tn event add (end-to-end via dispatch)", () => {
       }
     });
 
+    it("refuses moving an event's range off availability already recorded against it", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const team = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+      setHomeTeam(db, team.id);
+      const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      backfillNameKeys(db);
+      sqlite.close();
+
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await dispatch(["event", "add", "Springfield Sectionals 2026", "tournament", "2026-08-28", "2026-08-30"]);
+      await dispatch(["player", "avail", "Randy Rostered", "2026-08-29", "available"]);
+
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const code = await dispatch([
+        "event", "add", "Springfield Sectionals 2026", "tournament", "2026-09-01", "2026-09-03",
+      ]);
+
+      expect(code).toBe(1);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("2026-08-29"));
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("widen the range"));
+
+      const check = openDb();
+      try {
+        expect(check.db.select().from(events).all()[0]).toMatchObject({ endsOn: "2026-08-30" });
+      } finally {
+        check.sqlite.close();
+      }
+    });
+
     it("refuses a short invocation with the usage line", async () => {
       runMigrations();
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
