@@ -354,8 +354,12 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
 /**
  * `sectionals` (and bare, no target — spec: "Bare (no target) is equivalent to `sectionals`"):
  * one dossier per team present in the DB, plus a top-level `index.html`/`index.md` linking each.
- * `events` has no writer at all (docs/findings.md, #15), so "every team in the DB" is the only
- * available reading of "the field" — there is no `events` row to scope this to instead.
+ * "Every team in the DB" is the only available reading of "the field". The reason is narrower than
+ * it used to be: #17 PR B added `addEvent`, so `events` rows DO now exist — but nothing associates a
+ * TEAM with an event (`team_memberships.event_id` and `team_matches.event_id` are null on every real
+ * pull, docs/findings.md #15), so there is still no way to ask "which teams are in this event". The
+ * missing piece is the association, not the events table. Scoping this call to an event becomes
+ * possible when that lands (TennisLink, #27, is the likely source).
  *
  * The PRECISE guarantee this batch call makes, stated without overclaiming (Codex adversarial
  * review, PR #38 round 3, Finding 2 [high]): every leaf in the WHOLE batch — every team's html+md

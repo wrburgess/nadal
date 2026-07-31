@@ -85,8 +85,26 @@ positionals by name.
   surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
   from either surface, interleaved, which is the whole point of one shared telemetry table (spec §
   Request telemetry).
-- `tn player show "<name>"` (the CLI, not MCP) reads back availability/notes recorded via MCP — same
-  database, same service functions, so there is nothing surface-specific to reconcile.
+- **Verifying what a write actually recorded.** The tool's own result is the readback: `player_avail`
+  returns the stored `availability` and the `event` it resolved to, `player_note` returns the stored
+  note text. Check those rather than assuming a successful call means the intended value landed —
+  the event a day resolves to is the part most worth confirming.
+
+  `tn player show` is **not** a readback for these. It reports availability and captain notes only as
+  a `dataGaps` status (`not-collected` / `empty` / `has-data`) — a count, never the rows — so it can
+  tell you *that* something was recorded and never *what*. (This runbook previously said otherwise;
+  corrected on #17 PR B after an independent review, since an HC following it would have treated
+  "the section is no longer empty" as confirmation of a specific value.)
+
+  For the rows themselves there is no command yet, so read the table directly:
+
+  ```
+  sqlite3 data/nadal.db "select p.canonical_name, e.name, a.day, a.status
+    from availability a
+    join players p on p.id = a.player_id
+    join events  e on e.id = a.event_id
+    order by a.day"
+  ```
 
 ## If `tn db migrate` fails with "duplicate column name: is_home"
 
