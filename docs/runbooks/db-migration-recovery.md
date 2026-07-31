@@ -19,22 +19,53 @@ missed the old row and inserted a second one carrying the identical URL. Migrati
 partial unique index on `teams.tennisrecord_url` (`WHERE tennisrecord_url IS NOT NULL`) to make that
 column a real source identity going forward — and a database that already has such a pair fails the
 `CREATE UNIQUE INDEX` itself. `runMigrations()` (`src/db/client.ts`) catches exactly this failure and
-rethrows it naming the cause and this recovery, rather than surfacing SQLite's bare "UNIQUE
-constraint failed: teams.tennisrecord_url".
+rethrows it naming the cause, the database that failed, and this runbook, rather than surfacing
+SQLite's bare "UNIQUE constraint failed: teams.tennisrecord_url".
 
-**Recovery is one line. It moves the database aside rather than deleting it** — substitute the path
-the error message names, which is the database that actually failed (`TN_DB_PATH` if you set it,
-`data/nadal.db` otherwise). The error prints this command with your real path already filled in:
+**Recovery is one line. It moves the database aside rather than deleting it.** The error names the
+database that actually failed — `TN_DB_PATH` if you set it, `data/nadal.db` otherwise — as an
+**absolute** path. Substitute that path here:
 
 ```sh
 mv -i -- '/abs/path/to/nadal.db' '/abs/path/to/nadal.db.pre-0009.bak' && tn db migrate
 ```
 
-The command the error prints always uses **absolute** paths, so you can run it from wherever you are
-standing, and neither argument can be mistaken for an option even if you set `TN_DB_PATH` to
-something dash-prefixed. `-i` refuses to overwrite silently, and `--` ends option parsing — belt and
-braces on top of the absolute paths. The backup name is also chosen to be one that does not already
-exist, so recovering **twice** cannot destroy the first backup.
+The error deliberately does **not** print this command filled in for you, though it used to
+(issue #56). Emitting it meant `src/db/client.ts` permanently owned a shell-quoting surface, a
+filesystem-race surface, an encoding surface and a platform surface — and that one line produced a
+defect in **six of the eleven** adversarial review rounds on PR #52. The command lives here instead,
+in markdown, where no sanitizer eats it and no encoding question arises.
+
+The consequence is that the safeguards the emitted command used to apply on your behalf are now
+yours to apply. Every one of them is here because it caught a real defect, so none is decoration:
+
+- **Use the absolute path the error names**, not a relative one. You may not be standing where the
+  failing run was — and since `-` cannot begin an absolute path, neither argument can be mistaken
+  for an option even if `TN_DB_PATH` is dash-prefixed.
+- **Keep `-i`.** It refuses to overwrite silently.
+- **Keep `--`.** It ends option parsing — belt and braces on top of the absolute paths.
+- **Keep both paths quoted.** A path containing a space is otherwise two arguments, and the source
+  path is whatever you set `TN_DB_PATH` to.
+- **Choose a backup name that is not already taken.** If `…pre-0009.bak` already exists from an
+  earlier recovery, add a suffix (`…pre-0009.2.bak`). Overwriting it destroys the captain notes and
+  availability saved by the *previous* failure — the exact data this whole procedure exists to
+  protect.
+
+**If the error says `(path escaped …)` and the path contains `\u{…}` sequences**, those are escapes
+the error produced, not characters in the filename: the real path holds something that cannot be
+shown literally. Two things follow.
+
+First, **do not retype the escape into a shell** — it would name a different file, which is the whole
+reason the error escapes it. Move the database aside with a file manager, or with `node -e` using the
+real string, then re-run `tn db migrate`.
+
+Second, **read the escape off `--quiet`'s JSON, not off the summary line.** The one-line
+`key=value` summary escapes backslashes inside its quoted field, so a path rendered `…we\u{A}ird.db`
+appears there as `…we\\u{A}ird.db` — doubled, and one un-escaping away from being misread:
+
+```sh
+tn db migrate --json | jq -r .message      # carries the escape exactly as produced
+```
 
 Deleting would work too — `tn db migrate` only needs the file gone — but there is no reason to make
 the recovery destructive, and keeping the backup is what makes the export step below possible
@@ -116,8 +147,9 @@ a `select *` dump is unrestorable by construction: the numbers in it will point 
 Events must carry `kind`, `starts_on` and `ends_on` too, because those are the arguments
 `tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` requires to recreate one.
 
-`data/nadal.db.pre-0009.bak` below stands in for the backup path — use the one the recovery command
-actually named, which is absolute and may not be under `data/` at all if you set `TN_DB_PATH`.
+`data/nadal.db.pre-0009.bak` below stands in for the backup path — use the one **you** chose when you
+ran the recovery above, which is absolute and may not be under `data/` at all if you set
+`TN_DB_PATH`.
 
 ```sh
 # 0. The home team and the events — without these, steps below have nothing to attach to.

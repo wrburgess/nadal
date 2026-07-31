@@ -235,7 +235,13 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
   // This asserts the RENDERED CLI line, which is the surface that actually broke — the sibling
   // assertion in test/db-teams-url-unique-upgrade.test.ts covers the message itself. The defect
   // lives in the seam, so it is guarded from both sides.
-  it("renders the #46 duplicate-URL recovery command INTACT through the one-line summary", async () => {
+  //
+  // #56 retired the `mv` command this originally pinned; the guard is RETARGETED, not deleted,
+  // because the defect it exists for is untouched by that change. An error string's format is a
+  // contract with whatever renders it, and either side can move independently — #44 changed the
+  // renderer while #46 changed the string, and neither suite saw it. The payload is different now
+  // (the database path and the runbook link rather than a command), and the seam is the same.
+  it("renders the #46 duplicate-URL recovery INTACT through the one-line summary", async () => {
     const dbFile = join(mkdtempSync(join(tmpdir(), "tn-")), "legacy.db");
     // A database migrated up to 0008 that already holds the duplicate pair 0009 forbids.
     const legacyDir = buildLegacyMigrationsFolder(8);
@@ -257,10 +263,13 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
     expect(printed, "no db migrate summary line was emitted").toBeDefined();
     const fields = parseSummaryFields(printed as string);
     expect(fields.status).toBe("error");
-    // The whole recovery command survives as one contiguous, copy-pasteable run — this is what a
-    // collapsed multi-line message destroys.
-    expect(fields.message).toContain(`mv -i -- '${dbFile}' '${dbFile}.pre-0009.bak' && tn db migrate`);
+    // The two things the reader must be able to act on survive as contiguous runs: the database
+    // that actually failed, and the runbook that carries the recovery. A collapsed multi-line
+    // message is what destroys contiguity, so this is the assertion that catches the seam moving.
+    expect(fields.message).toContain(dbFile);
     expect(fields.message).toContain("docs/runbooks/db-migration-recovery.md");
+    // And no command comes back through this surface (#56).
+    expect(fields.message).not.toMatch(/\bmv\b/);
 
     errorSpy.mockRestore();
   });
