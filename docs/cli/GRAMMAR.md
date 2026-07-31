@@ -27,7 +27,8 @@ this keeps the line single-line and un-spoofable. Sanitizing does not trim leadi
 whitespace: a quoted value preserves edge whitespace exactly (e.g. a `TN_DB_PATH` with a trailing
 space round-trips unchanged), since quoting already makes it unambiguous.
 
-A bare **`--` ends flag parsing**: every token after it is a target or payload, never a flag, so
+A bare **`--` ends flag parsing** — with one documented exception below: every token after it is a
+target or payload, never a flag, so
 `tn player note Randy -- "--poach at net"` records a note that begins with `--`. Global flags are
 recognized only *before* the delimiter — past it, `--json` is literal text. An unrecognized flag
 *before* `--` still fails, so the delimiter is not a way to silence a typo'd flag. (This is a change:
@@ -35,6 +36,13 @@ the grammar previously stated there was no `--` terminator, which was true when 
 free-text payload and became a defect the moment `player note` landed — an ordinary note beginning
 `--` could not be recorded at all, and prefixing whitespace corrupts text that is deliberately
 stored untrimmed. Found by the independent reviewer on #17 PR A.)
+
+**The exception:** a `--` that is itself the *value* of a declared value flag (`--from`, `--source-url`
+on `team pull` / `player pull`) is that flag's value, not a delimiter — the parser consumes it
+statefully. `dispatch`'s help scan, which runs earlier and does not know a command's value flags,
+uses a simpler first-`--` scan, so the two disagree in exactly that case: `tn player pull X --from --
+--source-url URL --help` prints no help. This needs an argument literally named `--` to reach and is
+tracked as #44 rather than fixed inside #17 PR A.
 
 `team pull` and `player pull` are the exception to "no additional flags beyond the
 three listed" above: they also accept `--players` (team pull only, cascades each roster profile
