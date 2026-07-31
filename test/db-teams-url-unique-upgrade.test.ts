@@ -207,6 +207,49 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     expect(message).not.toContain(`'${relativePath}'`);
   });
 
+  // Codex round 5, rated HIGH — and it REFUTED the round-4 dispute rather than repeating it, with
+  // the distinguishing case: main's success-path `path=` field is merely lossy to LOOK at, whereas
+  // an executable recovery turns that same loss into a DESTRUCTIVE ACTION ON THE WRONG FILE. With
+  // TN_DB_PATH holding a legal control-character pathname, `sanitizeValue` renders the newline as a
+  // space, so a printed `mv` would name the space-normalized sibling; if that file exists, pasting
+  // the command moves an UNRELATED database aside while the real one still fails to migrate.
+  //
+  // So this path fails safe: no command is offered at all, and the real path is given JSON-escaped
+  // (lossless, and control-character-free so it survives the one-line summary intact).
+  it("REGRESSION: offers NO shell command when the database path contains control characters", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "we\nird.db"); // a legal POSIX filename containing a newline
+    const legacyDir = buildLegacyMigrationsFolder(5);
+    const sqlite = new Database(dbPath);
+    try {
+      migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
+      sqlite.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A', 'https://tr/t?a')`);
+      sqlite.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A 4.0', 'https://tr/t?a')`);
+    } finally {
+      sqlite.close();
+    }
+    // The space-normalized sibling — the file a naive rendered `mv` would have moved.
+    const sibling = join(dir, "we ird.db");
+    writeFileSync(sibling, "an unrelated database");
+
+    let caught: unknown;
+    try {
+      runMigrations(dbPath);
+    } catch (err) {
+      caught = err;
+    }
+    const message = (caught as Error).message;
+
+    // No executable command is offered, so nothing can name the wrong file.
+    expect(message).not.toMatch(/mv /);
+    expect(message).not.toContain(sibling);
+    // The real path is still communicated, losslessly and without control characters.
+    expect(message).toContain(JSON.stringify(dbPath));
+    expect(message).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+    // And the unrelated file is untouched.
+    expect(readFileSync(sibling, "utf8")).toBe("an unrelated database");
+  });
+
   it("the same legacy database WITHOUT duplicates upgrades cleanly and the index exists", () => {
     const dbPath = freshDbPath();
     const legacyDir = buildLegacyMigrationsFolder(5);

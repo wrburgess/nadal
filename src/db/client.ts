@@ -4,6 +4,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sanitizeValue } from "../sanitize.js";
 import { backfillNameKeys } from "./name-key.js";
 
 export const DEFAULT_DB_PATH = "data/nadal.db";
@@ -46,22 +47,6 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
 const TEAMS_URL_UNIQUE_FAILURE = /UNIQUE constraint failed: teams\.tennisrecord_url/;
 
 /**
- * drizzle-orm's `SQLiteSyncDialect` wraps every failed migration statement in a `DrizzleError`
- * whose OWN message is the generic `Failed to run the query '<sql>'` — the actual
- * better-sqlite3 message ("UNIQUE constraint failed: ...") lives on `.cause` (native `Error.cause`,
- * which `DrizzleError`'s constructor sets). Walking the whole chain rather than checking two fixed
- * levels keeps this matching if a future drizzle-orm version stops wrapping, or wraps one deeper.
- *
- * Written as a walk, not as `err instanceof Error ? … : String(err)` guards, for a testing reason
- * (`rules/testing.md`: never keep a branch no test can kill). Those guards cannot fail in this
- * codebase — `migrate()`'s throw is always an `Error` — so no fixture distinguishes them, and an
- * unkillable branch reads as coverage to every later reader. The loop condition has no such
- * problem: it is exercised in both directions on every call (true for the DrizzleError, true for
- * its cause, false at the end of the chain), so a mutation to it is caught. A non-`Error` throw
- * yields `""` here, which matches no pattern and so falls through to the `throw err` below — the
- * original is re-thrown untouched, which is what the discarded `String(err)` branch was for.
- */
-/**
  * POSIX single-quote wrapping for a path interpolated into a copy-pasteable shell command. The
  * database path is caller-supplied (`TN_DB_PATH`, or a `runMigrations(path)` argument), so it can
  * contain spaces — an unquoted `mv /tmp/my db.db …` would silently become a two-source `mv`.
@@ -89,6 +74,22 @@ function untakenBackupPath(dbPath: string): string {
   return existsSync(preferred) ? `${dbPath}.pre-0006.${Date.now()}.bak` : preferred;
 }
 
+/**
+ * drizzle-orm's `SQLiteSyncDialect` wraps every failed migration statement in a `DrizzleError`
+ * whose OWN message is the generic `Failed to run the query '<sql>'` — the actual
+ * better-sqlite3 message ("UNIQUE constraint failed: ...") lives on `.cause` (native `Error.cause`,
+ * which `DrizzleError`'s constructor sets). Walking the whole chain rather than checking two fixed
+ * levels keeps this matching if a future drizzle-orm version stops wrapping, or wraps one deeper.
+ *
+ * Written as a walk, not as `err instanceof Error ? … : String(err)` guards, for a testing reason
+ * (`rules/testing.md`: never keep a branch no test can kill). Those guards cannot fail in this
+ * codebase — `migrate()`'s throw is always an `Error` — so no fixture distinguishes them, and an
+ * unkillable branch reads as coverage to every later reader. The loop condition has no such
+ * problem: it is exercised in both directions on every call (true for the DrizzleError, true for
+ * its cause, false at the end of the chain), so a mutation to it is caught. A non-`Error` throw
+ * yields `""` here, which matches no pattern and so falls through to the `throw err` below — the
+ * original is re-thrown untouched, which is what the discarded `String(err)` branch was for.
+ */
 function messageChain(err: unknown): string {
   const messages: string[] = [];
   let current: unknown = err;
@@ -126,13 +127,38 @@ export function runMigrations(path: string = dbPath()): void {
         // while #44/PR #51 concurrently moved `db migrate` onto `emitSummary`. Both changes were
         // green in isolation. Keep the message single-line; the long-form version lives in
         // docs/runbooks/db-migration-recovery.md, which is markdown and has room for it.
+        const CAUSE =
+          "UNIQUE constraint failed: teams.tennisrecord_url — this database has two team rows " +
+          "sharing one tennisrecord_url (issue #46), so migration 0006's unique index cannot apply. ";
+        const DATA_AT_RISK =
+          " Captain notes and availability exist ONLY in this file, so extract them from the " +
+          "backup first: docs/runbooks/db-migration-recovery.md";
+
+        // A path that `sanitizeValue` would ALTER cannot be rendered faithfully in the one-line
+        // summary this message is printed through — so no copy-pasteable command is offered for
+        // one. Emitting an `mv` here is worse than emitting none: the rendered command would name
+        // the space-normalized sibling path, and if THAT file exists, pasting it moves an unrelated
+        // database aside while the real one still fails to migrate. Codex round 5 refuted the
+        // earlier "this is pre-existing" position on exactly this point, and correctly: main's
+        // success-path `path=` field is merely lossy to LOOK at, while an executable recovery turns
+        // the same loss into a destructive action on the wrong file. Display-loss and wrong-action
+        // are not the same severity, so this branch fails safe instead of guessing.
+        //
+        // The predicate IS `sanitizeValue`, not a hand-listed character class — the same lesson
+        // round 4 forced on the test-side assertion: a guard whose job is "matches what module X
+        // strips" must call X, or it drifts the moment X widens.
+        if (source !== sanitizeValue(source)) {
+          throw new Error(
+            `${CAUSE}Its path contains control characters, so no copy-pasteable command can be ` +
+              "shown here without naming a DIFFERENT file — move the database aside yourself and " +
+              `re-run \`tn db migrate\`. Path, JSON-escaped: ${JSON.stringify(source)}.${DATA_AT_RISK}`,
+          );
+        }
+
         throw new Error(
-          "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
-            `(${source}) has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
-            "0006's unique index cannot apply. Recover (non-destructive, moves the file aside): " +
+          `${CAUSE.slice(0, -1)}(${source}). Recover (non-destructive, moves the file aside): ` +
             `mv -i -- ${shellQuote(source)} ${shellQuote(untakenBackupPath(source))} && tn db migrate ` +
-            "— then re-pull. Captain notes and availability exist ONLY in this file, so extract " +
-            "them from the backup first: docs/runbooks/db-migration-recovery.md",
+            `— then re-pull.${DATA_AT_RISK}`,
         );
       }
       throw err;
