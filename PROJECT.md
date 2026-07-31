@@ -355,11 +355,34 @@ presents the suggestions **and waits**. nadal does not wait: its operating loop 
 waits on the HC* outside the six enumerated HC steps, so a blocking wait would contradict the same spec
 this section enforces.
 
-**So nadal declares a third value: `log-and-continue`.** Under it, `final` **appends the suggestion to
-[`docs/findings.md`](docs/findings.md) as one line and continues.** It folds nothing, files nothing,
-waits on nothing. The findings log **is** this project's HC-presentation surface — the HC's own
-enumerated steps include *"triage the findings log at will"*, and that triage, not `final`, is where a
-suggestion becomes work.
+**So nadal declares a third value: `log-and-continue`.** The findings log **is** this project's
+HC-presentation surface — the HC's own enumerated steps include *"triage the findings log at will"*, and
+that triage, not `final`, is where a suggestion becomes work.
+
+##### What `final` does at Step 1 under `log-and-continue` — the instruction, not a value to match
+
+**Read this as `final`'s Step 1 procedure for this repo. It replaces both bullets of that step; do not
+run either of them.**
+
+1. **Append** each Rules-Layer / config suggestion to [`docs/findings.md`](docs/findings.md) as **one
+   line**, in the format that file's header specifies.
+2. **Fold nothing.** Edit no Rules Layer, no skill body, no `docs/standards/` file. (These are vendored;
+   see *Findings-Log Discipline* below.)
+3. **File nothing.** No Issue, no PR, no ADR — see the same section.
+4. **Wait for nothing.** Continue straight to Step 2 (verify the PR is ready).
+5. **Record it in the SOW** where Step 5's *Folded Rule/Config Changes* section expects a fold and a
+   deferral: write `Folded: None — nadal runs log-and-continue` and
+   `Deferred (follow-up): None — N suggestion(s) appended to docs/findings.md`, so the SOW section is
+   answered rather than left blank or filled with a follow-up link.
+
+**If you looked for `log-and-continue` in [`final`](skills/final/SKILL.md) Step 1 and found no matching
+branch: that is expected, and it is not a reason to skip the step.** That body is vendored and ships
+only the two baseline values, so it cannot name this one. **This block is the branch.** A Reviewer
+finding on [PR #55](https://github.com/wrburgess/nadal/pull/55) raised precisely this risk — that an
+agent meeting an unrecognized value performs *neither* documented branch and silently does nothing,
+which at this step is how the prohibited follow-up got created in the first place. The remedy is that
+the disposition is written here as an **imperative procedure** rather than as a token requiring a
+matching conditional: there is nothing to match, so there is nothing to fall through.
 
 **Why a new name instead of redefining `present-to-hc`** — this was a Reviewer finding on
 [PR #55](https://github.com/wrburgess/nadal/pull/55), and it changed the answer. An earlier draft set
