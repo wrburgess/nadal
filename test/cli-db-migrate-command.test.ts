@@ -293,6 +293,55 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
     errorSpy.mockRestore();
   });
 
+  // Codex adversarial review of #56, round 2 (rated high, recommendation adopted): the seam was
+  // equality-tested only on the LITERAL branch, so the escaped branch's rendering went through
+  // `quoteSummaryValue` with nothing pinning what came out. That is the branch where the seam is
+  // least obvious — `losslessPath` emits backslashes, and the summary format escapes backslashes,
+  // so the wire form is DOUBLED (`\\u{A}`) while the parsed value is not. Documented in the runbook;
+  // asserted here, which is the difference between knowing it and keeping it.
+  it("renders an ESCAPED #46 recovery intact through the one-line summary", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbFile = join(dir, "we\nird.db"); // a legal POSIX filename containing a newline
+    const seed = new Database(dbFile);
+    try {
+      migrate(drizzle(seed), { migrationsFolder: buildLegacyMigrationsFolder(8) });
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A', 'https://tr/t?a')`);
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A 4.0', 'https://tr/t?a')`);
+    } finally {
+      seed.close();
+    }
+    process.env.TN_DB_PATH = dbFile;
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const code = await dispatch(["db", "migrate"]);
+    expect(code).toBe(1);
+
+    const printed = errorSpy.mock.calls.map((c) => String(c[0])).find((l) => l.includes("db migrate"));
+    const raw = printed as string;
+    const fields = parseSummaryFields(raw);
+
+    // The escape is written ONCE in the value the reader gets back...
+    const escapedPath = dbFile.replace(String.fromCharCode(10), "\\u{A}");
+    expect(fields.message).toBe(
+      "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+        `at ${escapedPath} (path escaped — it contains characters that cannot be shown literally) ` +
+        "has two team rows sharing one tennisrecord_url (issue #46), so migration " +
+        "0009's unique index cannot apply. Recovery moves this database aside rather than " +
+        "deleting it, but read the runbook FIRST: captain notes and availability exist ONLY " +
+        "in this file and must be exported from it before you re-pull. " +
+        "docs/runbooks/db-migration-recovery.md",
+    );
+    // ...and TWICE on the wire, because the summary format escapes backslashes inside its quoted
+    // field. Both facts are asserted because a reader who copies the escape off the terminal gets
+    // the doubled form, and the runbook tells them to read `--json` instead for exactly this reason.
+    expect(raw).toContain("we\\\\u{A}ird.db");
+    // The rendered line is control-character free — the newline in the real filename never reaches
+    // the terminal, which is what `losslessPath` exists for.
+    expect(fields.message).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+
+    errorSpy.mockRestore();
+  });
+
   it("--json prints a parseable status=ok payload and applies migrations", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 

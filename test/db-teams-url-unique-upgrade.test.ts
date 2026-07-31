@@ -318,6 +318,20 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     }
     const message = (caught as Error).message;
 
+    // FULL-MESSAGE equality here too, not just "contains the escape". Codex round 2 (rated high)
+    // pointed out that these cases asserted strictly less than the newline case one test up, so for
+    // every character class except newline the no-command invariant rested on a single
+    // `not.toMatch(/\\bmv\\b/)`. The escaped BRANCH was already pinned by the newline case's
+    // equality, so this is defense in depth rather than a live hole — but "one character class
+    // happens to carry the strong assertion for all of them" is not a property worth resting on,
+    // and equality costs one line here.
+    expect(message).toBe(
+      expectedDuplicateUrlMessage(
+        `at ${dbPath.replace(ch, escaped)} (path escaped — it contains characters that cannot be shown literally)`,
+      ),
+    );
+
+    // Implied by the equality above; kept because they survive a deliberate prose rewording.
     // Lossless: the exact code point is recoverable from the escape...
     expect(message).toContain(escaped);
     // ...and survives sanitizeValue untouched, which is the whole point (JSON.stringify did not).

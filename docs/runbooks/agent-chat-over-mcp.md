@@ -142,8 +142,25 @@ See [db-migration-recovery.md](db-migration-recovery.md) for why each of those i
 
 Then re-pull. The database is a *cache* over `raw/`, not a system of record — spec § Ingestion makes
 every fetch an idempotent upsert and archives every page, precisely so it can be rebuilt at any time.
-Nothing you typed by hand is at risk unless you had already recorded captain notes or availability on
-that branch, in which case copy them out first (`sqlite3 data/nadal.db "select * from captain_notes;"`).
+Nothing you typed by hand is at risk **except captain notes and availability**, which exist nowhere
+else.
+
+**To recover those, follow
+[db-migration-recovery.md](db-migration-recovery.md) → *General note on data at risk*, reading from
+the `.pre-0005.bak` you just created** — not from the configured database path, which after the move
+is either absent or a freshly rebuilt empty one. Three things that procedure gets right and a
+one-liner here cannot:
+
+- it exports **joined to names**, because `captain_notes` and `availability` store `player_id` /
+  `event_id` foreign keys and a rebuilt database assigns new autoincrement ids — so a `select *` dump
+  is unrestorable by construction, its numbers pointing at different players;
+- it covers the **home-team designation and the events** as well, which notes and availability cannot
+  be restored without;
+- it names the **order** the three have to come back in.
+
+This paragraph previously said `sqlite3 data/nadal.db "select * from captain_notes;"`, which was wrong
+in all three ways *and* named the default database rather than the one that actually failed (Codex
+adversarial review of #56, round 2, rated critical).
 
 **This cannot happen to a database created after the merge**, which applies `0000`..`0005` in order.
 No permanent repair path is shipped for it, deliberately: that would mean carrying
