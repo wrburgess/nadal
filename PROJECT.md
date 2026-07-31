@@ -327,10 +327,11 @@ parser default; the flip lives in the shipped file, not in that default.)
 
 How [`final`](skills/final/SKILL.md) handles the Rules-Layer / config improvements it learns during
 implementation, now that a hands-off run reaches the merge gate on its own
-([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). Its shipped default is
-`autonomous-fold`; allowed values `autonomous-fold | present-to-hc`. This is a **documentary** value —
-prose, **not** a row in the gate table above (the parser reads a two-row table and must stay two-row),
-so a host changes it by editing this paragraph.
+([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). The shipped default is
+`autonomous-fold`; allowed values `autonomous-fold | present-to-hc`. **nadal sets it to
+`present-to-hc`** — see *How nadal reads it* below. This is a **documentary** value — prose, **not** a
+row in the gate table above (the parser reads a two-row table and must stay two-row), so a host changes
+it by editing this paragraph.
 
 - **`autonomous-fold`** (shipped default) — `final` **folds** well-scoped, low-risk Rules-Layer/config
   improvements into the **same PR a human merges**, so the merge gate stays the backstop for them, and
@@ -339,10 +340,107 @@ so a host changes it by editing this paragraph.
 - **`present-to-hc`** — `final` **presents** the suggestions to the HC and waits, editing no Rules
   Layer or config without approval (the pre-ungated behavior).
 
+#### How nadal reads it
+
+**Both branches of `autonomous-fold` are forbidden here, which is why nadal does not run it.** *Fold*
+would mean editing the vendored Rules Layer, and this project writes **zero** local rules files
+(spec § *Factory model and SDLC*). *Defer to a follow-up issue* is the move
+[*Findings-Log Discipline*](#findings-log-discipline) below prohibits outright. That is not theoretical:
+[#34](https://github.com/wrburgess/nadal/issues/34) was opened by the `/ship 15` run as exactly such a
+Rules-Layer follow-up, and was closed `not planned` and converted back into findings entries in
+`59a34c3`. The setting produced the violation, so the setting changes.
+
+Under nadal's `present-to-hc`, `final` **appends the suggestion to
+[`docs/findings.md`](docs/findings.md) as one line and continues.** It folds nothing, files nothing, and
+blocks on nothing. The findings log **is** this project's HC-presentation surface: the HC's own
+enumerated steps include *"triage the findings log at will"*, and that triage — not `final` — is where a
+suggestion becomes work.
+
+One word of the shipped value is **deliberately reinterpreted, and named rather than smuggled**: the
+baseline's `present-to-hc` says `final` presents **and waits**. nadal does not wait. Its operating loop
+states that *nothing waits on the HC* except the six enumerated HC steps, so a blocking wait here would
+contradict the spec that the rest of this section enforces. Everything else about the value — edit no
+Rules Layer or config without approval — holds unchanged, and that is the part doing the work.
+
 This value governs only `final`'s rule-suggestion step. It does **not** touch the intake/authoring
 "a human disposes" gates — [`scout`](skills/scout/SKILL.md), [`clip`](skills/clip/SKILL.md),
 [`follow`](skills/follow/SKILL.md), [`restock`](skills/restock/SKILL.md),
 [`create-skill`](skills/create-skill/SKILL.md) — whose review PRs a human still disposes.
+
+## Findings-Log Discipline
+
+Where an **operational or process learning** goes in nadal, and — more importantly — where it does
+**not**. This is a Project Config value in the same sense as *Human Gates* above: the spec
+(§ *Factory model and SDLC*) is its origin, and this is the copy an agent actually reaches, since the
+instruction chain is `CLAUDE.md` → [`AGENTS.md`](AGENTS.md) → this file and reaches no spec directory.
+
+**The artifact** is [`docs/findings.md`](docs/findings.md) — append-only, one line per finding. Its
+header states the line format and the type vocabulary; read the format there rather than from a second
+copy here, so the two cannot drift.
+
+**The disposition set is `do-now` / `upstream-to-ace` / `drop`, and only the HC applies one.** Findings
+become work **only** at an explicit HC-triggered triage session — one of the HC's own enumerated steps
+is *"triage the findings log at will."*
+
+> **No Issues, PRs, rules, or ADRs spawn directly from findings.**
+
+That sentence is the rule. An agent that has just learned something process-shaped writes **one line**
+and continues.
+
+### Precedence — this overrides three instructions that say otherwise
+
+The instruction chain does not merely omit the rule above; in three places it **directs the opposite** —
+and each sits where an agent is standing at the moment it decides. The first is Tier-1 Lean Core, so it
+is resident on every run; the second is a step [`final`](skills/final/SKILL.md) executes at every
+delivery; the third is the only logging pattern the Config Bundle ships at all. All three are
+**vendored** — nadal never edits `rules/`, `skills/`, or `docs/standards/` — so they are overridden here,
+from the host's own config layer, which is what that layer exists for. For a **process/operational**
+finding in nadal, none of the following applies:
+
+| Vendored instruction | What it says | Here |
+|---|---|---|
+| [`rules/self-review.md`](rules/self-review.md) → *Anti-Patterns* | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
+| [`final`](skills/final/SKILL.md) Step 1 | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `present-to-hc`. |
+| [`scout`](skills/scout/SKILL.md) / the Learnings Log | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
+
+The third row is the one most likely to be missed, and it is why the first two are so easy to obey: the
+only logging pattern the Config Bundle ships has the **opposite** disposition, so an agent applying its
+trained reflex lands on exactly the banned behavior. Recognizing which of the two logs is in hand is the
+whole judgment.
+
+### What this does not cover
+
+The override is scoped to **process/operational findings**. It is not a rule against filing work:
+
+- A **defect** discovered during a run is still fixed in that run's PR — the standing fold rule is
+  unchanged, and a defect is not a process finding.
+- A genuine **Springfield feature gap or bug** is still a tracked Issue. The spec's test is
+  *"PRs must advance Springfield or fix defects. Everything else is a findings line."*
+- The **HC may promote** any finding at triage — that is the `do-now` disposition, and it is the only
+  path from this log to tracked work. [#35](https://github.com/wrburgess/nadal/issues/35) is itself an
+  instance: opened at explicit HC direction, and therefore **not precedent** for an agent doing the same.
+
+### The limits of this statement, stated plainly
+
+**Nothing in *Quality Checks* parses this section, and no check can observe the behavior it governs.**
+Stated exactly, since a limit stated loosely is the failure this whole section is about:
+`scripts/parity_check.rb` asserts structure — the required `##` sections, skill frontmatter, resolvable
+links, and the gate/reviewer **values**. It does read a little prose, but only three fixed patterns: a
+heading advertising itself as unenforceable, and whether a skill body names the `Human Gates` and
+*Reviewer* host values. It parses nothing below, and — the part that matters — the violation this rule
+forbids happens in a GitHub artifact and in an agent's judgment, so **no in-repo check could see it
+even if one were written.**
+
+This section's force therefore comes from being read, not from being checked; do not mistake it for a
+guardrail. What it removes is the **conflicting instruction** an agent was previously following, which
+is the failure the record actually shows: #34 was created by an agent obeying the `autonomous-fold`
+setting, not by one that had failed to find this rule.
+
+The canonical fix is upstream — [wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159), which
+names the process-findings log in the Config Bundle and enforces its disposition discipline. When it
+lands and is re-synced, **this section collapses into the canonical statement rather than drifting from
+it**; the re-vendor obligation is recorded in [`docs/ace-sync-manifest.md`](docs/ace-sync-manifest.md)
+under *Known local deltas*, which is where a re-sync reconciler looks.
 
 ## Intake Pipeline
 
