@@ -456,6 +456,31 @@ describe("overwriteOutputFile never has a window where the destination is missin
     expect(readdirSync(dir)).toEqual([basename(path)]);
   });
 
+  // REGRESSION (Codex adversarial review, PR #38 round 4). The test above throws BEFORE the temp
+  // file is ever created, so it passes whether or not the cleanup path covers a write that FAILS
+  // PARTWAY. `writeFileSync` is not all-or-nothing: ENOSPC/EIO/a quota can leave a truncated temp
+  // behind. This simulates exactly that — create the file, then throw — which is unreachable by the
+  // throw-immediately mock, and is red when the write sits outside the cleanup-protected block.
+  it("REGRESSION: a write that CREATES the temp file and then fails must still clean it up", () => {
+    dir = mkdtempSync(join(tmpdir(), "tn-atomic-write-"));
+    const path = join(dir, "index.html");
+    writeFileSync(path, "GOOD EXISTING CONTENT", "utf8");
+
+    vi.mocked(fsModule.writeFileSync).mockImplementationOnce(((target: string) => {
+      // Land a real, partially-written file at the temp path first — the state a torn write leaves
+      // behind. `openSync`/`writeSync`/`closeSync` are not mocked in this file, so this creates the
+      // debris for real rather than simulating its existence.
+      const fd = fsModule.openSync(target, "wx");
+      fsModule.writeSync(fd, "PARTIAL");
+      fsModule.closeSync(fd);
+      throw new Error("simulated torn write (ENOSPC after create)");
+    }) as unknown as typeof fsModule.writeFileSync);
+
+    expect(() => overwriteOutputFile(path, "NEW CONTENT")).toThrow();
+    expect(readdirSync(dir)).toEqual([basename(path)]);
+    expect(readFileSync(path, "utf8")).toBe("GOOD EXISTING CONTENT");
+  });
+
   it("REGRESSION: a failure during the final atomic rename must also leave the existing good file untouched, with no temp cruft", () => {
     dir = mkdtempSync(join(tmpdir(), "tn-atomic-write-"));
     const path = join(dir, "index.html");

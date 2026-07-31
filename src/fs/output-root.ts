@@ -389,8 +389,13 @@ export function overwriteOutputFile(path: string, content: string): void {
   assertLeafWritable(path);
   const dir = dirname(path);
   const tempPath = join(dir, `.${basename(path)}.tmp-${randomBytes(8).toString("hex")}`);
-  writeFileSync(tempPath, content, { encoding: "utf8", flag: "wx" });
   try {
+    // The write is INSIDE the cleanup block, not before it. `writeFileSync` is not all-or-nothing:
+    // it can create the file and then fail partway through (ENOSPC, EIO, a full quota), leaving a
+    // truncated `.<leaf>.tmp-*` behind forever. With the write outside, that debris was unreachable
+    // by the cleanup below — and the test for this path threw BEFORE the temp existed, so it passed
+    // whether or not cleanup covered the case (Codex adversarial review, PR #38 round 4).
+    writeFileSync(tempPath, content, { encoding: "utf8", flag: "wx" });
     assertLeafWritable(path);
     renameSync(tempPath, path);
   } catch (err) {
