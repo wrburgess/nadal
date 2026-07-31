@@ -93,8 +93,15 @@ function untakenBackupPath(dbPath: string): string {
  * cost is one character class, and a guard that is correct only for the inputs someone thought of is
  * the shape this repo keeps re-learning.
  */
-const UNRENDERABLE_CLASS = "[\\p{Cc}\\p{Cf}\\p{Cs}\\u2028\\u2029]";
-const UNRENDERABLE = new RegExp(UNRENDERABLE_CLASS, "u");
+// Exported ONLY so the character classes can be unit-tested directly. A lone surrogate cannot
+// exist as a real filename on any platform — every OS stores path bytes, and encoding one to UTF-8
+// already replaces it with U+FFFD — so an end-to-end test of that case necessarily depends on how
+// a given filesystem resolves the two names. The first attempt did exactly that and passed on
+// macOS while failing on Linux CI (`runMigrations` simply never threw there). The portable form is
+// to exercise the pure functions directly and leave the end-to-end coverage to inputs that CAN be
+// real filenames, which the newline case already is.
+export const UNRENDERABLE_CLASS = "[\\p{Cc}\\p{Cf}\\p{Cs}\\u2028\\u2029]";
+export const UNRENDERABLE = new RegExp(UNRENDERABLE_CLASS, "u");
 
 /**
  * Render a path so it survives every mechanism above **losslessly** — each unrenderable character
@@ -109,7 +116,7 @@ const UNRENDERABLE = new RegExp(UNRENDERABLE_CLASS, "u");
  * containing the text `\u{2028}` renders as `\\u{2028}` and so cannot be confused with an escape
  * this function produced. Same ordering argument, for the same reason, as `quoteSummaryValue`'s.
  */
-function losslessPath(value: string): string {
+export function losslessPath(value: string): string {
   return value
     .replaceAll("\\", "\\\\")
     .replace(
