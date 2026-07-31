@@ -100,7 +100,7 @@ TypeScript / Node 22, SQLite (better-sqlite3 + drizzle), vitest, Playwright for 
 
 - **ace is the factory; nadal is a product.** Vendor a snapshot of the ace baseline via `ace-sync` with a manifest recording the ace SHA. Upgrades are deliberate re-syncs. **nadal never edits vendored files**; parity check fails CI on drift. Project-local layer: reviewer config, human gates, protected branches (values ace already externalizes).
 - **Anti-bloat, mechanical:**
-  - `docs/findings.md` — append-only, one line per finding (`date · type · gist`). Findings become work only at an explicit HC-triggered triage (dispositions: do-now / upstream-to-ace / drop). No Issues, PRs, rules, or ADRs spawn directly from findings.
+  - `docs/findings.md` — append-only, one line per finding. Its header states the line format and the type + state vocabularies; read them there rather than from a copy here, so the two cannot drift. Findings become tracked work only at an explicit HC-triggered triage pass (dispositions: do-now / upstream-to-ace / drop). No Issues, PRs, rules, or ADRs spawn directly from findings — **but a broken thing is a defect**, fixed in the running change when the fix is in hand or tracked immediately when it is not; this rule governs learnings and proposals, never things that are simply broken.
   - Process improvements are ace's jurisdiction, upstreamed in batches. nadal writes zero local rules files.
   - nadal ADRs: application decisions only, passing distill's three-part test (hard to reverse, surprising later, real trade-off). Target O(10), not O(60).
   - **PRs must advance Springfield or fix defects.** Everything else is a findings line.

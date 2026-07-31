@@ -1,9 +1,43 @@
 # Findings Log
 
-Append-only. One line per finding: `date · type · gist`. Types: process | bug | idea | data.
-Findings become work ONLY at an HC-triggered triage session (dispositions: do-now /
-upstream-to-ace / drop). No Issues, PRs, rules, or ADRs spawn directly from this file.
-(Spec § Factory model and SDLC.)
+Append-only. One line per finding: `date · type · state · gist`. Full rules in
+[`PROJECT.md`](../PROJECT.md) → *Findings Disposition*; spec § *Factory model and SDLC* is the origin.
+
+**Type — what kind of thing it is.** `bug` · `process` · `note` · `fact` · `risk` · `idea` ·
+`optimization`. This is the **observed** vocabulary, not a new mandate: it is what the writers of this
+log actually used. Kickoff declared four (`process | bug | idea | data`) and `data` was never once
+used, so the artifact is the authority over the older statement.
+
+**State — what happens to it next.** `closed` (resolved in the run that found it, or a lesson needing
+no action) · `open` (live work) · `accepted` (a real limitation, decided against on the record).
+Entries written before 2026-08-01 carry no state; the first triage pass assigns one.
+
+**Only the HC promotes, and nothing urgent waits for that.**
+
+> **No Issues, PRs, rules, or ADRs spawn directly from findings.** The HC promotes `open` findings to
+> tracked work at a triage pass — the `do-now` disposition, and the only path from this file to an
+> Issue. Separately and always: **if something is broken it is a defect**, fixed in the running change
+> when the fix is in hand or tracked immediately when it is not. Filing that is correct, not a
+> violation. What this rule governs is *learnings and proposals*, never things that are simply broken.
+
+An agent that has just learned something process-shaped writes **one line** and continues. A finding
+matching a class below records **a reference plus what is new about this instance**, not a
+re-derivation of the lesson.
+
+## Recurring classes
+
+Descriptive index of shapes recorded more than once — **not rules**. An imperative statement belongs
+in the Rules Layer, which nadal does not author. Line references are to this file as of `10e6189`
+(`git show 10e6189:docs/findings.md`), since a header edit shifts every later line.
+
+| Class | Shape | Seen |
+|---|---|---|
+| **C1** | Fixed the named instance, not the class | ~20 · L77 L132 L185 L215 L248 |
+| **C2** | A claim outruns what the code enforces — comment, test title, doc, PR body, quantifier | ~17 · L93 L214 L246 L261 |
+| **C3** | A review round's fix creates the next round's defect | ~9 · L155 L192 L209 L256 |
+| **C4** | Testing only the configuration the test invented | ~8 · L142 L157 L197 L238 |
+| **C5** | An enumeration fails silently at its edges — derive the guard from structure | ~7 · L87 L114 L190 L237 |
+| **C6** | A behavioral merge hazard with no textual signature | 5 · L180 L231 L239 |
 
 - 2026-07-29 · process · sandcastle/warren-style dispatched-worker execution preserves our operating loop; candidate ace capability, not nadal v1 work
 - 2026-07-29 · process · an `ace new <project>` stamper would complete the factory model; upstream idea for ace

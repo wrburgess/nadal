@@ -118,6 +118,17 @@ definitions.
 | **Medium** | Maintainability, clarity, or a smaller coverage gap. | Fix now or file a tracked follow-up. |
 | **Low** | Style, naming, or optional polish. | Author's discretion. |
 
+**"File a tracked follow-up" applies to a *defect*, never to a process learning.** The Medium row is
+written for code, and for code it is correct. A Medium finding that is a *learning or a proposal about
+how agents work* takes the [*Findings-Log Discipline*](#findings-log-discipline) path instead — one
+findings line — because filing it is the exact move that section prohibits. Apply that section's
+two-question test before reading this column: **is something broken?** first, *then* is it a learning.
+
+**Severity is orthogonal to [*Review Lenses*](#review-lenses).** A lens decides *what a pass looks
+for*; severity decides *what happens to what it finds*. A finding surfaced outside the declared lens
+set is not thereby downgraded — the permanent *what class is not on this list?* lens exists precisely
+to surface it, and it is severity-rated like any other.
+
 ## Lifecycle Host
 
 - **Host platform:** `GitHub` (default). The issue/PR verbs the Skills use are isolated so a Host App
@@ -250,6 +261,67 @@ unchanged. A host wanting a plan-gate review must add a mechanism that does not 
 A host adding an **asynchronous** row must name in that row the artifact field its platform records
 the reviewed commit in, as the shipped Copilot row does with a GitHub review's `commit_id` — the
 concrete field name is host territory and never appears in a skill body.
+
+## Review Lenses
+
+**How deep a solicited review goes, and when it stops.** The canonical mechanism is proposed upstream
+at [wrburgess/ace#161](https://github.com/wrburgess/ace/issues/161); until it lands this section is the
+host-local statement, and it **overrides** the unbounded adversarial pass the vendored
+[`verify`](skills/verify/SKILL.md) body describes (see the precedence table under
+[*Findings-Log Discipline*](#precedence--this-overrides-five-instructions-that-say-otherwise)).
+
+**Two kinds of discovery, one of them bounded.** *Solicited* discovery is commissioned — Stage 4's
+adversarial pass, the Reviewer's response, every re-summons after a fix — and if it is not bounded it
+does not terminate. *Unsolicited* discovery is something noticed while doing other work; it is routed,
+**never capped**, and it is empirically the higher-yield of the two.
+
+### The bound is a lens set, not a round count
+
+A **lens** is one named question a pass asks. A **lens set** is the selection declared **at the
+summons**, chosen for what the change touches. Each lens runs once; repeating a lens that returned
+clean requires the HC.
+
+Round counts are the wrong bound: across seven nadal PRs, value in a late pass came from asking a
+*different* question and cost came from *repeating* one. The one pass given an explicit threat model
+converged at one finding, then zero.
+
+**Lens-set size: 3–4 per summons, plus the permanent lens.** This is a menu, not a checklist —
+running every lens on every change rebuilds the unbounded pass in a new costume.
+
+| Lens | Asks |
+|---|---|
+| **Guard completeness** | Does this guard *enumerate* cases, or *derive* from structure? |
+| **Key identity** | Can two different facts collide on one key, or one fact split into two? |
+| **Fail-open** | Does the error path do something weaker than the happy path? |
+| **Reachability** | Has this code ever executed? Is a produced field ever read? |
+| **Claim vs code** | Does any comment, test title, doc or PR sentence assert more than the code enforces? |
+| **Concurrency** | Two processes, not two threads — check-then-act across a WAL database. |
+| **What class is not on this list?** | **Permanent — always included.** |
+
+The first six are **derived from nadal's own recorded defect classes**, not from a generic catalogue,
+and they are a starting set to be revised as the record changes. The seventh is not optional: a menu
+necessarily enumerates the defects already known, and a pass that keeps returning one class is not
+evidence that other classes are absent.
+
+### Fix-verification is bounded separately
+
+Code written in response to review findings is the least-reviewed code in the change — authored *after*
+the pass that would have caught it. It gets **two verification passes**, not the lens set.
+
+**Escalate on recurrence rather than iterate.** If a fix-verification pass finds a defect *in the
+fixes themselves* beyond that limit, the design is wrong and the AC stops and says so. Nine recorded
+instances in this repo show patching past that point moving the same defect one step sideways rather
+than closing it.
+
+### What a PR is for
+
+Projected here from spec § *Factory model and SDLC*, which states it and which **the instruction chain
+never reaches**:
+
+> **PRs must advance Springfield or fix defects. Everything else is a findings line.**
+
+Correctness work that does not move the destination closer is triaged, not folded — however correct it
+is. This is the same rule as *bugs we fix, optimizations we triage*, one level up.
 
 ## Human Gates
 
@@ -495,8 +567,8 @@ Where an **operational or process learning** goes in nadal, and — more importa
 instruction chain is `CLAUDE.md` → [`AGENTS.md`](AGENTS.md) → this file and reaches no spec directory.
 
 **The artifact** is [`docs/findings.md`](docs/findings.md) — append-only, one line per finding. Its
-header states the line format and the type vocabulary; read the format there rather than from a second
-copy here, so the two cannot drift.
+header states the line format and the type + state vocabularies; read them there rather than from a
+second copy here, so the two cannot drift.
 
 **The disposition set is `do-now` / `upstream-to-ace` / `drop`, and only the HC applies one.** Findings
 become work **only** at an explicit HC-triggered triage session — one of the HC's own enumerated steps
@@ -507,10 +579,56 @@ is *"triage the findings log at will."*
 That sentence is the rule. An agent that has just learned something process-shaped writes **one line**
 and continues.
 
-### Precedence — this overrides four instructions that say otherwise
+### Two axes, and where each state lives
 
-The instruction chain does not merely omit the rule above; in four places it **directs the opposite** —
-and each sits where an agent is standing at the moment it decides. All four are **vendored** — nadal
+Every finding carries **two independent facts**, and recording only the first is the failure mode.
+**Type** answers *what kind of thing is it*; **state** answers *what happens to it next*. Read by type
+alone, a log whose entries are overwhelmingly defects already fixed in the run that found them is
+indistinguishable from a backlog of that many open defects — and the format conforms perfectly the
+whole time. State is what separates the archive from the work.
+
+| State | Meaning | Lives in |
+|---|---|---|
+| `closed` | Resolved in the run that found it, or a lesson needing no action | `docs/findings.md` — nothing moves |
+| `open` | Live work, not yet done | a GitHub Issue, label `docket` + its type label; milestone `Springfield v1` only if it must be true before the date |
+| `accepted` | A real limitation, decided against on the record | a **closed** GitHub Issue, label `residual` |
+
+**The flow is one-way.** `accepted` is terminal: its whole purpose is that the same residual is not
+re-litigated on a later pass. Check it before raising anything that sounds familiar —
+`gh issue list --state closed --label residual`.
+
+Storing `open` findings as Issues is **not** a violation of the rule above: promotion at a triage pass
+*is* the `do-now` disposition, and the HC applies it. What the rule forbids is an agent spawning one
+mid-run. [#30](https://github.com/wrburgess/nadal/issues/30),
+[#34](https://github.com/wrburgess/nadal/issues/34) and
+[#43](https://github.com/wrburgess/nadal/issues/43) failed because they were **residuals and leftovers
+filed as work** — which the state axis now prevents directly, since a residual is `accepted` and never
+`open`.
+
+### The triage pass
+
+**It sits outside the lifecycle and has no trigger.** Every lifecycle stage is scoped to one issue or
+one PR; there is no cross-issue stage, and attaching triage to an invented boundary between units of
+work is the stage split [`docs/standards/development-lifecycle.md`](docs/standards/development-lifecycle.md)
+warns against. It runs when the HC calls it, is interruptible, and blocks nothing — which is safe
+precisely because nothing urgent is in the pile: a broken thing is a defect and never waits for triage.
+
+**The AC's pass is subtractive, not additive.** Its product is *eliminations with evidence* — already
+fixed, superseded, duplicate, unreachable — not a ranked list of everything. A pass that returns every
+item ranked has delegated nothing.
+
+**The AC may eliminate only what it can attach a re-runnable check to** — one command the HC can paste
+to confirm the row. Everything else it *proposes*. This is
+[ADR 0033](docs/adr/0033-verification-stays-in-main-agent-loop.md)'s boundary applied to disposition:
+mechanical facts are delegable, judgment is not. **Its deliverable is a file, not a message.**
+
+**Sort only as far as the next decision requires.** First pass is binary — before Springfield or not.
+Only the deferred side is sub-sorted, and only when something is about to be done with it.
+
+### Precedence — this overrides five instructions that say otherwise
+
+The instruction chain does not merely omit the rules above; in five places it **directs the opposite** —
+and each sits where an agent is standing at the moment it decides. All five are **vendored** — nadal
 never edits `rules/`, `skills/`, or `docs/standards/` — so they are overridden here, from the host's own
 config layer, which is what that layer exists for. For a **process/operational** finding in nadal, none
 of the following applies:
@@ -521,6 +639,7 @@ of the following applies:
 | [`rules/self-review.md`](rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and executable in [`ship`](skills/ship/SKILL.md)'s `asks_ledger` contract as `status: "handed-off"` with a `ref` | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
 | [`final`](skills/final/SKILL.md) Step 1 (executed at every delivery) | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`. |
 | [`scout`](skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
+| [`verify`](skills/verify/SKILL.md) Stage 4 (executed on every PR) | an adversarial pass that *"actively tries to **refute** the change"* — stated with **no stopping condition**, so "is anything wrong?" runs until a human stops it | **Bounded here.** See [*Review Lenses*](#review-lenses): a solicited pass declares a lens set of 3–4 plus the permanent lens, each lens runs once, and fix-verification gets two passes before escalation. The adversarial *posture* is unchanged — only its terminus is supplied, because the vendored body supplies none. |
 
 Two of these are easy to miss for opposite reasons. The **last** row is the trained reflex: the only
 logging pattern the bundle ships has the opposite disposition, so an agent pattern-matching on "I
