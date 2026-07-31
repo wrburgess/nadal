@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runMigrations } from "../src/db/client.js";
+import { sanitizeValue } from "../src/sanitize.js";
 import { buildLegacyMigrationsFolder } from "./helpers/legacy-migrations.js";
 
 function freshDbPath(): string {
@@ -243,11 +244,57 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     // No executable command is offered, so nothing can name the wrong file.
     expect(message).not.toMatch(/mv /);
     expect(message).not.toContain(sibling);
-    // The real path is still communicated, losslessly and without control characters.
-    expect(message).toContain(JSON.stringify(dbPath));
+    // The real path is still communicated, losslessly and without control characters. Escaped by
+    // `losslessPath`, NOT `JSON.stringify` — round 6 showed the latter leaves DEL/C1/Cf and
+    // U+2028-9 literal for `sanitizeValue` to eat downstream.
+    expect(message).toContain(dbPath.replace(String.fromCharCode(10), '\\u{A}'));
+    expect(sanitizeValue(message)).toBe(message);
     expect(message).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
     // And the unrelated file is untouched.
     expect(readFileSync(sibling, "utf8")).toBe("an unrelated database");
+  });
+
+  // Codex round 6, rated HIGH. The round-5 fail-safe rendered the path with `JSON.stringify`, which
+  // escapes the C0 controls but leaves DEL, the C1 block, every \p{Cf} format control and
+  // U+2028/U+2029 LITERAL — and `sanitizeValue` replaces exactly those downstream. So a path
+  // containing U+2028 or RIGHT-TO-LEFT OVERRIDE reached the reader neither losslessly nor
+  // control-free, while the message claimed both: a comment outrunning what the code enforced,
+  // which is the shape this repo keeps re-learning. `src/cli/emit.ts` had already documented this
+  // exact `JSON.stringify` shortfall for its own payload.
+  //
+  // `losslessPath` escapes every character in sanitizeValue's OWN class, so these two cases — one
+  // Zl-adjacent (U+2028), one Cf (RLO) — must round-trip through the whole CLI render intact.
+  it.each([
+    { label: "U+2028 LINE SEPARATOR", ch: "\u2028", escaped: "\\u{2028}" },
+    { label: "U+202E RIGHT-TO-LEFT OVERRIDE (Cf)", ch: "\u202E", escaped: "\\u{202E}" },
+  ])("REGRESSION: renders a path containing $label losslessly and control-free", ({ ch, escaped }) => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, `we${ch}ird.db`);
+    const legacyDir = buildLegacyMigrationsFolder(5);
+    const sqlite = new Database(dbPath);
+    try {
+      migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
+      sqlite.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A', 'https://tr/t?a')`);
+      sqlite.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A 4.0', 'https://tr/t?a')`);
+    } finally {
+      sqlite.close();
+    }
+
+    let caught: unknown;
+    try {
+      runMigrations(dbPath);
+    } catch (err) {
+      caught = err;
+    }
+    const message = (caught as Error).message;
+
+    // Lossless: the exact code point is recoverable from the escape...
+    expect(message).toContain(escaped);
+    // ...and survives sanitizeValue untouched, which is the whole point (JSON.stringify did not).
+    expect(sanitizeValue(message)).toBe(message);
+    expect(message).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+    // Still fails safe: no command that could name the wrong file.
+    expect(message).not.toMatch(/mv /);
   });
 
   it("the same legacy database WITHOUT duplicates upgrades cleanly and the index exists", () => {

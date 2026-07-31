@@ -75,6 +75,32 @@ function untakenBackupPath(dbPath: string): string {
 }
 
 /**
+ * Render a path so it survives `sanitizeValue` **losslessly** — every character that sanitizer
+ * would replace is escaped to `\u{XXXX}`, leaving output built only from backslashes, braces and
+ * hex.
+ *
+ * `JSON.stringify` is NOT sufficient here and that is the whole reason this exists (Codex round 6,
+ * rated high). It escapes the C0 controls but leaves DEL, the C1 block, every `\p{Cf}` format
+ * control, and U+2028/U+2029 **literal** — `sanitizeValue` then replaces exactly those with spaces
+ * downstream, so a path containing U+2028 or RIGHT-TO-LEFT OVERRIDE reached the reader neither
+ * losslessly nor control-free while the message claimed both. `src/cli/emit.ts` already documents
+ * this precise `JSON.stringify` shortfall for its own `--json` payload; the fix here is the same
+ * one, applied to the same character class.
+ *
+ * Backslashes are escaped FIRST, so a path legitimately containing the text `\u{2028}` cannot be
+ * confused with an escape this function produced — the same ordering argument, for the same reason,
+ * as `quoteSummaryValue`'s.
+ */
+function losslessPath(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replace(
+      /[\p{Cc}\p{Cf}\u2028\u2029]/gu,
+      (ch) => `\\u{${(ch.codePointAt(0) as number).toString(16).toUpperCase()}}`,
+    );
+}
+
+/**
  * drizzle-orm's `SQLiteSyncDialect` wraps every failed migration statement in a `DrizzleError`
  * whose OWN message is the generic `Failed to run the query '<sql>'` — the actual
  * better-sqlite3 message ("UNIQUE constraint failed: ...") lives on `.cause` (native `Error.cause`,
@@ -151,7 +177,7 @@ export function runMigrations(path: string = dbPath()): void {
           throw new Error(
             `${CAUSE}Its path contains control characters, so no copy-pasteable command can be ` +
               "shown here without naming a DIFFERENT file — move the database aside yourself and " +
-              `re-run \`tn db migrate\`. Path, JSON-escaped: ${JSON.stringify(source)}.${DATA_AT_RISK}`,
+              `re-run \`tn db migrate\`. Path, escaped losslessly: ${losslessPath(source)}.${DATA_AT_RISK}`,
           );
         }
 
