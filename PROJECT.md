@@ -364,9 +364,15 @@ that triage, not `final`, is where a suggestion becomes work.
 **Read this as `final`'s Step 1 procedure for this repo. It replaces both bullets of that step; do not
 run either of them.**
 
-1. **On a run that posts a plan, the plan carries a standing item:** *"append this run's process/config
-   learnings to `docs/findings.md`."* [`devise`](skills/devise/SKILL.md) includes it in every plan it
-   posts. **This is deliberately not an exemption:** the append is *inside the approved plan*, so
+1. **On a run that posts a plan, the plan must carry a standing task:** *"append this run's
+   process/config learnings to `docs/findings.md`."* This is a **host requirement on the plan the AC
+   authors**, and it is declared *here* because this file is where [`devise`](skills/devise/SKILL.md)
+   reads its host values. **Stated plainly so it is not mistaken for shipped behavior: the vendored
+   `devise` body does not name this task, and nadal cannot add it there** — whoever authors the plan
+   includes it because *this line* requires it, exactly as the Step-1 procedure above is the branch
+   `final`'s body does not contain. A plan posted without the task is incomplete: add it and re-post
+   before implementing, rather than appending later and calling it unplanned.
+   **This is deliberately not an exemption:** the append is *inside the approved plan*, so
    [`verify`](skills/verify/SKILL.md)'s normal drift test passes on it **truthfully** — its self-review
    can still assert *"only files in the final approved plan changed"* without that record being false.
    Everything else in the same commit gets the ordinary drift review; nothing is suppressed by
