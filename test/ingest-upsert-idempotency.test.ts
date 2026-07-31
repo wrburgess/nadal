@@ -129,7 +129,31 @@ describe("upsert idempotency — the headline test", () => {
       });
       expect(second.kind).toBe("ok");
 
-      expect(snapshot(teams)).toEqual(teamsAfterFirst);
+      // Issue #49 (Codex review round 2): `teams.roster_observed_at` is the one column a re-pull is
+      // SUPPOSED to move — it records WHEN we last looked, not what we found, and the monotonic
+      // retirement guard depends on it advancing. Every other column of `teams`, and every other
+      // table below, still compares byte-identical, so the headline guarantee ("a re-pull changes
+      // no DATA") is intact rather than weakened. Asserted as two halves rather than by dropping
+      // the row comparison: the watermark is pinned to have ADVANCED, so this is strictly more
+      // coverage than the single `toEqual` it replaces, not an exemption carved out of it.
+      type TeamSnapshotRow = { id: number; tennisrecordUrl: string | null; rosterObservedAt: string | null };
+      const teamsFirst = teamsAfterFirst as TeamSnapshotRow[];
+      const teamsSecond = snapshot(teams) as TeamSnapshotRow[];
+      const withoutWatermark = (rows: TeamSnapshotRow[]) =>
+        rows.map((row) => {
+          const copy: Partial<TeamSnapshotRow> = { ...row };
+          delete copy.rosterObservedAt;
+          return copy;
+        });
+      expect(withoutWatermark(teamsSecond)).toEqual(withoutWatermark(teamsFirst));
+
+      const pulledFirst = teamsFirst.find((t) => t.tennisrecordUrl !== null)!;
+      const pulledSecond = teamsSecond.find((t) => t.id === pulledFirst.id)!;
+      expect(pulledFirst.rosterObservedAt).not.toBeNull();
+      expect(
+        pulledSecond.rosterObservedAt! >= pulledFirst.rosterObservedAt!,
+        "the second pull observed the roster no earlier than the first",
+      ).toBe(true);
       expect(snapshot(teamMemberships)).toEqual(membershipsAfterFirst);
       expect(snapshot(teamMatches)).toEqual(teamMatchesAfterFirst);
       expect(snapshot(courtMatches)).toEqual(courtMatchesAfterFirst);

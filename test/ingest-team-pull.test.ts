@@ -466,3 +466,142 @@ describe("pullTeam --from never retires (issue #49, Codex review of PR #53)", ()
     }
   });
 });
+
+
+// Issue #49, found by the independent Codex adversarial review of PR #53 round 2 (rated high).
+// SQLite serializes the two writers, but serialization orders the WRITES and the reconcile is a
+// claim about the INPUTS: an older complete roster that commits last would retire a player the
+// newer one listed. Both pages are valid and complete, so this is distinct from the accepted
+// truncated-page limitation. Reachable inside one process — the MCP server awaits `fetchPage`, so
+// two overlapping `team_pull` calls interleave exactly this way when the earlier request is slower.
+describe("pullTeam is monotonic in observation time (issue #49, Codex review round 2)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  /** A fetcher that reports an explicit `fetchedAt`, so a test can order two snapshots by the time
+   * they were OBSERVED rather than by the order they happen to be written. */
+  function fetcherObservedAt(body: string, fetchedAt: string) {
+    return async (url: string) => ({ url, status: 200, body, fetchedAt });
+  }
+
+  it("an OLDER complete roster committing after a newer one does not retire the player the newer one listed", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Seed: the team exists with all 18, observed early.
+      const seed = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-01T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      expect(seed.kind).toBe("ok");
+
+      // Process B: the NEWER snapshot — still lists Ellis — commits FIRST.
+      const newer = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-20T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      expect(newer.kind).toBe("ok");
+
+      // Process A: the OLDER snapshot, fetched before B but slower to arrive, omits Ellis and
+      // commits SECOND. Without the monotonic guard it retires Ellis on stale evidence.
+      const olderBody = removeRosterRow(team.html, "Ellis Eastwick");
+      const older = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(olderBody, "2026-07-10T00:00:00.000Z"),
+        target: team.source.url,
+      });
+
+      expect(older.kind).toBe("ok");
+      if (older.kind !== "ok") throw new Error("expected ok");
+      expect(older.retiredCount, "a stale snapshot must retire nobody").toBe(0);
+
+      const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+      const rows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.retiredAt, "the newer snapshot listed Ellis, so Ellis is still current").toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a NEWER snapshot still retires normally — the guard rejects stale evidence, it does not disable retirement", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-01T00:00:00.000Z"),
+        target: team.source.url,
+      });
+
+      const later = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), "2026-07-15T00:00:00.000Z"),
+        target: team.source.url,
+      });
+
+      expect(later.kind).toBe("ok");
+      if (later.kind !== "ok") throw new Error("expected ok");
+      expect(later.retiredCount).toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a stale snapshot does not advance the watermark, so a genuinely newer pull after it still reconciles", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-20T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      // Stale — skipped, and must NOT move the mark backward to 2026-07-10.
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-10T00:00:00.000Z"),
+        target: team.source.url,
+      });
+
+      const teamRow = db.select().from(teams).where(eq(teams.tennisrecordUrl, team.source.url)).all()[0]!;
+      expect(teamRow.rosterObservedAt, "the stale pull must not move the watermark").toBe(
+        "2026-07-20T00:00:00.000Z",
+      );
+
+      // A genuinely newer snapshot after the stale one still reconciles.
+      const newest = await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), "2026-07-25T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      expect(newest.kind).toBe("ok");
+      if (newest.kind !== "ok") throw new Error("expected ok");
+      expect(newest.retiredCount).toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a --from replay never advances the watermark, so it cannot make a later live pull look stale", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-01T00:00:00.000Z"),
+        target: team.source.url,
+      });
+      const path = join(mkdtempSync(join(tmpdir(), "tn-archive-")), "team.html");
+      writeFileSync(path, team.html, "utf8");
+      await pullTeam({ db, fetchPage: createStubFetcher({}), from: { path, sourceUrl: team.source.url } });
+
+      const teamRow = db.select().from(teams).where(eq(teams.tennisrecordUrl, team.source.url)).all()[0]!;
+      expect(teamRow.rosterObservedAt, "a replay records no observation time").toBe("2026-07-01T00:00:00.000Z");
+    } finally {
+      sqlite.close();
+    }
+  });
+});

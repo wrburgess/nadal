@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { eq } from "drizzle-orm";
 import type { openDb } from "../db/client.js";
 import { teams } from "../db/schema.js";
 import { hrefParam } from "../parsers/dom.js";
@@ -91,6 +92,10 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
   let url: string;
   let body: string;
   let httpStatus: number;
+  // When the ROSTER IN `body` WAS OBSERVED — the fetch's own stamp, not a later local clock read.
+  // Null on the `--from` replay path, which has no observation time at all (an archived file's
+  // vintage is unknowable) and which therefore never reconciles. See the monotonic guard below.
+  let observedAt: string | null = null;
 
   if (from !== undefined) {
     url = from.sourceUrl;
@@ -110,6 +115,10 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       const page = await fetchPage(url);
       body = page.body;
       httpStatus = page.status;
+      // The FETCH's timestamp, taken when the bytes arrived (src/ingest/fetch.ts). Reading a fresh
+      // `new Date()` further down would stamp this snapshot with the moment we got round to writing
+      // it, which is exactly the value that cannot order two concurrent pulls.
+      observedAt = page.fetchedAt;
     } catch (err) {
       return { kind: "error", message: err instanceof Error ? err.message : String(err) };
     }
@@ -117,7 +126,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
 
   const archivedPath = archivePage({ sourceSet: "tennisrecord", slug: slugFromUrl(url), url, body, httpStatus });
 
-  const source = { url, fetchedAt: new Date().toISOString() };
+  const source = { url, fetchedAt: observedAt ?? new Date().toISOString() };
   let parsed;
   try {
     parsed = parseTennisRecordTeam(body, source);
@@ -174,8 +183,34 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       // does not carry. If one is ever wanted, it needs a captured-at timestamp compared against
       // the memberships it would retire, not a caller's assertion that this file is current.
       // (Found by the independent Codex adversarial review of this PR, rated high.)
+      //
+      // MONOTONIC IN OBSERVATION TIME, not in commit order. SQLite serializes the two writers, but
+      // serialization orders the *writes* and this reconcile is a claim about the *inputs*: process
+      // A fetches a complete roster omitting P, process B then fetches a NEWER complete roster
+      // listing P and commits first, and A — committing second, correctly serialized — retires P
+      // anyway. Both pages are valid and complete, so this is a different defect from the accepted
+      // truncated-page limitation, and it is reachable inside ONE process: the MCP server awaits
+      // `fetchPage`, so two overlapping `team_pull` calls interleave exactly this way whenever the
+      // earlier request's response is the slower one. Comparing the incoming snapshot's OBSERVATION
+      // time against the last one actually applied is what SQLite cannot do for us.
+      //
+      // A NULL `rosterObservedAt` means no snapshot has ever been applied, which must read as
+      // "apply this one", never as an infinitely-old one. ISO-8601 UTC strings compare
+      // lexicographically in chronological order, so `<` is a real time comparison here. Strictly
+      // older is skipped; an equal stamp still applies, so a same-millisecond re-pull is not
+      // mistaken for a stale one.
+      // (Found by the independent Codex adversarial review of this PR, round 2, rated high.)
+      const lastObserved = upserted.rosterObservedAt;
+      const staleSnapshot = observedAt !== null && lastObserved !== null && observedAt < lastObserved;
+      if (staleSnapshot) {
+        console.warn(
+          `team pull: roster snapshot observed ${sanitizeValue(observedAt ?? "")} is older than the ` +
+            `applied ${sanitizeValue(lastObserved ?? "")} — memberships refreshed, retirement skipped`,
+        );
+      }
+
       const observedRetiredCount =
-        from !== undefined
+        from !== undefined || staleSnapshot
           ? 0
           : retireAbsentMemberships(tx, {
               teamId: upserted.id,
@@ -186,6 +221,13 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
               // last (not) observed by the same fetch.
               retiredAt: source.fetchedAt,
             });
+
+      // Advance the watermark only when this snapshot actually reconciled. A replay (`--from`) has
+      // no observation time to record, and a stale snapshot must not move the mark forward — doing
+      // either would let the NEXT genuinely-newer pull be rejected as stale.
+      if (from === undefined && !staleSnapshot && observedAt !== null) {
+        tx.update(teams).set({ rosterObservedAt: observedAt }).where(eq(teams.id, upserted.id)).run();
+      }
 
       for (const row of parsed.schedule) {
         const opponent = resolveTeam(tx, { name: row.opponentTeamName });

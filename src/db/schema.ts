@@ -50,6 +50,15 @@ export const teams = sqliteTable("teams", {
   // concurrency"). `src/query/home-team.ts` is the only writer; it always clears any prior flag
   // and sets the new one inside a single transaction, so the index can never observe two set rows.
   isHome: integer("is_home", { mode: "boolean" }),
+  // Issue #49 (Codex adversarial review of PR #53, round 2): when the roster snapshot that last
+  // RECONCILED this team was OBSERVED — the fetch's own timestamp, not the write's. SQLite
+  // serializes the two writers but cannot order their *inputs*, so without this, two concurrent
+  // live pulls whose fetches resolve out of order let the OLDER complete roster commit last and
+  // retire a player the NEWER one listed. `pullTeam` skips the reconcile when the incoming
+  // snapshot is older than this value, which makes retirement monotonic in observation time
+  // rather than in commit order. Nullable: no team has an observation until its first live pull,
+  // and a NULL must read as "nothing applied yet", never as an infinitely-old snapshot.
+  rosterObservedAt: text("roster_observed_at"),
   // Issue #32: JS-folded comparison key for name, same rationale as players.nameKey above.
   nameKey: text("name_key"),
   // Same fuzzy-band purpose as players.nameKeyLength above.

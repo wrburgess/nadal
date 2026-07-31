@@ -1,0 +1,1 @@
+ALTER TABLE `teams` ADD `roster_observed_at` text;
