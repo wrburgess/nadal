@@ -87,23 +87,25 @@ positionals by name.
 
 > **Every direct `sqlite3` read below must target the database the MCP SERVER writes — and the
 > server has its own environment.** `TN_DB_PATH` set for the server is not `TN_DB_PATH` set in your
-> shell, and defaulting to `data/nadal.db` when your shell lacks it is exactly how you end up
-> inspecting a file the server never touched. Worse, `sqlite3` **creates** a database at a path that
-> does not exist, so the wrong path returns a confident empty answer rather than an error — a false
-> verification arriving precisely when you are checking whether a write landed.
+> shell. Two distinct ways that bites, and a default fixes neither:
 >
-> So: name it explicitly and prove it exists before reading it.
+> - `sqlite3` **creates** a database at a path that does not exist, so a wrong path returns a
+>   confident empty answer rather than an error;
+> - and if `data/nadal.db` happens to **exist** from some earlier run, a default silently reads
+>   unrelated historical rows — which looks like a successful verification.
+>
+> So there is no default here. Name the server's database explicitly and prove it exists:
 >
 > ```sh
-> DB="${TN_DB_PATH:-data/nadal.db}"   # must match the SERVER's TN_DB_PATH, not just your shell's
-> test -f "$DB" || echo "STOP: no database at '$DB' — sqlite3 would create an empty one" >&2
+> printf "the MCP server's database path: "; IFS= read -r DB || DB=
+> test -f "$DB" || echo "STOP: no database at '$DB' — do not trust anything below" >&2
 > ```
 >
-> Run that check first and do not continue if it prints STOP. Every read below is written
-> `test -f "$DB" && sqlite3 "$DB" …` so a wrong path fails closed rather than fabricating an empty
-> database. (Four rounds of the Codex adversarial review of #56 landed on this same class in three
-> different files; the last of them was this block, where an earlier draft of this very warning still
-> let the default through.)
+> Every read below is written `test -f "$DB" && sqlite3 "$DB" …`, so a missing path fails closed
+> rather than fabricating an empty database. That guard cannot tell you the path is the *right* one,
+> though — only you can, by matching it against the server's own environment. (This block took three
+> attempts across the Codex adversarial review of #56: a hardcoded literal, then a default that could
+> create the wrong file, then a default that could *read* an existing wrong one.)
 
 - Every tool call writes a `request_log` row with `surface="mcp"` — `test -f "$DB" && sqlite3 "$DB"
   "select surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
@@ -148,7 +150,9 @@ case "${TN_DB_PATH:-}" in
 esac
 
 case "$DB" in
-  /*) mv -i -- "$DB" "$DB.pre-0005.bak" && tn db migrate ;;
+  /*) mv -i -- "$DB" "$DB.pre-0005.bak" &&
+      TN_DB_PATH="$DB" tn db migrate ;;   # bind it: bare `tn db migrate` would rebuild
+                                          # data/nadal.db, not the file just moved
   *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
 esac
 ```

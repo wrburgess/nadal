@@ -36,12 +36,19 @@ case "${TN_DB_PATH:-}" in
 esac
 
 case "$DB" in
-  /*) mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
+  /*) mv -i -- "$DB" "$DB.pre-0009.bak" &&
+      TN_DB_PATH="$DB" tn db migrate ;;   # bind it: bare `tn db migrate` would rebuild
+                                          # data/nadal.db, not the file just moved
   *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
 esac
 ```
 
-Both of those forms exist because the two obvious shortcuts are each wrong, and each was caught by
+`TN_DB_PATH="$DB"` on the rebuild is not decoration. `tn` resolves its database from `TN_DB_PATH` or
+the `data/nadal.db` default — **never** from your shell's `$DB` — so a bare `tn db migrate` after the
+move rebuilds the default and leaves the database you just moved aside missing (verified: it created
+`data/nadal.db` while the selected file stayed 0 bytes).
+
+The rest of these forms exist because the obvious shortcuts are each wrong, and each was caught by
 the Codex adversarial review of #56 after this runbook shipped it:
 
 - **Do not paste the path into a single-quoted template.** A perfectly legal
@@ -164,7 +171,9 @@ case "${TN_DB_PATH:-}" in
 esac
 
 case "$DB" in
-  /*) mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
+  /*) mv -i -- "$DB" "$DB.pre-0009.bak" &&
+      TN_DB_PATH="$DB" tn db migrate ;;   # bind it: bare `tn db migrate` would rebuild
+                                          # data/nadal.db, not the file just moved
   *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
 esac
 ```
