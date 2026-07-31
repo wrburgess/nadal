@@ -27,12 +27,14 @@ the error message names, which is the database that actually failed (`TN_DB_PATH
 `data/nadal.db` otherwise). The error prints this command with your real path already filled in:
 
 ```sh
-mv -i -- 'data/nadal.db' 'data/nadal.db.pre-0006.bak' && tn db migrate
+mv -i -- '/abs/path/to/nadal.db' '/abs/path/to/nadal.db.pre-0006.bak' && tn db migrate
 ```
 
-`--` stops `mv` reading a dash-prefixed path (a legitimate `TN_DB_PATH=-db`) as an option. `-i`
-refuses to overwrite silently. The backup name in the printed command is also chosen to be one that
-does not already exist, so recovering **twice** cannot destroy the first backup.
+The command the error prints always uses **absolute** paths, so you can run it from wherever you are
+standing, and neither argument can be mistaken for an option even if you set `TN_DB_PATH` to
+something dash-prefixed. `-i` refuses to overwrite silently, and `--` ends option parsing — belt and
+braces on top of the absolute paths. The backup name is also chosen to be one that does not already
+exist, so recovering **twice** cannot destroy the first backup.
 
 Deleting would work too — `tn db migrate` only needs the file gone — but there is no reason to make
 the recovery destructive, and keeping the backup is what makes the export step below possible
@@ -76,6 +78,9 @@ store `player_id` / `event_id` foreign keys, and a rebuilt database assigns new 
 a `select *` dump is unrestorable by construction: the numbers in it will point at different players.
 Events must carry `kind`, `starts_on` and `ends_on` too, because those are the arguments
 `tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` requires to recreate one.
+
+`data/nadal.db.pre-0006.bak` below stands in for the backup path — use the one the recovery command
+actually named, which is absolute and may not be under `data/` at all if you set `TN_DB_PATH`.
 
 ```sh
 # 0. The home team and the events — without these, steps below have nothing to attach to.

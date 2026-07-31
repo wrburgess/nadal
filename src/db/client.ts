@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { backfillNameKeys } from "./name-key.js";
 
@@ -107,14 +107,22 @@ export function runMigrations(path: string = dbPath()): void {
     } catch (err) {
       const chain = messageChain(err);
       if (TEAMS_URL_UNIQUE_FAILURE.test(chain)) {
+        // ABSOLUTE, always. Two reasons, and the second is the load-bearing one:
+        //   1. the reader may not be in the directory the run used, so a relative path in a
+        //      copy-pasteable recovery command is a trap;
+        //   2. an absolute path cannot begin with `-`, so it can never be parsed as an OPTION —
+        //      which closes the dash-prefixed-`TN_DB_PATH` hazard structurally rather than relying
+        //      on the `--` terminator alone (Codex round 3; see the note on `--` below).
+        const source = resolve(path);
         throw new Error(
           `${chain}\n\n` +
-            `This database (${path}) has two team rows sharing the same tennisrecord_url ` +
+            `This database (${source}) has two team rows sharing the same tennisrecord_url ` +
             "(issue #46) — migration 0006's unique index cannot apply until that is resolved.\n\n" +
-            "Recovery — moves the database aside rather than deleting it, so nothing is lost.\n" +
-            "`--` keeps a dash-prefixed path from being read as an option; `-i` refuses to " +
-            "overwrite silently if a backup appeared since this message:\n" +
-            `  mv -i -- ${shellQuote(path)} ${shellQuote(untakenBackupPath(path))} && tn db migrate\n\n` +
+            "Recovery — moves the database aside rather than deleting it, so nothing is lost. " +
+            "`-i` refuses to overwrite silently if a backup appeared since this message; `--` ends " +
+            "option parsing (kept as belt-and-braces — the absolute paths above already cannot be " +
+            "read as options):\n" +
+            `  mv -i -- ${shellQuote(source)} ${shellQuote(untakenBackupPath(source))} && tn db migrate\n\n` +
             "Then re-pull. Rosters, ratings and match history are all re-derivable from the " +
             "archived raw/ pages, but captain notes and availability exist ONLY in this file — " +
             "extract those from the backup first if you recorded any " +

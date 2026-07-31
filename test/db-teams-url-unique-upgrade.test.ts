@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runMigrations } from "../src/db/client.js";
 import { buildLegacyMigrationsFolder } from "./helpers/legacy-migrations.js";
@@ -90,10 +90,12 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     expect(message).not.toContain("data/nadal.db");
     // No destructive command anywhere in the guidance.
     expect(message).not.toMatch(/\brm\b/);
-    // `--` is the argument terminator, and it is what makes a dash-prefixed path safe. Codex round
-    // 2 (rated high): single-quoting protects shell METACHARACTERS but not `mv`'s own OPTION
-    // parsing, so a legitimate `TN_DB_PATH=-db` emitted as `mv '-db' …` is read as a flag, not a
-    // pathname. `-i` is the second, independent guard — see the clobber test below.
+    // Three independent guards, in the order they were learned:
+    //   `-i`  — refuses a silent overwrite (round 2's clobber finding; see the test below)
+    //   `--`  — ends option parsing (round 2: single-quoting protects shell METACHARACTERS but not
+    //           `mv`'s own OPTION parsing, so `TN_DB_PATH=-db` emitted as `mv '-db' …` reads as a flag)
+    //   absolute paths — round 3; the structural fix, since a path starting with `/` can never be
+    //           parsed as an option at all. Pinned by its own test below.
     expect(message).toMatch(/mv -i -- /);
     // Pins the PLAIN backup name for the "nothing taken yet" case. Without this the disambiguating
     // branch in `untakenBackupPath` is half-unkillable: a mutant that ALWAYS disambiguates still
@@ -146,6 +148,50 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     expect(message).toContain(`${dbPath}.pre-0006.`);
     // And the untouched prior backup still holds its content.
     expect(readFileSync(takenBackup, "utf8")).toBe("a previous backup holding captain notes");
+  });
+
+  // Codex round 3 recommended emitting absolute paths so neither argument can begin with `-`.
+  // Adopted — it closes the dash-prefixed-path class structurally instead of relying on `--`, and a
+  // recovery command is copy-pasted from wherever the reader happens to be standing, so a relative
+  // path is a trap regardless.
+  //
+  // (The round-3 finding this came attached to — that BSD `mv` on macOS rejects `--` — was DISPUTED
+  // and not accepted; see the PR thread. `mv -i -- -db -db.bak` exits 0 on this host. The `mv:
+  // illegal option -- -` text that finding cited comes from `mv --version`, which BSD `mv` has no
+  // flag for; its wording merely reads as though the terminator were rejected.)
+  it("REGRESSION: the recovery command emits an ABSOLUTE path even when given a relative one", () => {
+    const dbPath = freshDbPath();
+    const legacyDir = buildLegacyMigrationsFolder(5);
+    const sqlite = new Database(dbPath);
+    try {
+      migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
+      sqlite.exec(
+        `INSERT INTO teams (name, tennisrecord_url) VALUES ('Springfield A', 'https://tr/team?a')`,
+      );
+      sqlite.exec(
+        `INSERT INTO teams (name, tennisrecord_url) VALUES ('Springfield A 4.0', 'https://tr/team?a')`,
+      );
+    } finally {
+      sqlite.close();
+    }
+
+    // Address the very same file by a RELATIVE path, without chdir-ing into the repo or writing
+    // anything into it: `resolve(cwd, relative(cwd, p))` is exactly `p`.
+    const relativePath = relative(process.cwd(), dbPath);
+    expect(relativePath).not.toBe(dbPath); // the premise of this test
+    expect(isAbsolute(relativePath)).toBe(false);
+
+    let caught: unknown;
+    try {
+      runMigrations(relativePath);
+    } catch (err) {
+      caught = err;
+    }
+    const message = (caught as Error).message;
+
+    // The emitted `mv` source is the absolute path, not the relative one it was called with.
+    expect(message).toContain(`mv -i -- '${dbPath}'`);
+    expect(message).not.toContain(`'${relativePath}'`);
   });
 
   it("the same legacy database WITHOUT duplicates upgrades cleanly and the index exists", () => {
