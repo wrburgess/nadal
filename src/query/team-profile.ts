@@ -20,6 +20,11 @@ export type TeamTargetResolution =
  * `tennisrecord_url`; a bare name goes through `findTeamByName` (src/ingest/identity.ts, reused
  * unchanged — teams have no alias table, so no alias-folding wrapper is needed here the way
  * `resolvePlayerTarget` needs one for players).
+ *
+ * The `tr:` branch's `.all()[0]` is single-row by construction, not by convention: migration 0006
+ * (issue #46) makes a non-null `teams.tennisrecord_url` a DB-unique source identity, and
+ * `upsertTeam` (src/ingest/upsert.ts) resolves by that URL before ever touching the name path, so a
+ * rename can never leave two rows sharing one URL for this lookup to pick between arbitrarily.
  */
 export function resolveTeamTarget(db: Db, target: string): TeamTargetResolution {
   if (target.startsWith("tr:")) {

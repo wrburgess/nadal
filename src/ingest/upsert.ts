@@ -9,6 +9,7 @@ import {
   teamMemberships,
   teams,
 } from "../db/schema.js";
+import { AmbiguousIdentityError } from "./errors.js";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { Db } from "./db-types.js";
 
@@ -29,20 +30,41 @@ type RatingObservationInsert = typeof ratingObservations.$inferInsert;
 /**
  * The idempotent write primitives every pipeline (Task 7) writes through, inside ONE
  * `sqlite.transaction` per run (spec § Ingestion: re-run anytime, nothing duplicates; a parse
- * failure mid-pull writes nothing rather than half a team). Six of these seven target a named
- * unique index directly with `onConflictDoUpdate`/`onConflictDoNothing` — the natural key is
- * known and DB-enforced. `upsertPlayer` is the one exception: no players column is both
- * non-nullable and globally unique for a TennisRecord-only pull (a bare `tennisrecord_url` is not
- * DB-unique on purpose — two page URLs can legitimately name the same person after a fuzzy-match
- * merge decision), so its identity is resolved in the application layer by
- * `src/ingest/identity.ts` BEFORE this module ever runs; `upsertPlayer` takes that resolved id and
- * writes to it directly, which is exactly as idempotent for a fixed id.
+ * failure mid-pull writes nothing rather than half a team). FIVE of these seven target a named
+ * unique index directly with `onConflictDoUpdate`/`onConflictDoNothing` — the natural key is known
+ * and DB-enforced. TWO are exceptions: `upsertPlayer` and `upsertTeam`.
+ *
+ * `upsertPlayer`: no players column is both non-nullable and globally unique for a
+ * TennisRecord-only pull (a bare `tennisrecord_url` is not DB-unique on purpose — two page URLs
+ * can legitimately name the same person after a fuzzy-match merge decision), so its identity is
+ * resolved in the application layer by `src/ingest/identity.ts` BEFORE this module ever runs;
+ * `upsertPlayer` takes that resolved id and writes to it directly, which is exactly as idempotent
+ * for a fixed id. That non-uniqueness is scoped to PLAYERS ONLY — it never applied to `teams`, and
+ * reading it as a general rule for "any `tennisrecord_url` column" is exactly the misreading that
+ * produced issue #42 and, from it, #46: `teams.tennisrecord_url` IS DB-unique (migration 0006), a
+ * team has no fuzzy-merge mechanism, and `upsertTeam` below resolves by it directly rather than
+ * deferring to `identity.ts`.
+ *
+ * `upsertTeam`: covered by its own doc comment immediately below.
  */
 
 /**
- * Team's own natural key is `teams.name` (existing unique index `teams_name_unique`).
+ * Team's natural key is source-ID-first, name as fallback — spec § Ingestion's identity ladder,
+ * followed here rather than deferred to `src/ingest/identity.ts` (unlike `upsertPlayer` above)
+ * because a non-null `teams.tennisrecord_url` is DB-unique (migration 0006, issue #46) and a team
+ * has no fuzzy-merge mechanism, so there is no ambiguity tier to defer to.
  *
- * On conflict, only the columns this pull actually CARRIES are written. Writing `values.x ?? null`
+ * When `tennisrecordUrl` is given and non-null: look the team up BY URL first. A match UPDATES
+ * that row (applying the possibly-renamed `name` + recomputed `name_key`, and every other optional
+ * column through the same null-skipping `set` below) — this is what keeps a team's identity stable
+ * across an upstream rename, which a name-only conflict target cannot do (the #46 bug: the old row
+ * went unmatched and a second row appeared carrying the same URL). A rename whose target name is
+ * already held by a DIFFERENT row is a merge decision, out of bounds per spec § Ingestion, so it
+ * throws `AmbiguousIdentityError` with both names as candidates rather than guessing — `pullTeam`
+ * already catches this error type (team-pull.ts) and maps it to `{kind:"ambiguous"}`, so this is no
+ * new error path at any call site. No match falls through to today's name-conflict path unchanged.
+ *
+ * On either path, only the columns this pull actually CARRIES are written. Writing `values.x ?? null`
  * across the board instead would mean a TennisRecord pull — which knows nothing about
  * `tennislink_url` and passes `district: null` unconditionally — silently erased whatever another
  * source had already recorded there, on every re-pull. Nothing sets those columns today, so the
@@ -62,6 +84,8 @@ export function upsertTeam(db: Db, values: TeamInsert): TeamRow {
   // equivalence argument, recorded where the branch used to be so it is not re-added.
   const key = nameKey(values.name);
 
+  // Note: `name` is deliberately NOT in this `set` — it is the conflict TARGET on the name-fallback
+  // path below, and is added explicitly (it may be changing) only on the URL-match UPDATE path.
   const set: Partial<TeamInsert> = { nameKey: key };
   if (values.section !== undefined && values.section !== null) set.section = values.section;
   if (values.district !== undefined && values.district !== null) set.district = values.district;
@@ -70,6 +94,35 @@ export function upsertTeam(db: Db, values: TeamInsert): TeamRow {
   }
   if (values.tennisrecordUrl !== undefined && values.tennisrecordUrl !== null) {
     set.tennisrecordUrl = values.tennisrecordUrl;
+  }
+
+  if (values.tennisrecordUrl !== undefined && values.tennisrecordUrl !== null) {
+    // Single-row BY CONSTRUCTION: `teams_tennisrecord_url_unique` (migration 0006) makes a
+    // non-null tennisrecord_url a unique source identity, so `[0]` is never an arbitrary pick.
+    const existing = db
+      .select()
+      .from(teams)
+      .where(eq(teams.tennisrecordUrl, values.tennisrecordUrl))
+      .all()[0];
+
+    if (existing !== undefined) {
+      if (existing.name !== values.name) {
+        // A rename whose target name is ALREADY HELD BY A DIFFERENT ROW is a merge decision —
+        // spec § Ingestion puts that out of bounds entirely. `teams.name` is itself DB-unique, so
+        // writing straight through would otherwise surface as a raw UNIQUE constraint failure
+        // instead of the ladder's own reportable outcome.
+        const collision = db.select().from(teams).where(eq(teams.name, values.name)).all()[0];
+        if (collision !== undefined) {
+          throw new AmbiguousIdentityError([existing.name, values.name]);
+        }
+      }
+      return db
+        .update(teams)
+        .set({ ...set, name: values.name })
+        .where(eq(teams.id, existing.id))
+        .returning()
+        .get();
+    }
   }
 
   return db

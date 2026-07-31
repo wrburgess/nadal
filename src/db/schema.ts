@@ -58,6 +58,15 @@ export const teams = sqliteTable("teams", {
   uniqueIndex("team_home_unique").on(t.isHome).where(sql`is_home = 1`),
   index("teams_name_key_idx").on(t.nameKey),
   index("teams_name_key_length_idx").on(t.nameKeyLength),
+  // Issue #46: a non-null `tennisrecord_url` IS a unique source identity (spec § Ingestion's
+  // "source IDs first" step) — unlike `players.tennisrecord_url` (see upsert.ts's module doc for
+  // why that one stays deliberately non-unique), a team has no fuzzy-merge mechanism, so nothing
+  // ever legitimately needs two team rows sharing one URL. Partial for the same NULLs-are-distinct
+  // reason as every other partial index here: most teams (opponent stubs created by name alone,
+  // e.g. team-pull.ts's schedule loop) carry no tennisrecord_url at all.
+  uniqueIndex("teams_tennisrecord_url_unique")
+    .on(t.tennisrecordUrl)
+    .where(sql`tennisrecord_url IS NOT NULL`),
 ]);
 
 export const events = sqliteTable("events", {

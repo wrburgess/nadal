@@ -25,6 +25,7 @@ import { nameKey } from "../src/db/name-key.js";
 import { players, teams } from "../src/db/schema.js";
 import { findPlayerByName, resolvePlayer, resolveTeam } from "../src/ingest/identity.js";
 import { resolvePlayerTarget } from "../src/query/player-profile.js";
+import { resolveTeamTarget } from "../src/query/team-profile.js";
 import { buildNamePool } from "./helpers/players.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -131,5 +132,32 @@ describe("identity resolution never full-table-scans a keyed table", () => {
     const band = entries.find((e) => /name_key_length["'`\]\s]*>=/i.test(e.sql));
     expect(band, "no name_key_length band query was issued at all").toBeDefined();
     expect(band?.plan).toMatch(/USING INDEX players_name_key_length_idx/i);
+  });
+
+  // Issue #46 / docs/findings.md :183 — the prior guard shipped scoped to the paths #32 named
+  // (the no-ID tiers), so the tier-1 `tennisrecord_url` read sat beside four green assertions
+  // without tripping one. These two extend the guard to the CLASS: both are index-backed only
+  // because of the Task 2 partial unique index (`teams_tennisrecord_url_unique`).
+  it("resolveTeam WITH a tennisrecordUrl issues no scan of teams", () => {
+    const entries = plansFor((db) => {
+      resolveTeam(db, {
+        tennisrecordUrl: "https://tr/team?nonexistent",
+        name: "A Query Team That Matches No One At All",
+      });
+    });
+    expectNoScans(entries);
+    const urlLookup = entries.find((e) => /tennisrecord_url/i.test(e.sql));
+    expect(urlLookup, "no tennisrecord_url lookup was issued at all").toBeDefined();
+    expect(urlLookup?.plan).toMatch(/USING INDEX teams_tennisrecord_url_unique/i);
+  });
+
+  it("resolveTeamTarget('tr:...') issues no scan of teams", () => {
+    const entries = plansFor((db) => {
+      resolveTeamTarget(db, "tr:https://tr/team?nonexistent");
+    });
+    expectNoScans(entries);
+    const urlLookup = entries.find((e) => /tennisrecord_url/i.test(e.sql));
+    expect(urlLookup, "no tennisrecord_url lookup was issued at all").toBeDefined();
+    expect(urlLookup?.plan).toMatch(/USING INDEX teams_tennisrecord_url_unique/i);
   });
 });

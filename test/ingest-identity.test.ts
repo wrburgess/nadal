@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
 import { playerAliases, players, teams } from "../src/db/schema.js";
-import { resolvePlayer, resolveTeam } from "../src/ingest/identity.js";
+import { findTeamByName, resolvePlayer, resolveTeam } from "../src/ingest/identity.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 describe("resolvePlayer", () => {
@@ -196,6 +196,73 @@ describe("identity ladder — Unicode case folding", () => {
       expect(resolved.kind).toBe("matched");
       if (resolved.kind === "matched") expect(resolved.row.id).toBe(created.row.id);
       expect(db.select().from(players).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Issue #46, Task 4: `teams.name_key` carries only a PLAIN index — unlike `teams.name`, it is not
+// DB-unique, so "Springfield A" and "springfield a" can both exist and fold to the same key. The
+// doc comment above `resolveTeam` claimed tier 2 was a single-row lookup "because the column is
+// unique," which was false of the column actually queried.
+describe("findTeamByName ambiguity (#46)", () => {
+  useTnDbPath();
+
+  function freshDb() {
+    runMigrations();
+    return openDb();
+  }
+
+  it("REGRESSION: two rows folding to the same name_key are ambiguous, not an arbitrary pick", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      db.insert(teams)
+        .values([
+          { name: "Springfield A", nameKey: nameKey("Springfield A") },
+          { name: "springfield a", nameKey: nameKey("springfield a") },
+        ])
+        .run();
+
+      const result = findTeamByName(db, "Springfield A");
+
+      expect(result.kind).toBe("ambiguous");
+      if (result.kind === "ambiguous") {
+        expect(result.candidates.map((t) => t.name).sort()).toEqual(["Springfield A", "springfield a"]);
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+describe("resolveTeam tier 2 ambiguity (#46)", () => {
+  useTnDbPath();
+
+  function freshDb() {
+    runMigrations();
+    return openDb();
+  }
+
+  it("REGRESSION: two rows folding to the same name_key resolve as ambiguous, and no row is created", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      db.insert(teams)
+        .values([
+          { name: "Springfield A", nameKey: nameKey("Springfield A") },
+          { name: "springfield a", nameKey: nameKey("springfield a") },
+        ])
+        .run();
+      const before = db.select().from(teams).all();
+
+      const result = resolveTeam(db, { name: "Springfield A" });
+
+      expect(result.kind).toBe("ambiguous");
+      if (result.kind === "ambiguous") {
+        expect(result.candidates.map((t) => t.name).sort()).toEqual(["Springfield A", "springfield a"]);
+      }
+      // Never a silent merge, never a row created — re-read the table rather than trust the kind alone.
+      expect(db.select().from(teams).all()).toEqual(before);
     } finally {
       sqlite.close();
     }

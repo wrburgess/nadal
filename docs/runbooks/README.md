@@ -9,6 +9,8 @@ exercises, and runbooks double as HC post-merge checklists.
   availability and captain notes conversationally
 - [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md) — `tn lineup plan` → read the guess
   critically; record availability behind `tn event add`
+- [db-migration-recovery.md](db-migration-recovery.md) — `tn db migrate` fails on an existing
+  database; the one-line recovery and why losing the database costs nothing by design
 
 Planned (spec § Testing):
 

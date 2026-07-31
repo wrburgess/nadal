@@ -43,6 +43,13 @@
       "when": 1785473737395,
       "tag": "0005_military_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785511662427,
+      "tag": "0006_steep_thunderbolt_ross",
+      "breakpoints": true
     }
   ]
 }

@@ -140,7 +140,11 @@ export function findTeamByName(db: Db, name: string): NameLookup<TeamRow> {
   assertTeamsKeyed(db);
   const key = nameKey(name);
 
+  // `teams.name_key` carries only a PLAIN index (unlike `teams.name`, which is DB-unique) — two
+  // rows CAN fold to the same key ("Springfield A" / "springfield a"), so more than one match here
+  // is ambiguous, never an arbitrary `[0]`.
   const exact = db.select().from(teams).where(eq(teams.nameKey, key)).all();
+  if (exact.length > 1) return { kind: "ambiguous", candidates: exact };
   if (exact[0] !== undefined) return { kind: "found", row: exact[0] };
 
   const fuzzy = fuzzyTeamBand(db, nameKeyLength(key)).filter((row) => {
@@ -259,9 +263,12 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
 
 /**
  * Resolve a team against the same three-tier shape as `resolvePlayer`, scoped to
- * `teams.tennisrecord_url` (tier 1) and `teams.name` (tiers 2-3; already unique, so tier 2 is a
- * single-row lookup rather than an alias join). Same "never a silent merge" contract on tier 3.
- * Tiers 2-3 are indexed on `teams.name_key` / `teams.name_key_length`, same as `resolvePlayer`.
+ * `teams.tennisrecord_url` (tier 1 — DB-unique since migration 0006, issue #46, so `idMatch[0]` is
+ * single-row by construction) and `teams.name_key` (tiers 2-3). Tier 2 is NOT a single-row lookup:
+ * `teams.name` is DB-unique, but `name_key` (the JS-folded comparison key it queries) carries only
+ * a plain index, so two rows CAN fold to the same key — more than one match is ambiguous, mirroring
+ * `resolvePlayer`'s own `exactIds.length > 1` branch. Same "never a silent merge" contract on tier
+ * 3. Tiers 2-3 are indexed on `teams.name_key` / `teams.name_key_length`, same as `resolvePlayer`.
  */
 export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution<TeamRow> {
   if (input.tennisrecordUrl !== undefined && input.tennisrecordUrl !== null) {
@@ -277,6 +284,7 @@ export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution
   const key = nameKey(input.name);
 
   const exact = db.select().from(teams).where(eq(teams.nameKey, key)).all();
+  if (exact.length > 1) return { kind: "ambiguous", candidates: exact };
   if (exact[0] !== undefined) return { kind: "matched", row: exact[0] };
 
   const fuzzyCandidates = fuzzyTeamBand(db, nameKeyLength(key)).filter((t) => {
