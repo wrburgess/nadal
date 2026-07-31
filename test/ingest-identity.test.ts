@@ -405,4 +405,100 @@ describe("resolveRosterPlayer", () => {
       sqlite.close();
     }
   });
+
+  // Issue #49 (PR #52, main) added nullable `team_memberships.retired_at`; every OTHER
+  // current-roster read (`getTeamProfile`, `getLineupPlan`) and write gate (`setAvailability`,
+  // `addCaptainNote`) filters it. `resolveRosterPlayer` merged in without doing so (found by the
+  // orchestrator's own audit after this branch merged main) — a retired player still resolved as
+  // on-roster for a scorecard, through both the bare-name tiers and the prefix-ID `isOnRoster`
+  // check, defeating the exact invariant this function exists to enforce.
+  describe("retired team_memberships rows (#49) are excluded from the roster, like every sibling read", () => {
+    it("REGRESSION: a bare name for a player RETIRED from the named team is not matched", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.insert(teamMemberships)
+          .values({ playerId: player.id, teamId: team.id, eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" })
+          .run();
+
+        const result = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: team.id });
+
+        // Reported, not assumed: with the retired row excluded from the roster query entirely, the
+        // player cannot appear in tier 2 (exact) or tier 3 (fuzzy) — nothing on file for this team
+        // to be ambiguous WITH — so this resolves the same as a name matching no one at all.
+        expect(result.kind).toBe("unresolved");
+        if (result.kind === "unresolved") expect(result.candidates).toEqual([]);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION: a usta: prefix-ID for a player RETIRED from the named team is off-roster, not matched", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+        db.insert(teamMemberships)
+          .values({ playerId: player.id, teamId: team.id, eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" })
+          .run();
+
+        const result = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
+
+        expect(result.kind).toBe("off-roster");
+        if (result.kind === "off-roster") expect(result.row.id).toBe(player.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a CURRENT (non-retired) member still resolves normally, by both a bare name and a prefix-ID — the guard must not over-refuse", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+        db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+        const byName = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: team.id });
+        const byId = resolveRosterPlayer(db, { name: "usta:99999", teamId: team.id });
+
+        expect(byName.kind).toBe("matched");
+        if (byName.kind === "matched") expect(byName.row.id).toBe(player.id);
+        expect(byId.kind).toBe("matched");
+        if (byId.kind === "matched") expect(byId.row.id).toBe(player.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a player retired from team A but CURRENT on team B resolves for B, and is off-roster/unresolved for A", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const teamA = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        const teamB = seedTeam(db, "Report Opponent");
+        const player = seedPlayer(db, "Ada Ashby");
+        db.update(players).set({ ustaUaid: "99999" }).where(eq(players.id, player.id)).run();
+        db.insert(teamMemberships)
+          .values({ playerId: player.id, teamId: teamA.id, eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" })
+          .run();
+        db.insert(teamMemberships).values({ playerId: player.id, teamId: teamB.id, eventId: null }).run();
+
+        const forA = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: teamA.id });
+        const forAById = resolveRosterPlayer(db, { name: "usta:99999", teamId: teamA.id });
+        const forB = resolveRosterPlayer(db, { name: "Ada Ashby", teamId: teamB.id });
+        const forBById = resolveRosterPlayer(db, { name: "usta:99999", teamId: teamB.id });
+
+        expect(forA.kind).toBe("unresolved");
+        expect(forAById.kind).toBe("off-roster");
+        expect(forB.kind).toBe("matched");
+        if (forB.kind === "matched") expect(forB.row.id).toBe(player.id);
+        expect(forBById.kind).toBe("matched");
+        if (forBById.kind === "matched") expect(forBById.row.id).toBe(player.id);
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
 });

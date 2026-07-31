@@ -325,15 +325,25 @@ export type RosterPlayerResolution =
   | { kind: "unresolved"; candidates: PlayerRow[] }
   | { kind: "off-roster"; row: PlayerRow };
 
-/** True when `playerId` has a `team_memberships` row for `teamId` — the roster-boundary check every
- * tier of `resolveRosterPlayer` must pass, prefix-IDs included (Codex adversarial review of PR #54,
- * High finding 1: the three prefix branches used to skip this entirely). */
+/** True when `playerId` has a CURRENT (non-retired) `team_memberships` row for `teamId` — the
+ * roster-boundary check every tier of `resolveRosterPlayer` must pass, prefix-IDs included (Codex
+ * adversarial review of PR #54, High finding 1: the three prefix branches used to skip this
+ * entirely). `isNull(retiredAt)` matches issue #49's own idiom (`src/query/lineup.ts:84`): a
+ * retired player must never resolve as on-roster here either, same as every sibling read/write
+ * gate #49 named (`getTeamProfile`, `getLineupPlan`, `setAvailability`, `addCaptainNote`) — a
+ * scorecard-extracted name is exactly the kind of write that invariant exists to protect. */
 function isOnRoster(db: Db, playerId: number, teamId: number): boolean {
   return (
     db
       .select({ id: teamMemberships.id })
       .from(teamMemberships)
-      .where(and(eq(teamMemberships.playerId, playerId), eq(teamMemberships.teamId, teamId)))
+      .where(
+        and(
+          eq(teamMemberships.playerId, playerId),
+          eq(teamMemberships.teamId, teamId),
+          isNull(teamMemberships.retiredAt),
+        ),
+      )
       .all().length > 0
   );
 }
@@ -387,10 +397,13 @@ export function resolveRosterPlayer(db: Db, input: ResolveRosterPlayerInput): Ro
   assertPlayersKeyed(db);
   assertPlayerAliasesKeyed(db);
 
+  // Issue #49: excludes a retired member the same way `isOnRoster` above does, and the same way
+  // every sibling current-roster read/write gate does (`src/query/lineup.ts:84`'s idiom) — a
+  // retired player must not be a fuzzy-tier candidate here any more than an exact one.
   const rosterPlayerIds = db
     .select({ playerId: teamMemberships.playerId })
     .from(teamMemberships)
-    .where(eq(teamMemberships.teamId, input.teamId))
+    .where(and(eq(teamMemberships.teamId, input.teamId), isNull(teamMemberships.retiredAt)))
     .all()
     .map((r) => r.playerId);
   if (rosterPlayerIds.length === 0) return { kind: "unresolved", candidates: [] };
