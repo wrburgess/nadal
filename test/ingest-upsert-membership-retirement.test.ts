@@ -84,16 +84,33 @@ describe("retireAbsentMemberships", () => {
     const { db, sqlite } = freshDb();
     try {
       const team = seedTeam(db, "Team A");
+      // An OBSERVED league member, present only so `observedPlayerIds` is non-empty. Without it the
+      // empty-set guard returns before any SQL is built, and this test would pass whether or not
+      // `event_id IS NULL` is in the predicate at all — the exact false green rules/testing.md
+      // names ("never let a fixture satisfy a loop's exit condition before the case under test is
+      // reached"). Verified by mutation: deleting `isNull(teamMemberships.eventId)` from
+      // `retireAbsentMemberships` left all 989 suite tests green until this line existed.
+      const observed = seedPlayer(db, "Observed League Player");
+      upsertMembership(db, { playerId: observed.id, teamId: team.id, eventId: null });
+
       const player = seedPlayer(db, "Event Player");
       const eventRow = db.insert(events).values({ name: "Sectionals", kind: "tournament" }).returning().get();
       db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: eventRow.id }).run();
 
-      const count = retireAbsentMemberships(db, { teamId: team.id, observedPlayerIds: [], retiredAt: "2026-07-31" });
+      // `player` is absent from the observed set, so ONLY the event_id scope can spare their row.
+      const count = retireAbsentMemberships(db, {
+        teamId: team.id,
+        observedPlayerIds: [observed.id],
+        retiredAt: "2026-07-31",
+      });
 
       expect(count).toBe(0);
-      const rows = rowsFor(db, team.id);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]!.retiredAt).toBeNull();
+      const eventRowAfter = rowsFor(db, team.id).find((r) => r.eventId === eventRow.id)!;
+      expect(eventRowAfter.retiredAt).toBeNull();
+      // The observed league member is untouched too — this test must fail on the event_id scope,
+      // not incidentally on some other row changing.
+      const leagueRowAfter = rowsFor(db, team.id).find((r) => r.playerId === observed.id)!;
+      expect(leagueRowAfter.retiredAt).toBeNull();
     } finally {
       sqlite.close();
     }

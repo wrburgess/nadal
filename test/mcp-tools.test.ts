@@ -21,6 +21,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
 import { sixMonthsAgo } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
+import { removeRosterRow } from "./helpers/roster-html.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
 
@@ -432,6 +433,39 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(textOf(result)) as { team: string; rosterCount: number };
     expect(payload.rosterCount).toBeGreaterThan(0);
+
+    vi.restoreAllMocks();
+  });
+
+  // Issue #49. The MCP handler hand-builds its result object rather than spreading `pullTeam`'s,
+  // so a field added to the CLI summary does NOT reach MCP on its own — the first cut of this PR
+  // reported `retired=N` on the CLI while the MCP tool silently omitted it, letting an MCP-driven
+  // pull retire real teammates with nothing in the response to say so. Asserted with a real
+  // retirement (not `toBe(0)` on a first pull, which a hardcoded zero would also satisfy).
+  it("team_pull over MCP reports retiredCount, so an MCP-driven pull cannot silently retire a departed member", async () => {
+    runMigrations();
+    const teamFixture = loadFixture("tennisrecord/team");
+    let body = teamFixture.html;
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body,
+      fetchedAt: new Date().toISOString(),
+    }));
+
+    const client = await connectedClient();
+    const first = await client.callTool({ name: "team_pull", arguments: { target: teamFixture.source.url } });
+    expect(first.isError).not.toBe(true);
+    expect((JSON.parse(textOf(first)) as { retiredCount: number }).retiredCount).toBe(0);
+
+    // Same URL, a roster page that no longer lists one member — the departure this must surface.
+    body = removeRosterRow(teamFixture.html, "Ellis Eastwick");
+    expect(body).not.toBe(teamFixture.html);
+    const second = await client.callTool({ name: "team_pull", arguments: { target: teamFixture.source.url } });
+    expect(second.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(second)) as { rosterCount: number; retiredCount: number };
+    expect(payload.rosterCount).toBe(17);
+    expect(payload.retiredCount).toBe(1);
 
     vi.restoreAllMocks();
   });
