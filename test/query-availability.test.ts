@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { availability, events, players, teamMemberships, teams } from "../src/db/schema.js";
@@ -445,6 +446,81 @@ describe("setAvailability with overlapping events", () => {
       ).toThrow(EventDoesNotCoverDayError);
     } finally {
       sqlite.close();
+    }
+  });
+});
+
+
+// The OPPOSITE ordering from `query-events.test.ts`'s atomicity test, and the reason the invariant
+// needs serializing on both sides (Codex review of PR #47 round 13, rated high). `addEvent` holding
+// a lock closes the race where the event moves SECOND. This closes the one where it moves FIRST:
+// resolve an event here, let another process narrow it — finding nothing to strand, because nothing
+// is committed yet — and the upsert lands a row outside the range that now exists.
+describe("setAvailability is atomic against a concurrent event-range change", () => {
+  const dbFixture = useTnDbPath();
+
+  it("holds the write lock from event resolution through the upsert", () => {
+    runMigrations();
+    {
+      const { db, sqlite } = openDb(dbFixture.path());
+      const team = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+      setHomeTeam(db, team.id);
+      const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      db.insert(events)
+        .values({ name: "Springfield Sectionals 2026", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .run();
+      sqlite.close();
+    }
+
+    const other = new Database(dbFixture.path());
+    other.pragma("journal_mode = WAL");
+    other.pragma("busy_timeout = 0"); // fail fast rather than hang
+
+    let sawBegin = false;
+    let attempted = false;
+    let narrowingSucceeded: boolean | null = null;
+
+    // Same seam and the same off-by-one care as the events-side test: `verbose` fires JUST BEFORE a
+    // statement runs, so the lock is not held while `BEGIN IMMEDIATE` itself is announced — the
+    // interleaving has to be attempted on the following statement.
+    const { db, sqlite } = openDb(dbFixture.path(), {
+      verbose: (message) => {
+        if (attempted || typeof message !== "string") return;
+        if (!sawBegin) {
+          sawBegin = message.toLowerCase().includes("begin immediate");
+          return;
+        }
+        attempted = true;
+        try {
+          // The narrowing that would strand the row this transaction is about to write.
+          other.prepare("update events set ends_on = ? where name = ?").run("2026-08-28", "Springfield Sectionals 2026");
+          narrowingSucceeded = true;
+        } catch {
+          narrowingSucceeded = false;
+        }
+      },
+    });
+
+    try {
+      const playerId = db.select().from(players).all()[0]!.id;
+      const result = setAvailability(db, { playerId, day: "2026-08-30", status: "available" });
+
+      expect(sawBegin, "the transaction must be BEGIN IMMEDIATE, not deferred").toBe(true);
+      expect(attempted, "the interleaving must actually have been attempted mid-transaction").toBe(true);
+      expect(
+        narrowingSucceeded,
+        "another process must not be able to narrow the event while this write is resolving it",
+      ).toBe(false);
+
+      // The row landed against an event that still covers its day — the invariant held.
+      const event = db.select().from(events).all()[0]!;
+      expect(result.eventId).toBe(event.id);
+      expect(event.endsOn).toBe("2026-08-30");
+      expect(rows(db)[0]).toMatchObject({ day: "2026-08-30", eventId: event.id });
+    } finally {
+      sqlite.close();
+      other.close();
     }
   });
 });

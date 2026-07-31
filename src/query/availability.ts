@@ -171,34 +171,52 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
   const status = statusResult.data;
   const day = requireIsoDay(input.day);
 
-  const homeTeam = requireHomeTeam(db);
+  // Every DB read and the write run in ONE `BEGIN IMMEDIATE` transaction — the OTHER half of the
+  // event-range invariant, and it has to be here as well as in `addEvent` because the race runs in
+  // both directions.
+  //
+  // `addEvent` serializing its own check-then-update closes the ordering where the event moves
+  // second. This closes the one where it moves FIRST: without it, this function resolves an event
+  // (and its range), another process narrows that event — finding no availability to strand,
+  // because none is committed yet — and this upsert then lands a row outside the range that now
+  // exists. Same stranded row, opposite order, and `addEvent`'s guard cannot see it. Two
+  // `IMMEDIATE` writers cannot overlap, so whichever commits first, the second observes the
+  // committed state and validates against reality rather than a snapshot it already lost.
+  // (Found by the independent Codex review of PR #47, rounds 12-13, rated high.)
+  //
+  // NOTE for a future caller: this takes a connection, not a transaction handle. Nesting would
+  // become a savepoint and the `immediate` behavior would not apply — if this ever needs to compose
+  // inside a larger transaction, that outer transaction must itself be `IMMEDIATE`.
+  return db.transaction((tx) => {
+    const homeTeam = requireHomeTeam(tx);
 
-  const onRoster =
-    db
-      .select({ id: teamMemberships.id })
-      .from(teamMemberships)
-      .where(and(eq(teamMemberships.playerId, input.playerId), eq(teamMemberships.teamId, homeTeam.id)))
-      .all().length > 0;
-  if (!onRoster) {
-    throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);
-  }
+    const onRoster =
+      tx
+        .select({ id: teamMemberships.id })
+        .from(teamMemberships)
+        .where(and(eq(teamMemberships.playerId, input.playerId), eq(teamMemberships.teamId, homeTeam.id)))
+        .all().length > 0;
+    if (!onRoster) {
+      throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);
+    }
 
-  const candidateEvents = eventsForDay(db, day);
-  if (candidateEvents.length === 0) {
-    throw new NoEventForDayError(`no event on file covers day "${day}"`);
-  }
+    const candidateEvents = eventsForDay(tx, day);
+    if (candidateEvents.length === 0) {
+      throw new NoEventForDayError(`no event on file covers day "${day}"`);
+    }
 
-  const event = selectEvent(db, day, candidateEvents, input.eventName);
+    const event = selectEvent(tx, day, candidateEvents, input.eventName);
 
-  const row = db
-    .insert(availability)
-    .values({ playerId: input.playerId, eventId: event.id, day, status })
-    .onConflictDoUpdate({
-      target: [availability.playerId, availability.eventId, availability.day],
-      set: { status },
-    })
-    .returning()
-    .get();
+    const row = tx
+      .insert(availability)
+      .values({ playerId: input.playerId, eventId: event.id, day, status })
+      .onConflictDoUpdate({
+        target: [availability.playerId, availability.eventId, availability.day],
+        set: { status },
+      })
+      .returning()
+      .get();
 
-  return { availabilityId: row.id, eventId: event.id, eventName: event.name, status: row.status };
+    return { availabilityId: row.id, eventId: event.id, eventName: event.name, status: row.status };
+  }, { behavior: "immediate" });
 }
