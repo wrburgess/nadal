@@ -65,36 +65,55 @@ job — see [db-migration-recovery.md](db-migration-recovery.md).
 
 ### 2. Re-pull every already-scouted team, live, cascading rosters
 
-**Do not paste a team name into a command template.** A team name is *scraped data* — it comes from
-TennisRecord and lands in the database unaltered — and the enumeration query above prints it raw. A
-name containing a double quote closes the quoted argument, and everything after it is read by your
-shell as further commands: substituting `A"; touch /tmp/pwn; #` into `tn team pull "<name>"` runs
-`touch`. That is this repo's own standing lesson (`docs/findings.md`, the #56/#57 entry) pointed at
-a runbook instead of an error message — handing a human something executable makes the payload the
-shell's problem, and stored data must never become syntax.
+**Never type a team name into a command, and never paste one between quotes.** A team name is
+*scraped data* — it comes from TennisRecord and lands in the database unaltered. Pasting it into
+`tn team pull "<name>"` lets a `"` close the argument and run whatever follows; pasting it into
+`team='<name>'` lets an `'` do the same, and apostrophes in team names are ordinary, not exotic.
+This is this repo's own #56/#57 lesson (`docs/findings.md`) with the roles swapped: there a
+*message* handed a human something executable, here a *runbook* would. Either way stored data must
+never become syntax, and no amount of quoting advice fixes an instruction whose final step is
+"splice this text into a command".
 
-Let the shell carry each name as a **value**, never as text you retype into a command:
+So the refresh **never carries a name at all.** It drives on each team's stored TennisRecord URL,
+which `tn team pull` accepts directly (`src/ingest/team-pull.ts`'s `resolveTargetUrl`: an
+`https://` target is used as-is). A URL is percent-encoded and cannot contain a space, a quote or a
+newline, so it is safe *as transport*, not merely safe once quoted:
 
 ```sh
 DB="${TN_DB_PATH:-data/nadal.db}"
-sqlite3 "$DB" "select name from teams order by name" |
-  while IFS= read -r team; do
-    tn team pull "$team" --players
-  done
+[ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
+
+# Enumerate to a file, NOT into a pipe. `sqlite3 … | while …` reports the STATUS OF THE LOOP: an
+# unreadable or corrupt database emits no rows, the loop body never runs, and the pipeline exits 0 —
+# a total enumeration failure that reads exactly like "no teams to refresh".
+urls="$(mktemp)" || exit 1
+sqlite3 "$DB" "select tennisrecord_url from teams where tennisrecord_url is not null order by name" > "$urls" \
+  || { echo "STOP: could not read teams from $DB" >&2; rm -f "$urls"; exit 1; }
+
+failed=0
+# Redirected, not piped, so the loop runs in THIS shell and `failed` survives it.
+while IFS= read -r url; do
+  [ -n "$url" ] || continue
+  tn team pull "$url" --players || { echo "FAILED: $url" >&2; failed=1; }
+done < "$urls"
+rm -f "$urls"
+
+[ "$failed" -eq 0 ] || echo "STOP: at least one pull failed — this refresh is PARTIAL" >&2
 ```
 
-`"$team"` is expanded as a single argument and is never re-parsed as syntax, so no name can inject
-anything, whatever characters it holds. If you would rather drive it one team at a time, keep the
-same property — assign first, then run:
+The `failed` accumulator is not decoration: without it a failed pull followed by a successful one
+leaves the loop's exit status 0, and a partial refresh reads as a clean one. **A team with no stored
+`tennisrecord_url` is skipped by the query** — deliberately, since there is nothing to pull it from;
+the enumeration in *Before you start* prints that column so you can see which teams those are.
+
+To drive one team at a time, read it at a **prompt** rather than pasting it into shell syntax —
+the same `IFS= read -r` pattern [db-migration-recovery.md](db-migration-recovery.md) and
+[backup-restore.md](backup-restore.md) use. What you type at a prompt is never parsed by the shell:
 
 ```sh
-team='Paste the name between these single quotes'
+printf 'team name (or its TennisRecord URL): '; IFS= read -r team
 tn team pull "$team" --players
 ```
-
-(The one input this does not handle is a team name containing a literal newline, which the loop
-reads as two records. That fails *closed* — `tn` reports an unresolved target for both halves and
-writes nothing — so it is a lookup failure, not an injection. See *Known limitations*.)
 
 No `--from`/`--source-url` here — that pair replays a **previously saved** page (what the dry run
 and this repo's own tests use to stay offline); leaving both off is what makes this command fetch
@@ -119,11 +138,11 @@ row with no profile link on the page at all, which cascades can never reach).
 
 ### 3. Pull any player individually who needs it
 
-Same rule as step 2 — a player name is scraped data too, so assign it before you use it rather than
-typing it inside the command:
+Same rule as step 2 — a player name is scraped data too, so read it at a prompt rather than pasting
+it into shell syntax:
 
 ```sh
-player='Paste the name between these single quotes'
+printf 'player name (or their TennisRecord URL): '; IFS= read -r player
 tn player pull "$player"
 ```
 
@@ -143,7 +162,7 @@ whose dossier needs NTRP or WTN, run the full procedure in
 A readback distinct from trusting each command's own `status=ok`:
 
 ```sh
-team='Paste the name between these single quotes'
+printf 'team name: '; IFS= read -r team
 tn team show "$team"
 ```
 
@@ -169,6 +188,15 @@ the data here what I expect" and ends at a printed dossier.
   anything TennisLink would have supplied (#27, unbuilt).
 - **No `tn team list` yet.** *Before you start*'s `sqlite3` query is the substitute until it ships
   (`docs/cli/GRAMMAR.md`'s *Planned* list).
+- **A team name containing a literal newline cannot be driven by name, and an earlier draft of this
+  runbook was wrong about why that is safe.** It claimed a newline-bearing name would simply split
+  into two records that both fail to resolve, writing nothing. That is false: if a team is stored as
+  `North⏎South` while teams named `North` and `South` also exist, a name-driven loop resolves both
+  halves to those *unrelated* teams and live-pulls them — updating and possibly retiring rosters
+  nobody asked to touch. This is exactly why step 2 drives on the stored **URL** instead: a
+  percent-encoded URL cannot contain a newline, so the transport removes the failure mode rather
+  than documenting it. The single-team prompt reads one line, so such a name cannot be entered
+  whole there either — use its TennisRecord URL.
 - **No automated check verifies this runbook's prose.** `test/cli-grammar-parity.test.ts` parity-checks
   only `docs/cli/GRAMMAR.md`'s `## Commands` table (noun/verb/summary, in both directions) — it has
   no opinion on anything under `docs/runbooks/`, and nothing else reads this file either.

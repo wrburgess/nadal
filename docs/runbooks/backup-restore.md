@@ -46,8 +46,14 @@ case "$BAK" in
   *'"'*|*'
 '*) echo "STOP: backup path must not contain a double quote or newline; got '$BAK'" >&2; exit 1 ;;
 esac
+# And the SOURCE must already exist. `sqlite3 "$DB"` on a path with no file CREATES an empty
+# database, which `.backup` then faithfully copies — producing a real, structurally valid, EMPTY
+# backup. Step 2's `integrity_check` answers `ok` for it, because it is a perfectly good empty
+# database. A typo in the source path is otherwise indistinguishable from a successful backup right
+# up until the row counts, and by then you may already have discarded what you were protecting.
+[ -f "$DB" ] || { echo "STOP: no database at $DB — nothing to back up" >&2; exit 1; }
 
-sqlite3 "$DB" ".backup \"$BAK\""
+sqlite3 "$DB" ".backup \"$BAK\"" || { echo "STOP: .backup failed" >&2; exit 1; }
 ```
 
 Both prompts use `IFS= read -r` verbatim, same as
@@ -91,6 +97,10 @@ avoidable by not choosing a backup destination that contains one.
 ### 2. Verify the backup — a passing `PRAGMA` is not enough on its own
 
 ```sh
+# Check the file exists BEFORE opening it: `sqlite3 "$BAK"` on a missing path creates an empty
+# database, and the very next command would then certify that fresh emptiness as `ok`. Verifying a
+# backup by opening it is only meaningful once you know you are opening the backup.
+[ -f "$BAK" ] || { echo "STOP: no backup file at $BAK — step 1 did not produce one" >&2; exit 1; }
 sqlite3 "$BAK" "PRAGMA integrity_check;"
 ```
 
@@ -126,8 +136,12 @@ case "$BAK" in
   *'"'*|*'
 '*) echo "STOP: backup path must not contain a double quote or newline; got '$BAK'" >&2; exit 1 ;;
 esac
+# And the backup must exist before it overwrites anything. Without this, `.restore` on a missing
+# `$BAK` opens/creates an empty database and restores THAT over `$TARGET` — a silent wipe dressed as
+# a recovery, which is the worst possible outcome of this entire runbook.
+[ -f "$BAK" ] || { echo "STOP: no backup file at $BAK — refusing to restore" >&2; exit 1; }
 
-sqlite3 "$TARGET" ".restore \"$BAK\""
+sqlite3 "$TARGET" ".restore \"$BAK\"" || { echo "STOP: .restore failed" >&2; exit 1; }
 ```
 
 `.restore` is `.backup`'s mirror and carries the identical inner-quoting rule above — double-quote
