@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { editDistance, FUZZY_MAX_DISTANCE, nameKey, namesEqual } from "../src/db/name-key.js";
+import { editDistance, FUZZY_MAX_DISTANCE, nameKey, nameKeyLength, namesEqual } from "../src/db/name-key.js";
 
 describe("nameKey", () => {
   it("folds a composed accented name and its NFD-decomposed spelling to the same key", () => {
@@ -63,5 +63,27 @@ describe("editDistance", () => {
 describe("FUZZY_MAX_DISTANCE", () => {
   it("is the near-identical (one- or two-character) typo radius used by the identity ladder", () => {
     expect(FUZZY_MAX_DISTANCE).toBe(2);
+  });
+});
+
+describe("nameKeyLength", () => {
+  // The unit this returns has to be the unit SQLite's `length()` counts, because the tier-3 band
+  // compares one against the other. For every BMP name the two are identical, which is exactly why
+  // a divergence here is easy to ship and hard to see.
+  it("counts code points, not UTF-16 code units, so it matches SQLite's length()", () => {
+    expect(nameKeyLength("john")).toBe(4);
+    expect(nameKeyLength("élodie")).toBe(6);
+    expect(nameKeyLength("𝕁𝕠𝕙𝕟")).toBe(4); // SQLite length() == 4; JS .length == 8
+  });
+
+  it("diverges from JS .length by exactly one per astral character", () => {
+    expect("𝕁𝕠𝕙𝕟".length - nameKeyLength("𝕁𝕠𝕙𝕟")).toBe(4);
+    expect("john".length - nameKeyLength("john")).toBe(0);
+  });
+
+  it("agrees with JS .length for every name in the BMP", () => {
+    for (const name of ["Nova Norbury", "Élodie Ünwin", "Al", ""]) {
+      expect(nameKeyLength(name)).toBe(name.length);
+    }
   });
 });

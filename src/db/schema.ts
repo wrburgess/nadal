@@ -10,10 +10,12 @@ export const players = sqliteTable("players", {
   ageRange: text("age_range"),
   gender: text("gender"),
   tennisrecordUrl: text("tennisrecord_url"),       // durable re-pull handle (spec § Ingestion)
-  // Issue #32: the JS-folded (nameKey.ts) comparison key for canonicalName. Nullable — see
-  // docs/adr and db/name-key.ts for why NOT NULL can't be added on a populated table; a nullable
-  // column here plus a fail-closed read-time probe (src/ingest/identity.ts) is the deliberate
-  // trade. Backfilled in JS (SQLite's lower() is ASCII-only) by backfillNameKeys in client.ts.
+  // Issue #32: the JS-folded (name-key.ts) comparison key for canonicalName. Nullable on purpose:
+  // SQLite rejects `ADD COLUMN ... NOT NULL DEFAULT '' CHECK (name_key <> '')` on a populated table
+  // ("CHECK constraint failed"), and the same form WITHOUT the check is fail-open — a forgotten
+  // insert silently gets ''. So the guarantee lives at read time instead, in the fail-closed probe
+  // in src/ingest/identity.ts. Backfilled in JS (SQLite's lower() is ASCII-only) by
+  // backfillNameKeys in db/name-key.ts.
   nameKey: text("name_key"),
   // Indexed length of nameKey, used to narrow the fuzzy (tier-3) candidate band to rows whose key
   // length is within FUZZY_MAX_DISTANCE of the target's — a necessary condition for a Levenshtein

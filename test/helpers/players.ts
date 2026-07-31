@@ -30,7 +30,13 @@ export function buildNamePool(): string[] {
     }
   }
 
-  const shortNames = ["Al", "Bo", "Cy", "Ann", "Ben", "Coe", "Élo"];
+  // Astral-plane (non-BMP) names are in the pool deliberately: they are the ONE input class where
+  // JS's `.length` (UTF-16 code units) and SQLite's `length()` (code points) disagree, so a corpus
+  // without them cannot observe a band measured in the wrong unit — the equivalence assertion would
+  // pass over a corpus where the two units happen to coincide, which is a false green rather than a
+  // proof. See `nameKeyLength` in src/db/name-key.ts.
+  const astralNames = ["𝕁𝕠𝕙", "𝕁𝕠𝕙n", "𝕁𝕠𝕙𝕟 Smith", "Ann𝕒"];
+  const shortNames = ["Al", "Bo", "Cy", "Ann", "Ben", "Coe", "Élo", ...astralNames];
   const longNames = [
     "Alexandria Montgomery Fitzgerald",
     "Bartholomew Winterbourne Ashcombe",

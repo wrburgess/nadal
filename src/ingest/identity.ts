@@ -1,5 +1,5 @@
 import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
-import { editDistance, FUZZY_MAX_DISTANCE, nameKey } from "../db/name-key.js";
+import { editDistance, FUZZY_MAX_DISTANCE, nameKey, nameKeyLength } from "../db/name-key.js";
 import { playerAliases, players, teams } from "../db/schema.js";
 import type { Db } from "./db-types.js";
 
@@ -126,7 +126,7 @@ export function findPlayerByName(db: Db, name: string): NameLookup<PlayerRow> {
   const exact = db.select().from(players).where(eq(players.nameKey, key)).all();
   if (exact[0] !== undefined) return { kind: "found", row: exact[0] };
 
-  const fuzzy = fuzzyPlayerBand(db, key.length).filter((row) => {
+  const fuzzy = fuzzyPlayerBand(db, nameKeyLength(key)).filter((row) => {
     const distance = editDistance(row.canonicalName, name);
     return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
   });
@@ -143,7 +143,7 @@ export function findTeamByName(db: Db, name: string): NameLookup<TeamRow> {
   const exact = db.select().from(teams).where(eq(teams.nameKey, key)).all();
   if (exact[0] !== undefined) return { kind: "found", row: exact[0] };
 
-  const fuzzy = fuzzyTeamBand(db, key.length).filter((row) => {
+  const fuzzy = fuzzyTeamBand(db, nameKeyLength(key)).filter((row) => {
     const distance = editDistance(row.name, name);
     return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
   });
@@ -227,7 +227,7 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
     };
   }
 
-  const fuzzyCandidates = fuzzyPlayerBand(db, key.length).filter((p) => {
+  const fuzzyCandidates = fuzzyPlayerBand(db, nameKeyLength(key)).filter((p) => {
     const distance = editDistance(p.canonicalName, input.name);
     return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
   });
@@ -279,7 +279,7 @@ export function resolveTeam(db: Db, input: ResolveTeamInput): IdentityResolution
   const exact = db.select().from(teams).where(eq(teams.nameKey, key)).all();
   if (exact[0] !== undefined) return { kind: "matched", row: exact[0] };
 
-  const fuzzyCandidates = fuzzyTeamBand(db, key.length).filter((t) => {
+  const fuzzyCandidates = fuzzyTeamBand(db, nameKeyLength(key)).filter((t) => {
     const distance = editDistance(t.name, input.name);
     return distance > 0 && distance <= FUZZY_MAX_DISTANCE;
   });

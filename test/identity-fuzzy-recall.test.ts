@@ -6,9 +6,9 @@
 // unabridged brute-force scan over the whole corpus finds — not merely spot-checked examples.
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
-import { editDistance, FUZZY_MAX_DISTANCE, nameKey } from "../src/db/name-key.js";
+import { editDistance, FUZZY_MAX_DISTANCE, nameKey, nameKeyLength } from "../src/db/name-key.js";
 import { players } from "../src/db/schema.js";
-import { findPlayerByName } from "../src/ingest/identity.js";
+import { findPlayerByName, resolvePlayer } from "../src/ingest/identity.js";
 import { buildNamePool } from "./helpers/players.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -102,6 +102,42 @@ describe("identity fuzzy recall — banded tier-3 matches brute force exactly", 
       // > 2) exclude this candidate — the band did not drop a true match, there simply isn't one.
       expect(result.kind).toBe("not-found");
       expect(bruteForceFuzzyMatches([plusThree], base)).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Regression, found by the self-review adversarial pass on PR #40 and reproduced before it was
+  // fixed. The band's target length was measured with JS's `.length` (UTF-16 code units) while the
+  // stored `name_key_length` it is compared against is SQLite's `length()` (code points). The two
+  // agree for every BMP name — i.e. for the whole rest of this suite — and diverge by one per
+  // astral character, so a name carrying enough of them shifted the band past its own true
+  // candidates. The visible symptom was the worst one available: `not-found` where brute force says
+  // `ambiguous`, which makes `resolvePlayer` create a second row for a player already on file.
+  it("ASTRAL-PLANE UNITS: a true fuzzy candidate whose name is outside the BMP is still found — the band is measured in code points, not UTF-16 units", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const stored = "𝕁𝕠𝕙"; // 3 code points, 6 UTF-16 units
+      const probe = "𝕁𝕠𝕙n"; // 4 code points, 7 UTF-16 units — a genuine distance-1 near-miss
+
+      // Guard the premise: if these ever stop disagreeing, this test is no longer exercising the
+      // defect it was written for and must not keep passing as if it were.
+      expect(nameKey(stored).length).not.toBe(nameKeyLength(nameKey(stored)));
+      expect(editDistance(stored, probe)).toBe(1);
+
+      seedCorpus(db, [stored]);
+
+      const banded = findPlayerByName(db, probe);
+      expect(banded.kind).toBe("ambiguous");
+      const bandedNames = banded.kind === "ambiguous" ? banded.candidates.map((p) => p.canonicalName).sort() : [];
+      expect(bandedNames).toEqual(bruteForceFuzzyMatches([stored], probe));
+
+      // The consequence that makes this a correctness bug rather than a performance one: a dropped
+      // candidate silently becomes a duplicate player.
+      const before = db.select().from(players).all().length;
+      expect(resolvePlayer(db, { name: probe }).kind).toBe("ambiguous");
+      expect(db.select().from(players).all()).toHaveLength(before);
     } finally {
       sqlite.close();
     }

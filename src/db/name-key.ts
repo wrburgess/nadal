@@ -23,6 +23,24 @@ export function namesEqual(a: string, b: string): boolean {
   return nameKey(a) === nameKey(b);
 }
 
+/**
+ * The length of a key **in the same unit the stored `name_key_length` column counts** — SQLite's
+ * `length()` on TEXT counts CODE POINTS, while JavaScript's `.length` counts UTF-16 CODE UNITS.
+ * The two diverge by one per astral-plane character (verified: `length()` of `𝕁𝕠𝕙𝕟` is 4, its JS
+ * `.length` is 8), so feeding a JS `.length` into the tier-3 band would compare a target measured
+ * in one unit against candidates measured in another — and a name carrying enough astral
+ * characters would shift the band clean past its own true candidates, dropping them. That failure
+ * is silent and it is the worst one available here: a dropped fuzzy candidate is a duplicate player
+ * created for someone already on file, which is precisely what tier 3 exists to prevent.
+ *
+ * Counting code points keeps the band's necessary condition valid even though `editDistance` below
+ * still operates on UTF-16 units: a single unit-edit changes the code-point count by at most one,
+ * so a code-point gap wider than `FUZZY_MAX_DISTANCE` still forces a distance wider than it.
+ */
+export function nameKeyLength(key: string): number {
+  return [...key].length;
+}
+
 // Near-identical, not "vaguely similar": a one- or two-character typo distance, small enough that
 // two genuinely different names in the same roster essentially never collide by accident (the
 // fixture rosters are all distinct first+last combinations well outside this radius).
