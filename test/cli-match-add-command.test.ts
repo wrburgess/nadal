@@ -142,6 +142,40 @@ describe("tn match add (end-to-end via dispatch)", () => {
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("status=error"));
   });
 
+  // PR #54 verify findings 1-2, exercised over the CLI surface for symmetry with the MCP-level
+  // tests in test/mcp-tools.test.ts — both presenters call the same service, so both must refuse.
+  it("a duplicate resolved player within one court refuses over the CLI too", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const { home, visiting } = seedRosters(db);
+    sqlite.close();
+
+    const payload = validPayload(home.name, visiting.name);
+    payload.courts[1] = { ...payload.courts[1]!, homePlayers: ["Bo Bramwell", "Bo Bramwell"] };
+    const payloadPath = writeTempFile("payload.json", JSON.stringify(payload));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["match", "add", payloadPath]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("duplicate participant"));
+  });
+
+  it("homeTeam/visitingTeam naming the same team refuses over the CLI too", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const { home } = seedRosters(db);
+    sqlite.close();
+
+    const payloadPath = writeTempFile("payload.json", JSON.stringify(validPayload(home.name, home.name)));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["match", "add", payloadPath]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("cannot play itself"));
+  });
+
   it("flagged (unresolved) names exit 1 with the names named in the summary", async () => {
     runMigrations();
     const { db, sqlite } = openDb();

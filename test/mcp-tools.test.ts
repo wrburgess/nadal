@@ -327,6 +327,82 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     }
   });
 
+  // PR #54 verify finding 3: a cross-field invariant declared only on `scorecardPayloadSchema`
+  // itself (rather than in the service) would not survive `inputShape: { ...schema.shape }` here,
+  // since that spread carries only PER-KEY validators. Exercised over the REAL MCP transport
+  // (not the service function directly) so this proves the guard actually reaches this surface,
+  // not just that the service function has one.
+  it("match_add refuses a duplicate resolved player within one court over MCP too — the guard is not schema-only", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const home = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    const visiting = db.insert(teams).values({ name: "Report Opponent" }).returning().get();
+    for (const [teamId, name] of [
+      [home.id, "Bo Bramwell"],
+      [visiting.id, "Opp Two"],
+      [visiting.id, "Opp Three"],
+    ] as const) {
+      const player = db.insert(players).values({ canonicalName: name }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId, eventId: null }).run();
+    }
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "match_add",
+      arguments: {
+        playedOn: "2026-08-28",
+        homeTeam: home.name,
+        visitingTeam: visiting.name,
+        courts: [
+          {
+            slot: "D1",
+            discipline: "doubles",
+            homePlayers: ["Bo Bramwell", "Bo Bramwell"],
+            visitingPlayers: ["Opp Two", "Opp Three"],
+          },
+        ],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("duplicate participant");
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(teamMatches).all(), "a refusal must write nothing").toHaveLength(0);
+    } finally {
+      check.sqlite.close();
+    }
+  });
+
+  it("match_add refuses homeTeam/visitingTeam naming the same team over MCP too", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "HOA/Burgess-Zingg/40&over3.5M" }).returning().get();
+    for (const name of ["Ada Ashby", "Bo Bramwell", "Cy Calder"]) {
+      const player = db.insert(players).values({ canonicalName: name }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    }
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "match_add",
+      arguments: {
+        playedOn: "2026-08-28",
+        homeTeam: team.name,
+        visitingTeam: team.name,
+        courts: [{ slot: "S1", discipline: "singles", homePlayers: ["Ada Ashby"], visitingPlayers: ["Bo Bramwell"] }],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("cannot play itself");
+  });
+
   // Found by the independent Codex review of PR #47 (rated medium). MCP tool results carry scraped
   // player and team names and were passed through a bare `JSON.stringify`, which escapes the C0
   // controls but leaves RIGHT-TO-LEFT OVERRIDE and U+2028/U+2029 intact — so the guard the CLI's

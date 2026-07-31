@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,7 @@ import {
   courtMatchPlayers,
   courtMatches,
   events,
+  playerAliases,
   players,
   teamMatches,
   teamMemberships,
@@ -105,6 +107,44 @@ describe("describeMatchAddRefusal", () => {
         ],
       }),
     ).toBe('unresolved player name(s): "Ghost Player" unresolved; "Alex Ston" ambiguous (Alex Stone, Alex Stove)');
+  });
+
+  // PR #54 verify findings 1-2: a same-team refusal and a duplicate-resolved-player refusal each
+  // need their own wording, same as every other refusal kind.
+  it("names a same-team refusal", () => {
+    expect(describeMatchAddRefusal({ ok: false, kind: "same-team", team: "IA/Versteeg/40&Over3.5M" })).toBe(
+      'homeTeam and visitingTeam both resolve to the same team ("IA/Versteeg/40&Over3.5M") — a team cannot play itself',
+    );
+  });
+
+  it("names every duplicate-players violation together", () => {
+    expect(
+      describeMatchAddRefusal({
+        ok: false,
+        kind: "duplicate-players",
+        duplicates: [
+          {
+            slot: "D1",
+            playerId: 7,
+            occurrences: [
+              { side: "home", name: "Bo Bramwell" },
+              { side: "home", name: "Bo Bramwell" },
+            ],
+          },
+          {
+            slot: "D2",
+            playerId: 9,
+            occurrences: [
+              { side: "home", name: "Transfer Player" },
+              { side: "visiting", name: "Transfer Player" },
+            ],
+          },
+        ],
+      }),
+    ).toBe(
+      'duplicate participant(s): court "D1": the same player (id 7) listed as home:"Bo Bramwell" and home:"Bo Bramwell"; ' +
+        'court "D2": the same player (id 9) listed as home:"Transfer Player" and visiting:"Transfer Player"',
+    );
   });
 });
 
@@ -548,6 +588,212 @@ describe("addMatchFromScorecard", () => {
           throw new Error("expected an unresolved-players refusal");
         }
         expect(db.select().from(teamMatches).all()).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  // PR #54 verify findings 1-2: `upsertCourtMatchPlayers` conflicts on `(court_match_id,
+  // player_id)` and does `onConflictDoUpdate({ set: { side } })` (upsert.ts:355-365) — so writing
+  // the SAME resolved player twice for one court silently leaves ONE row, with the later `side`
+  // winning, no error anywhere. The schema's cardinality invariant (Task 1) guarantees the right
+  // COUNT of names but never distinctness of the RESOLVED player, so every path below reaches the
+  // service with a schema-valid payload that would otherwise write fewer participants than the
+  // schema just promised. The check must compare resolved `playerId`, never the input strings —
+  // that's what makes the alias/prefix-ID/both-sides cases (which cannot be caught by string
+  // comparison) actually distinguishable from a genuine two-distinct-player court.
+  describe("duplicate-participant and same-team guards", () => {
+    it("REGRESSION (finding 1a): the same name listed twice on one side of a doubles court refuses, DB unchanged", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        const before = {
+          teamMatches: db.select().from(teamMatches).all(),
+          courtMatches: db.select().from(courtMatches).all(),
+          courtMatchPlayers: db.select().from(courtMatchPlayers).all(),
+          players: db.select().from(players).all(),
+        };
+
+        const payload = basePayload(home.name, visiting.name);
+        payload.courts[1] = { ...payload.courts[1]!, homePlayers: ["Bo Bramwell", "Bo Bramwell"] };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.kind).toBe("duplicate-players");
+
+        expect(db.select().from(teamMatches).all()).toEqual(before.teamMatches);
+        expect(db.select().from(courtMatches).all()).toEqual(before.courtMatches);
+        expect(db.select().from(courtMatchPlayers).all()).toEqual(before.courtMatchPlayers);
+        expect(db.select().from(players).all()).toEqual(before.players);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (finding 1b): two distinct names aliasing to the SAME player on one side refuses — not catchable by string comparison", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting, bo } = seedStandardRosters(db);
+        db.insert(playerAliases)
+          .values({ playerId: bo.id, alias: "Robert Bramwell", nameKey: nameKey("Robert Bramwell") })
+          .run();
+
+        const payload = basePayload(home.name, visiting.name);
+        payload.courts[1] = { ...payload.courts[1]!, homePlayers: ["Bo Bramwell", "Robert Bramwell"] };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok && result.kind === "duplicate-players") {
+          expect(result.duplicates).toHaveLength(1);
+          expect(result.duplicates[0]!.playerId).toBe(bo.id);
+        } else {
+          throw new Error("expected a duplicate-players refusal");
+        }
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (finding 1c): the same player on BOTH sides of a court refuses — reachable via bug #49's append-only team_memberships", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        // A transferred player: on file for BOTH teams' rosters, since team_memberships never
+        // deletes the old row when a player moves teams (#49).
+        const transferred = seedRosterPlayer(db, home.id, "Transfer Player");
+        db.insert(teamMemberships).values({ playerId: transferred.id, teamId: visiting.id, eventId: null }).run();
+
+        const payload = basePayload(home.name, visiting.name);
+        payload.courts[1] = {
+          ...payload.courts[1]!,
+          homePlayers: ["Bo Bramwell", "Transfer Player"],
+          visitingPlayers: ["Transfer Player", "Opp Three"],
+        };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok && result.kind === "duplicate-players") {
+          expect(result.duplicates).toHaveLength(1);
+          expect(result.duplicates[0]!.playerId).toBe(transferred.id);
+          expect(result.duplicates[0]!.occurrences.map((o) => o.side).sort()).toEqual(["home", "visiting"]);
+        } else {
+          throw new Error("expected a duplicate-players refusal");
+        }
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (finding 1d): a usta: prefix-ID duplicating a bare name already on that side refuses", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting, bo } = seedStandardRosters(db);
+        db.update(players).set({ ustaUaid: "77777" }).where(eq(players.id, bo.id)).run();
+
+        const payload = basePayload(home.name, visiting.name);
+        payload.courts[1] = { ...payload.courts[1]!, homePlayers: ["Bo Bramwell", "usta:77777"] };
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.kind).toBe("duplicate-players");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (finding 2): homeTeam and visitingTeam naming the same team refuses, DB unchanged", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        seedRosterPlayer(db, team.id, "Ada Ashby");
+        seedRosterPlayer(db, team.id, "Bo Bramwell");
+        seedRosterPlayer(db, team.id, "Cy Calder");
+        const before = {
+          teamMatches: db.select().from(teamMatches).all(),
+          courtMatches: db.select().from(courtMatches).all(),
+          courtMatchPlayers: db.select().from(courtMatchPlayers).all(),
+          players: db.select().from(players).all(),
+        };
+
+        const result = addMatchFromScorecard(db, basePayload(team.name, team.name));
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.kind).toBe("same-team");
+
+        expect(db.select().from(teamMatches).all()).toEqual(before.teamMatches);
+        expect(db.select().from(courtMatches).all()).toEqual(before.courtMatches);
+        expect(db.select().from(courtMatchPlayers).all()).toEqual(before.courtMatchPlayers);
+        expect(db.select().from(players).all()).toEqual(before.players);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION (finding 2, variant): two DIFFERENT spellings resolving to the SAME team also refuse — compares the resolved id, not the strings", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const team = seedTeam(db, "HOA/Burgess-Zingg/40&over3.5M");
+        seedRosterPlayer(db, team.id, "Ada Ashby");
+        seedRosterPlayer(db, team.id, "Bo Bramwell");
+        seedRosterPlayer(db, team.id, "Cy Calder");
+
+        // Different casing, same nameKey-folded team — findTeamByName's exact tier matches both to
+        // the identical row, so the two payload STRINGS differ while the resolved ids do not.
+        const result = addMatchFromScorecard(
+          db,
+          basePayload("HOA/Burgess-Zingg/40&over3.5M", "hoa/burgess-zingg/40&over3.5m"),
+        );
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.kind).toBe("same-team");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("REGRESSION: ALL duplicate-participant violations across multiple courts are reported together, not just the first", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+        seedRosterPlayer(db, home.id, "Dev Duxbury");
+        seedRosterPlayer(db, visiting.id, "Opp Four");
+        seedRosterPlayer(db, visiting.id, "Opp Five");
+
+        const payload = basePayload(home.name, visiting.name);
+        payload.courts[1] = { ...payload.courts[1]!, homePlayers: ["Bo Bramwell", "Bo Bramwell"] }; // D1
+        payload.courts.push({
+          slot: "D2",
+          discipline: "doubles",
+          homePlayers: ["Dev Duxbury", "Dev Duxbury"], // D2, a SECOND, independent violation
+          visitingPlayers: ["Opp Four", "Opp Five"],
+        });
+
+        const result = addMatchFromScorecard(db, payload);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok && result.kind === "duplicate-players") {
+          expect(result.duplicates.map((d) => d.slot).sort()).toEqual(["D1", "D2"]);
+        } else {
+          throw new Error("expected a duplicate-players refusal listing both courts");
+        }
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a genuine two-distinct-player doubles court still ingests cleanly — the guard must not over-refuse", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const { home, visiting } = seedStandardRosters(db);
+
+        const result = addMatchFromScorecard(db, basePayload(home.name, visiting.name));
+
+        expect(result.ok).toBe(true);
       } finally {
         sqlite.close();
       }

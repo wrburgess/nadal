@@ -22,11 +22,24 @@ export type MatchAddPlayerFlag = {
   candidates: string[];
 };
 
+/** One payload occurrence — a side plus the exact name/prefix-ID as given — that resolved to a
+ * player ALREADY seen elsewhere in the same court (PR #54 verify findings 1a-1d). */
+export type MatchAddDuplicateOccurrence = { side: "home" | "visiting"; name: string };
+
+export type MatchAddDuplicatePlayerFlag = {
+  slot: string;
+  playerId: number;
+  /** Every occurrence of this player within this one court, in payload order — always 2 or more. */
+  occurrences: MatchAddDuplicateOccurrence[];
+};
+
 export type AddMatchFromScorecardResult =
   | { ok: true; teamMatchId: number; courts: number }
   | { ok: false; kind: "unknown-team"; team: string; candidates: string[] }
   | { ok: false; kind: "unknown-event"; event: string }
-  | { ok: false; kind: "unresolved-players"; flags: MatchAddPlayerFlag[] };
+  | { ok: false; kind: "unresolved-players"; flags: MatchAddPlayerFlag[] }
+  | { ok: false; kind: "same-team"; team: string }
+  | { ok: false; kind: "duplicate-players"; duplicates: MatchAddDuplicatePlayerFlag[] };
 
 /** Thrown inside the transaction to abort it — better-sqlite3/drizzle roll back automatically on a
  * thrown error, same "no partial write" precedent as `AmbiguousIdentityError`
@@ -50,6 +63,16 @@ class UnresolvedPlayersRefusal extends Error {
     super(`unresolved player name(s): ${flags.map((f) => f.name).join(", ")}`);
   }
 }
+class SameTeamRefusal extends Error {
+  constructor(readonly team: string) {
+    super(`homeTeam and visitingTeam both resolve to the same team "${team}"`);
+  }
+}
+class DuplicatePlayersRefusal extends Error {
+  constructor(readonly duplicates: MatchAddDuplicatePlayerFlag[]) {
+    super(`duplicate participant(s) across ${duplicates.length} court(s)`);
+  }
+}
 
 /**
  * Resolve one side's team by name — NEVER creates (a team is created by `team pull`, not here).
@@ -65,11 +88,21 @@ function requireTeam(db: Db, name: string): TeamRow {
 
 /**
  * Ingests one scorecard payload: resolves both teams and the named event (never-create — see
- * `requireTeam` above), resolves EVERY player on both sides through the roster-scoped, never-create
- * ladder (`resolveRosterPlayer`, Task 2) — and if ANY name is unresolved or ambiguous, collects
- * every flag before refusing, rolling the WHOLE ingest back rather than writing a partial match
- * (mirrors the `AmbiguousIdentityError`-inside-a-transaction precedent at
- * `src/ingest/archived.ts:66-67`). On success: `upsertTeamMatch` for the parent — MANDATORY, since
+ * `requireTeam` above), refuses if both teams resolve to the SAME row (comparing the resolved id,
+ * never the input strings — two spellings/aliases of one team count), resolves EVERY player on
+ * both sides through the roster-scoped, never-create ladder (`resolveRosterPlayer`, Task 2),
+ * refuses if any RESOLVED player appears more than once across a single court's two sides (PR #54
+ * verify findings 1-2 — same reasoning as the team check: compared by resolved `playerId`, never
+ * by the input name, since a duplicate can arrive as an identical string, two names sharing an
+ * alias, a `usta:` id duplicating a bare name, or the same player rostered on both teams at once
+ * per bug #49's append-only `team_memberships`) — and if ANY of these checks fails, collects every
+ * violation of that kind before refusing, rolling the WHOLE ingest back rather than writing a
+ * partial match (mirrors the `AmbiguousIdentityError`-inside-a-transaction precedent at
+ * `src/ingest/archived.ts:66-67`). Every one of these invariants lives HERE, in the service, not
+ * only on `scorecardPayloadSchema` — a cross-field check declared on the schema object itself would
+ * not survive `src/mcp/tools.ts` spreading `scorecardPayloadSchema.shape` into `match_add`'s
+ * `inputShape` (see that file's own comment), so putting it there would protect the CLI and
+ * silently skip the MCP surface. On success: `upsertTeamMatch` for the parent — MANDATORY, since
  * `upsertCourtMatch`'s id-less branch dedupes on `(slot, playedOn, teamMatchId)`
  * (`upsert.ts:302-334`); without a parent, two different same-day courts at the same slot would
  * silently collapse into one row — then one `upsertCourtMatch` + `upsertCourtMatchPlayers` per
@@ -80,6 +113,10 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
     return db.transaction((tx) => {
       const homeTeam = requireTeam(tx, payload.homeTeam);
       const visitingTeam = requireTeam(tx, payload.visitingTeam);
+
+      // Compared by resolved ID, not by the two input strings — two spellings or an alias of the
+      // SAME team must refuse just as readily as an identical string would (PR #54 finding 2).
+      if (homeTeam.id === visitingTeam.id) throw new SameTeamRefusal(homeTeam.name);
 
       let eventId: number | null = null;
       if (payload.event !== undefined) {
@@ -115,6 +152,40 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
       // Collected ALL flags above before refusing, so one round trip reports every bad name rather
       // than the first (Task 3) — never thrown inline inside the resolution loop.
       if (flags.length > 0) throw new UnresolvedPlayersRefusal(flags);
+
+      // PR #54 verify findings 1a-1d: `upsertCourtMatchPlayers` conflicts on `(court_match_id,
+      // player_id)` and updates `side` in place on a repeat — so writing the SAME resolved player
+      // twice for one court (either side, or split across both) would silently leave ONE
+      // participant row where the schema's cardinality check just promised two. Grouped by
+      // RESOLVED playerId, never by the input name string, because none of the four ways a
+      // duplicate actually arrives (an identical string repeated, two names sharing an alias, a
+      // `usta:` id duplicating a bare name, or the same player rostered on both teams per #49) are
+      // distinguishable from each other, or from a genuine two-distinct-player court, by comparing
+      // strings — only the id two different lookups resolved to tells them apart.
+      const duplicates: MatchAddDuplicatePlayerFlag[] = [];
+      for (const court of payload.courts) {
+        const occurrencesByPlayerId = new Map<number, MatchAddDuplicateOccurrence[]>();
+        const sides: { side: "home" | "visiting"; teamId: number; names: string[] }[] = [
+          { side: "home", teamId: homeTeam.id, names: court.homePlayers },
+          { side: "visiting", teamId: visitingTeam.id, names: court.visitingPlayers },
+        ];
+        for (const { side, teamId, names } of sides) {
+          for (const name of names) {
+            // Safe: every name here was resolved above, and the `flags.length > 0` throw already
+            // returned for any resolution that was not `matched`.
+            const playerId = resolvedPlayerIds.get(`${teamId}:${name}`)!;
+            const occurrences = occurrencesByPlayerId.get(playerId) ?? [];
+            occurrences.push({ side, name });
+            occurrencesByPlayerId.set(playerId, occurrences);
+          }
+        }
+        for (const [playerId, occurrences] of occurrencesByPlayerId) {
+          if (occurrences.length > 1) duplicates.push({ slot: court.slot, playerId, occurrences });
+        }
+      }
+      // Collected across EVERY court before refusing, same "one round trip reports everything"
+      // rule as the player-name flags above.
+      if (duplicates.length > 0) throw new DuplicatePlayersRefusal(duplicates);
 
       const teamMatch = upsertTeamMatch(tx, {
         eventId,
@@ -160,6 +231,10 @@ export function addMatchFromScorecard(db: Db, payload: ScorecardPayload): AddMat
     }
     if (err instanceof UnknownEventRefusal) return { ok: false, kind: "unknown-event", event: err.event };
     if (err instanceof UnresolvedPlayersRefusal) return { ok: false, kind: "unresolved-players", flags: err.flags };
+    if (err instanceof SameTeamRefusal) return { ok: false, kind: "same-team", team: err.team };
+    if (err instanceof DuplicatePlayersRefusal) {
+      return { ok: false, kind: "duplicate-players", duplicates: err.duplicates };
+    }
     throw err;
   }
 }
@@ -173,6 +248,19 @@ export function describeMatchAddRefusal(result: Extract<AddMatchFromScorecardRes
       : `unknown team "${result.team}"`;
   }
   if (result.kind === "unknown-event") return `unknown event "${result.event}"`;
+  if (result.kind === "same-team") {
+    return `homeTeam and visitingTeam both resolve to the same team ("${result.team}") — a team cannot play itself`;
+  }
+  if (result.kind === "duplicate-players") {
+    return `duplicate participant(s): ${result.duplicates
+      .map(
+        (d) =>
+          `court "${d.slot}": the same player (id ${d.playerId}) listed as ${d.occurrences
+            .map((o) => `${o.side}:"${o.name}"`)
+            .join(" and ")}`,
+      )
+      .join("; ")}`;
+  }
   return `unresolved player name(s): ${result.flags
     .map((f) =>
       f.reason === "ambiguous" ? `"${f.name}" ambiguous (${f.candidates.join(", ")})` : `"${f.name}" unresolved`,
