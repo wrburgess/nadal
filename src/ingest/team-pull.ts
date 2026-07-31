@@ -146,13 +146,62 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
         tennisrecordUrl: url,
       });
 
+      const lastObserved = upserted.rosterObservedAt;
+      const lastUrl = upserted.rosterObservedUrl;
+
+      // NOT-NEWER, not merely older: `<=` fails CLOSED on an equal stamp. `fetchedAt` has
+      // millisecond precision, so two snapshots with DIFFERENT content can carry the same string,
+      // and nothing then orders them — retiring on a coin flip is the one outcome worth ruling out.
+      // Skipping costs at most a delay: memberships are still upserted, and the next pull (with a
+      // later stamp) reconciles. (Codex round 3, rated medium — my first cut used `<` on the
+      // reasoning that a same-millisecond re-pull should still apply, which weighed the harmless
+      // case over the harmful one.)
+      const staleSnapshot = observedAt !== null && lastObserved !== null && observedAt <= lastObserved;
+
+      // A snapshot from a DIFFERENT source cannot be ordered against this team's watermark at all.
+      // TennisRecord team URLs carry a `year` and `tn team pull` accepts an arbitrary URL, so
+      // freshly fetching a PRIOR SEASON's page produces a valid roster with a brand-new fetch time
+      // — newer than the watermark, and authoritative-looking, while describing a roster that is a
+      // year out of date. It would retire everyone who joined since.
+      //
+      // Such a pull RE-BASELINES rather than being ignored forever: it refreshes memberships,
+      // retires nobody, and records the new (url, observedAt) pair, so the NEXT pull from that same
+      // source reconciles normally. That matters because the canonical URL legitimately changes
+      // when a season rolls over — a rule that merely refused a new source would silently disable
+      // retirement for that team for good. (Codex round 3, rated high.)
+      const differentSource = lastUrl !== null && lastUrl !== url;
+
+      if (staleSnapshot) {
+        console.warn(
+          `team pull: roster snapshot observed ${sanitizeValue(observedAt ?? "")} is not newer than the ` +
+            `applied ${sanitizeValue(lastObserved ?? "")} — memberships refreshed, retirement skipped`,
+        );
+      } else if (differentSource) {
+        console.warn(
+          `team pull: roster came from ${sanitizeValue(url)}, not the source that last reconciled ` +
+            `(${sanitizeValue(lastUrl ?? "")}) — memberships refreshed, retirement skipped, baseline moved`,
+        );
+      }
+
+      // Computed BEFORE the roster loop, because the loop's `upsertMembership` decides whether to
+      // clear `retired_at` and that decision needs the same trust verdict the retirement below uses.
+      // Computing it afterwards left the guard ASYMMETRIC: an untrusted snapshot could not remove a
+      // member, but could still REVIVE one the authoritative roster had correctly retired — the very
+      // defect this issue exists to fix, arriving through the opposite door.
+      // (Codex adversarial review of PR #53, round 4, rated high.)
+      const trustedSnapshot = from === undefined && !staleSnapshot && !differentSource;
+
       const observedPlayerIds: number[] = [];
       for (const entry of parsed.roster) {
         const resolved = resolvePlayer(tx, { name: entry.name });
         if (resolved.kind === "ambiguous") {
           throw new AmbiguousIdentityError(resolved.candidates.map((p) => p.canonicalName));
         }
-        upsertMembership(tx, { playerId: resolved.row.id, teamId: upserted.id, eventId: null });
+        upsertMembership(
+          tx,
+          { playerId: resolved.row.id, teamId: upserted.id, eventId: null },
+          { unretire: trustedSnapshot },
+        );
         observedPlayerIds.push(resolved.row.id);
       }
 
@@ -200,47 +249,9 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       // older is skipped; an equal stamp still applies, so a same-millisecond re-pull is not
       // mistaken for a stale one.
       // (Found by the independent Codex adversarial review of this PR, round 2, rated high.)
-      const lastObserved = upserted.rosterObservedAt;
-      const lastUrl = upserted.rosterObservedUrl;
-
-      // NOT-NEWER, not merely older: `<=` fails CLOSED on an equal stamp. `fetchedAt` has
-      // millisecond precision, so two snapshots with DIFFERENT content can carry the same string,
-      // and nothing then orders them — retiring on a coin flip is the one outcome worth ruling out.
-      // Skipping costs at most a delay: memberships are still upserted, and the next pull (with a
-      // later stamp) reconciles. (Codex round 3, rated medium — my first cut used `<` on the
-      // reasoning that a same-millisecond re-pull should still apply, which weighed the harmless
-      // case over the harmful one.)
-      const staleSnapshot = observedAt !== null && lastObserved !== null && observedAt <= lastObserved;
-
-      // A snapshot from a DIFFERENT source cannot be ordered against this team's watermark at all.
-      // TennisRecord team URLs carry a `year` and `tn team pull` accepts an arbitrary URL, so
-      // freshly fetching a PRIOR SEASON's page produces a valid roster with a brand-new fetch time
-      // — newer than the watermark, and authoritative-looking, while describing a roster that is a
-      // year out of date. It would retire everyone who joined since.
-      //
-      // Such a pull RE-BASELINES rather than being ignored forever: it refreshes memberships,
-      // retires nobody, and records the new (url, observedAt) pair, so the NEXT pull from that same
-      // source reconciles normally. That matters because the canonical URL legitimately changes
-      // when a season rolls over — a rule that merely refused a new source would silently disable
-      // retirement for that team for good. (Codex round 3, rated high.)
-      const differentSource = lastUrl !== null && lastUrl !== url;
-
-      if (staleSnapshot) {
-        console.warn(
-          `team pull: roster snapshot observed ${sanitizeValue(observedAt ?? "")} is not newer than the ` +
-            `applied ${sanitizeValue(lastObserved ?? "")} — memberships refreshed, retirement skipped`,
-        );
-      } else if (differentSource) {
-        console.warn(
-          `team pull: roster came from ${sanitizeValue(url)}, not the source that last reconciled ` +
-            `(${sanitizeValue(lastUrl ?? "")}) — memberships refreshed, retirement skipped, baseline moved`,
-        );
-      }
-
-      const observedRetiredCount =
-        from !== undefined || staleSnapshot || differentSource
-          ? 0
-          : retireAbsentMemberships(tx, {
+      const observedRetiredCount = !trustedSnapshot
+        ? 0
+        : retireAbsentMemberships(tx, {
               teamId: upserted.id,
               observedPlayerIds,
               // The pull's single already-computed timestamp (`source.fetchedAt` above), not a fresh

@@ -427,11 +427,11 @@ describe("pullTeam --from never retires (issue #49, Codex review of PR #53)", ()
     }
   });
 
-  it("a replay still ADDS and un-retires the members it does list — only the destructive half is withheld", async () => {
+  it("a replay does NOT un-retire a member the authoritative roster retired, but still adds an unseen one", async () => {
     runMigrations();
     const { db, sqlite } = openDb();
     try {
-      // Retire Ellis legitimately, via a live pull whose roster omits them.
+      // Ellis is retired legitimately, by a live pull whose roster omits them.
       await pullTeam({
         db,
         fetchPage: createStubFetcher({ [team.source.url]: { body: team.html } }),
@@ -447,8 +447,10 @@ describe("pullTeam --from never retires (issue #49, Codex review of PR #53)", ()
       if (live.kind !== "ok") throw new Error("expected ok");
       expect(live.retiredCount).toBe(1);
 
-      // Now replay the FULL archive: Ellis is listed again, so the roster loop must un-retire them.
-      // This is what proves the guard skips only `retireAbsentMemberships`, not the whole write.
+      // Replay the FULL archive, which DOES list Ellis. An archive of unknown vintage must not
+      // overturn the authoritative roster's finding — reviving a departed player is the very defect
+      // #49 exists to fix, and it is no more acceptable arriving from a replay than a retirement
+      // would be. (An earlier version of this PR asserted the opposite; Codex round 4 caught it.)
       const full = archiveFile(team.html);
       const replay = await pullTeam({
         db,
@@ -460,7 +462,32 @@ describe("pullTeam --from never retires (issue #49, Codex review of PR #53)", ()
       const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
       const rows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
       expect(rows).toHaveLength(1);
-      expect(rows[0]!.retiredAt, "a replay that DOES list the player must un-retire them").toBeNull();
+      expect(rows[0]!.retiredAt, "a replay must not revive a retired member").not.toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a replay still INSERTS a membership it has never seen — untrusted evidence may add, just not overturn", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Seed from a roster WITHOUT Ellis, so no Ellis membership exists at all.
+      await pullTeam({
+        db,
+        fetchPage: createStubFetcher({ [team.source.url]: { body: removeRosterRow(team.html, "Ellis Eastwick") } }),
+        target: team.source.url,
+      });
+      const before = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all();
+      expect(before, "Ellis is not on file yet").toHaveLength(0);
+
+      const full = archiveFile(team.html);
+      await pullTeam({ db, fetchPage: createStubFetcher({}), from: { path: full, sourceUrl: team.source.url } });
+
+      const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+      const rows = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all();
+      expect(rows, "a never-seen member is still inserted").toHaveLength(1);
+      expect(rows[0]!.retiredAt).toBeNull();
     } finally {
       sqlite.close();
     }
@@ -704,6 +731,99 @@ describe("pullTeam reconcile provenance (issue #49, Codex review round 3)", () =
       expect(settled.kind).toBe("ok");
       if (settled.kind !== "ok") throw new Error("expected ok");
       expect(settled.retiredCount, "retirement resumes once the new source is the baseline").toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Issue #49, Codex adversarial review of PR #53 round 4 (rated high). The guards above stop an
+// untrusted snapshot REMOVING a member; these pin the inverse — it must not REVIVE one either.
+// Reviving a correctly-retired player puts them back on every roster read and back into predicted
+// lineups, which is the original defect of this issue arriving through the opposite door.
+describe("an untrusted snapshot cannot revive a retired member (issue #49, Codex round 4)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  function fetcherObservedAt(body: string, fetchedAt: string) {
+    return async (url: string) => ({ url, status: 200, body, fetchedAt });
+  }
+
+  /** Pulls the full roster, then a later roster omitting Ellis, leaving Ellis correctly retired. */
+  async function seedWithEllisRetired(db: ReturnType<typeof openDb>["db"]) {
+    await pullTeam({
+      db,
+      fetchPage: fetcherObservedAt(team.html, "2026-07-01T00:00:00.000Z"),
+      target: team.source.url,
+    });
+    const retired = await pullTeam({
+      db,
+      fetchPage: fetcherObservedAt(removeRosterRow(team.html, "Ellis Eastwick"), "2026-07-20T00:00:00.000Z"),
+      target: team.source.url,
+    });
+    expect(retired.kind).toBe("ok");
+    if (retired.kind !== "ok") throw new Error("expected ok");
+    expect(retired.retiredCount).toBe(1);
+  }
+
+  function ellisRetiredAt(db: ReturnType<typeof openDb>["db"]): string | null {
+    const ellis = db.select().from(players).where(eq(players.canonicalName, "Ellis Eastwick")).all()[0]!;
+    return db.select().from(teamMemberships).where(eq(teamMemberships.playerId, ellis.id)).all()[0]!.retiredAt;
+  }
+
+  it("a STALE same-source snapshot listing the retired member leaves them retired", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await seedWithEllisRetired(db);
+
+      // Older than the watermark, and it lists Ellis. Stale evidence must not overturn.
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-10T00:00:00.000Z"),
+        target: team.source.url,
+      });
+
+      expect(ellisRetiredAt(db), "a stale snapshot must not revive a retired member").not.toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a DIFFERENT-SOURCE (prior-season) snapshot listing the retired member leaves them retired", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await seedWithEllisRetired(db);
+
+      // Newer stamp, but a different source — exactly the case that re-baselines. It may move the
+      // baseline; it may not overturn the authoritative roster's finding about Ellis.
+      const priorYearUrl = team.source.url.replace("year=2026", "year=2025");
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-31T00:00:00.000Z"),
+        target: priorYearUrl,
+      });
+
+      expect(ellisRetiredAt(db), "a different source must not revive a retired member").not.toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a TRUSTED newer same-source snapshot DOES un-retire — the guard rejects bad evidence, not the feature", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      await seedWithEllisRetired(db);
+
+      await pullTeam({
+        db,
+        fetchPage: fetcherObservedAt(team.html, "2026-07-25T00:00:00.000Z"),
+        target: team.source.url,
+      });
+
+      expect(ellisRetiredAt(db), "a trusted newer roster listing Ellis un-retires them").toBeNull();
     } finally {
       sqlite.close();
     }

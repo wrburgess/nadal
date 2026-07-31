@@ -130,8 +130,27 @@ export function upsertPlayer(db: Db, values: UpsertPlayerFields): PlayerRow {
  * emits it after `DO NOTHING`, which SQLite rejects outright for a targeted conflict — confirmed
  * empirically, not assumed from the docs. `retiredAt` now gives that `set` real work to do; the
  * reason `onConflictDoUpdate` is used at all is unchanged.
+ *
+ * `options.unretire` (default `true`) gates that clearing. An UNTRUSTED snapshot — a `--from` replay,
+ * a stale one, or one from a different source — must not change an existing membership's retirement
+ * state in EITHER direction. Blocking only retirement was an asymmetry: reviving a correctly-retired
+ * member puts a departed player back on every roster read and back into predicted lineups, which is
+ * precisely the defect issue #49 exists to fix, re-entered through the opposite door. Such a snapshot
+ * may still INSERT a membership it has never seen — that is fail-open in the same direction as the
+ * rest of this design, and the next authoritative pull retires it if it was wrong.
+ * (Codex adversarial review of PR #53, round 4, rated high.)
  */
-export function upsertMembership(db: Db, values: TeamMembershipInsert): TeamMembershipRow {
+export function upsertMembership(
+  db: Db,
+  values: TeamMembershipInsert,
+  options: { unretire?: boolean } = {},
+): TeamMembershipRow {
+  // `unretire: false` makes the conflict branch leave `retired_at` ALONE. The `set` then falls back
+  // to the historical self-assignment no-op, which is still required for the SQLite grammar reason
+  // in the doc comment above — `onConflictDoNothing` cannot carry the partial index's `WHERE`.
+  const unretire = options.unretire ?? true;
+  const set = unretire ? { retiredAt: null } : { playerId: values.playerId };
+
   if (values.eventId === null || values.eventId === undefined) {
     return db
       .insert(teamMemberships)
@@ -139,7 +158,7 @@ export function upsertMembership(db: Db, values: TeamMembershipInsert): TeamMemb
       .onConflictDoUpdate({
         target: [teamMemberships.teamId, teamMemberships.playerId],
         targetWhere: sql`event_id IS NULL`,
-        set: { retiredAt: null },
+        set,
       })
       .returning()
       .get();
@@ -149,7 +168,7 @@ export function upsertMembership(db: Db, values: TeamMembershipInsert): TeamMemb
     .values({ ...values, retiredAt: null })
     .onConflictDoUpdate({
       target: [teamMemberships.playerId, teamMemberships.teamId, teamMemberships.eventId],
-      set: { retiredAt: null },
+      set,
     })
     .returning()
     .get();
