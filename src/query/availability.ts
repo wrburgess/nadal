@@ -10,6 +10,7 @@ import { z } from "zod";
 import { availability, events, teamMemberships } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoHomeTeamError, requireHomeTeam } from "./home-team.js";
+import { isIsoDay } from "./iso-day.js";
 
 type EventRow = typeof events.$inferSelect;
 type AvailabilityRow = typeof availability.$inferSelect;
@@ -34,33 +35,24 @@ export class AmbiguousEventForDayError extends Error {
 
 const availabilityStatusSchema = z.enum(["available", "unavailable", "uncertain"]);
 
-const ISO_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
 /**
  * Rejects anything that is not a real `YYYY-MM-DD` calendar date.
  *
  * `day` is half of this table's `(player_id, event_id, day)` upsert key, and `eventsForDay`
  * compares it as TEXT — so before this guard existed, any malformed string that merely SORTED
- * inside an event's range matched that event and was stored verbatim. `"2026-08-28 "`,
- * `"2026-08-28xyz"` and `"2026-08-2900"` each wrote a SEPARATE row alongside the real
- * `"2026-08-28"`, which defeats the idempotent upsert the unique index exists to give and invents
- * days that no per-event-day read will ever match. That is the `upsertTeamMatch` shape
- * docs/findings.md records four review rounds on — a key assembled without normalizing its input
- * domain — so it is closed at the write service, where BOTH presenters (CLI `tn player avail` and
- * the MCP `player_avail` tool) inherit it, rather than in either presenter.
+ * inside an event's range matched that event and was stored verbatim, defeating the idempotent
+ * upsert the unique index exists to give and inventing days that no per-event-day read will ever
+ * match. It is closed at the write service, where BOTH presenters (CLI `tn player avail` and the
+ * MCP `player_avail` tool) inherit it, rather than in either presenter.
  *
- * The pattern alone is not enough: `"2026-02-31"` matches it and is not a date. Round-tripping
- * through `Date` is what rejects that — a value JS either refuses outright (NaN) or silently rolls
- * forward into a different day, and a silent roll-forward is precisely the kind of quiet
- * substitution this guard exists to prevent.
+ * The *rule* now lives in `iso-day.ts`, shared with `events.ts` — whose `starts_on`/`ends_on` are
+ * the other half of the same TEXT comparison, so the two must agree on what a day is or a range
+ * written by one could never be matched by the other. The error CLASS stays local: callers assert
+ * on class, never on message text.
  */
 function requireIsoDay(day: string): string {
-  if (!ISO_DAY_PATTERN.test(day)) {
-    throw new InvalidAvailabilityDayError(`invalid day "${day}" (expected YYYY-MM-DD)`);
-  }
-  const parsed = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
-    throw new InvalidAvailabilityDayError(`invalid day "${day}" (not a real calendar date)`);
+  if (!isIsoDay(day)) {
+    throw new InvalidAvailabilityDayError(`invalid day "${day}" (expected a real YYYY-MM-DD date)`);
   }
   return day;
 }

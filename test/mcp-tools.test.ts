@@ -182,6 +182,67 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(JSON.parse(textOf(noteResult))).toMatchObject({ note: "Big serve on big points." });
   });
 
+  it("event_add creates the event over MCP, then player_avail resolves against it", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+    const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+    backfillNameKeys(db); // #32: index-backed name resolution needs the key populated
+    sqlite.close();
+
+    const client = await connectedClient();
+    await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+    const addResult = await client.callTool({
+      name: "event_add",
+      arguments: {
+        target: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+      },
+    });
+    expect(addResult.isError).not.toBe(true);
+    expect(JSON.parse(textOf(addResult))).toEqual({
+      event: "Springfield Sectionals 2026",
+      kind: "tournament",
+      startsOn: "2026-08-28",
+      endsOn: "2026-08-30",
+      created: true,
+    });
+
+    // The point of the tool: the availability writer now has an event to resolve against, over the
+    // same surface, with no out-of-band SQL in between.
+    const availResult = await client.callTool({
+      name: "player_avail",
+      arguments: { target: player.canonicalName, day: "2026-08-29", status: "available" },
+    });
+    expect(availResult.isError).not.toBe(true);
+    expect(JSON.parse(textOf(availResult))).toMatchObject({
+      availability: "available",
+      event: "Springfield Sectionals 2026",
+    });
+  });
+
+  it("event_add refuses an invalid kind as a tool error rather than crashing the server", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "event_add",
+      arguments: { target: "Springfield", kind: "sectionals", startsOn: "2026-08-28", endsOn: "2026-08-30" },
+    });
+
+    expect(result.isError).toBe(true);
+    const { db, sqlite } = openDb();
+    try {
+      expect(db.select().from(events).all(), "a refusal must write nothing").toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("report_build over MCP writes real files via the hardened output-root guard", async () => {
     runMigrations();
     const { db, sqlite } = openDb();

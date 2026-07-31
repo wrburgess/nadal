@@ -180,7 +180,17 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
           teamMatchId: linkedTeamMatch?.id ?? null,
           slot: record.slot,
           discipline: record.discipline,
-          winnerSide: null,
+          // The profiled player is written on side "home" immediately below, so the parser's
+          // player-relative `result` maps straight onto a side. This MUST stay inside the loop
+          // iteration that assigns the participant sides: sides here are pull-perspective (see
+          // `upsertCourtMatchPlayers`, which SETS `side` on conflict), so a later pull of an
+          // opposing player rewrites all of them from that player's perspective. The flip is
+          // symmetric and `windowedRecord` is perspective-invariant only because the winner flips
+          // with the sides — hoisting this out would silently invert every rewritten row.
+          // Until #17 PR B this was hardcoded `null`, and `derive.ts` reads a null winner as
+          // *undecided* by design, so every dossier's W/L read 0-0 with all matches undecided
+          // (test/ingest-winner-side.test.ts).
+          winnerSide: record.result === "W" ? "home" : "visiting",
           score: setsToScore(record),
           leagueContext: record.leagueContext,
           playedOn: record.playedOn,

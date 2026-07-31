@@ -15,6 +15,7 @@ import { pullPlayer } from "../ingest/player-pull.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
+import { addEvent } from "../query/events.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
@@ -224,6 +225,42 @@ export const MCP_TOOLS: McpToolDef[] = [
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
         const result = setAvailability(db, { playerId: resolution.playerId, day, status });
         return { player: target, day, availability: result.status, event: result.eventName };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "event_add",
+    cliCommand: "event add",
+    description: "Create or update an event and its inclusive date range",
+    inputShape: {
+      target: z.string().min(1),
+      kind: z.string().min(1),
+      startsOn: z.string().min(1),
+      endsOn: z.string().min(1),
+    },
+    handler: async (rawArgs) => {
+      const { target, kind, startsOn, endsOn } = rawArgs as {
+        target: string;
+        kind: string;
+        startsOn: string;
+        endsOn: string;
+      };
+      const { db, sqlite } = openDb();
+      try {
+        // No `requireResolved` here, unlike every other target-taking tool: this is the writer that
+        // CREATES events, so resolving the name against existing rows first would make it
+        // impossible to add the first one.
+        const result = addEvent(db, { name: target, kind, startsOn, endsOn });
+        return {
+          event: result.name,
+          kind: result.kind,
+          startsOn: result.startsOn,
+          endsOn: result.endsOn,
+          created: result.created,
+        };
       } finally {
         sqlite.close();
       }
