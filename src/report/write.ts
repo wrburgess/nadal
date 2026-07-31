@@ -7,6 +7,7 @@
 // must be refused by the same control that refuses `TN_RAW_PATH=src`, never a second hand-rolled
 // check.
 
+import { asc } from "drizzle-orm";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -110,9 +111,20 @@ export function teamSlug(teamId: number, teamName: string): string {
  * directory whether it was built alone or as part of `sectionals`, so a later single-team refresh
  * never produces a second directory for a team `sectionals` already placed (Codex adversarial
  * review, PR #38, Finding 2 [high]).
+ *
+ * `.orderBy(asc(teams.id))` below is load-bearing, not cosmetic: the whole disambiguation scheme in
+ * `resolveTeamDirNames` is defined in terms of "DB id order", but SQL makes no guarantee about the
+ * row order of a SELECT without an explicit ORDER BY — SQLite can and does invert it (see
+ * `PRAGMA reverse_unordered_selects`, which exists specifically to catch code that assumes
+ * otherwise). Without this, two different invocations (a batch `sectionals` run and a later
+ * single-team refresh through this function, each its own connection/query plan) can observe
+ * `teams.*` in different orders and therefore disambiguate the SAME collision in opposite
+ * directions — one dossier silently overwriting the other, which is the exact bug this whole
+ * function exists to prevent, one layer up (Codex adversarial review, PR #38 round 2, Finding 2
+ * [high]; round 1 fixed the disambiguation LOOP but never pinned the ORDER the loop depends on).
  */
 function resolveDirNameForTeam(db: Db, teamId: number): string {
-  const allTeams = db.select().from(teams).all();
+  const allTeams = db.select().from(teams).orderBy(asc(teams.id)).all();
   const dirNames = resolveTeamDirNames(allTeams.map((t) => ({ teamId: t.id, teamName: t.name })));
   // `teamId` is guaranteed present: the caller (`writeTeamDossier`) only reaches this after
   // `buildTeamDossier` already fetched this exact team's profile without throwing, so it exists in
@@ -152,39 +164,39 @@ export function buildTeamDossier(db: Db, teamId: number, options: { since: strin
   return { team, players };
 }
 
-/** Renders both forms and writes them under `<reportsRoot>/<team-slug>/`, returning the paths
- * written (2: `index.html`, `index.md`) — every path checked with `assertReportPathSafe` BEFORE
- * anything is written, so a refusal leaves nothing on disk (same discipline as `archivePage`).
+/** Everything `writeTeamDossier` needs to know BEFORE it writes a single byte: the two real,
+ * validated leaf paths and their already-rendered content. Splitting "figure out whether this team
+ * CAN be written" from "write it" is what lets `writeSectionalsDossiers` below validate every team
+ * in the batch — plus the top-level index pair — before committing any of them to disk (Codex
+ * adversarial review, PR #38 round 2, Finding 3 [medium]). */
+type PreparedDossierWrite = {
+  htmlPath: string;
+  mdPath: string;
+  realHtmlPath: string;
+  realMdPath: string;
+  htmlContent: string;
+  mdContent: string;
+};
+
+/** Assembles one team's dossier and validates both of its leaves — `assertReportPathSafe`,
+ * `mkdirSync`, `resolveRealOutputPath`, `assertLeafWritable` — WITHOUT writing anything yet. Content
+ * is rendered here too (not deferred to the commit step) so a rendering failure is caught at the
+ * same "nothing written yet" point as a path-safety failure, rather than after some other team in
+ * the batch has already committed.
+ *
  * `dirName`, when given, is a pre-resolved (and, for a batch, collision-disambiguated) directory
  * name from `resolveTeamDirNames` — `writeSectionalsDossiers` passes one so a `team-a` collision
  * between two teams in the same run is caught at the batch level. A standalone single-team call
- * (`tn report build "<team>"`, which never passes `dirName`) resolves its own via
- * `resolveDirNameForTeam` — the SAME whole-DB, collision-disambiguated resolution `sectionals` would
- * have produced for this team — rather than a bare `teamSlug` that only sees the one team being
- * built and would happily place it in a slug another team already claims (Finding 2 above).
- *
- * Reports carry the same personal data as raw archive captures and land in the same public repo, so
- * the write is held to `archivePage`'s standard, not just its pre-check: after `mkdirSync` (which
- * silently succeeds over an existing symlinked directory) the path is re-validated and resolved to
- * its REAL location via `resolveRealOutputPath`, and the leaf is written with `overwriteOutputFile`
- * — which refuses to follow an existing symlink at `index.html`/`index.md` rather than writing
- * through it. Unlike `archivePage`'s never-rewritten, timestamped filenames, a dossier IS rewritten
- * in place on every run (byte-identical reruns are a tested guarantee), so the leaf write can't be a
- * bare `flag: "wx"` — `overwriteOutputFile` tolerates and replaces a plain file left by a prior run
- * while still refusing a symlink.
- *
- * BOTH leaves are checked with `assertLeafWritable` before EITHER is written, so a symlink at
- * `index.md` refuses before `index.html` — written first, below — ever touches disk: the earlier
- * version of this function only discovered a symlinked leaf inside `overwriteOutputFile`, AT WRITE
- * TIME, so the html write could already have landed before the md write's symlink check threw,
- * leaving a fresh partial dossier behind despite this function's own "a refusal leaves nothing on
- * disk" promise above (Codex adversarial review, PR #38, Finding 3 [medium]). */
-export function writeTeamDossier(
+ * (`writeTeamDossier`, which never passes `dirName`) resolves its own via `resolveDirNameForTeam` —
+ * the SAME whole-DB, collision-disambiguated resolution `sectionals` would have produced for this
+ * team — rather than a bare `teamSlug` that only sees the one team being built and would happily
+ * place it in a slug another team already claims (Finding 2 above). */
+function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
   options: { since: string },
   dirName?: string,
-): string[] {
+): PreparedDossierWrite {
   const dossier = buildTeamDossier(db, teamId, options);
   const dir = join(reportsRoot(), dirName ?? resolveDirNameForTeam(db, teamId));
   const htmlPath = join(dir, "index.html");
@@ -198,10 +210,59 @@ export function writeTeamDossier(
   const realMdPath = resolveRealOutputPath(reportsRoot(), mdPath, DEFAULT_REPORTS_DIR);
   assertLeafWritable(realHtmlPath);
   assertLeafWritable(realMdPath);
-  overwriteOutputFile(realHtmlPath, renderDossier(dossier));
-  overwriteOutputFile(realMdPath, renderDossierMarkdown(dossier));
 
-  return [htmlPath, mdPath];
+  return {
+    htmlPath,
+    mdPath,
+    realHtmlPath,
+    realMdPath,
+    htmlContent: renderDossier(dossier),
+    mdContent: renderDossierMarkdown(dossier),
+  };
+}
+
+/** Writes a `PreparedDossierWrite`'s two leaves — the only place `overwriteOutputFile` is called
+ * for a team dossier. By the time this runs, `prepareTeamDossierWrite` has already confirmed both
+ * leaves are writable, so this step is not expected to throw; it still goes through
+ * `overwriteOutputFile` (not a bare `writeFileSync`) so the no-follow-a-symlink discipline holds
+ * even against a leaf that changed on disk between prepare and commit. */
+function commitDossierWrite(prepared: PreparedDossierWrite): string[] {
+  overwriteOutputFile(prepared.realHtmlPath, prepared.htmlContent);
+  overwriteOutputFile(prepared.realMdPath, prepared.mdContent);
+  return [prepared.htmlPath, prepared.mdPath];
+}
+
+/** Renders both forms and writes them under `<reportsRoot>/<team-slug>/`, returning the paths
+ * written (2: `index.html`, `index.md`) — every path checked with `assertReportPathSafe` BEFORE
+ * anything is written, so a refusal leaves nothing on disk (same discipline as `archivePage`).
+ *
+ * Reports carry the same personal data as raw archive captures and land in the same public repo, so
+ * the write is held to `archivePage`'s standard, not just its pre-check: after `mkdirSync` (which
+ * silently succeeds over an existing symlinked directory) the path is re-validated and resolved to
+ * its REAL location via `resolveRealOutputPath`, and the leaf is written with `overwriteOutputFile`
+ * — which refuses to follow an existing symlink at `index.html`/`index.md` rather than writing
+ * through it. Unlike `archivePage`'s never-rewritten, timestamped filenames, a dossier IS rewritten
+ * in place on every run (byte-identical reruns are a tested guarantee), so the leaf write can't be a
+ * bare `flag: "wx"` — `overwriteOutputFile` tolerates and replaces a plain file left by a prior run
+ * while still refusing a symlink.
+ *
+ * BOTH leaves are checked with `assertLeafWritable` before EITHER is written (inside
+ * `prepareTeamDossierWrite`, run before `commitDossierWrite`), so a symlink at `index.md` refuses
+ * before `index.html` ever touches disk: an earlier version of this function only discovered a
+ * symlinked leaf inside `overwriteOutputFile`, AT WRITE TIME, so the html write could already have
+ * landed before the md write's symlink check threw, leaving a fresh partial dossier behind despite
+ * this function's own "a refusal leaves nothing on disk" promise above (Codex adversarial review,
+ * PR #38, Finding 3 [medium]). That promise holds for a single `writeTeamDossier` call; it does NOT
+ * by itself extend across a whole batch of teams — see `writeSectionalsDossiers` below, which is why
+ * `prepareTeamDossierWrite`/`commitDossierWrite` are split out as their own functions rather than
+ * inlined here. */
+export function writeTeamDossier(
+  db: Db,
+  teamId: number,
+  options: { since: string },
+  dirName?: string,
+): string[] {
+  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, options, dirName));
 }
 
 type TeamIndexEntry = { teamId: number; teamName: string; dirName: string };
@@ -239,12 +300,22 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * available reading of "the field" — there is no `events` row to scope this to instead.
  */
 export function writeSectionalsDossiers(db: Db, options: { since: string }): string[] {
-  const allTeams = db.select().from(teams).all();
+  // Same load-bearing `ORDER BY teams.id` as `resolveDirNameForTeam` above, and for the identical
+  // reason: this function's own collision-disambiguation only agrees with a later single-team
+  // refresh's disambiguation if both see teams in the same order, and SQL does not grant that for
+  // free (Codex adversarial review, PR #38 round 2, Finding 2 [high]).
+  const allTeams = db.select().from(teams).orderBy(asc(teams.id)).all();
   const dirNames = resolveTeamDirNames(allTeams.map((t) => ({ teamId: t.id, teamName: t.name })));
-  const written: string[] = [];
-  for (const team of allTeams) {
-    written.push(...writeTeamDossier(db, team.id, options, dirNames.get(team.id)));
-  }
+
+  // PHASE 1 — validate every leaf this batch will touch, EVERY team's html+md pair plus the
+  // top-level index pair, before writing ANY of them. `writeTeamDossier`'s own "a refusal leaves
+  // nothing on disk" promise is true for one team, but the old version of this function called it
+  // in a loop that WROTE each team as soon as that team's own two leaves checked out — so a LATER
+  // team's symlinked leaf still left every EARLIER team's fresh dossier sitting on disk, discovered
+  // only at write time, one team too late (Codex adversarial review, PR #38 round 2, Finding 3
+  // [medium]; round 1 fixed the html-then-md ordering WITHIN one team but never widened the
+  // guarantee to the whole batch this function drives).
+  const preparedTeams = allTeams.map((team) => prepareTeamDossierWrite(db, team.id, options, dirNames.get(team.id)));
 
   const entries: TeamIndexEntry[] = allTeams.map((t) => ({
     teamId: t.id,
@@ -258,13 +329,20 @@ export function writeSectionalsDossiers(db: Db, options: { since: string }): str
   mkdirSync(reportsRoot(), { recursive: true });
   // Same post-mkdir re-check + no-follow-leaf-overwrite discipline as `writeTeamDossier` above — the
   // top-level index names every team on file, so it deserves the identical protection, not a lesser
-  // one just because it lives one directory up. And the same BOTH-before-EITHER leaf validation as
-  // `writeTeamDossier` (Finding 3): without it, a symlinked `index.md` would let `index.html` land on
-  // disk first before the refusal ever surfaced.
+  // one just because it lives one directory up.
   const realIndexHtmlPath = resolveRealOutputPath(reportsRoot(), indexHtmlPath, DEFAULT_REPORTS_DIR);
   const realIndexMdPath = resolveRealOutputPath(reportsRoot(), indexMdPath, DEFAULT_REPORTS_DIR);
   assertLeafWritable(realIndexHtmlPath);
   assertLeafWritable(realIndexMdPath);
+
+  // PHASE 2 — every leaf in the batch (every team's pair, and the top-level pair) is now confirmed
+  // writable. Only now does anything actually get written to disk, so a refusal anywhere above this
+  // line leaves the ENTIRE batch untouched, not just the one team or the top-level pair that
+  // triggered it.
+  const written: string[] = [];
+  for (const prepared of preparedTeams) {
+    written.push(...commitDossierWrite(prepared));
+  }
   overwriteOutputFile(realIndexHtmlPath, renderIndexHtml(entries));
   overwriteOutputFile(realIndexMdPath, renderIndexMarkdown(entries));
   written.push(indexHtmlPath, indexMdPath);

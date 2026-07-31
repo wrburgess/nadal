@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,39 +102,77 @@ export function assertNoSymlinkComponents(resolvedRoot: string, resolvedTarget: 
 }
 
 /**
- * True when `dir`, or any of its ancestors, contains a `.git` entry (a directory for a normal
- * clone, or a file for a linked worktree — both mark "a git work tree starts here"). A pure
- * filesystem walk, no subprocess: this exists so `assertNotGitTracked` below can skip shelling out
- * entirely for the common case (an archive root on an external disk, which is not inside any git
- * work tree at all) rather than paying a `git` invocation on every single write.
+ * Walks `dir` and its ancestors for a `.git` entry (a directory for a normal clone, a file for a
+ * linked worktree — both mark "a git work tree starts here") and returns the FIRST ancestor that
+ * has one, or `null` if none does. A pure filesystem walk, no subprocess: this exists so
+ * `assertNotGitTracked` below can (1) skip shelling out entirely for the common case (an
+ * archive/report root on an external disk, not inside any git work tree at all), and (2) hand
+ * `isGitTracked` a `cwd` that is GUARANTEED to exist on disk — `existsSync(join(current, ".git"))`
+ * only ever returns true when `current` itself exists, so the returned root is never a path a
+ * subprocess would fail to `chdir` into. That guarantee is the fix for Finding 1 below: the
+ * destination's OWN directory (the previous `cwd`) is routinely absent — that is the normal state
+ * for a build about to recreate it — but the work-tree ROOT it lives under always exists once any
+ * `.git` marker has been found underneath it.
  */
-function isInsideAnyGitWorkTree(dir: string): boolean {
+function findGitWorkTreeRoot(dir: string): string | null {
   let current = dir;
   for (;;) {
-    if (existsSync(join(current, ".git"))) return true;
+    if (existsSync(join(current, ".git"))) return current;
     const parent = dirname(current);
-    if (parent === current) return false;
+    if (parent === current) return null;
     current = parent;
   }
 }
 
+/** The only three outcomes `assertNotGitTracked` distinguishes: `git` confirmed the path is
+ * tracked (refuse), `git` confirmed it is not (allow), or the answer could not be determined at all
+ * — a spawn failure, an unexpected exit code, stderr that isn't git's own documented "not tracked"
+ * message (refuse; never conflate with "untracked", see `isGitTracked` below). */
+type GitTrackedResult = "tracked" | "untracked" | "indeterminate";
+
 /**
  * Asks git itself — not `.gitignore`, which cannot answer this — whether `resolvedPath` is
- * currently tracked. `git ls-files --error-unmatch` exits 0 when the path IS tracked and non-zero
- * otherwise (untracked, git missing, or `dir` not actually inside a work tree despite the `.git`
- * marker `isInsideAnyGitWorkTree` found). stdio is fully piped so nothing — including git's own
- * error text — leaks to the console; the exit status alone is read.
+ * currently tracked, running the `git` invocation from `cwd` (a directory `findGitWorkTreeRoot`
+ * already confirmed exists on disk, NOT `resolvedPath`'s own directory — see that function's doc
+ * comment and Finding 1 below for why that distinction is the entire fix). `resolvedPath` is
+ * absolute, so `cwd` only has to be somewhere inside the same work tree for git to resolve it
+ * correctly; which existing ancestor is used does not change the answer.
+ *
+ * `git ls-files --error-unmatch` exits 0 when the path IS tracked. On any non-zero exit this reads
+ * stderr rather than trusting the exit code alone: git's OWN text for "not tracked" is
+ * "did not match any file(s) known to git" — that specific message is the ONLY thing that resolves
+ * to "untracked". That text is English only because the locale is pinned to `C` below; it is a
+ * translated string otherwise, so the pin is load-bearing rather than cosmetic.
+ * Every other outcome (a spawn error — git missing from PATH — a non-zero exit with different or no
+ * stderr, or a crash) resolves to "indeterminate", which the caller refuses rather than allows: an
+ * invocation problem is indistinguishable from exactly the state this whole module exists to guard
+ * against, so fail-open here is not defensible (Codex adversarial review, PR #38 round 2, Finding 1
+ * [critical] — the round-1 version conflated ALL of these into a single `catch { return false }`,
+ * which is what let a destination whose parent directory doesn't exist yet — because `cwd` was that
+ * same missing directory — bypass the guard entirely: ENOENT on `execFileSync`'s own `chdir` looked
+ * indistinguishable from "not tracked").
  */
-function isGitTracked(resolvedPath: string): boolean {
-  try {
-    execFileSync("git", ["ls-files", "--error-unmatch", "--", resolvedPath], {
-      cwd: dirname(resolvedPath),
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    return true;
-  } catch {
-    return false;
-  }
+function isGitTracked(resolvedPath: string, cwd: string): GitTrackedResult {
+  const result = spawnSync("git", ["ls-files", "--error-unmatch", "--", resolvedPath], {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    // git's error messages are TRANSLATED when it is built with NLS and the environment asks for
+    // another language — under `LC_ALL=fr_FR.UTF-8` the stderr below reads "erreur : le
+    // spécificateur de chemin '…' ne correspond à aucun fichier connu de git", and the English
+    // match then fails. Since an unmatched message resolves to "indeterminate" and the caller
+    // FAILS CLOSED, that would refuse every capture and every dossier write on any machine not
+    // running in English, while passing every test on one that is. That is the PR #31 round-3
+    // defect exactly ("a privacy control that refuses everything looks identical to a privacy
+    // control that works, right up until someone runs it"), so the locale is pinned rather than
+    // assumed: `LC_ALL=C` selects git's untranslated strings, and `LANGUAGE` is cleared because it
+    // overrides LC_ALL for message translation specifically and would otherwise win.
+    env: { ...process.env, LC_ALL: "C", LANGUAGE: "" },
+  });
+  if (result.error !== undefined) return "indeterminate";
+  if (result.status === 0) return "tracked";
+  if (result.status === 1 && (result.stderr ?? "").includes("did not match any file")) return "untracked";
+  return "indeterminate";
 }
 
 /**
@@ -148,23 +186,32 @@ function isGitTracked(resolvedPath: string): boolean {
  *
  * Deliberately generic rather than hardcoded to this package's own repo: it asks whether
  * `resolvedPath` is tracked in WHATEVER git work tree (if any) it happens to live in, found by a
- * plain filesystem walk (`isInsideAnyGitWorkTree`) rather than anchoring to `PACKAGE_ROOT`. Two
+ * plain filesystem walk (`findGitWorkTreeRoot`) rather than anchoring to `PACKAGE_ROOT`. Two
  * consequences fall out of that: (1) an archive/report root on an external disk — legitimately not
  * inside any repo — is detected as such WITHOUT ever shelling out to git, and (2) this check, and
  * the two callers that share it, can be exercised in tests against an isolated temp git repo rather
- * than mutating this real repository's own index. `isGitTracked` fails OPEN (git missing, the
- * directory turning out not to be a real work tree after all, or any other spawn/exit error) rather
- * than blocking every write for a reason unrelated to the destination itself — the one case this
- * function exists to catch, a CONFIRMED tracked file, is the only case `git ls-files
- * --error-unmatch` reports with exit 0, and that is the only case that throws here.
+ * than mutating this real repository's own index.
+ *
+ * Fails CLOSED now, not open: a path inside a confirmed git work tree that `isGitTracked` cannot
+ * resolve to a definite "tracked"/"untracked" answer is refused, same as a confirmed-tracked path.
+ * No retry-from-a-different-cwd is attempted, because `cwd` here is ALREADY the known-good work-tree
+ * root `findGitWorkTreeRoot` found (guaranteed to exist) — a second attempt from that identical `cwd`
+ * would only re-observe the same failure, so it would add a subprocess spawn for no chance of a
+ * different outcome (Codex adversarial review, PR #38 round 2, Finding 1 [critical]).
  */
 function assertNotGitTracked(resolvedPath: string): void {
-  if (!isInsideAnyGitWorkTree(dirname(resolvedPath))) return;
-  if (!isGitTracked(resolvedPath)) return;
+  const workTreeRoot = findGitWorkTreeRoot(dirname(resolvedPath));
+  if (workTreeRoot === null) return;
+  const result = isGitTracked(resolvedPath, workTreeRoot);
+  if (result === "untracked") return;
+  const reason =
+    result === "tracked"
+      ? "a path git already tracks"
+      : "a path inside a git work tree whose tracked status could not be determined (git invocation failed or returned an unexpected result)";
   throw new OutputPathError(
-    `refusing to write a path git already tracks: ${resolvedPath} ` +
+    `refusing to write ${reason}: ${resolvedPath} ` +
       `(.gitignore does not un-track a file that was previously \`git add -f\`'d — writing here would ` +
-      `produce a tracked change containing personal data in a public repo)`,
+      `risk producing a tracked change containing personal data in a public repo)`,
   );
 }
 

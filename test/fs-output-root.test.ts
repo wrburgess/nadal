@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertOutputPathSafe, OutputPathError } from "../src/fs/output-root.js";
 
@@ -146,6 +146,36 @@ describe("assertOutputPathSafe", () => {
       ).not.toThrow();
     });
 
+    // REGRESSION (self-review, PR #38 round 2). "untracked" is decided by matching git's OWN error
+    // text, and that text is TRANSLATED when git is built with NLS and the environment asks for
+    // another language: under a French locale the same failure reads "erreur : le spécificateur de
+    // chemin '…' ne correspond à aucun fichier connu de git". An unmatched message resolves to
+    // "indeterminate", and the caller fails CLOSED — so before the locale was pinned this refused
+    // every capture and every dossier write on any machine not running in English, while every test
+    // passed on one that is. Same shape as the PR #31 round-3 defect: a privacy control that
+    // refuses everything is indistinguishable from one that works until someone runs it.
+    //
+    // LANGUAGE is set as well as LC_ALL because LANGUAGE overrides LC_ALL for message translation
+    // specifically — pinning only LC_ALL would leave the hole open for anyone who sets it.
+    it("still resolves 'untracked' when the ambient locale would translate git's error message", () => {
+      const { repoRoot } = initTrackedFile(join("reports", "team-a", "index.html"));
+      const untracked = join(repoRoot, "reports", "team-a", "index.md");
+      const priorLcAll = process.env.LC_ALL;
+      const priorLanguage = process.env.LANGUAGE;
+      process.env.LC_ALL = "fr_FR.UTF-8";
+      process.env.LANGUAGE = "fr";
+      try {
+        expect(() =>
+          assertOutputPathSafe(untracked, join(repoRoot, "reports"), "reports"),
+        ).not.toThrow();
+      } finally {
+        if (priorLcAll === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = priorLcAll;
+        if (priorLanguage === undefined) delete process.env.LANGUAGE;
+        else process.env.LANGUAGE = priorLanguage;
+      }
+    });
+
     it("a root outside any git repository at all still works — nothing is tracked because there is no git here", () => {
       const root = mkdtempSync(join(tmpdir(), "tn-no-git-"));
       try {
@@ -154,6 +184,87 @@ describe("assertOutputPathSafe", () => {
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
+    });
+
+    // REGRESSION (Codex adversarial review, PR #38 round 2, Finding 1 [critical]). The round-1 fix
+    // above asked git whether the destination is tracked, but ran `git` with the destination's OWN
+    // (about-to-be-created) directory as `cwd` — and a fresh write's parent directory is routinely
+    // absent from disk (that is the entire point of a "first write" case, tested right above this
+    // one). `execFileSync` throws ENOENT for a nonexistent `cwd`, and the old code's `catch` treated
+    // ANY thrown error, including this one, as "untracked" — so the exact case this guard exists to
+    // catch (a force-added tracked file) bypasses it completely the moment its directory is missing
+    // from disk, which is the normal state for a build about to recreate it. Fail-open here is not
+    // defensible: an invocation error is indistinguishable from exactly the state being guarded
+    // against, so git must be invoked from a directory that is GUARANTEED to exist (the discovered
+    // git work-tree root, not the destination's own directory) and any invocation problem must be
+    // treated as indeterminate -> refuse, never as "untracked".
+    it("REGRESSION (round 2): refuses a tracked file even though its parent directory no longer exists on disk", () => {
+      const { repoRoot, absolutePath } = initTrackedFile(join("reports", "team-a", "index.html"));
+      // The file AND its parent directory are both gone from disk, but the path is still tracked in
+      // git's index — exactly the state a build script hits when it is about to recreate a
+      // directory that was deleted (or never checked out) without `git rm`ing the tracked file first.
+      rmSync(join(repoRoot, "reports", "team-a"), { recursive: true, force: true });
+      expect(existsSync(dirname(absolutePath))).toBe(false);
+      expect(() =>
+        assertOutputPathSafe(absolutePath, join(repoRoot, "reports"), "reports"),
+      ).toThrow(OutputPathError);
+    });
+
+    // Companion to the above: the fix must not turn EVERY missing-parent-directory write into a
+    // refusal — only ones git actually confirms are tracked. An untracked destination whose parent
+    // directory does not exist yet (the ordinary first-write case, just inside a real git repo this
+    // time rather than the module's own PACKAGE_ROOT-anchored fixture above) must still succeed.
+    it("a legitimate first-ever write into a not-yet-existing directory inside an untracked root still succeeds", () => {
+      repoDir = mkdtempSync(join(tmpdir(), "tn-git-track-"));
+      execFileSync("git", ["init", "-q"], { cwd: repoDir, stdio: "ignore" });
+      const root = join(repoDir, "reports");
+      const candidate = join(root, "brand-new-team", "index.html");
+      expect(existsSync(dirname(candidate))).toBe(false);
+      expect(() => assertOutputPathSafe(candidate, root, "reports")).not.toThrow();
+    });
+
+    // REGRESSION (Codex adversarial review, PR #38 round 2, Finding 1 [critical]). A spawn failure
+    // (git missing from PATH) is one of the "anything else" outcomes the reviewer named as
+    // indeterminate: it must never be read as "untracked" for a path that IS inside a git work tree,
+    // because that is indistinguishable from the exact case being guarded against.
+    it("REGRESSION (round 2): refuses when git itself cannot be invoked, rather than treating the spawn failure as untracked", () => {
+      repoDir = mkdtempSync(join(tmpdir(), "tn-git-track-"));
+      execFileSync("git", ["init", "-q"], { cwd: repoDir, stdio: "ignore" });
+      const root = join(repoDir, "reports");
+      mkdirSync(join(root, "team-b"), { recursive: true });
+      const candidate = join(root, "team-b", "index.html");
+      writeFileSync(candidate, "not tracked, but git can't be asked right now");
+
+      const originalPath = process.env.PATH;
+      process.env.PATH = "";
+      try {
+        expect(() => assertOutputPathSafe(candidate, root, "reports")).toThrow(OutputPathError);
+      } finally {
+        process.env.PATH = originalPath;
+      }
+    });
+
+    // REGRESSION (Codex adversarial review, PR #38 round 2, Finding 1 [critical]). `isGitTracked`
+    // has THREE outcomes, not two: exit 0 (tracked), exit 1 with git's own "did not match any file"
+    // text (untracked), and everything else (indeterminate -> refuse). The two tests above cover a
+    // spawn failure; this one exercises the THIRD shape distinctly — git successfully runs but exits
+    // with a DIFFERENT nonzero status and a DIFFERENT stderr message than the documented "untracked"
+    // one (here: a malformed `.git` file makes git itself fail with "fatal: invalid gitfile format",
+    // exit 128) — so the final fallback branch is reached by an actual git invocation, not merely a
+    // spawn error, and still refuses rather than silently reading "nonzero exit" as "untracked".
+    it("REGRESSION (round 2): refuses when git runs but fails with neither a tracked exit nor its documented untracked message", () => {
+      repoDir = mkdtempSync(join(tmpdir(), "tn-git-track-"));
+      // A `.git` FILE (not a directory) makes `findGitWorkTreeRoot`'s plain existence check see a
+      // work tree here, but its contents are not the `gitdir: <path>` pointer format a linked
+      // worktree's `.git` file actually has — so git itself refuses to use it, distinctly from
+      // "path not found in the index".
+      writeFileSync(join(repoDir, ".git"), "not a real gitdir pointer\n");
+      const root = join(repoDir, "reports");
+      mkdirSync(join(root, "team-c"), { recursive: true });
+      const candidate = join(root, "team-c", "index.html");
+      writeFileSync(candidate, "not tracked, but git can't even start here");
+
+      expect(() => assertOutputPathSafe(candidate, root, "reports")).toThrow(OutputPathError);
     });
   });
 });

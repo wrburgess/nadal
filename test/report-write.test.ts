@@ -358,10 +358,99 @@ describe("src/report/write.ts", () => {
         expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
         expect(existsSync(join(reportsDir, "index.html"))).toBe(false);
         expect(existsSync(linkTarget)).toBe(false);
+        // Codex adversarial review, PR #38 round 2, Finding 3 [medium]: this test passed even before
+        // the round-2 fix because it never checked what happened to Team G's OWN dossier. Teams are
+        // written before the top-level index (see `writeSectionalsDossiers`'s body), so without a
+        // batch-wide pre-validation pass, Team G's index.html/index.md land on disk BEFORE the
+        // top-level index.md's symlink is ever inspected — "a refusal leaves nothing on disk" was
+        // false for the batch even though this test's only assertions were about the top-level pair.
+        expect(existsSync(join(reportsDir, "team-g", "index.html"))).toBe(false);
+        expect(existsSync(join(reportsDir, "team-g", "index.md"))).toBe(false);
       } finally {
         sqlite.close();
         rmSync(escapeTarget, { recursive: true, force: true });
       }
+    });
+
+    // REGRESSION (Codex adversarial review, PR #38 round 2, Finding 3 [medium]). The reviewer's exact
+    // reproducer: two teams, the LATER team's `index.md` is a symlink, and the EARLIER team has no
+    // dossier on disk yet. Teams are written serially in `writeSectionalsDossiers`'s loop, so without
+    // a batch-wide pre-validation pass, the earlier team's html+md are already written by the time
+    // the later team's symlinked leaf is discovered (at write time, inside `overwriteOutputFile`) and
+    // throws — leaving a fresh, unwanted dossier on disk despite `writeTeamDossier`'s own "a refusal
+    // leaves nothing on disk" doc-comment promise, which only ever held PER TEAM, not across the
+    // batch.
+    it("REGRESSION: a symlinked leaf on the SECOND team refuses before the FIRST team's dossier is ever written", () => {
+      const teamOne = seedTeamWithRoster("Team First", []);
+      const teamTwo = seedTeamWithRoster("Team Second", []);
+      const dirTwo = join(reportsDir, teamSlug(teamTwo.id, "Team Second"));
+      mkdirSync(dirTwo, { recursive: true });
+      const escapeTarget = mkdtempSync(join(tmpdir(), "tn-escape-"));
+      const linkTarget = join(escapeTarget, "leaked.md");
+      symlinkSync(linkTarget, join(dirTwo, "index.md"));
+      const { db, sqlite } = openDb();
+      try {
+        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        // The bug this guards against: Team First's dossier — which has no symlink of its own and
+        // would build+write without issue on its own — must not have been written just because it
+        // happened to be processed (by id order) before Team Second's symlink was discovered.
+        const dirOne = join(reportsDir, teamSlug(teamOne.id, "Team First"));
+        expect(existsSync(join(dirOne, "index.html"))).toBe(false);
+        expect(existsSync(join(dirOne, "index.md"))).toBe(false);
+        expect(existsSync(linkTarget)).toBe(false);
+      } finally {
+        sqlite.close();
+        rmSync(escapeTarget, { recursive: true, force: true });
+      }
+    });
+
+    // REGRESSION (Codex adversarial review, PR #38 round 2, Finding 2 [high]). Neither
+    // `db.select().from(teams).all()` call this collision scheme depends on (write.ts:115 inside
+    // `resolveDirNameForTeam`, write.ts:242 here) carries an `ORDER BY`. SQL makes NO guarantee about
+    // unordered row order, and SQLite has a documented pragma, `reverse_unordered_selects`, whose
+    // entire purpose is to surface bugs that (wrongly) assume one — exactly the shape of bug this
+    // test targets. Without an explicit `ORDER BY teams.id`, two DIFFERENT invocations (a batch
+    // `sectionals` run, and a later single-team `tn report build "<team>"` refresh on a fresh
+    // connection) can observe teams.* in different row orders and therefore assign the SAME colliding
+    // team to DIFFERENT directories — which is precisely the overwrite bug round 1 claimed to fix,
+    // reintroduced one layer up. This is NOT satisfied by getting insertion order "by luck" (the
+    // round-1 tests' gap, per the reviewer): the pragma below forces a genuinely different order on
+    // the second connection.
+    it("REGRESSION: a single-team refresh must not disagree with the batch build on a colliding team's directory, even when SQLite's row order differs between the two connections", () => {
+      const teamOne = seedTeamWithRoster("Team A!!!", []);
+      const teamTwo = seedTeamWithRoster("Team A???", []);
+
+      // Invocation 1: `sectionals`, on an ordinary connection.
+      const batch = openDb();
+      let batchWritten: string[];
+      try {
+        batchWritten = writeSectionalsDossiers(batch.db, { since: "2026-01-01" });
+      } finally {
+        batch.sqlite.close();
+      }
+      const batchTeamHtmlPaths = batchWritten.filter(
+        (p) => p.endsWith("index.html") && p !== join(reportsDir, "index.html"),
+      );
+      const batchDirForTeamTwo = dirname(
+        batchTeamHtmlPaths.find((p) => readFileSync(p, "utf8").includes("Team A???"))!,
+      );
+
+      // Invocation 2: `tn report build "Team A???"` — a single-team refresh, on a SEPARATE connection
+      // where the unordered SELECT happens to come back reversed. Same DB, same teams, same
+      // collision — this must still land in the SAME directory invocation 1 chose.
+      rmSync(reportsDir, { recursive: true, force: true });
+      const single = openDb();
+      single.sqlite.pragma("reverse_unordered_selects = ON");
+      let singleWritten: string[];
+      try {
+        singleWritten = writeTeamDossier(single.db, teamTwo.id, { since: "2026-01-01" });
+      } finally {
+        single.sqlite.close();
+      }
+      const singleDirForTeamTwo = dirname(singleWritten.find((p) => p.endsWith("index.html"))!);
+
+      expect(singleDirForTeamTwo).toBe(batchDirForTeamTwo);
+      expect(teamOne.id).toBeLessThan(teamTwo.id); // sanity: id order is the order the scheme depends on
     });
 
     it("with no teams in the DB, still writes a (near-empty) top-level index without crashing", () => {
