@@ -43,20 +43,31 @@ const RATING_SOURCE_LABELS: Record<string, string> = {
   tr_dynamic: "TR-Dyn",
 };
 
-/** NTRP's `ratingType` (C/S/A/D/M) is appended directly to the value (spec: "NTRP + rating type");
- * every other source has no rating type to append. `value` prints without a trailing ".0" so an
- * integer NTRP rating (e.g. 4) does not read as "4.0" when the page never distinguished them. */
-function formatRatingValue(value: number): string {
-  return String(value);
+/**
+ * Every rating source renders at a FIXED precision, never a variable one — these are scouting
+ * numbers read side by side in print, and a WTN of exactly `4` rendering as `"4"` next to a `"4.2"`
+ * reads as a different (smaller-magnitude) quantity than it is, not merely a formatting quirk.
+ * NTRP is fixed to 1 decimal place (it is always `x.0`/`x.5` by definition — spec § Domain model);
+ * every other source (WTN singles/doubles, TR dynamic, and anything outside the known vocabulary —
+ * `RATING_SOURCE_LABELS`'s "open vocabulary" comment applies here too) is fixed to 2. `toFixed`
+ * rounds rather than truncates, so a value carrying more precision than the display allows (e.g. a
+ * raw `21.567`) still renders a value consistent with the others rather than silently dropping
+ * digits.
+ */
+function formatRatingValue(value: number, source: string): string {
+  const decimals = source === "ntrp" ? 1 : 2;
+  return value.toFixed(decimals);
 }
 
+/** NTRP's `ratingType` (C/S/A/D/M) is appended directly to the value (spec: "NTRP + rating type");
+ * every other source has no rating type to append. */
 export function formatRatingTrajectory(trajectory: RatingTrajectoryResult): string {
   if (trajectory.length === 0) return "none on file";
   return trajectory
     .map((entry) => {
       const label = RATING_SOURCE_LABELS[entry.source] ?? entry.source;
       const typeSuffix = entry.latest.ratingType ?? "";
-      return `${label} ${formatRatingValue(entry.latest.value)}${typeSuffix}`;
+      return `${label} ${formatRatingValue(entry.latest.value, entry.source)}${typeSuffix}`;
     })
     .join(", ");
 }

@@ -18,6 +18,14 @@ describe("escapeMarkdownCell", () => {
   it("leaves ordinary text untouched", () => {
     expect(escapeMarkdownCell("Nova Norbury")).toBe("Nova Norbury");
   });
+
+  it("escapes angle brackets, square brackets, underscores, and asterisks — markdown permits inline HTML and emphasis syntax, so any of these left raw can inject markup or break formatting", () => {
+    expect(escapeMarkdownCell("<b>[link](_url_) *bold*")).toBe("\\<b\\>\\[link\\](\\_url\\_) \\*bold\\*");
+  });
+
+  it("a script tag renders as literal text, not raw HTML — the whole point of escaping <, >", () => {
+    expect(escapeMarkdownCell("<script>alert(1)</script>")).not.toContain("<script>");
+  });
 });
 
 describe("renderDossierMarkdown", () => {
@@ -64,6 +72,30 @@ describe("renderDossierMarkdown", () => {
     expect(unescapedPipeCount).toBe(headerPipeCount);
   });
 
+  it("escapes a player name containing a script tag EVERYWHERE it appears — the roster table AND the player heading, not just the table — so the raw substring <script> never survives into the markdown output", () => {
+    const nastyName = "Dan <script>alert(1)</script>";
+    const dossier = buildDossier({
+      players: [buildPlayerProfile({ identity: { ...buildPlayerProfile().identity, canonicalName: nastyName } })],
+      team: buildTeamProfile({
+        roster: [
+          {
+            playerId: 1,
+            canonicalName: nastyName,
+            ageRange: null,
+            singlesRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },
+            doublesRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },
+            slotTendencies: [],
+          },
+        ],
+      }),
+    });
+    const md = renderDossierMarkdown(dossier);
+    expect(md).not.toContain("<script>");
+    expect(md).not.toContain("<script>alert(1)</script>");
+    // The player heading ("### Dan ...") must also be escaped, not just the roster table row.
+    expect(md).toContain(`### ${escapeMarkdownCell(nastyName)}`);
+  });
+
   it('includes a "Not collected yet" block when dataGaps reports gaps', () => {
     const md = renderDossierMarkdown(buildDossier());
     expect(md).toMatch(/not collected yet/i);
@@ -89,8 +121,8 @@ describe("renderDossierMarkdown", () => {
   it("renders the roster table with age range, NTRP+type, and TR dynamic rating", () => {
     const md = renderDossierMarkdown(buildDossier());
     expect(md).toContain("40-49");
-    expect(md).toContain("4C");
-    expect(md).toContain("4.1");
+    expect(md).toContain("4.0C"); // NTRP 4.0, fixed 1-decimal precision, rating type C
+    expect(md).toContain("4.10"); // TR dynamic, fixed 2-decimal precision
   });
 
   it("renders head-to-head rows when headToHead is present, with an undecided count when nonzero", () => {
@@ -111,5 +143,33 @@ describe("renderDossierMarkdown", () => {
     });
     const md = renderDossierMarkdown(dossier);
     expect(md).toContain("Prior meetings vs our players: none on file.");
+  });
+
+  it("renders the 'not available' prior-meetings note exactly ONCE for a multi-player dossier, in its own section — not once per player block", () => {
+    const players = [1, 2, 3, 4].map((id) =>
+      buildPlayerProfile({ identity: { ...buildPlayerProfile().identity, playerId: id, canonicalName: `Player ${id}` } }),
+    );
+    const dossier = buildDossier({
+      players,
+      team: buildTeamProfile({
+        roster: players.map((p) => ({
+          playerId: p.identity.playerId,
+          canonicalName: p.identity.canonicalName,
+          ageRange: p.identity.ageRange,
+          singlesRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },
+          doublesRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },
+          slotTendencies: [],
+        })),
+        headToHead: null,
+      }),
+    });
+    const md = renderDossierMarkdown(dossier);
+    const occurrences = md.toLowerCase().split("not available in this build").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("renders a dedicated 'Prior meetings vs our players' section heading, separate from the per-player blocks", () => {
+    const md = renderDossierMarkdown(buildDossier());
+    expect(md).toMatch(/^## Prior meetings vs our players$/m);
   });
 });

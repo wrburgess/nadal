@@ -78,25 +78,45 @@ function formatHeadToHead(h: TeamCrossHeadToHead): string {
   return h.undecided > 0 ? `${base} (${h.undecided} undecided)` : base;
 }
 
-function renderPriorMeetingsHtml(player: PlayerProfile, headToHead: TeamCrossHeadToHead[] | null): string {
-  if (headToHead === null) {
-    return "<p><em>Prior meetings vs our players: not available in this build (no home team configured).</em></p>";
-  }
+/** One player's row within the dedicated prior-meetings section (see `renderPriorMeetingsSectionHtml`
+ * below) — `headToHead` is never null here, that case is handled once for the whole dossier by the
+ * caller before this is reached. */
+function renderPlayerPriorMeetingsRowHtml(player: PlayerProfile, headToHead: TeamCrossHeadToHead[]): string {
   const rows = headToHead.filter((h) => h.playerId === player.identity.playerId);
+  const name = escapeHtml(player.identity.canonicalName);
   if (rows.length === 0) {
-    return "<p>Prior meetings vs our players: none on file.</p>";
+    return `<p><strong>${name}</strong> — Prior meetings vs our players: none on file.</p>`;
   }
   const items = rows
     .map((h) => `<li>vs player #${h.opponentId}: ${escapeHtml(formatHeadToHead(h))} (${h.matches} matches)</li>`)
     .join("");
-  return `<div><strong>Prior meetings vs our players:</strong><ul>${items}</ul></div>`;
+  return `<div><strong>${name}</strong> — Prior meetings vs our players:<ul>${items}</ul></div>`;
+}
+
+/**
+ * One dedicated section for the whole dossier, rendered ONCE — not once per player block. The
+ * "not available in this build" line does not depend on which player it is about (there is no home
+ * team configured at all), so repeating it per player only repeated the same sentence N times for
+ * an N-player dossier; when head-to-head data IS available it genuinely differs per player, so this
+ * section still breaks it out by player, just gathered in one place rather than scattered through
+ * `renderPlayersSectionHtml`.
+ */
+function renderPriorMeetingsSectionHtml(dossier: TeamDossier): string {
+  const headToHead = dossier.team.headToHead;
+  const body =
+    headToHead === null
+      ? "<p><em>Not available in this build (no home team configured).</em></p>"
+      : dossier.players.map((p) => renderPlayerPriorMeetingsRowHtml(p, headToHead)).join("");
+  return `<section id="prior-meetings"><h2>Prior meetings vs our players</h2>${body}</section>`;
 }
 
 /** One player's full detail block — everything about a single player stays together on the page
  * (`page-break-inside: avoid`, in the inlined stylesheet), so a printed binder never splits one
  * player's record across a page break. Content order follows spec § Deliverables #1: 6-month
- * singles/doubles records, then court-slot tendencies, then partner frequency, then prior meetings. */
-function renderPlayerBlockHtml(player: PlayerProfile, headToHead: TeamCrossHeadToHead[] | null): string {
+ * singles/doubles records, then court-slot tendencies, then partner frequency. Prior meetings is
+ * NOT repeated here — it renders once for the whole dossier, in its own section
+ * (`renderPriorMeetingsSectionHtml`). */
+function renderPlayerBlockHtml(player: PlayerProfile): string {
   return (
     '<div class="player-block">' +
     `<h3>${escapeHtml(player.identity.canonicalName)}</h3>` +
@@ -104,13 +124,12 @@ function renderPlayerBlockHtml(player: PlayerProfile, headToHead: TeamCrossHeadT
     ` doubles ${escapeHtml(formatRecord(player.doublesRecord.sixMonth))}</p>` +
     `<p><strong>Court-slot tendencies:</strong> ${escapeHtml(formatSlotTendencies(player.slotTendencies))}</p>` +
     `<p><strong>Partner frequency:</strong> ${escapeHtml(formatPartnerFrequency(player.partnerFrequency))}</p>` +
-    renderPriorMeetingsHtml(player, headToHead) +
     "</div>"
   );
 }
 
 function renderPlayersSectionHtml(dossier: TeamDossier): string {
-  return dossier.players.map((p) => renderPlayerBlockHtml(p, dossier.team.headToHead)).join("");
+  return dossier.players.map((p) => renderPlayerBlockHtml(p)).join("");
 }
 
 // The three sections with no writer ANYWHERE in the codebase (docs/findings.md, #15) — same labels
@@ -185,6 +204,7 @@ export function renderDossier(dossier: TeamDossier): string {
     '<section id="players"><h2>Player detail</h2>' +
     renderPlayersSectionHtml(dossier) +
     "</section>" +
+    renderPriorMeetingsSectionHtml(dossier) +
     renderNotCollectedHtml(dossier) +
     "</body>" +
     "</html>"

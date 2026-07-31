@@ -47,7 +47,7 @@ describe("tn report build (end-to-end via dispatch)", () => {
     return team;
   }
 
-  it("with a <team> target, builds that team's dossier and prints one summary line naming the files/count, exit 0", async () => {
+  it("with a <team> target, builds that team's dossier and prints one summary line naming the root/teams/files, exit 0", async () => {
     seedTeamWithRoster("Team A", ["Player One"]);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -57,7 +57,13 @@ describe("tn report build (end-to-end via dispatch)", () => {
     expect(logSpy).toHaveBeenCalledTimes(1);
     const printed = logSpy.mock.calls[0]?.[0] as string;
     expect(printed).toMatch(/^report build status=ok/);
-    expect(printed).toContain("count=2");
+    expect(printed).toContain("teams=1");
+    expect(printed).toContain("files=2");
+    expect(printed).toContain(`root="${resolve(reportsDir)}"`);
+    // The old shape printed every absolute file path on one line — unreadable at Sectionals scale
+    // (five-plus teams). The fix replaces that with root+count, so no ".html"/".md" path appears.
+    expect(printed).not.toContain(".html");
+    expect(printed).not.toContain(".md");
   });
 
   it("with target sectionals, builds one dossier per team plus a top-level index", async () => {
@@ -69,7 +75,8 @@ describe("tn report build (end-to-end via dispatch)", () => {
 
     expect(code).toBe(0);
     const printed = logSpy.mock.calls[0]?.[0] as string;
-    expect(printed).toContain("count=6");
+    expect(printed).toContain("teams=2");
+    expect(printed).toContain("files=6");
   });
 
   it("bare (no target) is equivalent to sectionals", async () => {
@@ -80,7 +87,8 @@ describe("tn report build (end-to-end via dispatch)", () => {
 
     expect(code).toBe(0);
     const printed = logSpy.mock.calls[0]?.[0] as string;
-    expect(printed).toContain("count=4"); // 1 team * 2 files + 2 top-level index files
+    expect(printed).toContain("teams=1");
+    expect(printed).toContain("files=4"); // 1 team * 2 files + 2 top-level index files
   });
 
   it("--json emits parseable JSON and no key=value summary line", async () => {
@@ -93,7 +101,9 @@ describe("tn report build (end-to-end via dispatch)", () => {
     expect(logSpy).toHaveBeenCalledTimes(1);
     const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
     expect(parsed.status).toBe("ok");
-    expect(parsed.count).toBe(4);
+    expect(parsed.teams).toBe(1);
+    expect(parsed.files).toBe(4);
+    expect(parsed.root).toBe(resolve(reportsDir));
   });
 
   it("--quiet emits nothing on stdout and preserves exit code 0", async () => {

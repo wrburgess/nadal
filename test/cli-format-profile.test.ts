@@ -55,18 +55,47 @@ describe("formatRatingTrajectory", () => {
       { source: "ntrp", latest: { id: 1, value: 4.0, ratingType: "C", observedOn: "2026-01-01" }, series: [] },
       { source: "wtn_singles", latest: { id: 2, value: 21.5, ratingType: null, observedOn: "2026-01-01" }, series: [] },
     ];
-    expect(formatRatingTrajectory(trajectory)).toBe("NTRP 4C, WTN-S 21.5");
+    // NTRP is fixed to 1 decimal (it is always x.0/x.5 by definition); WTN is fixed to 2 decimals.
+    expect(formatRatingTrajectory(trajectory)).toBe("NTRP 4.0C, WTN-S 21.50");
   });
 
   it("an unrecognized source label falls back to the raw source string rather than dropping it", () => {
     const trajectory: RatingTrajectoryResult = [
       { source: "utr", latest: { id: 1, value: 5.0, ratingType: null, observedOn: "2026-01-01" }, series: [] },
     ];
-    expect(formatRatingTrajectory(trajectory)).toBe("utr 5");
+    expect(formatRatingTrajectory(trajectory)).toBe("utr 5.00");
   });
 
   it("no observations at all renders an explicit placeholder", () => {
     expect(formatRatingTrajectory([])).toBe("none on file");
+  });
+
+  it("formats a WTN value that is exactly an integer with fixed 2-decimal precision — not '4', but '4.00'", () => {
+    const trajectory: RatingTrajectoryResult = [
+      { source: "wtn_doubles", latest: { id: 1, value: 4, ratingType: null, observedOn: "2026-01-01" }, series: [] },
+    ];
+    expect(formatRatingTrajectory(trajectory)).toBe("WTN-D 4.00");
+  });
+
+  it("formats a TR dynamic value with trailing zeros at fixed 2-decimal precision — not '4.1', but '4.10'", () => {
+    const trajectory: RatingTrajectoryResult = [
+      { source: "tr_dynamic", latest: { id: 1, value: 4.1, ratingType: null, observedOn: "2026-01-01" }, series: [] },
+    ];
+    expect(formatRatingTrajectory(trajectory)).toBe("TR-Dyn 4.10");
+  });
+
+  it("formats an NTRP value that is exactly an integer with fixed 1-decimal precision — not '4', but '4.0'", () => {
+    const trajectory: RatingTrajectoryResult = [
+      { source: "ntrp", latest: { id: 1, value: 4, ratingType: "C", observedOn: "2026-01-01" }, series: [] },
+    ];
+    expect(formatRatingTrajectory(trajectory)).toBe("NTRP 4.0C");
+  });
+
+  it("rounds a value with more decimal places than the fixed precision, rather than truncating or overflowing", () => {
+    const trajectory: RatingTrajectoryResult = [
+      { source: "wtn_singles", latest: { id: 1, value: 21.567, ratingType: null, observedOn: "2026-01-01" }, series: [] },
+    ];
+    expect(formatRatingTrajectory(trajectory)).toBe("WTN-S 21.57");
   });
 });
 

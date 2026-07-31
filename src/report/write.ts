@@ -8,7 +8,7 @@
 // check.
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { assertOutputPathSafe } from "../fs/output-root.js";
 import type { Db } from "../ingest/db-types.js";
 import { getPlayerProfile } from "../query/player-profile.js";
@@ -30,16 +30,70 @@ function assertReportPathSafe(candidatePath: string, root: string = reportsRoot(
   assertOutputPathSafe(candidatePath, root, DEFAULT_REPORTS_DIR);
 }
 
+/** The reports root as an absolute path — what the CLI's `root=` summary field reports, so a caller
+ * knows exactly where the binder landed regardless of what directory `tn` was invoked from. */
+export function resolvedReportsRoot(): string {
+  return resolve(reportsRoot());
+}
+
+/** The number of teams currently on file — what the CLI's `teams=` summary field reports for a
+ * `sectionals` build. A single-team `report build <team>` never needs this: it always writes
+ * exactly one team's dossier by definition. */
+export function countTeams(db: Db): number {
+  return db.select().from(teams).all().length;
+}
+
 /**
- * A team's directory name under the reports root. Team names are NOT filesystem-safe — the
- * fixtures themselves use names like `IA/Versteeg/40&Over3.5M` (`/` would otherwise be read as a
- * path separator, silently nesting directories no one asked for) — so the directory is the opaque,
- * always-safe `team-<id>` rather than a slugified name. `assertReportPathSafe` guards every path
- * regardless, but avoiding attacker-shaped path components in the first place is simpler than
- * relying on the guard alone to catch a `..`-laden team name.
+ * Lowercase, collapse every run of non-alphanumeric characters to a single `-`, then trim leading
+ * and trailing `-`. This is the ONLY thing standing between a team name and a filesystem path
+ * component — team names are NOT filesystem-safe (fixtures themselves use names like
+ * `IA/Versteeg/40&Over3.5M`, where `/` would otherwise be read as a path separator, silently
+ * nesting directories no one asked for) — so no character outside `[a-z0-9-]` can survive this
+ * function by construction. In particular `.`, `..`, `/`, and `\` are all non-alphanumeric and are
+ * therefore always collapsed away: a team literally named `../../etc/passwd` cannot produce a `..`
+ * segment no matter what. `assertReportPathSafe` still guards every write as defense in depth, but
+ * the slug generator itself is designed to make the escape impossible, not just caught.
  */
-function teamDirName(teamId: number): string {
-  return `team-${teamId}`;
+export function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * A team's directory-safe name: the slugified team name, so a courtside binder is navigable by
+ * opponent name rather than an opaque `team-<id>` — that WAS the always-safe fallback (see git
+ * history), but it defeated the entire point of a binder: you cannot tell which opponent `team-1`
+ * is without opening it. A name that is entirely punctuation (e.g. `"!!!"`) slugifies to the empty
+ * string, which is not a usable directory name, so `teamSlug` falls back to the same opaque
+ * `team-<id>` form in exactly that case — the fallback is now the exception, not the rule.
+ * Collision-safety (two DISTINCT names slugifying to the SAME string) is handled by the caller
+ * (`resolveTeamDirNames`), which has visibility across every team in one build; this function alone
+ * cannot know about sibling teams.
+ */
+export function teamSlug(teamId: number, teamName: string): string {
+  const slug = slugify(teamName);
+  return slug === "" ? `team-${teamId}` : slug;
+}
+
+/**
+ * Resolves one directory name per team, collision-safe across the whole batch: when two distinct
+ * team names slugify to the same string, every team AFTER the first to claim that slug gets its id
+ * appended, so neither dossier ever overwrites the other. Deterministic given a fixed input order
+ * (callers pass teams in DB id order), not merely "safe" — the same DB produces the same directory
+ * names every time, preserving `writeTeamDossier`'s byte-identical-reruns guarantee.
+ */
+function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): Map<number, string> {
+  const used = new Set<string>();
+  const dirNames = new Map<number, string>();
+  for (const e of entries) {
+    let slug = teamSlug(e.teamId, e.teamName);
+    if (used.has(slug)) slug = `${slug}-${e.teamId}`;
+    used.add(slug);
+    dirNames.set(e.teamId, slug);
+  }
+  return dirNames;
 }
 
 /**
@@ -54,12 +108,21 @@ export function buildTeamDossier(db: Db, teamId: number, options: { since: strin
   return { team, players };
 }
 
-/** Renders both forms and writes them under `<reportsRoot>/team-<id>/`, returning the paths written
- * (2: `index.html`, `index.md`) — every path checked with `assertReportPathSafe` BEFORE anything is
- * written, so a refusal leaves nothing on disk (same discipline as `archivePage`). */
-export function writeTeamDossier(db: Db, teamId: number, options: { since: string }): string[] {
+/** Renders both forms and writes them under `<reportsRoot>/<team-slug>/`, returning the paths
+ * written (2: `index.html`, `index.md`) — every path checked with `assertReportPathSafe` BEFORE
+ * anything is written, so a refusal leaves nothing on disk (same discipline as `archivePage`).
+ * `dirName`, when given, is a pre-resolved (and, for a batch, collision-disambiguated) directory
+ * name from `resolveTeamDirNames` — `writeSectionalsDossiers` passes one so a `team-a` collision
+ * between two teams in the same run is caught at the batch level; a standalone single-team call (no
+ * sibling teams to collide with) computes its own from `teamSlug` directly. */
+export function writeTeamDossier(
+  db: Db,
+  teamId: number,
+  options: { since: string },
+  dirName?: string,
+): string[] {
   const dossier = buildTeamDossier(db, teamId, options);
-  const dir = join(reportsRoot(), teamDirName(teamId));
+  const dir = join(reportsRoot(), dirName ?? teamSlug(teamId, dossier.team.teamName));
   const htmlPath = join(dir, "index.html");
   const mdPath = join(dir, "index.md");
 
@@ -73,11 +136,11 @@ export function writeTeamDossier(db: Db, teamId: number, options: { since: strin
   return [htmlPath, mdPath];
 }
 
-type TeamIndexEntry = { teamId: number; teamName: string };
+type TeamIndexEntry = { teamId: number; teamName: string; dirName: string };
 
 function renderIndexHtml(entries: TeamIndexEntry[]): string {
   const items = entries
-    .map((e) => `<li><a href="${teamDirName(e.teamId)}/index.html">${escapeHtml(e.teamName)}</a></li>`)
+    .map((e) => `<li><a href="${e.dirName}/index.html">${escapeHtml(e.teamName)}</a></li>`)
     .join("");
   const body = entries.length === 0 ? "<p>No teams on file yet.</p>" : `<ul>${items}</ul>`;
   return (
@@ -89,7 +152,7 @@ function renderIndexHtml(entries: TeamIndexEntry[]): string {
 
 function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
   if (entries.length === 0) return "# Sectionals dossiers _(v0 layout)_\n\nNo teams on file yet.\n";
-  const items = entries.map((e) => `- [${e.teamName}](${teamDirName(e.teamId)}/index.md)`).join("\n");
+  const items = entries.map((e) => `- [${e.teamName}](${e.dirName}/index.md)`).join("\n");
   return `# Sectionals dossiers _(v0 layout)_\n\n${items}\n`;
 }
 
@@ -101,12 +164,17 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  */
 export function writeSectionalsDossiers(db: Db, options: { since: string }): string[] {
   const allTeams = db.select().from(teams).all();
+  const dirNames = resolveTeamDirNames(allTeams.map((t) => ({ teamId: t.id, teamName: t.name })));
   const written: string[] = [];
   for (const team of allTeams) {
-    written.push(...writeTeamDossier(db, team.id, options));
+    written.push(...writeTeamDossier(db, team.id, options, dirNames.get(team.id)));
   }
 
-  const entries: TeamIndexEntry[] = allTeams.map((t) => ({ teamId: t.id, teamName: t.name }));
+  const entries: TeamIndexEntry[] = allTeams.map((t) => ({
+    teamId: t.id,
+    teamName: t.name,
+    dirName: dirNames.get(t.id)!,
+  }));
   const indexHtmlPath = join(reportsRoot(), "index.html");
   const indexMdPath = join(reportsRoot(), "index.md");
   assertReportPathSafe(indexHtmlPath);

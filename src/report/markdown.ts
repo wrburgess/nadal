@@ -15,16 +15,30 @@ import {
 import type { TeamDossier } from "./types.js";
 
 /**
- * Markdown table cells break on two characters: `|` (the column delimiter itself) and a raw
- * newline (a table row must be exactly one line). A backtick is escaped too — an odd number of
- * unescaped backticks in a cell opens an inline-code span that swallows every `|` after it until
- * the next backtick, which corrupts the table exactly like an unescaped pipe would, just less
- * obviously. Backslash-escaping is CommonMark's own mechanism for "this character, literally" —
- * not a bespoke scheme — so the table survives being re-parsed by any standard renderer, not just
- * displayed as raw text.
+ * The general-purpose escape for any free text this renderer interpolates — a player or team name
+ * is attacker-influenced (it comes from a scraped page), and markdown, unlike this renderer's HTML
+ * twin, permits raw inline HTML: a name like `Dan <script>alert(1)</script>` written verbatim is
+ * executed by any viewer that renders the resulting `.md` file. `escapeHtml` in `html.ts` is the
+ * ONLY thing preventing that on the HTML side; this is markdown's equivalent, applied everywhere a
+ * name (or any other free-text field) is interpolated — table cells, headings, prose — not only
+ * inside the roster table.
+ *
+ * A markdown table cell specifically breaks on two further characters beyond the injection set:
+ * `|` (the column delimiter itself) and a raw newline (a table row must be exactly one line). A
+ * backtick is escaped for the same table-safety reason — an odd number of unescaped backticks opens
+ * an inline-code span that swallows every `|` after it until the next backtick, corrupting the
+ * table exactly like an unescaped pipe would, just less obviously. `<`, `>`, `[`, `]`, `_`, `*` are
+ * escaped because CommonMark treats them as syntax (raw HTML, link/image brackets, emphasis) even
+ * outside a table cell — the same character set matters whether this value lands in a table row or
+ * a bare heading. Backslash-escaping is CommonMark's own mechanism for "this character, literally"
+ * — not a bespoke scheme — so the output survives being re-parsed by any standard renderer, not
+ * just displayed as raw text by accident.
  */
 export function escapeMarkdownCell(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/`/g, "\\`").replace(/\r?\n/g, " ");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/[|`<>[\]_*]/g, (ch) => `\\${ch}`)
+    .replace(/\r?\n/g, " ");
 }
 
 function renderRosterTableMarkdown(dossier: TeamDossier): string {
@@ -52,32 +66,46 @@ function formatHeadToHead(h: TeamCrossHeadToHead): string {
   return h.undecided > 0 ? `${base} (${h.undecided} undecided)` : base;
 }
 
-function renderPriorMeetingsMarkdown(player: PlayerProfile, headToHead: TeamCrossHeadToHead[] | null): string {
-  if (headToHead === null) {
-    return "_Prior meetings vs our players: not available in this build (no home team configured)._";
-  }
+/** One player's row within the dedicated prior-meetings section (see
+ * `renderPriorMeetingsSectionMarkdown` below) — `headToHead` is never null here, that case is
+ * handled once for the whole dossier by the caller before this is reached. */
+function renderPlayerPriorMeetingsRowMarkdown(player: PlayerProfile, headToHead: TeamCrossHeadToHead[]): string {
   const rows = headToHead.filter((h) => h.playerId === player.identity.playerId);
-  if (rows.length === 0) return "Prior meetings vs our players: none on file.";
+  const name = escapeMarkdownCell(player.identity.canonicalName);
+  if (rows.length === 0) return `**${name}** — Prior meetings vs our players: none on file.`;
   const items = rows.map((h) => `- vs player #${h.opponentId}: ${formatHeadToHead(h)} (${h.matches} matches)`);
-  return ["**Prior meetings vs our players:**", ...items].join("\n");
+  return [`**${name}** — Prior meetings vs our players:`, ...items].join("\n");
 }
 
-function renderPlayerBlockMarkdown(player: PlayerProfile, headToHead: TeamCrossHeadToHead[] | null): string {
+/**
+ * One dedicated section for the whole dossier, rendered ONCE — not once per player block. Same
+ * rationale as `html.ts`'s twin: the "not available" line does not depend on which player it is
+ * about, so repeating it per player only repeated the same sentence N times for an N-player
+ * dossier.
+ */
+function renderPriorMeetingsSectionMarkdown(dossier: TeamDossier): string {
+  const headToHead = dossier.team.headToHead;
+  const body =
+    headToHead === null
+      ? "_Not available in this build (no home team configured)._"
+      : dossier.players.map((p) => renderPlayerPriorMeetingsRowMarkdown(p, headToHead)).join("\n\n");
+  return `## Prior meetings vs our players\n\n${body}`;
+}
+
+function renderPlayerBlockMarkdown(player: PlayerProfile): string {
   return [
-    `### ${player.identity.canonicalName}`,
+    `### ${escapeMarkdownCell(player.identity.canonicalName)}`,
     "",
     `**6-month record:** singles ${formatRecord(player.singlesRecord.sixMonth)}, doubles ${formatRecord(player.doublesRecord.sixMonth)}`,
     "",
     `**Court-slot tendencies:** ${formatSlotTendencies(player.slotTendencies)}`,
     "",
-    `**Partner frequency:** ${formatPartnerFrequency(player.partnerFrequency)}`,
-    "",
-    renderPriorMeetingsMarkdown(player, headToHead),
+    `**Partner frequency:** ${escapeMarkdownCell(formatPartnerFrequency(player.partnerFrequency))}`,
   ].join("\n");
 }
 
 function renderPlayersSectionMarkdown(dossier: TeamDossier): string {
-  return dossier.players.map((p) => renderPlayerBlockMarkdown(p, dossier.team.headToHead)).join("\n\n");
+  return dossier.players.map((p) => renderPlayerBlockMarkdown(p)).join("\n\n");
 }
 
 const DATA_GAP_LABELS: Record<string, string> = {
@@ -105,13 +133,15 @@ function renderNotCollectedMarkdown(dossier: TeamDossier): string {
 
 export function renderDossierMarkdown(dossier: TeamDossier): string {
   return (
-    `# ${dossier.team.teamName} — Scouting Dossier _(dossier — v0 layout)_\n\n` +
+    `# ${escapeMarkdownCell(dossier.team.teamName)} — Scouting Dossier _(dossier — v0 layout)_\n\n` +
     "## Roster\n\n" +
     renderRosterTableMarkdown(dossier) +
     "\n\n" +
     renderTeamRecordMarkdown(dossier) +
     "\n\n## Player detail\n\n" +
     renderPlayersSectionMarkdown(dossier) +
+    "\n\n" +
+    renderPriorMeetingsSectionMarkdown(dossier) +
     renderNotCollectedMarkdown(dossier) +
     "\n"
   );

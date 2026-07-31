@@ -101,8 +101,8 @@ describe("renderDossier", () => {
   it("renders the roster table with age range, NTRP+type, and TR dynamic rating", () => {
     const html = renderDossier(buildDossier());
     expect(html).toContain("40-49");
-    expect(html).toContain("4C"); // NTRP 4.0, rating type C
-    expect(html).toContain("4.1"); // TR dynamic
+    expect(html).toContain("4.0C"); // NTRP 4.0, fixed 1-decimal precision, rating type C
+    expect(html).toContain("4.10"); // TR dynamic, fixed 2-decimal precision
   });
 
   it("renders court-slot tendencies and partner frequency for each player", () => {
@@ -157,5 +157,33 @@ describe("renderDossier", () => {
     });
     const html = renderDossier(dossier);
     expect(html).toContain("Prior meetings vs our players: none on file.");
+  });
+
+  it("renders the 'not available' prior-meetings note exactly ONCE for a multi-player dossier, in its own section — not once per player block", () => {
+    const players = [1, 2, 3, 4].map((id) =>
+      buildPlayerProfile({ identity: { ...buildPlayerProfile().identity, playerId: id, canonicalName: `Player ${id}` } }),
+    );
+    const dossier = buildDossier({
+      players,
+      team: buildTeamProfile({
+        roster: players.map((p) => ({
+          playerId: p.identity.playerId,
+          canonicalName: p.identity.canonicalName,
+          ageRange: p.identity.ageRange,
+          singlesRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },
+          doublesRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },
+          slotTendencies: [],
+        })),
+        headToHead: null,
+      }),
+    });
+    const html = renderDossier(dossier);
+    const occurrences = html.toLowerCase().split("not available in this build").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("renders a dedicated 'Prior meetings vs our players' section separate from the per-player blocks", () => {
+    const html = renderDossier(buildDossier());
+    expect(html).toMatch(/<section id="prior-meetings">/);
   });
 });

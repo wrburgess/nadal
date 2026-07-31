@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
 import { OutputPathError } from "../src/fs/output-root.js";
-import { buildTeamDossier, writeTeamDossier, writeSectionalsDossiers } from "../src/report/write.js";
+import {
+  buildTeamDossier,
+  slugify,
+  teamSlug,
+  writeTeamDossier,
+  writeSectionalsDossiers,
+} from "../src/report/write.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 describe("src/report/write.ts", () => {
@@ -93,12 +99,79 @@ describe("src/report/write.ts", () => {
         sqlite.close();
       }
     });
+
+    it("writes under a slugified team-name directory, not the opaque team-<id> name — a courtside binder must be navigable by opponent name", () => {
+      const team = seedTeamWithRoster("IA/Versteeg/40&Over3.5M", []);
+      const { db, sqlite } = openDb();
+      try {
+        const written = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        expect(written.every((p) => p.includes(join(reportsDir, "ia-versteeg-40-over3-5m")))).toBe(true);
+        expect(written.some((p) => p.includes(`team-${team.id}`))).toBe(false);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a team name that is entirely punctuation slugifies to nothing, so the directory falls back to team-<id>", () => {
+      const team = seedTeamWithRoster("!!!", []);
+      const { db, sqlite } = openDb();
+      try {
+        const written = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        expect(written.every((p) => p.includes(join(reportsDir, `team-${team.id}`)))).toBe(true);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("a team name shaped like a path-traversal attempt cannot escape the reports root by construction", () => {
+      const team = seedTeamWithRoster("../../etc/passwd", []);
+      const { db, sqlite } = openDb();
+      try {
+        const written = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        for (const p of written) {
+          expect(p.startsWith(reportsDir)).toBe(true);
+          expect(p).not.toContain("..");
+        }
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  describe("slugify", () => {
+    it("lowercases and collapses runs of non-alphanumerics to a single dash", () => {
+      expect(slugify("IA/Versteeg/40&Over3.5M")).toBe("ia-versteeg-40-over3-5m");
+    });
+
+    it("trims leading and trailing dashes", () => {
+      expect(slugify("--Hello World--")).toBe("hello-world");
+    });
+
+    it("a name that is entirely punctuation slugifies to the empty string", () => {
+      expect(slugify("!!!")).toBe("");
+    });
+
+    it("no dot, double-dot, forward-slash, or backslash survives slugification", () => {
+      const slug = slugify("../../etc/passwd\\windows");
+      expect(slug).not.toMatch(/[./\\]/);
+      expect(slug).not.toContain("..");
+    });
+  });
+
+  describe("teamSlug", () => {
+    it("falls back to team-<id> when the name slugifies to the empty string", () => {
+      expect(teamSlug(42, "!!!")).toBe("team-42");
+    });
+
+    it("uses the slugified name otherwise", () => {
+      expect(teamSlug(42, "Team Alpha")).toBe("team-alpha");
+    });
   });
 
   describe("writeSectionalsDossiers", () => {
     it("writes one dossier per team in the DB, plus a top-level index.html/index.md", () => {
-      const teamE = seedTeamWithRoster("Team E", []);
-      const teamF = seedTeamWithRoster("Team F", []);
+      seedTeamWithRoster("Team E", []);
+      seedTeamWithRoster("Team F", []);
       const { db, sqlite } = openDb();
       try {
         const written = writeSectionalsDossiers(db, { since: "2026-01-01" });
@@ -107,13 +180,38 @@ describe("src/report/write.ts", () => {
         for (const path of written) {
           expect(existsSync(path)).toBe(true);
         }
-        expect(written).toContain(join(reportsDir, `team-${teamE.id}`, "index.html"));
-        expect(written).toContain(join(reportsDir, `team-${teamF.id}`, "index.md"));
+        // Directories are named for the team (slugified), not the opaque numeric id — a courtside
+        // binder must be navigable by opponent name, not by looking up which id belongs to which team.
+        expect(written).toContain(join(reportsDir, "team-e", "index.html"));
+        expect(written).toContain(join(reportsDir, "team-f", "index.md"));
         expect(written).toContain(join(reportsDir, "index.html"));
         expect(written).toContain(join(reportsDir, "index.md"));
         // The top-level index links to each team dossier.
         expect(readFileSync(join(reportsDir, "index.html"), "utf8")).toContain("Team E");
         expect(readFileSync(join(reportsDir, "index.md"), "utf8")).toContain("Team F");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("two distinct team names that slugify identically get distinct, collision-safe directories", () => {
+      // "Team A!!!" and "Team A???" both slugify to "team-a" — neither may overwrite the other's
+      // dossier, so the later team (by insertion/id order) must get its id appended to disambiguate.
+      seedTeamWithRoster("Team A!!!", []);
+      const teamTwo = seedTeamWithRoster("Team A???", []);
+      const { db, sqlite } = openDb();
+      try {
+        const written = writeSectionalsDossiers(db, { since: "2026-01-01" });
+        expect(written).toContain(join(reportsDir, "team-a", "index.html"));
+        expect(written).toContain(join(reportsDir, `team-a-${teamTwo.id}`, "index.html"));
+        // Every written path actually exists, and the two dossiers are genuinely distinct files —
+        // this is the assertion that would fail if the second team silently overwrote the first.
+        expect(existsSync(join(reportsDir, "team-a", "index.html"))).toBe(true);
+        expect(existsSync(join(reportsDir, `team-a-${teamTwo.id}`, "index.html"))).toBe(true);
+        expect(readFileSync(join(reportsDir, "team-a", "index.html"), "utf8")).toContain("Team A!!!");
+        expect(readFileSync(join(reportsDir, `team-a-${teamTwo.id}`, "index.html"), "utf8")).toContain(
+          "Team A???",
+        );
       } finally {
         sqlite.close();
       }

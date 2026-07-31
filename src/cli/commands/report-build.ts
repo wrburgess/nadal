@@ -1,7 +1,7 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import { OutputPathError } from "../../fs/output-root.js";
-import { writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
+import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
@@ -36,8 +36,10 @@ export const reportBuild: Command = {
     const { db, sqlite } = openDb();
     try {
       let written: string[];
+      let teamsCount: number;
       if (target === undefined || target === SECTIONALS_TARGET) {
         written = writeSectionalsDossiers(db, { since });
+        teamsCount = countTeams(db);
       } else {
         const resolution = resolveTeamTarget(db, target);
         if (resolution.kind === "not-found") {
@@ -54,15 +56,20 @@ export const reportBuild: Command = {
           return 1;
         }
         written = writeTeamDossier(db, resolution.teamId, { since });
+        teamsCount = 1;
       }
 
+      // The old shape printed every absolute file path on one line — unreadable at Sectionals
+      // scale (a five-team field would print ten-plus paths). `root` + `teams` + `files` tells a
+      // caller exactly where to look and how much landed there without spelling out every path.
       emitSummary(
         "report build",
         "ok",
         [
           ["target", target ?? SECTIONALS_TARGET],
-          ["count", written.length],
-          ["files", written.join(", ")],
+          ["teams", teamsCount],
+          ["files", written.length],
+          ["root", resolvedReportsRoot()],
         ],
         opts,
       );

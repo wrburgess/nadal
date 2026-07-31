@@ -24,8 +24,15 @@ export const COMMANDS: Command[] = [
 
 export function helpText(): string {
   const lines = ["tn <noun> <verb> <target> [payload] [flags]", ""];
+  // Padding only the verb (the old approach) misaligns every row whose NOUN differs in length —
+  // "db migrate" and "player show" have different noun widths, so their summaries never lined up.
+  // The command column has to be the padded `noun verb` PAIR, and its width has to come from the
+  // registry rather than a magic number so it stays correct as commands are added (spec §
+  // Interfaces: "help fits one screen" implies a readable, aligned one, not merely a short one).
+  const commandColumnWidth = Math.max(...COMMANDS.map((c) => `${c.noun} ${c.verb}`.length));
   for (const c of COMMANDS) {
-    lines.push(`  tn ${c.noun} ${c.verb.padEnd(8)} ${c.summary}`);
+    const command = `${c.noun} ${c.verb}`.padEnd(commandColumnWidth);
+    lines.push(`  tn ${command}  ${c.summary}`);
   }
   lines.push("", "Global flags: --quiet/-q  --json  --help");
   return lines.join("\n");
