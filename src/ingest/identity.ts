@@ -263,7 +263,7 @@ export function resolvePlayer(db: Db, input: ResolvePlayerInput): IdentityResolu
 
 /**
  * Resolve a team against the same three-tier shape as `resolvePlayer`, scoped to
- * `teams.tennisrecord_url` (tier 1 — DB-unique since migration 0006, issue #46, so `idMatch[0]` is
+ * `teams.tennisrecord_url` (tier 1 — DB-unique since migration 0009, issue #46, so `idMatch[0]` is
  * single-row by construction) and `teams.name_key` (tiers 2-3). Tier 2 is NOT a single-row lookup:
  * `teams.name` is DB-unique, but `name_key` (the JS-folded comparison key it queries) carries only
  * a plain index, so two rows CAN fold to the same key — more than one match is ambiguous, mirroring

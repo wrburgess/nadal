@@ -1,9 +1,10 @@
 import Database from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { runMigrations, openDb } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
-import { playerAliases, players } from "../src/db/schema.js";
+import { playerAliases, players, teamMemberships, teams } from "../src/db/schema.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 function requestLogRows(dbPath: string) {
@@ -51,6 +52,32 @@ describe("tn player show (end-to-end via dispatch)", () => {
     expect(code).toBe(0);
     const printed = logSpy.mock.calls[0]?.[0] as string;
     expect(printed).toContain("(aka Jerry Martin)");
+  });
+
+  // Issue #49: a retired membership is not hidden from `player show` (it is real history), but must
+  // read distinctly from a current one — otherwise a captain reading the profile has no way to tell
+  // a former team from a current one.
+  it("labels a retired team membership '(former)', and a current one plainly", async () => {
+    const player = seedPlayer("Rowan Rushworth");
+    const { db, sqlite } = openDb();
+    const currentTeam = db.insert(teams).values({ name: "Current Team" }).returning().get();
+    const formerTeam = db.insert(teams).values({ name: "Former Team" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: currentTeam.id, eventId: null }).run();
+    db.insert(teamMemberships).values({ playerId: player.id, teamId: formerTeam.id, eventId: null }).run();
+    db.update(teamMemberships)
+      .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+      .where(eq(teamMemberships.teamId, formerTeam.id))
+      .run();
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "show", player.canonicalName]);
+
+    expect(code).toBe(0);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    expect(printed).toContain("Current Team");
+    expect(printed).not.toContain("Current Team (former)");
+    expect(printed).toContain("Former Team (former)");
   });
 
   it("--json emits the PlayerProfile verbatim, parseable, as the only console.log call", async () => {

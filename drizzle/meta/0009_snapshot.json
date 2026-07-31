@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6c6b4131-0ef7-4ce9-8505-84e89b1653fc",
-  "prevId": "456a95af-0e0c-4d06-bfc4-b4f56897de68",
+  "id": "488bfc7a-301e-42ad-8750-7cc5e2b97185",
+  "prevId": "37981800-3500-4f3b-88bc-57b4dc79f2ab",
   "tables": {
     "availability": {
       "name": "availability",
@@ -990,6 +990,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "roster_observed_at": {
+          "name": "roster_observed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "roster_observed_url": {
+          "name": "roster_observed_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "name_key": {
           "name": "name_key",
           "type": "text",
@@ -1038,6 +1052,14 @@
             "name_key_length"
           ],
           "isUnique": false
+        },
+        "teams_tennisrecord_url_unique": {
+          "name": "teams_tennisrecord_url_unique",
+          "columns": [
+            "tennisrecord_url"
+          ],
+          "isUnique": true,
+          "where": "tennisrecord_url IS NOT NULL"
         }
       },
       "foreignKeys": {},

@@ -237,8 +237,8 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
   // lives in the seam, so it is guarded from both sides.
   it("renders the #46 duplicate-URL recovery command INTACT through the one-line summary", async () => {
     const dbFile = join(mkdtempSync(join(tmpdir(), "tn-")), "legacy.db");
-    // A database migrated up to 0005 that already holds the duplicate pair 0006 forbids.
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    // A database migrated up to 0008 that already holds the duplicate pair 0009 forbids.
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const seed = new Database(dbFile);
     try {
       migrate(drizzle(seed), { migrationsFolder: legacyDir });
@@ -259,7 +259,7 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
     expect(fields.status).toBe("error");
     // The whole recovery command survives as one contiguous, copy-pasteable run — this is what a
     // collapsed multi-line message destroys.
-    expect(fields.message).toContain(`mv -i -- '${dbFile}' '${dbFile}.pre-0006.bak' && tn db migrate`);
+    expect(fields.message).toContain(`mv -i -- '${dbFile}' '${dbFile}.pre-0009.bak' && tn db migrate`);
     expect(fields.message).toContain("docs/runbooks/db-migration-recovery.md");
 
     errorSpy.mockRestore();

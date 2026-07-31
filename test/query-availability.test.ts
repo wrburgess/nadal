@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { availability, events, players, teamMemberships, teams } from "../src/db/schema.js";
@@ -219,6 +220,27 @@ describe("setAvailability", () => {
 
       expect(() =>
         setAvailability(db, { playerId: otherPlayer.id, day: "2026-08-29", status: "available" }),
+      ).toThrow(PlayerNotOnHomeRosterError);
+      expect(rows(db)).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #49: recording availability for someone the last successful pull did not see is the same
+  // error as printing them on the roster — a retired membership row must refuse exactly like a
+  // missing one, asserted by ERROR CLASS (never message text, per this file's own standing rule).
+  it("a RETIRED member of the home team's roster refuses (PlayerNotOnHomeRosterError), unchanged for a current one", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, fixture.playerId))
+        .run();
+
+      expect(() =>
+        setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" }),
       ).toThrow(PlayerNotOnHomeRosterError);
       expect(rows(db)).toHaveLength(0);
     } finally {

@@ -89,6 +89,58 @@ describe("getTeamProfile", () => {
     }
   });
 
+  // Issue #49: a retired membership row still exists (soft-retire, never a delete) but must not
+  // read as a current roster member — the headline symptom the issue was filed for.
+  it("a retired member is excluded from the roster, while a current member of the same team is not", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Team A");
+      const current = seedPlayer(db, "Current Player");
+      const retired = seedPlayer(db, "Departed Player");
+      seedMembership(db, current.id, team.id);
+      seedMembership(db, retired.id, team.id);
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, retired.id))
+        .run();
+
+      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+
+      expect(profile.roster.map((r) => r.canonicalName)).toEqual(["Current Player"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The sharp edge of "retired ≠ deleted": filtering the CURRENT roster must not filter the team's
+  // match record, which reads court/team-match history rather than the roster query.
+  it("a retirement does not change the team's match record — the departed player's court matches still count", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const teamA = seedTeam(db, "Team A");
+      const teamB = seedTeam(db, "Team B");
+      const retired = seedPlayer(db, "Departed Player");
+      seedMembership(db, retired.id, teamA.id);
+      db.insert(teamMatches)
+        .values({ homeTeamId: teamA.id, visitingTeamId: teamB.id, homeCourtsWon: 3, visitingCourtsWon: 2, playedOn: "2026-06-01" })
+        .run();
+
+      const before = getTeamProfile(db, teamA.id, { since: "2026-01-01" });
+      expect(before.teamRecord).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
+
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, retired.id))
+        .run();
+
+      const after = getTeamProfile(db, teamA.id, { since: "2026-01-01" });
+      expect(after.teamRecord).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
+      expect(after.roster, "filtering the CURRENT roster must not filter the team's history").toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("team record is computed from team_matches WITHOUT reading home/visiting as venue", () => {
     const { db, sqlite } = freshDb();
     try {
@@ -161,6 +213,42 @@ describe("getTeamProfile", () => {
       // wired a real versusTeamId), caught by reading the actual rendered artifact.
       expect(a1VsB1?.opponentName).toBe("B One");
       expect(a2VsB1?.opponentName).toBe("B One");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #49: the VERSUS roster is the same kind of "current membership" read as the own roster,
+  // and must be filtered the same way — a retired opponent should not appear as a cross-pair either.
+  it("a retired member of the VERSUS team is absent from the roster and from every headToHead cross pair", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const teamA = seedTeam(db, "Team A");
+      const teamB = seedTeam(db, "Team B");
+      const a1 = seedPlayer(db, "A One");
+      const b1 = seedPlayer(db, "B One");
+      const bRetired = seedPlayer(db, "B Departed");
+      seedMembership(db, a1.id, teamA.id);
+      seedMembership(db, b1.id, teamB.id);
+      seedMembership(db, bRetired.id, teamB.id);
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
+        .where(eq(teamMemberships.playerId, bRetired.id))
+        .run();
+
+      seedCourtMatch(
+        db,
+        { slot: "S1", discipline: "singles", winnerSide: "home", playedOn: "2026-05-01" },
+        [{ playerId: a1.id, side: "home" }, { playerId: bRetired.id, side: "visiting" }],
+      );
+
+      const profile = getTeamProfile(db, teamA.id, { since: "2026-01-01", versusTeamId: teamB.id });
+
+      const rows = profile.headToHead!;
+      // Only 1 team-A player x 1 CURRENT team-B player = 1 row, never one for the retired opponent.
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.opponentId).toBe(b1.id);
+      expect(rows.some((r) => r.opponentId === bRetired.id)).toBe(false);
     } finally {
       sqlite.close();
     }

@@ -47,8 +47,29 @@
     {
       "idx": 6,
       "version": "6",
-      "when": 1785511662427,
-      "tag": "0006_steep_thunderbolt_ross",
+      "when": 1785511384473,
+      "tag": "0006_married_bug",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785515827922,
+      "tag": "0007_big_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785516550491,
+      "tag": "0008_lame_shaman",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785518155691,
+      "tag": "0009_premium_bruce_banner",
       "breakpoints": true
     }
   ]

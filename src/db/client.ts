@@ -36,7 +36,7 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
 }
 
 // Issue #46: a pre-existing database holding a duplicate `teams.tennisrecord_url` pair (the exact
-// damage #46 fixes) makes migration 0006's `CREATE UNIQUE INDEX` fail with a bare "UNIQUE
+// damage #46 fixes) makes migration 0009's `CREATE UNIQUE INDEX` fail with a bare "UNIQUE
 // constraint failed: teams.tennisrecord_url" — legible to nobody who hasn't read this migration.
 // Shipping no dedupe DML for that pair is a deliberate choice (a same-URL rename collision is a
 // merge decision, out of bounds per spec § Ingestion, same as `upsertTeam`'s own
@@ -58,7 +58,7 @@ function shellQuote(value: string): string {
 
 /**
  * A backup path for `dbPath` that is **not already taken**. The first draft of the recovery moved
- * the database to a FIXED `<path>.pre-0006.bak`, which meant a SECOND failure overwrote the FIRST
+ * the database to a FIXED `<path>.pre-0009.bak`, which meant a SECOND failure overwrote the FIRST
  * backup — silently destroying the captain notes and availability the same message promises are
  * safe (Codex adversarial review round 2, rated high: the fix for a data-loss hazard reintroducing
  * one). Checking what is on disk closes it by construction rather than by warning the reader.
@@ -69,8 +69,8 @@ function shellQuote(value: string): string {
  * separately by `mv -i`, which is why that flag is not redundant with this function.
  */
 function untakenBackupPath(dbPath: string): string {
-  const preferred = `${dbPath}.pre-0006.bak`;
-  return existsSync(preferred) ? `${dbPath}.pre-0006.${Date.now()}.bak` : preferred;
+  const preferred = `${dbPath}.pre-0009.bak`;
+  return existsSync(preferred) ? `${dbPath}.pre-0009.${Date.now()}.bak` : preferred;
 }
 
 /**
@@ -178,9 +178,15 @@ export function runMigrations(path: string = dbPath()): void {
         // while #44/PR #51 concurrently moved `db migrate` onto `emitSummary`. Both changes were
         // green in isolation. Keep the message single-line; the long-form version lives in
         // docs/runbooks/db-migration-recovery.md, which is markdown and has room for it.
-        const CAUSE =
-          "UNIQUE constraint failed: teams.tennisrecord_url — this database has two team rows " +
-          "sharing one tennisrecord_url (issue #46), so migration 0006's unique index cannot apply. ";
+        // Built as a function of the path rather than concatenated around it. The earlier form
+         // sliced a trailing space off a fixed prefix and appended `(${source})`, which RENDERED as
+         // "...cannot apply.(/path)." — the database orphaned after a full stop. Eight static review
+         // rounds passed over that; it only shows when the message is actually printed, which is why
+         // this run renders it end-to-end through `tn db migrate` rather than reading the source.
+        const cause = (where: string) =>
+          "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+          `${where} has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
+          "0009's unique index cannot apply.";
         const DATA_AT_RISK =
           " Captain notes and availability exist ONLY in this file, so extract them from the " +
           "backup first: docs/runbooks/db-migration-recovery.md";
@@ -202,14 +208,15 @@ export function runMigrations(path: string = dbPath()): void {
         // ONLY thing between here and the reader.
         if (UNRENDERABLE.test(source)) {
           throw new Error(
-            `${CAUSE}Its path contains characters that cannot be shown faithfully here, so no copy-pasteable command can be ` +
-              "shown here without naming a DIFFERENT file — move the database aside yourself and " +
-              `re-run \`tn db migrate\`. Path, escaped losslessly: ${losslessPath(source)}.${DATA_AT_RISK}`,
+            `${cause(`at ${losslessPath(source)} (path escaped — it contains characters that cannot be shown literally)`)}` +
+              " No copy-pasteable command is offered for it: any rendering of that path would name a " +
+              "DIFFERENT file. Move the database aside yourself and re-run `tn db migrate`." +
+              DATA_AT_RISK,
           );
         }
 
         throw new Error(
-          `${CAUSE.slice(0, -1)}(${source}). Recover (non-destructive, moves the file aside): ` +
+          `${cause(`(${source})`)} Recover (non-destructive, moves the file aside): ` +
             `mv -i -- ${shellQuote(source)} ${shellQuote(untakenBackupPath(source))} && tn db migrate ` +
             `— then re-pull.${DATA_AT_RISK}`,
         );

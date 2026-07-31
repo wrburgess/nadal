@@ -108,7 +108,16 @@ export async function fetchPage(url: string, options: FetchPageOptions = {}): Pr
   }
 
   const body = await response.text();
-  const fetchedAt = new Date().toISOString();
+  // Stamped from `sentAt` — when the request WENT OUT — not from a clock read after the body
+  // finished arriving. `fetchedAt` orders roster snapshots against each other (issue #49's
+  // monotonic retirement guard in team-pull.ts), and completion time cannot do that job: a request
+  // issued first that receives an upstream/CDN-CACHED stale body can finish downloading LAST, and
+  // would then be stamped newer than the fresher response that overtook it — the ordering token
+  // says "newest" about the stalest content. Send time at least orders the requests as issued.
+  // `sentAt` is the re-anchored wake time already computed above for politeness pacing, so this
+  // reuses a value the retry/pacing logic has already reasoned about rather than adding a second
+  // clock read. (Codex adversarial review of PR #53, round 3, rated high.)
+  const fetchedAt = new Date(sentAt).toISOString();
 
   return { url, status: response.status, body, fetchedAt };
 }

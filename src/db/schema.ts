@@ -50,6 +50,23 @@ export const teams = sqliteTable("teams", {
   // concurrency"). `src/query/home-team.ts` is the only writer; it always clears any prior flag
   // and sets the new one inside a single transaction, so the index can never observe two set rows.
   isHome: integer("is_home", { mode: "boolean" }),
+  // Issue #49 (Codex adversarial review of PR #53, round 2): when the roster snapshot that last
+  // RECONCILED this team was OBSERVED — the fetch's own timestamp, not the write's. SQLite
+  // serializes the two writers but cannot order their *inputs*, so without this, two concurrent
+  // live pulls whose fetches resolve out of order let the OLDER complete roster commit last and
+  // retire a player the NEWER one listed. `pullTeam` skips the reconcile when the incoming
+  // snapshot is older than this value, which makes retirement monotonic in observation time
+  // rather than in commit order. Nullable: no team has an observation until its first live pull,
+  // and a NULL must read as "nothing applied yet", never as an infinitely-old snapshot.
+  rosterObservedAt: text("roster_observed_at"),
+  // Issue #49 (Codex round 3): WHICH SOURCE produced the snapshot that set `rosterObservedAt`.
+  // A timestamp alone is not provenance — TennisRecord team URLs carry a `year`, and `tn team pull`
+  // accepts an arbitrary URL, so freshly fetching a PRIOR SEASON's page yields a valid roster with
+  // a brand-new fetch time. Compared against the watermark alone it reads as authoritative and
+  // retires everyone who joined since. Retirement therefore requires the incoming URL to match the
+  // one that last reconciled; a different source re-baselines (refresh + record the new pair)
+  // instead of removing anyone.
+  rosterObservedUrl: text("roster_observed_url"),
   // Issue #32: JS-folded comparison key for name, same rationale as players.nameKey above.
   nameKey: text("name_key"),
   // Same fuzzy-band purpose as players.nameKeyLength above.
@@ -83,6 +100,16 @@ export const teamMemberships = sqliteTable("team_memberships", {
   playerId: integer("player_id").notNull().references(() => players.id),
   teamId: integer("team_id").notNull().references(() => teams.id),
   eventId: integer("event_id").references(() => events.id),
+  // Issue #49: soft-retire a departed roster member rather than leave this table append-only
+  // forever (docs/findings.md, #49's original review note — "a departed player stays on every
+  // roster read"). Nullable for the same SQLite reason as players.nameKey above (:13-19): `ALTER
+  // TABLE ... ADD COLUMN ... NOT NULL DEFAULT '' CHECK (...)` rejects a populated table, and the
+  // load-bearing half is that NULL means "not retired" ANYWAY — the migration backfills every
+  // pre-existing row to NULL rather than inventing a departure date nobody observed. Set by
+  // `retireAbsentMemberships` (src/ingest/upsert.ts) when a `tn team pull` no longer observes the
+  // player on the roster it just parsed, and cleared back to NULL by `upsertMembership` the moment
+  // the player is observed again — retirement is reversible by construction, never a second row.
+  retiredAt: text("retired_at"),
 }, (t) => [
   uniqueIndex("membership_unique").on(t.playerId, t.teamId, t.eventId),
   // SQLite treats NULLs as distinct even under a UNIQUE index/constraint, so the 3-column index

@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6c6b4131-0ef7-4ce9-8505-84e89b1653fc",
-  "prevId": "456a95af-0e0c-4d06-bfc4-b4f56897de68",
+  "id": "37981800-3500-4f3b-88bc-57b4dc79f2ab",
+  "prevId": "72f1eb95-4bfa-4e75-8e59-620328d44fc9",
   "tables": {
     "availability": {
       "name": "availability",
@@ -986,6 +986,20 @@
         "is_home": {
           "name": "is_home",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "roster_observed_at": {
+          "name": "roster_observed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "roster_observed_url": {
+          "name": "roster_observed_url",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

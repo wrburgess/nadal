@@ -15,15 +15,18 @@ function freshDbPath(): string {
 
 /**
  * Issue #46, Task 5: a pre-existing database holding a duplicate `tennisrecord_url` pair (the
- * exact damage #46 fixes) makes migration 0006's `CREATE UNIQUE INDEX` fail. This models "a real
+ * exact damage #46 fixes) makes migration 0009's `CREATE UNIQUE INDEX` fail. This models "a real
  * database that was created and used before this PR's partial-unique-index migration existed" the
  * same way `test/db-membership-unique-upgrade.test.ts` does for the membership index, via
- * `buildLegacyMigrationsFolder` (migrations 0000-0005, i.e. everything before #46's migration).
+ * `buildLegacyMigrationsFolder` (migrations 0000-0008, i.e. everything before #46's migration —
+ * which renumbered from 0006 to 0009 when #49 landed three migrations on `main` mid-review;
+ * `docs/findings.md` records that collision hazard and why the resolution is to regenerate
+ * rather than hand-edit a snapshot).
  */
 describe("upgrading an existing v5 database with duplicate tennisrecord_url rows (#46)", () => {
   it("runMigrations throws a legible error naming teams.tennisrecord_url and the recovery, not a bare UNIQUE constraint message", () => {
     const dbPath = freshDbPath();
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const sqlite = new Database(dbPath);
     try {
       migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
@@ -65,7 +68,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
   it("REGRESSION: the recovery names the ACTUAL failing database and is non-destructive", () => {
     const dbPath = freshDbPath();
     expect(dbPath).not.toContain("data/nadal.db"); // the premise of this test
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const sqlite = new Database(dbPath);
     try {
       migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
@@ -102,7 +105,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     // branch in `untakenBackupPath` is half-unkillable: a mutant that ALWAYS disambiguates still
     // satisfies every other assertion here, and `rules/testing.md` does not allow a branch side no
     // test can kill. The clobber test below pins the other side.
-    expect(message).toContain(`${dbPath}.pre-0006.bak'`);
+    expect(message).toContain(`${dbPath}.pre-0009.bak'`);
     // MERGE-BORN regression, caught integrating #44/PR #51. `tn db migrate` renders this message
     // through `emitSummary`'s one-line `key=value` summary, and `sanitizeValue` turns every control
     // character into a space — so a multi-line message silently collapses into one run of prose
@@ -128,7 +131,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
   // residual TOCTOU (a backup appearing between this message and the user running it).
   it("REGRESSION: a second failure never names an existing backup as its target", () => {
     const dbPath = freshDbPath();
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const sqlite = new Database(dbPath);
     try {
       migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
@@ -144,7 +147,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
 
     // Stand in for "a previous recovery already produced a backup" — with real content, so an
     // overwrite would be real data loss.
-    const takenBackup = `${dbPath}.pre-0006.bak`;
+    const takenBackup = `${dbPath}.pre-0009.bak`;
     writeFileSync(takenBackup, "a previous backup holding captain notes");
 
     let caught: unknown;
@@ -159,7 +162,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     expect(message).not.toContain(`${takenBackup}'`);
     // ...but must still propose a backup derived from this database.
     expect(message).toMatch(/mv -i -- /);
-    expect(message).toContain(`${dbPath}.pre-0006.`);
+    expect(message).toContain(`${dbPath}.pre-0009.`);
     // And the untouched prior backup still holds its content.
     expect(readFileSync(takenBackup, "utf8")).toBe("a previous backup holding captain notes");
   });
@@ -175,7 +178,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
   // flag for; its wording merely reads as though the terminator were rejected.)
   it("REGRESSION: the recovery command emits an ABSOLUTE path even when given a relative one", () => {
     const dbPath = freshDbPath();
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const sqlite = new Database(dbPath);
     try {
       migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
@@ -220,7 +223,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
   it("REGRESSION: offers NO shell command when the database path contains control characters", () => {
     const dir = mkdtempSync(join(tmpdir(), "tn-"));
     const dbPath = join(dir, "we\nird.db"); // a legal POSIX filename containing a newline
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const sqlite = new Database(dbPath);
     try {
       migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
@@ -270,7 +273,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
   ])("REGRESSION: renders a path containing $label losslessly and control-free", ({ ch, escaped }) => {
     const dir = mkdtempSync(join(tmpdir(), "tn-"));
     const dbPath = join(dir, `we${ch}ird.db`);
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const sqlite = new Database(dbPath);
     try {
       migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
@@ -338,7 +341,7 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
 
   it("the same legacy database WITHOUT duplicates upgrades cleanly and the index exists", () => {
     const dbPath = freshDbPath();
-    const legacyDir = buildLegacyMigrationsFolder(5);
+    const legacyDir = buildLegacyMigrationsFolder(8);
     const sqlite = new Database(dbPath);
     try {
       migrate(drizzle(sqlite), { migrationsFolder: legacyDir });

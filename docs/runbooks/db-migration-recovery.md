@@ -15,7 +15,7 @@ that database — see the note at the end.
 Reachable if your database already holds **two team rows sharing the same `tennisrecord_url`** —
 the exact damage issue #46 fixes: before that fix, `upsertTeam` conflicted only on `teams.name`, so
 re-pulling a team that had been renamed upstream (the same TennisRecord URL, parsed to a new name)
-missed the old row and inserted a second one carrying the identical URL. Migration 0006 adds a
+missed the old row and inserted a second one carrying the identical URL. Migration 0009 adds a
 partial unique index on `teams.tennisrecord_url` (`WHERE tennisrecord_url IS NOT NULL`) to make that
 column a real source identity going forward — and a database that already has such a pair fails the
 `CREATE UNIQUE INDEX` itself. `runMigrations()` (`src/db/client.ts`) catches exactly this failure and
@@ -27,7 +27,7 @@ the error message names, which is the database that actually failed (`TN_DB_PATH
 `data/nadal.db` otherwise). The error prints this command with your real path already filled in:
 
 ```sh
-mv -i -- '/abs/path/to/nadal.db' '/abs/path/to/nadal.db.pre-0006.bak' && tn db migrate
+mv -i -- '/abs/path/to/nadal.db' '/abs/path/to/nadal.db.pre-0009.bak' && tn db migrate
 ```
 
 The command the error prints always uses **absolute** paths, so you can run it from wherever you are
@@ -79,20 +79,20 @@ a `select *` dump is unrestorable by construction: the numbers in it will point 
 Events must carry `kind`, `starts_on` and `ends_on` too, because those are the arguments
 `tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` requires to recreate one.
 
-`data/nadal.db.pre-0006.bak` below stands in for the backup path — use the one the recovery command
+`data/nadal.db.pre-0009.bak` below stands in for the backup path — use the one the recovery command
 actually named, which is absolute and may not be under `data/` at all if you set `TN_DB_PATH`.
 
 ```sh
 # 0. The home team and the events — without these, steps below have nothing to attach to.
-sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
+sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
   select name from teams where is_home = 1" > home-team-backup.csv
 
-sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
+sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
   select name, kind, starts_on, ends_on
   from events
   order by starts_on" > events-backup.csv
 
-sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
+sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
   select p.canonical_name        as player,
          pp.canonical_name       as pair_player,
          n.note,
@@ -102,7 +102,7 @@ sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
   left join players pp  on pp.id = n.pair_player_id
   order by n.created_at" > captain-notes-backup.csv
 
-sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
+sqlite3 -header -csv 'data/nadal.db.pre-0009.bak' "
   select p.canonical_name as player,
          e.name           as event,
          a.day,
