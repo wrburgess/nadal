@@ -150,9 +150,11 @@ case "${TN_DB_PATH:-}" in
 esac
 
 case "$DB" in
-  /*) mv -i -- "$DB" "$DB.pre-0005.bak" &&
-      TN_DB_PATH="$DB" tn db migrate ;;   # bind it: bare `tn db migrate` would rebuild
-                                          # data/nadal.db, not the file just moved
+  /*) export TN_DB_PATH="$DB"   # binds EVERY `tn` below — migrate, re-pull AND restore.
+                               # A one-off `TN_DB_PATH="$DB" tn db migrate` binds only
+                               # that child process; the restore would then write the
+                               # default while appearing to succeed.
+      mv -i -- "$DB" "$DB.pre-0005.bak" && tn db migrate ;;
   *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
 esac
 ```
@@ -182,6 +184,12 @@ Then re-pull. The database is a *cache* over `raw/`, not a system of record — 
 every fetch an idempotent upsert and archives every page, precisely so it can be rebuilt at any time.
 Nothing you typed by hand is at risk **except captain notes and availability**, which exist nowhere
 else.
+
+**Stay in the shell where you ran the `export` above** — the restore commands resolve their database
+the same way `tn db migrate` does, so in a fresh shell they would write `data/nadal.db` and report
+success. If you restore over MCP instead, the server must have been started with that same
+`TN_DB_PATH`; the tools read the server's environment, not yours, and nothing in the tool result
+would tell you they diverged.
 
 **To recover those, follow
 [db-migration-recovery.md](db-migration-recovery.md) → *General note on data at risk*, reading from

@@ -36,17 +36,25 @@ case "${TN_DB_PATH:-}" in
 esac
 
 case "$DB" in
-  /*) mv -i -- "$DB" "$DB.pre-0009.bak" &&
-      TN_DB_PATH="$DB" tn db migrate ;;   # bind it: bare `tn db migrate` would rebuild
-                                          # data/nadal.db, not the file just moved
+  /*) export TN_DB_PATH="$DB"   # binds EVERY `tn` below — migrate, re-pull AND restore.
+                               # A one-off `TN_DB_PATH="$DB" tn db migrate` binds only
+                               # that child process; the restore would then write the
+                               # default while appearing to succeed.
+      mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
   *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
 esac
 ```
 
-`TN_DB_PATH="$DB"` on the rebuild is not decoration. `tn` resolves its database from `TN_DB_PATH` or
-the `data/nadal.db` default — **never** from your shell's `$DB` — so a bare `tn db migrate` after the
-move rebuilds the default and leaves the database you just moved aside missing (verified: it created
-`data/nadal.db` while the selected file stayed 0 bytes).
+`export TN_DB_PATH="$DB"` is not decoration, and **`export` rather than a one-off prefix** is the
+load-bearing part. `tn` resolves its database from `TN_DB_PATH` or the `data/nadal.db` default —
+**never** from your shell's `$DB`. So a bare `tn db migrate` after the move rebuilds the default and
+leaves the database you moved aside missing (verified: it created `data/nadal.db` while the selected
+file stayed 0 bytes). And a one-off `TN_DB_PATH="$DB" tn db migrate` fixes only *that* command: the
+re-pull and every restore step below would still write the default, succeeding all the way while the
+rebuilt database stays empty. Because the export step *is* correctly bound to `$BAK`, that failure is
+especially deceptive — you would export the right data and restore it into the wrong place.
+
+**Stay in this shell for everything below.** If you open a new one, re-run the `export`.
 
 The rest of these forms exist because the obvious shortcuts are each wrong, and each was caught by
 the Codex adversarial review of #56 after this runbook shipped it:
@@ -171,9 +179,11 @@ case "${TN_DB_PATH:-}" in
 esac
 
 case "$DB" in
-  /*) mv -i -- "$DB" "$DB.pre-0009.bak" &&
-      TN_DB_PATH="$DB" tn db migrate ;;   # bind it: bare `tn db migrate` would rebuild
-                                          # data/nadal.db, not the file just moved
+  /*) export TN_DB_PATH="$DB"   # binds EVERY `tn` below — migrate, re-pull AND restore.
+                               # A one-off `TN_DB_PATH="$DB" tn db migrate` binds only
+                               # that child process; the restore would then write the
+                               # default while appearing to succeed.
+      mv -i -- "$DB" "$DB.pre-0009.bak" && tn db migrate ;;
   *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
 esac
 ```
@@ -322,6 +332,8 @@ To restore after re-pulling, work back **up** the dependency order above.
 
 ```sh
 # Safe for simple values only — see the warning above before using these for note text.
+# EVERY line here writes to $TN_DB_PATH. If this is a new shell, re-run the `export` from the
+# recovery step first, or these will restore into data/nadal.db and silently succeed.
 tn team home '<name from home-team-backup.csv>'
 tn event add '<name>' '<kind>' '<starts_on>' '<ends_on>'      # one per events-backup.csv row
 tn player avail '<player>' '<day>' '<status>' '<event>'       # one per availability-backup.csv row
