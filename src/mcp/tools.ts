@@ -107,6 +107,13 @@ export const MCP_TOOLS: McpToolDef[] = [
           matchCount: result.matchCount,
           archivedPath: result.archivedPath,
           skippedRosterEntries: result.skippedRosterEntries,
+          // Issue #49: same reason `tn team pull` prints `retired=N` — retirement REMOVES a player
+          // from every current-roster read and write gate, so it has to be visible in the surface's
+          // own output rather than only in the database. This handler hand-builds its result object
+          // (it does not spread `result`), so a field added to the CLI summary does NOT reach MCP on
+          // its own: omitting it here would let an MCP-driven pull retire real teammates with
+          // nothing in the response to say so, while the CLI reported it.
+          retiredCount: result.retiredCount,
         };
       } finally {
         sqlite.close();

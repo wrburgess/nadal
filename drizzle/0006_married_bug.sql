@@ -1,0 +1,1 @@
+ALTER TABLE `team_memberships` ADD `retired_at` text;
