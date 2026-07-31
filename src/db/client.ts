@@ -4,7 +4,6 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sanitizeValue } from "../sanitize.js";
 import { backfillNameKeys } from "./name-key.js";
 
 export const DEFAULT_DB_PATH = "data/nadal.db";
@@ -75,27 +74,46 @@ function untakenBackupPath(dbPath: string): string {
 }
 
 /**
- * Render a path so it survives `sanitizeValue` **losslessly** — every character that sanitizer
- * would replace is escaped to `\u{XXXX}`, leaving output built only from backslashes, braces and
- * hex.
+ * The characters a database path cannot carry through to a human, from TWO independent mechanisms:
  *
- * `JSON.stringify` is NOT sufficient here and that is the whole reason this exists (Codex round 6,
- * rated high). It escapes the C0 controls but leaves DEL, the C1 block, every `\p{Cf}` format
- * control, and U+2028/U+2029 **literal** — `sanitizeValue` then replaces exactly those with spaces
- * downstream, so a path containing U+2028 or RIGHT-TO-LEFT OVERRIDE reached the reader neither
- * losslessly nor control-free while the message claimed both. `src/cli/emit.ts` already documents
- * this precise `JSON.stringify` shortfall for its own `--json` payload; the fix here is the same
- * one, applied to the same character class.
+ *   - `\p{Cc}` / `\p{Cf}` / U+2028 / U+2029 — `sanitizeValue` replaces these with a space before any
+ *     summary line is printed (`src/sanitize.ts`).
+ *   - `\p{Cs}` (lone UTF-16 surrogates) — `sanitizeValue` leaves these ALONE, but Node's UTF-8
+ *     encoder destroys them at output time: `"x\uD800y"` is written as the bytes `78 ef bf bd 79`,
+ *     i.e. U+FFFD (verified, not assumed).
  *
- * Backslashes are escaped FIRST, so a path legitimately containing the text `\u{2028}` cannot be
- * confused with an escape this function produced — the same ordering argument, for the same reason,
- * as `quoteSummaryValue`'s.
+ * Both mechanisms end the same way — the reader is shown a path that does not name the real file —
+ * so both belong in one predicate. Deriving the branch from `sanitizeValue` alone was necessary but
+ * NOT sufficient, which is what Codex round 7 caught: a surrogate path skipped the fail-safe and got
+ * a `mv` command naming a U+FFFD sibling.
+ *
+ * Reachability, checked rather than argued: a lone surrogate CANNOT arrive through `TN_DB_PATH`,
+ * because an environment variable is decoded from UTF-8 bytes and that round trip already replaces
+ * it. The only route is a direct `runMigrations("...\uD800...")` call from JS. Handled anyway — the
+ * cost is one character class, and a guard that is correct only for the inputs someone thought of is
+ * the shape this repo keeps re-learning.
+ */
+const UNRENDERABLE_CLASS = "[\\p{Cc}\\p{Cf}\\p{Cs}\\u2028\\u2029]";
+const UNRENDERABLE = new RegExp(UNRENDERABLE_CLASS, "u");
+
+/**
+ * Render a path so it survives every mechanism above **losslessly** — each unrenderable character
+ * becomes `\u{XXXX}`, leaving output built only from backslashes, braces and hex.
+ *
+ * `JSON.stringify` is NOT sufficient and that is why this exists (Codex round 6): it escapes the C0
+ * controls but leaves DEL, the C1 block, every `\p{Cf}` format control, U+2028/U+2029 AND lone
+ * surrogates literal — precisely the characters destroyed downstream. `src/cli/emit.ts` already
+ * documents this same `JSON.stringify` shortfall for its own payload.
+ *
+ * Backslashes are escaped FIRST, which is what makes the mapping injective: a path legitimately
+ * containing the text `\u{2028}` renders as `\\u{2028}` and so cannot be confused with an escape
+ * this function produced. Same ordering argument, for the same reason, as `quoteSummaryValue`'s.
  */
 function losslessPath(value: string): string {
   return value
     .replaceAll("\\", "\\\\")
     .replace(
-      /[\p{Cc}\p{Cf}\u2028\u2029]/gu,
+      new RegExp(UNRENDERABLE_CLASS, "gu"),
       (ch) => `\\u{${(ch.codePointAt(0) as number).toString(16).toUpperCase()}}`,
     );
 }
@@ -160,22 +178,24 @@ export function runMigrations(path: string = dbPath()): void {
           " Captain notes and availability exist ONLY in this file, so extract them from the " +
           "backup first: docs/runbooks/db-migration-recovery.md";
 
-        // A path that `sanitizeValue` would ALTER cannot be rendered faithfully in the one-line
-        // summary this message is printed through — so no copy-pasteable command is offered for
-        // one. Emitting an `mv` here is worse than emitting none: the rendered command would name
-        // the space-normalized sibling path, and if THAT file exists, pasting it moves an unrelated
-        // database aside while the real one still fails to migrate. Codex round 5 refuted the
-        // earlier "this is pre-existing" position on exactly this point, and correctly: main's
-        // success-path `path=` field is merely lossy to LOOK at, while an executable recovery turns
-        // the same loss into a destructive action on the wrong file. Display-loss and wrong-action
-        // are not the same severity, so this branch fails safe instead of guessing.
+        // A path that cannot be reproduced faithfully in the one-line summary gets NO
+        // copy-pasteable command. Emitting an `mv` for one is worse than emitting none: the
+        // rendered command names a normalized sibling path, and if THAT file exists, pasting it
+        // moves an unrelated database aside while the real one still fails to migrate. Codex round
+        // 5 refuted the earlier "this is pre-existing" position on exactly that point, and
+        // correctly — main's success-path `path=` field is merely lossy to LOOK at, whereas an
+        // executable recovery turns the same loss into a destructive action on the wrong file.
+        // Display-loss and wrong-action are not the same severity, so this fails safe.
         //
-        // The predicate IS `sanitizeValue`, not a hand-listed character class — the same lesson
-        // round 4 forced on the test-side assertion: a guard whose job is "matches what module X
-        // strips" must call X, or it drifts the moment X widens.
-        if (source !== sanitizeValue(source)) {
+        // The predicate is `UNRENDERABLE`, which is `sanitizeValue`'s class PLUS lone surrogates.
+        // Deriving it from `sanitizeValue` alone read better and was wrong (Codex round 7): the
+        // sanitizer is one of TWO mechanisms that corrupt a path on the way out, and the other —
+        // Node's UTF-8 encoder turning a lone surrogate into U+FFFD — leaves no trace in the
+        // sanitizer's class. "Match what module X strips" is the right instinct only when X is the
+        // ONLY thing between here and the reader.
+        if (UNRENDERABLE.test(source)) {
           throw new Error(
-            `${CAUSE}Its path contains control characters, so no copy-pasteable command can be ` +
+            `${CAUSE}Its path contains characters that cannot be shown faithfully here, so no copy-pasteable command can be ` +
               "shown here without naming a DIFFERENT file — move the database aside yourself and " +
               `re-run \`tn db migrate\`. Path, escaped losslessly: ${losslessPath(source)}.${DATA_AT_RISK}`,
           );

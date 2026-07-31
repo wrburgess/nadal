@@ -297,6 +297,53 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     expect(message).not.toMatch(/mv /);
   });
 
+  // Codex round 7, rated HIGH. `losslessPath` escaped Cc/Cf/U+2028/U+2029 but left a LONE UTF-16
+  // SURROGATE literal — and `sanitizeValue` leaves those alone too, so a surrogate path skipped the
+  // fail-safe entirely and got an `mv` command. Node's UTF-8 encoder then writes it as U+FFFD
+  // (verified: "x\uD800y" emits bytes 78 ef bf bd 79), so that command named a REPLACEMENT-CHARACTER
+  // sibling, not the real database. Two mechanisms corrupt a path on the way out; deriving the guard
+  // from the sanitizer alone only ever covered one of them.
+  //
+  // Reachability, checked not argued: a lone surrogate cannot arrive via TN_DB_PATH — an env var is
+  // decoded from UTF-8 bytes and that round trip already destroys it — so the only route is a direct
+  // `runMigrations()` call, which is exactly what this test does. Handled anyway: the fix is one
+  // character class, and a guard correct only for the inputs someone thought of is the shape this
+  // repo keeps re-learning.
+  it("REGRESSION: a lone-surrogate path fails safe and is rendered losslessly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const lone = String.fromCharCode(0xd800);
+    // The file on disk necessarily carries the U+FFFD encoding of that byte sequence — the real
+    // database this path resolves to. Seed it there, then call with the surrogate STRING: both
+    // encode to the same bytes, so they name the same file.
+    const onDisk = join(dir, `we\uFFFDird.db`);
+    const asPassed = join(dir, `we${lone}ird.db`);
+
+    const legacyDir = buildLegacyMigrationsFolder(5);
+    const sqlite = new Database(onDisk);
+    try {
+      migrate(drizzle(sqlite), { migrationsFolder: legacyDir });
+      sqlite.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A', 'https://tr/t?a')`);
+      sqlite.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A 4.0', 'https://tr/t?a')`);
+    } finally {
+      sqlite.close();
+    }
+
+    let caught: unknown;
+    try {
+      runMigrations(asPassed);
+    } catch (err) {
+      caught = err;
+    }
+    const message = (caught as Error).message;
+
+    // Fails safe: no command that could name the U+FFFD sibling.
+    expect(message).not.toMatch(/mv /);
+    // Lossless: the exact code unit is recoverable from the escape.
+    expect(message).toContain("\\u{D800}");
+    // And nothing unrenderable survives in the message itself.
+    expect(message).not.toMatch(/[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u);
+  });
+
   it("the same legacy database WITHOUT duplicates upgrades cleanly and the index exists", () => {
     const dbPath = freshDbPath();
     const legacyDir = buildLegacyMigrationsFolder(5);
