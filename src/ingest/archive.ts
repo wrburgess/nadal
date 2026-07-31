@@ -96,7 +96,9 @@ export function archivePage(input: ArchivePageInput): string {
   //
   // CLOSED (#33): un-redacted capture content can no longer be written outside the validated real
   // root via a directory-component swap between resolution and the write — the bytes go through a
-  // proven fd, not a re-resolved path string.
+  // proven fd, not a re-resolved path string. That proof includes the LINK COUNT, so the fd having
+  // acquired a second name outside the root (a hard link) is refused too, not just a redirected path
+  // (Codex adversarial review, PR #48).
   // REMAINING: an actor who wins the PRE-OPEN window — before `writeNewOutputFile` ever calls
   // `openSync` — can still cause an EMPTY file to be created at a location of their choosing; the
   // call then fails closed on the post-open verification and writes no CONTENT there. Pure Node has

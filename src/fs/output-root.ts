@@ -343,6 +343,44 @@ export function resolveRealOutputPath(root: string, candidatePath: string, permi
   return join(realDir, basename(resolvedCandidate));
 }
 
+/** Closes `fd`, swallowing any error: a cleanup failure must never mask the real one. */
+function closeQuietly(fd: number): void {
+  try {
+    closeSync(fd);
+  } catch {
+    // Best-effort. The ORIGINAL error is what the caller needs to see, not a close failure.
+  }
+}
+
+/**
+ * Removes `path` ONLY if it still names the exact inode `ours` describes — the file the caller just
+ * created and is now abandoning.
+ *
+ * A bare `unlinkSync(path)` here was a data-loss hole (Codex adversarial review, PR #48, [critical]).
+ * `unlink` resolves directory components like every other path call, so when verification failed
+ * *because* a parent was swapped for a symlink, the cleanup followed that symlink and deleted
+ * whatever sat at the corresponding name in the attacker-chosen directory — an unrelated file, in a
+ * location this module had just refused to write to. A guard that destroys a file outside the root
+ * while refusing to write one there is not a smaller version of the same control; it is a different,
+ * worse bug.
+ *
+ * Comparing `{dev, ino}` first makes the deletion self-limiting: if the entry is ours we remove it,
+ * and if the path now names anything else — an attacker's file, a replacement, a directory — we leave
+ * it completely alone and let the original error propagate. The worst case is a stray empty file we
+ * created inside a directory the attacker already controls, which is strictly better than deleting
+ * someone else's data.
+ */
+function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): void {
+  try {
+    const current = lstatSync(path);
+    if (current.dev !== ours.dev || current.ino !== ours.ino) return;
+    unlinkSync(path);
+  } catch {
+    // Best-effort: the entry may already be gone, or be unreadable. Either way the ORIGINAL error is
+    // what propagates, never a cleanup failure.
+  }
+}
+
 /**
  * The fd-anchored write primitive (#33). A file descriptor is bound to an INODE, not to a path.
  * Everything above this point — `resolveRealOutputPath` included — resolves a path STRING and hands
@@ -384,7 +422,7 @@ export function openNewOutputFileSafely(
   root: string,
   candidatePath: string,
   permittedDir: string,
-): { fd: number; realPath: string } {
+): { fd: number; realPath: string; openedStat: { dev: number; ino: number } } {
   const realPath = resolveRealOutputPath(root, candidatePath, permittedDir);
 
   // `openSync(..., "wx")` is `O_CREAT | O_EXCL`: it refuses outright to follow an existing symlink
@@ -394,22 +432,34 @@ export function openNewOutputFileSafely(
   // exactly the gap the two checks below exist to close.
   const fd = openSync(realPath, "wx");
 
+  // Captured IMMEDIATELY, before any check can fail: the cleanup path below needs the fd's identity
+  // to prove that whatever `realPath` names at cleanup time is still the file this call created,
+  // rather than an unrelated file an attacker has since arranged to sit there. `dev`/`ino` are fixed
+  // for the life of an fd, so this snapshot stays valid however verification goes.
+  const openedStat = fstatSync(fd);
+
   try {
-    // `assertNoSymlinkComponents` must be given a ROOT and a TARGET from the SAME tree — both
-    // lexical, or both real — or `relative()` between them walks out through unrelated ancestors and
-    // reports a false positive the moment either side crosses a symlinked ancestor of its own (macOS
+    // Containment is checked BEFORE the component walk (Codex adversarial review, PR #48, [low]).
+    // `assertNoSymlinkComponents` derives its walk from `relative(root, target)`, so if the root has
+    // been repointed out from under `realPath` that relative path starts with `..` and the walk
+    // wanders up through ancestors OUTSIDE the root, where it can throw something unrelated before
+    // the containment refusal that actually describes the problem ever runs. Establishing
+    // containment first means the walk only ever runs on a target genuinely underneath the root.
+    //
+    // Both sides must also come from the SAME tree — both lexical, or both real — or `relative()`
+    // reports a false positive the moment either crosses a symlinked ancestor of its own (macOS
     // resolves `/var` to `/private/var`, so a lexical root under `/var` paired with the already-real
-    // `realPath` below produces exactly that false positive). `realPath` is already real (it came
-    // from `resolveRealOutputPath`), so the root re-resolved here is real too, before either is used.
+    // `realPath` produces exactly that). `realPath` is already real (it came from
+    // `resolveRealOutputPath`), so the root re-resolved here is real too, before either is used.
     const realRootNow = realpathOfNearestExisting(resolve(root));
     assertRootSafe(realRootNow, permittedDir);
-    assertNoSymlinkComponents(realRootNow, realPath);
     const realDirNow = realpathSync.native(dirname(realPath));
     if (!isWithin(realRootNow, realDirNow)) {
       throw new OutputPathError(
         `refusing to write output path outside the resolved root "${realRootNow}": ${realDirNow}`,
       );
     }
+    assertNoSymlinkComponents(realRootNow, realPath);
 
     const fdStat = fstatSync(fd);
     const pathStat = lstatSync(realPath);
@@ -418,24 +468,34 @@ export function openNewOutputFileSafely(
         `refusing to write through a file descriptor whose target no longer matches the path it was opened from: ${realPath}`,
       );
     }
+
+    // The HARD-LINK bypass, and the reason inode identity alone is not containment (Codex
+    // adversarial review, PR #48, [critical]). Everything above proves "the fd is what this path
+    // names" — it does NOT prove "this path is the ONLY name the fd has". An attacker who wins the
+    // pre-open window (so the file is created through a symlinked component, OUTSIDE the root) can
+    // then restore the real parent directory and hard-link that outside file back to `realPath`.
+    // Every check above now passes honestly: no component is a symlink any more, and `{dev, ino}`
+    // genuinely match — because it is the same inode, reachable under two names, one of them outside
+    // the root. Writing through the fd would publish un-redacted content at the outside name.
+    //
+    // `nlink` is the exact discriminator, and it is exact rather than heuristic: `openSync(..., "wx")`
+    // is `O_CREAT | O_EXCL`, so it only ever succeeds by CREATING the file, and a newly created
+    // regular file has exactly one link. Any additional name therefore appeared after our open and is
+    // by definition not ours. There is no legitimate configuration in which a file this function just
+    // created already has a second link, so this refuses no real usage.
+    if (fdStat.nlink !== 1) {
+      throw new OutputPathError(
+        `refusing to write through a file descriptor with ${fdStat.nlink} links — the file this call created ` +
+          `has been given another name, which may lie outside the validated root: ${realPath}`,
+      );
+    }
   } catch (err) {
-    try {
-      closeSync(fd);
-    } catch {
-      // Best-effort: if closing the fd itself fails, the ORIGINAL verification error is still what
-      // the caller needs to see, not a close failure.
-    }
-    try {
-      unlinkSync(realPath);
-    } catch {
-      // Best-effort: `realPath` may not be the file we just opened (a symlinked component can make
-      // this unlink land somewhere unexpected, or the entry may already be gone) — either way the
-      // ORIGINAL verification error above is what propagates, never a cleanup failure.
-    }
+    closeQuietly(fd);
+    unlinkIfStillOurs(realPath, openedStat);
     throw err;
   }
 
-  return { fd, realPath };
+  return { fd, realPath, openedStat };
 }
 
 /**
@@ -456,7 +516,7 @@ export function writeNewOutputFile(
   permittedDir: string,
   content: string,
 ): string {
-  const { fd, realPath } = openNewOutputFileSafely(root, candidatePath, permittedDir);
+  const { fd, realPath, openedStat } = openNewOutputFileSafely(root, candidatePath, permittedDir);
   try {
     // Looped, not a single `writeSync`. `fs.writeSync` issues ONE `write(2)` and returns the number
     // of bytes it actually wrote; it does not retry the remainder the way `writeFileSync` does
@@ -468,19 +528,23 @@ export function writeNewOutputFile(
     const buffer = Buffer.from(content, "utf8");
     let written = 0;
     while (written < buffer.length) {
-      written += writeSync(fd, buffer, written, buffer.length - written);
+      const justWritten = writeSync(fd, buffer, written, buffer.length - written);
+      // A zero (or nonsensical) return would make this loop spin forever, re-issuing the same
+      // request that just made no progress and never yielding — a hung CLI rather than a failed one
+      // (Codex adversarial review, PR #48, [medium]). `write(2)` returning 0 for a non-empty request
+      // is not a state this code can make progress from, so it fails loudly instead. The loop cannot
+      // reach here with an empty buffer: `written` already equals `buffer.length` at zero.
+      if (!Number.isInteger(justWritten) || justWritten <= 0) {
+        throw new OutputPathError(
+          `refusing to continue writing after a write that made no progress ` +
+            `(${String(justWritten)} bytes written at offset ${written} of ${buffer.length}): ${realPath}`,
+        );
+      }
+      written += justWritten;
     }
   } catch (err) {
-    try {
-      closeSync(fd);
-    } catch {
-      // Best-effort — see openNewOutputFileSafely's identical cleanup comment above.
-    }
-    try {
-      unlinkSync(realPath);
-    } catch {
-      // Best-effort — see openNewOutputFileSafely's identical cleanup comment above.
-    }
+    closeQuietly(fd);
+    unlinkIfStillOurs(realPath, openedStat);
     throw err;
   }
   closeSync(fd);
@@ -546,6 +610,17 @@ export function assertLeafWritable(path: string): void {
  * window is refused rather than carried out. This narrows, but does not erase, the window: it is
  * still a check-then-use path operation, just with the check moved as close to the use as pure Node
  * allows.
+ *
+ * **This path is deliberately NOT held to `writeNewOutputFile`'s standard, and must not be described
+ * as if it were** (Codex adversarial review, PR #48, [critical], severity disputed down to a
+ * disclosure fix — the residual was already documented, but "both callers inherit the fix" read as
+ * full closure). A swap landing between this re-check and `renameSync` — including the hard-link
+ * variant, where the temp file is given a second name outside the root before the rename resolves
+ * either — can still place dossier content outside the validated root. Closing it needs `renameat`
+ * on a trusted directory handle, which pure Node does not expose, so the rename cannot be anchored
+ * the way the archive writer's `open` is. The archive writer (un-redacted raw captures, the more
+ * sensitive artifact) IS fully fd-anchored; the reports writer rewrites in place and therefore needs
+ * a rename, and keeps this narrower window.
  *
  * Any failure past the first `writeFileSync` — the second `assertLeafWritable`, the directory
  * re-verification, or `renameSync` itself — cleans up the now-orphaned temp file (best-effort; if

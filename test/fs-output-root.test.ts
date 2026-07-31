@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import * as fsModule from "node:fs";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -719,9 +720,129 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
       }) as unknown as typeof fsModule.openSync);
 
       expect(() => openNewOutputFileSafely(root, candidate, "reports")).toThrow(OutputPathError);
-      // The swapped-in file must be gone too — best-effort cleanup removes whatever now sits at the
-      // leaf, not just the (already-unlinked) file the fd was originally opened against.
+      // The swapped-in file must SURVIVE. Cleanup deletes only the inode this call created, and by
+      // now that inode is gone and a different file bears the name — so the refusal must leave it
+      // completely alone (Codex adversarial review, PR #48, [critical]: a cleanup that unlinks by
+      // path deletes whatever the attacker arranged to be sitting there).
+      expect(existsSync(candidate)).toBe(true);
+      expect(readFileSync(candidate, "utf8")).toBe("a different file entirely");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #48, [critical]. Everything else in this block proves "the fd is
+  // what this path names". It does NOT prove "this path is the fd's ONLY name". An attacker who wins
+  // the pre-open window — so the file is created through a symlinked component, OUTSIDE the root —
+  // can restore the real parent and hard-link that outside file back to the in-root path. Every
+  // other check then passes honestly: no component is a symlink any more, and {dev, ino} match,
+  // because it IS the same inode under two names. Only the link count reveals the second name.
+  it("REGRESSION: refuses when the created file has been given a SECOND name (hard link), even though every component is clean and the inode matches", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "tn-fd-outside-"));
+    try {
+      const subDir = join(root, "team-hardlink");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+      const outsideName = join(outside, "leaked.html");
+
+      const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fsModule.openSync).mockImplementationOnce(((target: string, flags: string) => {
+        const fd = realOpenSync(target, flags);
+        // The file now exists at `target`, inside the root, with one link. Give it a SECOND name
+        // outside the root — the state a restored-parent hard-link attack leaves behind. No
+        // component is a symlink and the inode is unchanged, so every other check still passes.
+        linkSync(target, outsideName);
+        return fd;
+      }) as unknown as typeof fsModule.openSync);
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "MUST NOT LEAK")).toThrow(OutputPathError);
+      // The whole point: no content reached the second name.
+      expect(readFileSync(outsideName, "utf8")).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #48, [critical]. `unlink` follows directory components like every
+  // other path call, so a cleanup that unlinks by PATH after a symlink swap deletes whatever sits at
+  // the corresponding name in the attacker-chosen directory. Refusing to write somewhere while
+  // deleting a file there is a different, worse bug than the one this module guards against.
+  it("REGRESSION: a refusal caused by a symlink swap must NOT delete the unrelated file it now resolves to", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "tn-fd-outside-"));
+    try {
+      const subDir = join(root, "team-cleanup-safety");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+      // An unrelated, pre-existing file that the swapped-in symlink will make `candidate` resolve to.
+      const bystander = join(outside, "index.html");
+      writeFileSync(bystander, "SOMEONE ELSE'S DATA", "utf8");
+
+      const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fsModule.openSync).mockImplementationOnce(((target: string, flags: string) => {
+        const fd = realOpenSync(target, flags);
+        const swappedDir = dirname(target);
+        rmSync(swappedDir, { recursive: true, force: true });
+        symlinkSync(outside, swappedDir, "dir");
+        return fd;
+      }) as unknown as typeof fsModule.openSync);
+
+      expect(() => openNewOutputFileSafely(root, candidate, "reports")).toThrow(OutputPathError);
+      expect(existsSync(bystander)).toBe(true);
+      expect(readFileSync(bystander, "utf8")).toBe("SOMEONE ELSE'S DATA");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #48, [medium]. A `writeSync` that reports zero progress would make
+  // the retry loop re-issue the same request forever — a hung CLI rather than a failed one. This
+  // test would HANG (not fail) without the guard, which is exactly why the guard has to exist.
+  it("REGRESSION: a write that reports ZERO progress fails loudly instead of spinning forever", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const { writeSync: realWriteSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-noprogress");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.writeSync).mockImplementation((() => 0) as unknown as typeof fsModule.writeSync);
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "some content")).toThrow(
+        /made no progress/,
+      );
       expect(existsSync(candidate)).toBe(false);
+    } finally {
+      // Restore CALL-THROUGH, not a bare `vi.fn()` — this is a persistent `mockImplementation`, and
+      // the block's `afterEach` uses `mockClear` (which leaves implementations in place), so a stub
+      // returning `undefined` would leak into every later test that writes through this fd path.
+      vi.mocked(fsModule.writeSync).mockImplementation(realWriteSync);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Multi-byte UTF-8 through the offset/length arithmetic: a loop that confused CHARACTERS for BYTES
+  // would truncate or corrupt this, and the ASCII cases above could not tell the difference.
+  it("writes multi-byte UTF-8 content byte-exactly, including across a forced short write", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const { writeSync: realWriteSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-utf8");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+      const content = "Ana Ivanović · 日本語 · café — WTN 4.2 · 🎾";
+
+      // Split mid-way through the buffer, which lands inside a multi-byte sequence for this string.
+      vi.mocked(fsModule.writeSync).mockImplementationOnce(((fd: number, buffer: Buffer) =>
+        realWriteSync(fd, buffer, 0, 7)) as unknown as typeof fsModule.writeSync);
+
+      writeNewOutputFile(root, candidate, "reports", content);
+
+      expect(readFileSync(candidate, "utf8")).toBe(content);
+      expect(readFileSync(candidate).length).toBe(Buffer.byteLength(content, "utf8"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
