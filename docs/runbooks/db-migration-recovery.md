@@ -328,7 +328,25 @@ To restore after re-pulling, work back **up** the dependency order above.
 > backticks. For anything else, restore notes through the **`player_note` MCP tool** via
 > [agent-chat-over-mcp.md](agent-chat-over-mcp.md): it takes the note as a **structured JSON
 > argument**, so no shell ever parses it, and it is also the only route that can restore a
-> **pairing** note. When in doubt, use it — it is strictly safer and never wrong.
+> **pairing** note. For note *content*, it is strictly safer than any shell form.
+>
+> **But it is only safe for the DATABASE under one condition, which the `export` above does not
+> give you.** An MCP tool opens the database from the **already-running server's** environment, not
+> from your shell — so a server started without this recovery's `TN_DB_PATH` will restore your notes
+> into *its* database and report success, while the database you just rebuilt stays empty. Nothing in
+> the tool result would reveal it. This applies to every restoring tool — `team_home`, `event_add`,
+> `player_avail`, `player_note` — not just notes.
+>
+> So before restoring anything over MCP: **restart the server with the exact absolute path you
+> exported**, and do not reuse a server whose environment you cannot account for. Verify it landed by
+> reading the rebuilt database directly rather than trusting the tool result:
+>
+> ```sh
+> test -f "$TN_DB_PATH" && sqlite3 "$TN_DB_PATH" "select count(*) from captain_notes"
+> ```
+>
+> If that count does not move, the server is writing somewhere else — stop and fix the server's
+> environment before restoring the rest.
 
 ```sh
 # Safe for simple values only — see the warning above before using these for note text.
