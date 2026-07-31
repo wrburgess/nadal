@@ -233,6 +233,40 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
     expect(logSpy).not.toHaveBeenCalled();
   });
 
+  // Pins the divergence the runbook warns about (Codex review of PR #47 round 8, rated medium
+  // against the runbook, which had told operators to use `team show` as the preflight). The two
+  // commands count DIFFERENT things on purpose — `team show` reports every court match its roster
+  // appears in, `lineup plan` counts only this team's own — and a doc claim about that difference
+  // should be executable rather than prose.
+  it("team show reports slots from history that lineup plan correctly refuses to use", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const ours = db.insert(teams).values({ name: "NE/Penland/40&Over3.5M" }).returning().get();
+    const elsewhere = db.insert(teams).values({ name: "Some Other Club/18&Over4.0M" }).returning().get();
+    const a = db.insert(players).values({ canonicalName: "Ada Ashby" }).returning().get();
+    const b = db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    for (const p of [a, b]) {
+      db.insert(teamMemberships).values({ playerId: p.id, teamId: ours.id, eventId: null }).run();
+    }
+    // Six matches together — but all of them for the OTHER club.
+    play(db, "D1", "doubles", [a.id, b.id], 6, linkTeamMatch(db, elsewhere.id, "divergence-other"));
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    // `team show` sees the history — this is why it is the wrong preflight, not a bug in it.
+    const showCode = await dispatch(["team", "show", "NE/Penland/40&Over3.5M"]);
+    expect(showCode).toBe(0);
+    expect(logSpy.mock.calls.at(-1)?.[0] as string).toContain("D1");
+
+    // `lineup plan` refuses, because none of it belongs to this team.
+    const planCode = await dispatch(["lineup", "plan", "NE/Penland/40&Over3.5M"]);
+    expect(planCode).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("only this team's own"));
+  });
+
   describe("refusals", () => {
     it("refuses a team with no court-match history and says what to run instead", async () => {
       runMigrations();

@@ -54,15 +54,27 @@ Three limits worth knowing before you rely on it:
 
 ## Steps
 
-### 1. Check there is something to predict from
+### 1. Check there is something to predict from — by running the prediction
 
 ```
-tn team show "IA/Versteeg/40&Over3.5M"
+tn lineup plan "IA/Versteeg/40&Over3.5M"
 ```
 
-Look at the `slots:` line. If it is `none`, no court matches have been ingested for this roster and
-the prediction will refuse — run the pull first. If it names only one or two courts, expect a thin
-prediction: the court set comes from exactly this data.
+**Do not use `tn team show`'s `slots:` line as the preflight.** It is tempting and it is wrong: that
+line counts *every* court match the roster's players appear in, including their other leagues, while
+the prediction counts only matches belonging to **this team**. A roster whose players have long
+histories elsewhere will show a healthy `slots:` line and then have `lineup plan` refuse — and you
+would go looking for the wrong problem.
+
+The prediction is its own preflight. Either it renders, or it refuses and tells you what to run:
+
+```
+lineup plan status=error message="no court-match history on file for "…" — only this team's own
+matches count, so run tn team pull --players for it first"
+```
+
+If it renders but names only one or two courts, expect a thin guess — and read the `excluded:` line,
+which says how many of the roster's matches belonged to other teams.
 
 ### 2. Run the prediction
 
