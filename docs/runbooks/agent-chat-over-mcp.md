@@ -88,8 +88,30 @@ positionals by name.
 
 ## Verifying it landed
 
-- Every tool call writes a `request_log` row with `surface="mcp"` — `sqlite3 data/nadal.db "select
-  surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
+> **Every direct `sqlite3` read below must target the database the MCP SERVER writes — and the
+> server has its own environment.** `TN_DB_PATH` set for the server is not `TN_DB_PATH` set in your
+> shell. Two distinct ways that bites, and a default fixes neither:
+>
+> - `sqlite3` **creates** a database at a path that does not exist, so a wrong path returns a
+>   confident empty answer rather than an error;
+> - and if `data/nadal.db` happens to **exist** from some earlier run, a default silently reads
+>   unrelated historical rows — which looks like a successful verification.
+>
+> So there is no default here. Name the server's database explicitly and prove it exists:
+>
+> ```sh
+> printf "the MCP server's database path: "; IFS= read -r DB || DB=
+> test -f "$DB" || echo "STOP: no database at '$DB' — do not trust anything below" >&2
+> ```
+>
+> Every read below is written `test -f "$DB" && sqlite3 "$DB" …`, so a missing path fails closed
+> rather than fabricating an empty database. That guard cannot tell you the path is the *right* one,
+> though — only you can, by matching it against the server's own environment. (This block took three
+> attempts across the Codex adversarial review of #56: a hardcoded literal, then a default that could
+> create the wrong file, then a default that could *read* an existing wrong one.)
+
+- Every tool call writes a `request_log` row with `surface="mcp"` — `test -f "$DB" && sqlite3 "$DB"
+  "select surface, command, outcome from request_log order by id desc limit 10"` shows the last ten calls
   from either surface, interleaved, which is the whole point of one shared telemetry table (spec §
   Request telemetry).
 - **Verifying what a write actually recorded.** The tool's own result is the readback: `player_avail`
@@ -105,8 +127,8 @@ positionals by name.
 
   For the rows themselves there is no command yet, so read the table directly:
 
-  ```
-  sqlite3 data/nadal.db "select p.canonical_name, e.name, a.day, a.status
+  ```sh
+  test -f "$DB" && sqlite3 "$DB" "select p.canonical_name, e.name, a.day, a.status
     from availability a
     join players p on p.id = a.player_id
     join events  e on e.id = a.event_id
@@ -120,16 +142,77 @@ while it still carried the pre-merge `0004_free_warstar` migration. `main` later
 `0004`, so this branch's home-team migration renumbered to `0005`; a database that recorded the old
 `0004` will try to apply `0005` on top of a column it already has.
 
-**Recovery is one line, and losing the database costs nothing by design:**
+**Recovery is one line, and losing the database costs nothing by design.** This error is rethrown
+unchanged, so it does **not** name the failing database — you have to identify it yourself:
 
 ```sh
-rm data/nadal.db && tn db migrate
+# This error does not name the database, so the shell's TN_DB_PATH is the best signal available.
+# Confirm it is the one you were using — `echo "${TN_DB_PATH:-data/nadal.db}"` — before running
+# this; a stale value would move and rebuild an unrelated database.
+case "${TN_DB_PATH:-}" in
+  /*) DB="$TN_DB_PATH" ;;                                   # set, and absolute — use it as-is
+  *)  printf 'absolute path to the database that failed: '  # otherwise paste it; `read -r` takes the
+      IFS= read -r DB || DB= ;;                             # line verbatim, so quotes need no care
+esac
+
+case "$DB" in
+  /*) export TN_DB_PATH="$DB"   # binds EVERY `tn` below — migrate, re-pull AND restore.
+                               # A one-off `TN_DB_PATH="$DB" tn db migrate` binds only
+                               # that child process; the restore would then write the
+                               # default while appearing to succeed.
+      mv -i -- "$DB" "$DB.pre-0005.bak" && tn db migrate ;;
+  *)  echo "STOP: need an ABSOLUTE path; got '$DB'" >&2 ;;
+esac
 ```
+
+**Resolve it to an absolute path.** The `data/nadal.db` default is *relative* and resolves against
+the working directory of the process, so recovering from a different directory than the failed run
+used would move a different file entirely.
+
+Two things this line used to get wrong, both fixed under #56 after the Codex adversarial review found
+the same class one runbook over:
+
+- It said `rm`, which is **destructive** for no benefit — `tn db migrate` only needs the file gone,
+  and the backup is what makes the export procedure in
+  [db-migration-recovery.md](db-migration-recovery.md) → *General note on data at risk* possible
+  *after* you have a working database again rather than only before.
+- It hardcoded `data/nadal.db`, so following it literally while `TN_DB_PATH` pointed elsewhere would
+  have **deleted an unrelated database** and left the failing one untouched. That is the wrong-file
+  class rated critical in issue #46, Codex round 1.
+
+`-i` refuses a silent overwrite, `--` ends option parsing, and `"$DB"` double-quoted survives a path
+containing a space *or an apostrophe* — which a pasted single-quoted path does not, the third defect
+this line carried and the one that reached both runbooks. Check `ls "$DB".pre-0005*` first: a backup
+name that is already taken means a *second* recovery would destroy the first one's captain notes.
+See [db-migration-recovery.md](db-migration-recovery.md) for why each of those is there.
 
 Then re-pull. The database is a *cache* over `raw/`, not a system of record — spec § Ingestion makes
 every fetch an idempotent upsert and archives every page, precisely so it can be rebuilt at any time.
-Nothing you typed by hand is at risk unless you had already recorded captain notes or availability on
-that branch, in which case copy them out first (`sqlite3 data/nadal.db "select * from captain_notes;"`).
+Nothing you typed by hand is at risk **except captain notes and availability**, which exist nowhere
+else.
+
+**Stay in the shell where you ran the `export` above** — the restore commands resolve their database
+the same way `tn db migrate` does, so in a fresh shell they would write `data/nadal.db` and report
+success. If you restore over MCP instead, the server must have been started with that same
+`TN_DB_PATH`; the tools read the server's environment, not yours, and nothing in the tool result
+would tell you they diverged.
+
+**To recover those, follow
+[db-migration-recovery.md](db-migration-recovery.md) → *General note on data at risk*, reading from
+the `.pre-0005.bak` you just created** — not from the configured database path, which after the move
+is either absent or a freshly rebuilt empty one. Three things that procedure gets right and a
+one-liner here cannot:
+
+- it exports **joined to names**, because `captain_notes` and `availability` store `player_id` /
+  `event_id` foreign keys and a rebuilt database assigns new autoincrement ids — so a `select *` dump
+  is unrestorable by construction, its numbers pointing at different players;
+- it covers the **home-team designation and the events** as well, which notes and availability cannot
+  be restored without;
+- it names the **order** the three have to come back in.
+
+This paragraph previously said `sqlite3 data/nadal.db "select * from captain_notes;"`, which was wrong
+in all three ways *and* named the default database rather than the one that actually failed (Codex
+adversarial review of #56, round 2, rated critical).
 
 **This cannot happen to a database created after the merge**, which applies `0000`..`0005` in order.
 No permanent repair path is shipped for it, deliberately: that would mean carrying

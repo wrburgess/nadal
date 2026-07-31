@@ -235,7 +235,13 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
   // This asserts the RENDERED CLI line, which is the surface that actually broke — the sibling
   // assertion in test/db-teams-url-unique-upgrade.test.ts covers the message itself. The defect
   // lives in the seam, so it is guarded from both sides.
-  it("renders the #46 duplicate-URL recovery command INTACT through the one-line summary", async () => {
+  //
+  // #56 retired the `mv` command this originally pinned; the guard is RETARGETED, not deleted,
+  // because the defect it exists for is untouched by that change. An error string's format is a
+  // contract with whatever renders it, and either side can move independently — #44 changed the
+  // renderer while #46 changed the string, and neither suite saw it. The payload is different now
+  // (the database path and the runbook link rather than a command), and the seam is the same.
+  it("renders the #46 duplicate-URL recovery INTACT through the one-line summary", async () => {
     const dbFile = join(mkdtempSync(join(tmpdir(), "tn-")), "legacy.db");
     // A database migrated up to 0008 that already holds the duplicate pair 0009 forbids.
     const legacyDir = buildLegacyMigrationsFolder(8);
@@ -257,10 +263,81 @@ describe("tn db migrate rejects unrecognized flags and extra arguments (#44 fold
     expect(printed, "no db migrate summary line was emitted").toBeDefined();
     const fields = parseSummaryFields(printed as string);
     expect(fields.status).toBe("error");
-    // The whole recovery command survives as one contiguous, copy-pasteable run — this is what a
-    // collapsed multi-line message destroys.
-    expect(fields.message).toContain(`mv -i -- '${dbFile}' '${dbFile}.pre-0009.bak' && tn db migrate`);
-    expect(fields.message).toContain("docs/runbooks/db-migration-recovery.md");
+    // EXACT EQUALITY on the rendered field — the whole message, after `sanitizeValue` and
+    // `quoteSummaryValue` and back out through `parseSummaryFields`. This is the strongest form the
+    // seam can be guarded in: it catches the payload being truncated, reordered, re-escaped, or
+    // having anything appended to it, rather than asserting that a few chosen substrings are still
+    // findable somewhere in it. The expected text is authored here, independently of
+    // `src/db/client.ts`, so it compares the seam's output against a hand-written expectation.
+    //
+    // Coupling to the exact prose is deliberate, and is what the assertion this replaces already
+    // did with the exact `mv -i -- '<src>' '<bak>' && tn db migrate` text. The seam is a string
+    // contract; guarding it means pinning the string.
+    //
+    // One thing this does NOT prove, checked by mutation rather than assumed: that the RAW message
+    // is single-line. `sanitizeValue` maps a newline to a space, so a multi-line message whose
+    // breaks fall at word boundaries renders byte-identically here and passes even exact equality.
+    // No assertion on this side of the seam can see that; the guard for it is the raw-message
+    // control-character assertion in test/db-teams-url-unique-upgrade.test.ts, which is what
+    // reddens when newlines are injected at word boundaries. The old command assertion had the
+    // identical blind spot — naming it is the change, not acquiring it.
+    expect(fields.message).toBe(
+      "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+        `(${dbFile}) has two team rows sharing one tennisrecord_url (issue #46), so migration ` +
+        "0009's unique index cannot apply. Recovery moves this database aside rather than " +
+        "deleting it, but read the runbook FIRST: captain notes and availability exist ONLY " +
+        "in this file and must be exported from it before you re-pull. " +
+        "docs/runbooks/db-migration-recovery.md",
+    );
+
+    errorSpy.mockRestore();
+  });
+
+  // Codex adversarial review of #56, round 2 (rated high, recommendation adopted): the seam was
+  // equality-tested only on the LITERAL branch, so the escaped branch's rendering went through
+  // `quoteSummaryValue` with nothing pinning what came out. That is the branch where the seam is
+  // least obvious — `losslessPath` emits backslashes, and the summary format escapes backslashes,
+  // so the wire form is DOUBLED (`\\u{A}`) while the parsed value is not. Documented in the runbook;
+  // asserted here, which is the difference between knowing it and keeping it.
+  it("renders an ESCAPED #46 recovery intact through the one-line summary", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbFile = join(dir, "we\nird.db"); // a legal POSIX filename containing a newline
+    const seed = new Database(dbFile);
+    try {
+      migrate(drizzle(seed), { migrationsFolder: buildLegacyMigrationsFolder(8) });
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A', 'https://tr/t?a')`);
+      seed.exec(`INSERT INTO teams (name, tennisrecord_url) VALUES ('A 4.0', 'https://tr/t?a')`);
+    } finally {
+      seed.close();
+    }
+    process.env.TN_DB_PATH = dbFile;
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const code = await dispatch(["db", "migrate"]);
+    expect(code).toBe(1);
+
+    const printed = errorSpy.mock.calls.map((c) => String(c[0])).find((l) => l.includes("db migrate"));
+    const raw = printed as string;
+    const fields = parseSummaryFields(raw);
+
+    // The escape is written ONCE in the value the reader gets back...
+    const escapedPath = dbFile.replace(String.fromCharCode(10), "\\u{A}");
+    expect(fields.message).toBe(
+      "UNIQUE constraint failed: teams.tennisrecord_url — this database " +
+        `at ${escapedPath} (path escaped — it contains characters that cannot be shown literally) ` +
+        "has two team rows sharing one tennisrecord_url (issue #46), so migration " +
+        "0009's unique index cannot apply. Recovery moves this database aside rather than " +
+        "deleting it, but read the runbook FIRST: captain notes and availability exist ONLY " +
+        "in this file and must be exported from it before you re-pull. " +
+        "docs/runbooks/db-migration-recovery.md",
+    );
+    // ...and TWICE on the wire, because the summary format escapes backslashes inside its quoted
+    // field. Both facts are asserted because a reader who copies the escape off the terminal gets
+    // the doubled form, and the runbook tells them to read `--json` instead for exactly this reason.
+    expect(raw).toContain("we\\\\u{A}ird.db");
+    // The rendered line is control-character free — the newline in the real filename never reaches
+    // the terminal, which is what `losslessPath` exists for.
+    expect(fields.message).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
 
     errorSpy.mockRestore();
   });
