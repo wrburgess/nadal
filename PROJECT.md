@@ -366,14 +366,31 @@ run either of them.**
 
 1. **Append** each Rules-Layer / config suggestion to [`docs/findings.md`](docs/findings.md) as **one
    line**, in the format that file's header specifies.
-2. **Fold nothing.** Edit no Rules Layer, no skill body, no `docs/standards/` file. (These are vendored;
+2. **Commit and push that append, here, before Step 2.** The canonical `autonomous-fold` branch requires
+   exactly this of *its* write — *"Commit and push the folds so Step 2's checks run on the folded
+   diff"* — and the append is this branch's write, so it inherits the requirement. **An append left in
+   the working tree is not delivered:** the SOW would claim a findings line that is not in the PR, and
+   the merge gate would never see it.
+3. **The append moved the PR head, so the review must be re-obtained.** Under `attested`
+   ([*Human Gates*](#human-gates)) the merge requires an external review **bound to a SHA equal to the
+   PR head**, and this commit is now the head. Re-enter [`verify`](skills/verify/SKILL.md) to summon the
+   Reviewer on the post-append head **before** posting the SOW. This is the same ordering constraint the
+   canonical branch states — *"a fold that lands after the attestation moves the head away from the
+   attested SHA, and condition 4 then refuses the merge"* — and it is why this step runs **first**, at
+   Step 1: doing the write early is what keeps it to one extra review round rather than one per
+   suggestion.
+4. **Fold nothing.** Edit no Rules Layer, no skill body, no `docs/standards/` file. (These are vendored;
    see *Findings-Log Discipline* below.)
-3. **File nothing.** No Issue, no PR, no ADR — see the same section.
-4. **Wait for nothing.** Continue straight to Step 2 (verify the PR is ready).
-5. **Record it in the SOW** where Step 5's *Folded Rule/Config Changes* section expects a fold and a
+5. **File nothing.** No Issue, no PR, no ADR — see the same section.
+6. **Wait for nothing.** No pause for the HC: proceed to Step 2 (verify the PR is ready) once 2–3 are
+   done. "Do not wait" governs the *human* gate, never the commit or the re-review.
+7. **Record it in the SOW** where Step 5's *Folded Rule/Config Changes* section expects a fold and a
    deferral: write `Folded: None — nadal runs log-and-continue` and
    `Deferred (follow-up): None — N suggestion(s) appended to docs/findings.md`, so the SOW section is
    answered rather than left blank or filled with a follow-up link.
+
+**If there is nothing to append, steps 2–3 are no-ops** — no commit, no head move, no extra review
+round. The cost above is paid only when the run actually learned something.
 
 **If you looked for `log-and-continue` in [`final`](skills/final/SKILL.md) Step 1 and found no matching
 branch: that is expected, and it is not a reason to skip the step.** That body is vendored and ships
