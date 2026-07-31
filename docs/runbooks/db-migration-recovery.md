@@ -116,23 +116,44 @@ sqlite3 -header -csv 'data/nadal.db.pre-0006.bak' "
 `pair_player` is `LEFT JOIN`ed because `captain_notes.pair_player_id` is nullable — a note about one
 player rather than a pairing. An inner join would silently drop every single-player note.
 
-To restore after re-pulling, work back **up** the dependency order above:
+To restore after re-pulling, work back **up** the dependency order above.
+
+> **Do not paste stored note text into a shell command.** A captain note is arbitrary text you
+> typed: it can contain apostrophes, double quotes, backslashes, newlines, or `$(…)` / backticks.
+> Inside double quotes a shell will *evaluate* the last of those, and an apostrophe breaks the
+> single-quoted forms below — so the naive copy-paste can mangle, drop, or execute the very content
+> this procedure exists to preserve. Player, team and event names have the same problem the moment
+> one contains an apostrophe (`O'Brien`).
+>
+> The shell forms below are safe **only** for simple values — no quotes, no newlines, no `$` or
+> backticks. For anything else, restore notes through the **`player_note` MCP tool** via
+> [agent-chat-over-mcp.md](agent-chat-over-mcp.md): it takes the note as a **structured JSON
+> argument**, so no shell ever parses it, and it is also the only route that can restore a
+> **pairing** note. When in doubt, use it — it is strictly safer and never wrong.
 
 ```sh
+# Safe for simple values only — see the warning above before using these for note text.
 tn team home '<name from home-team-backup.csv>'
 tn event add '<name>' '<kind>' '<starts_on>' '<ends_on>'      # one per events-backup.csv row
 tn player avail '<player>' '<day>' '<status>' '<event>'       # one per availability-backup.csv row
-tn player note  '<player>' "<note>"                           # one per captain-notes-backup.csv row
+tn player note  '<player>' '<note>'                           # one per captain-notes-backup.csv row
 ```
+
+(Single quotes, not double, for the note: single quotes stop `$(…)`, backticks and `$VAR` from
+being evaluated. They still cannot carry an apostrophe — that is the case the MCP tool exists for.)
 
 Every one of those resolves the player, team and event by **name** against the rebuilt database —
 which is why the export must carry names, and why the events export must carry `kind` and the date
 range. Names are the only columns the old and new databases agree on.
 
-Two things to know about the restore. A note about a **pairing** (a non-empty `pair_player` column
-in the export) cannot be restored from the CLI — `tn player note` takes one name by design — but it
-*is* restorable through the **`player_note` MCP tool**, which accepts the second player. Use
-[agent-chat-over-mcp.md](agent-chat-over-mcp.md) for those rows. And `captain_notes.created_at` is
-stamped at insert time, so restored notes carry the restore date rather than the original; the
-exported CSV keeps the true timestamps, so keep it after restoring rather than deleting it with the
-`.bak`.
+Two more things to know about the restore. A note about a **pairing** (a non-empty `pair_player`
+column in the export) cannot be restored from the CLI at all — `tn player note` takes one name by
+design — but it *is* restorable through the `player_note` MCP tool, which accepts the second player.
+And `captain_notes.created_at` is stamped at insert time, so restored notes carry the restore date
+rather than the original; the exported CSV keeps the true timestamps, so keep it after restoring
+rather than deleting it with the `.bak`.
+
+A note on the CSV itself: `sqlite3 -csv` quotes and doubles embedded quotes correctly, so a note
+containing commas, quotes or newlines **survives the export** intact. The hazard is entirely on the
+way back in — a spreadsheet or a shell, not the file. Read it with a real CSV parser (or the MCP
+route above), never with `cut -d,`.

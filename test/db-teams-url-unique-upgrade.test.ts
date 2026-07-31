@@ -109,8 +109,12 @@ describe("upgrading an existing v5 database with duplicate tennisrecord_url rows
     // Guarded here (the message itself) and end-to-end in test/cli-db-migrate-command.test.ts (the
     // rendered CLI line), because this defect lives in the seam between them and neither side had
     // it alone.
-    // eslint-disable-next-line no-control-regex
-    expect(message).not.toMatch(/[\u0000-\u001F\u0085\u2028\u2029]/);
+    // The predicate is sanitizeValue's OWN character class, not a hand-listed subset: \p{Cc} +
+    // \p{Cf} + U+2028/U+2029 (src/sanitize.ts). A narrower list here would claim "single-line" while
+    // missing DEL, the C1 block and every format control — a check whose comment outruns what it
+    // enforces, which rules/testing.md names as worse than no check. Codex round 4 caught exactly
+    // that in the first draft of this assertion.
+    expect(message).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
   });
 
   // Codex round 2, rated HIGH: the round-1 fix replaced `rm` with a bare `mv` to a FIXED backup
