@@ -51,8 +51,19 @@ never be reached by any command.
 |---------|---------|
 | `tn db migrate` | Apply pending schema migrations |
 | `tn team pull` | Pull a team roster and schedule from TennisRecord |
+| `tn team show` | Show a team's roster and match record |
 | `tn player pull` | Pull a player's ratings and match history from TennisRecord |
+| `tn player show` | Show a player's full profile: ratings trajectory, history, records |
+| `tn report build` | Render per-opponent scouting dossiers (HTML + markdown) to disk |
 
-Planned (spec § Interfaces; rows move up as commands land): `team show/list`,
-`player show/note/list`, `match add`, `event show`, `lineup plan`, `report build`,
+Planned (spec § Interfaces; rows move up as commands land): `team list`,
+`player note/list`, `match add`, `event show`, `lineup plan`,
 `db backup/restore`.
+
+`tn report build [sectionals|<team>] [--json]` — `<team>` renders that one team's dossier;
+`sectionals`, and bare (no target), render one dossier per team on file plus a top-level
+`index.html`/`index.md`. Output root: `TN_REPORTS_PATH`, defaulting to repo-relative `reports/` —
+mirroring `TN_DB_PATH`/`TN_RAW_PATH` exactly, so this introduces no new flag. Every write is
+checked by the same hardened output-root guard `raw/` uses (`src/fs/output-root.ts`), with
+`"reports"` as the one permitted in-repo directory — a misconfigured `TN_REPORTS_PATH` pointed at
+any other in-repo path (e.g. `src`) is refused, exit 1.

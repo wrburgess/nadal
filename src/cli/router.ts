@@ -1,6 +1,9 @@
 import { dbMigrate } from "./commands/db-migrate.js";
 import { playerPull } from "./commands/player-pull.js";
+import { playerShow } from "./commands/player-show.js";
+import { reportBuild } from "./commands/report-build.js";
 import { teamPull } from "./commands/team-pull.js";
+import { teamShow } from "./commands/team-show.js";
 import { logRequest } from "../telemetry/request-log.js";
 
 export type Command = {
@@ -10,7 +13,14 @@ export type Command = {
   run: (args: string[]) => Promise<number>;
 };
 
-export const COMMANDS: Command[] = [dbMigrate, teamPull, playerPull];
+export const COMMANDS: Command[] = [
+  dbMigrate,
+  teamPull,
+  teamShow,
+  playerPull,
+  playerShow,
+  reportBuild,
+];
 
 export function helpText(): string {
   const lines = ["tn <noun> <verb> <target> [payload] [flags]", ""];
