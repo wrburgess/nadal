@@ -116,11 +116,22 @@ scorecard PAGE is committed anywhere in this repo. The scorecard payload fixture
 thing entirely — see that section.
 
 **Capturing these is procedure, not a mystery** — [`docs/runbooks/capture-fixtures.md`](../../docs/runbooks/capture-fixtures.md)
-is the HC-driven session, including the two obstacles that cost a run to discover: TennisLink's team
-and player links are `javascript:` hrefs an automation harness cannot follow, so a human has to
-navigate; and its WebForms pages embed session credentials the redaction pipeline now strips
-automatically. What remains open is the parser work itself ([#27](https://github.com/wrburgess/nadal/issues/27)),
-which is corroborative — TennisRecord already supplies the scouting substrate.
+is the HC-driven session, including the two obstacles that cost a run to discover. First, TennisLink's
+team and player links are `javascript:` hrefs an automation harness cannot follow, so a human has to
+navigate.
+
+Second, and this one is a **safety** obstacle rather than a mechanical one: its WebForms pages embed
+**session credentials** — a real league page carries a 172-character `hdnCSRFToken` and a
+14,420-character `__VIEWSTATE` — and **nothing in this pipeline removes them.** Neither the
+substitution map (built from scouting subjects, not from the operator), nor `NEVER_PUBLISH` (email,
+phone, address), nor the per-source detectors model that class. Removal is **manual**: see the runbook's
+step 7 for the grep to run before committing, and [#80](https://github.com/wrburgess/nadal/issues/80)
+for why an automated control was attempted and withdrawn. Do **not** clear an allow-list refusal by
+adding a long opaque string to a vocabulary file — that is how a live token would get committed.
+
+What remains open beyond that is the parser work itself
+([#27](https://github.com/wrburgess/nadal/issues/27)), which is corroborative — TennisRecord already
+supplies the scouting substrate.
 
 ## Scorecard payloads (#18)
 
