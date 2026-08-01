@@ -597,6 +597,77 @@ describe("credential stripping", () => {
     expect(valueOf(redactHtml(benign, SUBS), "#benign")).toBe("keep me");
   });
 
+  // Every one of these is a CONFIRMED trace from the Codex adversarial review of PR #79, each
+  // reproduced locally before being fixed. The hand-written tag matcher failed all of them; the
+  // parser-located version is what closes the class rather than the individual delimiter.
+  describe("Codex adversarial-review traces", () => {
+    it("strips a credential whose value contains a quoted '>'", () => {
+      // CRITICAL: `<(?:input|meta)\b[^>]*>` truncated the tag at the `>` INSIDE the quoted value, so
+      // the tag never matched and the token survived untouched — and the backstop, reusing the same
+      // matcher, passed on it too.
+      const html = `<input type="hidden" id="hdnCSRFToken" value="abc>SECRET">`;
+      const out = redactHtml(html, SUBS);
+      expect(out).not.toContain("SECRET");
+      expect(valueOf(out, "#hdnCSRFToken")).toBe("");
+      expect(() => assertNoCredentialFields(html)).toThrow(RedactionError);
+    });
+
+    it("is not fooled by a colon-prefixed attribute name", () => {
+      // `(?<![-\w])` rejected `-` and word chars but not `:`, and `data:type` is a legal attribute
+      // name — so the tag read as a submit control and the token was skipped.
+      const html = `<input data:type="submit" type="hidden" id="hdnCSRFToken" value="SECRET">`;
+      const out = redactHtml(html, SUBS);
+      expect(out).not.toContain("SECRET");
+      expect(out).toContain('data:type="submit"');
+      expect(() => assertNoCredentialFields(html)).toThrow(RedactionError);
+    });
+
+    it("strips Laravel's _token, which matches no exact name and contains no 'csrf'", () => {
+      const html = `<input type="hidden" name="_token" value="SECRET">`;
+      const out = redactHtml(html, SUBS);
+      expect(out).not.toContain("SECRET");
+      expect(() => assertNoCredentialFields(html)).toThrow(RedactionError);
+    });
+
+    it("strips every other framework's CSRF field convention", () => {
+      for (const name of [
+        "__RequestVerificationToken",
+        "authenticity_token",
+        "csrfmiddlewaretoken",
+        "_csrf",
+        "csrf_token",
+      ]) {
+        const html = `<input type="hidden" name="${name}" value="SECRET">`;
+        expect(redactHtml(html, SUBS)).not.toContain("SECRET");
+      }
+    });
+
+    it("handles single-quoted and unquoted values", () => {
+      const sq = redactHtml(`<input id="csrf" value='sq>uote' />`, SUBS);
+      expect(sq).not.toContain("sq>uote");
+      const uq = redactHtml(`<div><input id="csrf" value=unquoted><span>x</span></div>`, SUBS);
+      expect(uq).not.toContain("unquoted");
+      expect(uq).toContain("<span>x</span>");
+    });
+
+    it("empties csrfEnabled too, and says why that is the right trade", () => {
+      // Codex rated this an over-strip. It is deliberate: the blast radius is a HIDDEN field no
+      // parser reads, in a test fixture. Erring toward stripping costs nothing here, while erring
+      // the other way ships a token. Visible labels are the case that matters, and `type` covers it.
+      expect(valueOf(redactHtml(`<input type="hidden" name="csrfEnabled" value="true">`, SUBS), 'input')).toBe("");
+      expect(valueOf(redactHtml(`<input type="submit" name="csrfEnabled" value="Go">`, SUBS), 'input')).toBe("Go");
+    });
+
+    it("strips several credential fields in one document without corrupting offsets", () => {
+      // The rewrite splices by parser-supplied span, so it must walk right-to-left.
+      const html = `<form><input type="hidden" name="__VIEWSTATE" value="AAA"><p>keep</p><input type="hidden" id="hdnCSRFToken" value="BBB"><meta name="csrf-token" content="CCC"></form>`;
+      const out = redactHtml(html, SUBS);
+      expect(out).not.toMatch(/AAA|BBB|CCC/);
+      expect(out).toContain("<p>keep</p>");
+      expect(cheerio.load(out)("input").length).toBe(2);
+    });
+  });
+
   it("never lets a token reach the allow-list refusal report", () => {
     // The defect was not that a token leaked — the allow-list refuses it. It was that the token
     // arrived in the operator's refusal list looking like boilerplate, and the documented way to

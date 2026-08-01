@@ -99,13 +99,22 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 
 7. **Agent: read the redacted fixture before committing it. A green pipeline is not sufficient.**
 
-   **Session credentials are handled for you.** `stripCredentialFields` empties `__VIEWSTATE`,
-   `__EVENTVALIDATION`, `__RequestVerificationToken`, `authenticity_token` and any `csrf`-named field
-   before any sweep runs, and `assertNoCredentialFields` fails the capture if one survives. This is not
-   theoretical tidiness — a real signed-in TennisLink league page carries a 172-character
-   `hdnCSRFToken` and a **14,420-character `__VIEWSTATE`**. **Never resolve a refusal by adding a long
-   opaque string to the vocabulary**; if you are looking at one, the stripper has a gap and the fix
-   belongs in `tools/redact-fixture.ts`, not in a vocabulary file.
+   **Session credentials in *known* fields are handled for you — and "known" is a closed list, not a
+   guarantee.** `stripCredentialFields` locates `<input>`/`<meta>` elements with the real HTML parser
+   and empties the value of any field whose `name`/`id` is a known credential convention:
+   `__VIEWSTATE`/`GENERATOR`/`ENCRYPTED`, `__EVENTVALIDATION`, `__RequestVerificationToken` (ASP.NET),
+   `authenticity_token` (Rails), `_token` (Laravel), `csrfmiddlewaretoken` (Django), `_csrf`,
+   `csrf_token`, `csrf-token`, `xsrf-token`, plus anything containing `csrf`/`xsrf`.
+   `assertNoCredentialFields` fails the capture if one survives.
+
+   This is not theoretical tidiness — a real signed-in TennisLink league page carries a 172-character
+   `hdnCSRFToken` and a **14,420-character `__VIEWSTATE`**.
+
+   **It is a blacklist, so a credential in a field named something else still ships.** If a refusal
+   presents you with a long opaque string, **do not add it to the vocabulary** — that is the exact move
+   this control exists to prevent. Either the field name belongs on the list in
+   `tools/redact-fixture.ts`, or you have found a class it does not model; the fix belongs there, never
+   in a vocabulary file.
 
    **What is still yours to check.** `tools/fixture-policy.ts` documents that **bare digit runs of any
    length are admitted structurally**, so a purely numeric identifier reduces to an empty skeleton and

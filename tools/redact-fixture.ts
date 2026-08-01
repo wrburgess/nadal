@@ -496,98 +496,193 @@ export function normalizeForComparison(value: string): string {
  * `NEVER_PUBLISH` below covers third-party PII (email, phone, address); the substitution map covers
  * identities someone enumerated; the detectors cover ids the site advertises. A page captured from a
  * logged-in session also carries the OPERATOR's secrets: TennisLink's league pages are ASP.NET
- * WebForms and embed a 172-character `hdnCSRFToken` and a `__VIEWSTATE` blob directly in the markup.
+ * WebForms and embed a 172-character `hdnCSRFToken` and a 14,420-character `__VIEWSTATE` inline.
  *
- * The allow-list would refuse such a token rather than ship it, so nothing leaks silently today —
- * but a refusal is where this became dangerous rather than safe. `docs/runbooks/capture-fixtures.md`
- * (and `test/fixtures/README.md` before it) tells an operator to resolve a refusal by classifying the
- * atom and **adding it to the committed vocabulary**, and a 172-character opaque string reads as
- * "boilerplate" to someone working that loop mechanically. Following the documented procedure
- * correctly could therefore commit a live session token to a public repository.
+ * The allow-list would refuse such a token rather than ship it, so nothing leaks silently — but the
+ * REFUSAL is where this became dangerous rather than safe. `docs/runbooks/capture-fixtures.md` tells
+ * an operator to resolve a refusal by classifying the atom and **adding it to the committed
+ * vocabulary**, and a 172-character opaque string reads as "boilerplate" to someone working that loop
+ * mechanically. Following the documented procedure correctly could therefore commit a live session
+ * token to a public repository.
  *
- * So these values are emptied BEFORE any sweep runs. That is lossless: no parser reads a hidden
- * WebForms field, and the element, its `name`/`id` and every other attribute survive untouched — only
- * the value goes. Emptying rather than substituting is deliberate: an empty value reduces to an empty
- * SKELETON, so the allow-list admits it with no vocabulary entry, and stripping cannot itself push an
- * operator back into the loop that caused the problem.
+ * ## Why this is parsed and not pattern-matched
  *
- * Matching is by field NAME, which is exact and enumerable, rather than by "looks like a secret",
- * which is neither — a heuristic over long alphanumeric runs would fire on legitimate page content.
- * The cost of that choice is stated plainly: this is a blacklist, so a credential in a field named
- * something not listed here still ships. `assertNoCredentialFields` is the backstop for the listed
- * names only, and does not make the control complete.
- * (Provenance: #27, observed on a live signed-in TennisLink session, 2026-08-01.)
+ * The first three versions of this control hand-wrote a tag matcher, and each review round found a new
+ * way it was lexically wrong: `\b` matched after a hyphen so `data-type` skipped a live token; the
+ * `(?<![-\w])` that fixed it did not cover `:`, so the legal attribute name `data:type` skipped it
+ * too; and `<(?:input|meta)\b[^>]*>` truncated the tag at a `>` INSIDE a quoted value, so
+ * `value="abc>SECRET"` survived untouched — with the backstop assertion sharing the identical bypass
+ * because it reused the same matcher.
+ *
+ * Three rounds, three delimiters, the same defect moving sideways. Lexical HTML has more edge cases
+ * than anyone enumerates by hand, so the tag boundaries now come from the real parser this module
+ * already imports. `htmlparser2` (via cheerio) reports each element's exact `[startIndex, endIndex]`
+ * span and its parsed `attribs`, which settles all three classes at the root: `data-type`,
+ * `data:type` and `type` are simply distinct keys, and a `>` inside a quoted value is the tokenizer's
+ * problem rather than ours.
+ *
+ * This is also the house pattern rather than a new one — the parsers in `src/parsers/` locate with
+ * cheerio and only then read values, and courtgrab2 before them used Nokogiri `.css()` the same way.
+ * This function had deviated from it; it no longer does.
+ *
+ * The one thing NOT delegated to the parser is writing the value back. Re-serialising a cheerio tree
+ * would reformat markup this module exists to preserve byte-for-byte, so the replacement is a string
+ * splice inside the parser-supplied span. That is safe in a way the old code was not: the span is
+ * authoritative, so a quoted `>` can no longer terminate it early, and an UNQUOTED attribute value
+ * cannot contain `>` at all under the HTML spec.
+ *
+ * ## Why emptying, and why erring toward it
+ *
+ * Emptying rather than substituting is deliberate: an empty value reduces to an empty SKELETON, so the
+ * allow-list admits it with no vocabulary entry and it never reaches the refusal report that caused
+ * the problem. A placeholder would put a new atom back INTO that report.
+ *
+ * Over-stripping a hidden field or a `<meta>` is harmless here, and the control errs that way on
+ * purpose: this produces a TEST FIXTURE, no parser reads a hidden input or a meta, and the element
+ * with every other attribute survives. So `csrfEnabled="true"` losing its value costs nothing. The one
+ * place precision genuinely matters is USER-VISIBLE text, which is why `type=submit|button|reset|image`
+ * — whose `value` is the control's label — is excluded outright.
+ *
+ * ## What this still does not do
+ *
+ * It is a blacklist. `CREDENTIAL_NAMES` carries the conventions of the frameworks this project meets,
+ * but a credential in a field named something else still ships, and `assertNoCredentialFields` backs
+ * up only the listed names. That is a real limit, not a formality.
+ * (Provenance: #27; live signed-in TennisLink session 2026-08-01; Codex adversarial review on PR #79.)
  */
-const CREDENTIAL_FIELD =
-  /^(?:__VIEWSTATE(?:GENERATOR|ENCRYPTED)?|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token)$|csrf/i;
-
-/** `<input>`/`<meta>` are the two tags that carry a credential in an attribute value. */
-const CREDENTIAL_BEARING_TAG = /<(?:input|meta)\b[^>]*>/gi;
-// `(?<![-\w])` and not `\b`: `\b` matches after a hyphen, so `\bname=` also matches `data-name=` and
-// `\btype=` also matches `data-type=`. That is wrong in both directions, and one of them fails OPEN —
-// `<input data-type="submit" type="hidden" id="hdnCSRFToken" value="…">` would be read as a button
-// and skipped, leaving a live token in place. These patterns must therefore anchor to a real
-// attribute boundary, not to a word boundary.
-// (Provenance: Stage-4 adversarial pass on PR #79, fail-open lens.)
-const ATTR_START = "(?<![-\\w])";
-const NAME_OR_ID = new RegExp(
-  `${ATTR_START}(?:name|id)\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s">]+))`,
-  "gi",
-);
-const VALUE_OR_CONTENT = new RegExp(
-  `${ATTR_START}(value|content)\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s">]+)`,
-  "gi",
-);
-const VALUE_OR_CONTENT_CAPTURING = new RegExp(
-  `${ATTR_START}(?:value|content)\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s">]+))`,
-  "gi",
+const CREDENTIAL_NAMES = new Set(
+  [
+    // ASP.NET WebForms / MVC
+    "__VIEWSTATE",
+    "__VIEWSTATEGENERATOR",
+    "__VIEWSTATEENCRYPTED",
+    "__EVENTVALIDATION",
+    "__RequestVerificationToken",
+    // Rails
+    "authenticity_token",
+    // Laravel — the field Codex correctly flagged as stripped by nothing
+    "_token",
+    // Django
+    "csrfmiddlewaretoken",
+    // Express / Angular / common conventions
+    "_csrf",
+    "csrf_token",
+    "csrf-token",
+    "xsrf-token",
+  ].map((name) => name.toLowerCase()),
 );
 
 /**
- * A submit/button/reset/image `value` is the control's VISIBLE LABEL, never a credential. Real
- * markup makes this matter: TennisLink ships `<input type="submit" id="btnCsrfRefreshPage"
- * value="Refresh Page">`, which matches on "csrf" but whose value is user-visible text — emptying it
- * would silently alter the page for no privacy gain. (Found by running this sweep over a live
- * signed-in page rather than only over the synthetic fixture.)
+ * Names that CONTAIN a csrf/xsrf marker — deliberately broad, because the blast radius is a hidden
+ * field or a meta that nothing reads (see "Why emptying" above). This is what catches TennisLink's
+ * `hdnCSRFToken` without the list having to know that vendor's prefix convention.
  */
-const LABEL_BEARING_TYPE = new RegExp(
-  `${ATTR_START}type\\s*=\\s*(?:"|')?(?:submit|button|reset|image)\\b`,
-  "i",
-);
+const CREDENTIAL_NAME_PATTERN = /csrf|xsrf/i;
 
-function credentialNamesIn(tag: string): string[] {
-  if (LABEL_BEARING_TYPE.test(tag)) return [];
-  return [...tag.matchAll(NAME_OR_ID)]
-    .map((m) => m[1] ?? m[2] ?? m[3] ?? "")
-    .filter((name) => CREDENTIAL_FIELD.test(name));
+function isCredentialName(name: string): boolean {
+  return CREDENTIAL_NAMES.has(name.toLowerCase()) || CREDENTIAL_NAME_PATTERN.test(name);
+}
+
+/** A submit/button/reset/image `value` is the control's VISIBLE LABEL, never a credential. */
+const LABEL_BEARING_TYPES = new Set(["submit", "button", "reset", "image"]);
+
+/** The attributes that can carry a credential: `value` on an input, `content` on a meta. */
+const CREDENTIAL_ATTRS = ["value", "content"] as const;
+
+type CredentialSpan = { start: number; end: number; names: string[]; attr: string; value: string };
+
+/**
+ * Locate every credential-bearing attribute using the real parser, returning spans into the ORIGINAL
+ * string. Shared by the stripper and its backstop so the two can never disagree about what counts.
+ */
+function findCredentialSpans(html: string): CredentialSpan[] {
+  // parse5 (cheerio's default parser) reports spans under `sourceCodeLocationInfo`. `endIndex` is
+  // EXCLUSIVE — pinned empirically, because an off-by-one here fails silently.
+  const $ = cheerio.load(html, { sourceCodeLocationInfo: true } as cheerio.CheerioOptions);
+  const found: CredentialSpan[] = [];
+
+  $("input, meta").each((_i, element) => {
+    const attribs: Record<string, string> = element.attribs ?? {};
+    const type = (attribs.type ?? "").trim().toLowerCase();
+    if (LABEL_BEARING_TYPES.has(type)) return;
+
+    const names = Object.entries(attribs)
+      .filter(([key]) => key.toLowerCase() === "name" || key.toLowerCase() === "id")
+      .map(([, value]) => value)
+      .filter(isCredentialName);
+    if (names.length === 0) return;
+
+    const start = element.startIndex;
+    const end = element.endIndex;
+    if (start === null || start === undefined || end === null || end === undefined) return;
+
+    for (const attr of CREDENTIAL_ATTRS) {
+      const value = attribs[attr];
+      if (value === undefined) continue;
+      found.push({ start, end, names, attr, value });
+    }
+  });
+
+  return found;
+}
+
+/**
+ * Static regex literals, one per credential-bearing attribute — deliberately NOT built from a
+ * template string. An earlier revision composed this pattern with `new RegExp(\`…\${attr}…\`)`, and
+ * the template literal ate every backslash before the RegExp ever saw it: `\\s` became `s`, so the
+ * pattern read `[s/]value s* = s*` and matched nothing. The control silently stripped NOTHING while
+ * every type-check passed. A security control should not depend on getting two layers of escaping
+ * right, so the patterns are literals and the attribute set is closed.
+ */
+const ATTR_VALUE_PATTERNS: Record<string, RegExp> = {
+  value: /((?:^|[\s/])value\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s"'>`=<]+)/i,
+  content: /((?:^|[\s/])content\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s"'>`=<]+)/i,
+};
+
+/**
+ * Replace an attribute's value with the empty string INSIDE one parser-delimited tag span. The span
+ * is authoritative, so a quoted `>` cannot terminate it early; an unquoted value cannot contain `>`
+ * under the HTML spec, so the unquoted branch is exact too.
+ */
+function emptyAttributeInSpan(tag: string, attr: string): string {
+  const pattern = ATTR_VALUE_PATTERNS[attr];
+  if (pattern === undefined) return tag;
+  return tag.replace(pattern, (_match, prefix: string) => `${prefix}""`);
 }
 
 /** Empty the value of every credential-bearing field, leaving the markup otherwise identical. */
 export function stripCredentialFields(html: string): string {
-  return html.replace(CREDENTIAL_BEARING_TAG, (tag) =>
-    credentialNamesIn(tag).length === 0
-      ? tag
-      : tag.replace(VALUE_OR_CONTENT, (_match, attr: string) => `${attr}=""`),
-  );
+  const spans = findCredentialSpans(html);
+  if (spans.length === 0) return html;
+
+  // Rewrite right-to-left so earlier spans keep their original offsets.
+  const byTag = new Map<number, { start: number; end: number; attrs: string[] }>();
+  for (const span of spans) {
+    const entry = byTag.get(span.start) ?? { start: span.start, end: span.end, attrs: [] };
+    entry.attrs.push(span.attr);
+    byTag.set(span.start, entry);
+  }
+
+  let out = html;
+  for (const entry of [...byTag.values()].sort((a, b) => b.start - a.start)) {
+    let tag = out.slice(entry.start, entry.end);
+    for (const attr of entry.attrs) tag = emptyAttributeInSpan(tag, attr);
+    out = out.slice(0, entry.start) + tag + out.slice(entry.end);
+  }
+  return out;
 }
 
 /**
- * Fail the capture if a listed credential field still carries a value. The message names the FIELD
- * and the length of what survived — never the value, since a secret does not become safe by being
- * printed in an error.
+ * Fail the capture if a listed credential field still carries a value. Shares `findCredentialSpans`
+ * with the stripper — a backstop that can drift from the thing it backs up is not a backstop. The
+ * message names the FIELD and the length of what survived, never the value, since a secret does not
+ * become safe by being printed in an error.
  */
 export function assertNoCredentialFields(html: string): void {
-  const survivors: string[] = [];
-  for (const [tag] of html.matchAll(CREDENTIAL_BEARING_TAG)) {
-    const names = credentialNamesIn(tag);
-    if (names.length === 0) continue;
-    // The SAME pattern the stripper uses, not a second hand-written copy of it — a backstop that
-    // disagrees with the thing it backs up is not a backstop.
-    for (const match of tag.matchAll(VALUE_OR_CONTENT_CAPTURING)) {
-      const value = match[1] ?? match[2] ?? match[3] ?? "";
-      if (value !== "") survivors.push(`${names.join("/")} (${value.length} chars)`);
-    }
-  }
+  const survivors = findCredentialSpans(html)
+    .filter((span) => span.value !== "")
+    .map((span) => `${span.names.join("/")} @${span.attr} (${span.value.length} chars)`);
+
   if (survivors.length > 0) {
     throw new RedactionError(
       `output still carries a session credential in a known credential field — these belong to the capturing operator, not to the page's subject, and must never be committed:\n${survivors
