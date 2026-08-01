@@ -130,12 +130,17 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 
    ```sh
    tsx tools/capture-fixture.ts \
-       --file <the saved page> \
+       --file <the saved page>.scrubbed \
        --source-url "<the exact URL from step 2>" \
        --map <the map, outside the repo> \
        --detectors <set> \
        --out test/fixtures/<source>/<name>.html
    ```
+
+   **`--file` names the `.scrubbed` copy, never the original.** On a login-gated page the original
+   still carries the session token, so capturing it re-enters the refusal of step 4 with no way
+   forward. (On a public page there is no scrub step and `.scrubbed` will not exist — pass the saved
+   page itself.)
 
    Use `--file`/`--source-url` for a saved page; `--url` fetches directly and is for public pages only.
 
