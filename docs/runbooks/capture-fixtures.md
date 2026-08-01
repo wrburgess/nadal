@@ -65,7 +65,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    > — the boundary holds.
    >
    > What is missing is a _credential-specific_ classifier: nothing can tell you whether that token is
-   > an entity key or session state. So the refusal lands you in the loop of step 6, where the
+   > an entity key or session state. So the refusal lands you in the loop of step 7, where the
    > tempting move is to make it go away by adding the token to the vocabulary. **Do not.** If the
    > token is session-bound, that publishes it. **Before committing the first TennisLink fixture,
    > establish which it is** — the cheap test is whether the same URL resolves from a different
@@ -76,10 +76,57 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    saved mid-render parses as a structural miss, which is the single most common cause of a failed
    capture. Save outside the repo, next to the map.
 
-4. **Agent: author the detector set and vocabulary from what the page actually contains** — the section
-   below. Skip only when capturing from a source that already has both.
+4. **Agent: scrub session credentials from the SAVED PAGE — before any capture runs.**
 
-5. **Agent: run the capture.**
+   > ### ⚠️ Session credentials are NOT stripped for you
+   >
+   > **This is manual, it happens HERE and not later, and on a login-gated page it is the step that
+   > matters most.**
+   >
+   > **Nothing in this repository removes a session credential from a captured page.** A control to do
+   > it was attempted and withdrawn — see [#80](https://github.com/wrburgess/nadal/issues/80) for why,
+   > and do not assume a later reader has landed it. Check `tools/redact-fixture.ts` yourself before
+   > relying on any automation here.
+   >
+   > This is not theoretical. A real signed-in TennisLink league page carries a **172-character
+   > `hdnCSRFToken`** and a **14,420-character `__VIEWSTATE`** inline in the markup, both live session
+   > state belonging to _you_, the capturing operator — not to the page's subject, and therefore in no
+   > substitution map built from scouting targets.
+   >
+   > **Why here and not after the capture.** The allow-list runs _before_ either output file is
+   > written, and it will refuse a 172-character token — so on a credential-bearing page **no fixture
+   > is produced at all**. There is nothing downstream to edit. An operator who waits until step 8 to
+   > deal with credentials is stranded, and the only way forward from that refusal is the one thing
+   > this runbook forbids: adding the token to the vocabulary. So the scrub operates on the **saved
+   > page**, which is your disposable copy outside the repo.
+   >
+   > **Work on a copy, and never on the original capture:**
+   >
+   > ```sh
+   > cp <the saved page> <the saved page>.scrubbed
+   > grep -oiE '(__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token|_token|csrfmiddlewaretoken|csrf|xsrf)[^>]{0,40}' <the saved page>.scrubbed
+   > ```
+   >
+   > **A hit is a candidate, not a verdict — read each one before deleting anything.** The grep matches
+   > a _field name_, and a matching name does not prove the value is a credential. Two rules before you
+   > edit:
+   >
+   > - **Skip `type=submit|button|reset|image`.** Their `value` is the control's **visible label**,
+   >   never a credential. This is not hypothetical: TennisLink ships
+   >   `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`, which matches on `csrf` and
+   >   whose value is the words on the button. Deleting it corrupts the page for no privacy gain — the
+   >   same false positive the withdrawn automation hit before it was withdrawn (#80).
+   > - **Empty the credential-bearing attribute only** — `value` on an `<input>`, `content` on a
+   >   `<meta>` — and leave the element, its `name`/`id` and every other attribute alone.
+   >
+   > Do not stop at that list: it is the conventions of frameworks this project has met, not a complete
+   > set. Then pass `--file <the saved page>.scrubbed` at step 6, and **never re-run the capture against
+   > the unscrubbed original** — that would silently undo this work.
+
+5. **Agent: author the detector set and vocabulary from what the page actually contains** — the section
+   — the section below. Skip only when capturing from a source that already has both.
+
+6. **Agent: run the capture**, against the **scrubbed** copy from step 4.
 
    ```sh
    tsx tools/capture-fixture.ts \
@@ -92,7 +139,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 
    Use `--file`/`--source-url` for a saved page; `--url` fetches directly and is for public pages only.
 
-6. **Agent: work the refusal loop — expect several rounds, and do not shortcut it.** The allow-list
+7. **Agent: work the refusal loop — expect several rounds, and do not shortcut it.** The allow-list
    policy refuses on any content atom it cannot classify, reports **every** unclassified skeleton (not
    just the first), and writes nothing. For each one, decide honestly which it is:
    - structural, boilerplate, or UI chrome → `# reviewed: <reason>`
@@ -105,48 +152,21 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    non-name-shaped ones; **every name-shaped skeleton is dispositioned by hand.** On a page dense with
    people — a scorecard naming ten players across five courts — this is the longest part of the session.
 
-7. **Agent: read the redacted fixture before committing it. A green pipeline is not sufficient.**
+8. **Agent: read the redacted fixture before committing it. A green pipeline is not sufficient.**
 
-   > ### ⚠️ Session credentials are NOT stripped for you
-   >
-   > **This step is manual, and on a login-gated page it is the one that matters most.**
-   >
-   > **Nothing in this repository removes a session credential from a captured page.** A control to do
-   > it was attempted and withdrawn — see [#80](https://github.com/wrburgess/nadal/issues/80) for why,
-   > and do not assume a later reader has landed it. Check `tools/redact-fixture.ts` yourself before
-   > relying on any automation here.
-   >
-   > This is not theoretical. A real signed-in TennisLink league page carries a **172-character
-   > `hdnCSRFToken`** and a **14,420-character `__VIEWSTATE`** inline in the markup, both live session
-   > state belonging to _you_, the capturing operator — not to the page's subject, and therefore in no
-   > substitution map built from scouting targets.
-   >
-   > **Before committing any fixture captured from a signed-in session, grep the redacted output for:**
+   > **Credentials were handled at step 4, on the saved page — not here.** If you skipped that step,
+   > go back: on a credential-bearing page the capture refuses and no fixture exists to inspect, and
+   > the only way forward from that refusal is the one thing this runbook forbids (adding the token to
+   > the vocabulary). One re-check is still worth it, since it is nearly free:
    >
    > ```sh
-   > grep -oiE '(__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token|_token|csrfmiddlewaretoken|csrf|xsrf)[^>]{0,40}' <fixture>
+   > grep -oiE '(__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token|_token|csrfmiddlewaretoken|csrf|xsrf)[^>]{0,40}' test/fixtures/<source>/<name>.html
    > ```
    >
-   > **A hit is a candidate, not a verdict — read each one before deleting anything.** The grep matches
-   > a _field name_, and a matching name does not prove the value is a credential. Two rules before you
-   > edit:
-   >
-   > - **Skip `type=submit|button|reset|image`.** Their `value` is the control's **visible label**, never
-   >   a credential. This is not hypothetical: TennisLink ships
-   >   `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`, which matches on `csrf` and
-   >   whose value is the words on the button. Deleting it corrupts the page for no privacy gain — the
-   >   same false positive the withdrawn automation hit before it was withdrawn (#80).
-   > - **Empty the credential-bearing attribute only** — `value` on an `<input>`, `content` on a
-   >   `<meta>` — and leave the element, its `name`/`id` and every other attribute alone.
-   >
-   > Then re-run the capture checks. And do not stop at that list: it is the conventions of frameworks
-   > this project has met, not a complete set.
-   >
-   > **And never resolve an allow-list refusal by adding a long opaque string to the vocabulary.** That
-   > is the specific mistake this warning exists to prevent: the allow-list _will_ refuse a
-   > 172-character token, and the documented remedy for a refusal is to classify the atom and commit it
-   > — which would publish the token. If a refusal shows you something opaque and high-entropy, treat
-   > it as a credential, not as boilerplate.
+   > Apply the same two rules as step 4 — a hit is a candidate, not a verdict; skip
+   > `type=submit|button|reset|image`, whose `value` is a visible label. If this finds a real credential
+   > that step 4 missed, fix it **in the scrubbed saved page and re-run the capture**, so the committed
+   > fixture is always something the tool produced rather than something hand-edited after the fact.
 
    **What is still yours to check.** `tools/fixture-policy.ts` documents that **bare digit runs of any
    length are admitted structurally**, so a purely numeric identifier reduces to an empty skeleton and
@@ -156,7 +176,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    output for the account number, the operator's surname, and any `PersonID` / `MemberNum` / `PlayerID` /
    `t=` value before it goes into git.
 
-8. **Agent: commit the fixture, its `.provenance.json` sidecar, and the vocabulary changes**, and
+9. **Agent: commit the fixture, its `.provenance.json` sidecar, and the vocabulary changes**, and
    register the fixture in `test/fixtures-vocabulary-complete.test.ts`'s `FIXTURES` list — the CI gate
    that re-runs the policy over every committed fixture. A fixture missing from that array is a fixture
    nothing re-checks.
@@ -170,7 +190,7 @@ having remembered a name.
 Add a key to `DETECTOR_SETS` in `tools/capture-fixture.ts`, plus a committed
 `tools/fixture-vocabulary/<set>.txt`.
 
-**Then widen the CI gate's source union, or step 8 cannot be completed.**
+**Then widen the CI gate's source union, or step 9 cannot be completed.**
 `test/fixtures-vocabulary-complete.test.ts` declares
 `const FIXTURES: { source: "tennisrecord" | "usta"; name: string }[]` — a closed union, so a
 fixture from a newly-named source **cannot be registered** until that type admits it. Widen the
@@ -207,7 +227,7 @@ under-covers while appearing to pass, which is the exact failure mode above.
 - **The map never enters the repo**, so a capture cannot be reproduced from a clean clone. That is the
   intended trade-off: reproducibility of the _fixture_ comes from committing the redacted output, not
   from being able to re-derive it.
-- **Numeric identifiers are not constrained by the allow-list** (step 7). The detector sweep is what
+- **Numeric identifiers are not constrained by the allow-list** (step 8). The detector sweep is what
   covers them, which is why a new source needs its own set rather than borrowing `none`.
 - **No automated login, in either direction.** Nothing here logs in, and nothing detects that a session
   expired mid-session except a saved page that turns out to be a login redirect.
