@@ -127,9 +127,20 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    > grep -oiE '(__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token|_token|csrfmiddlewaretoken|csrf|xsrf)[^>]{0,40}' <fixture>
    > ```
    >
-   > Any hit with a non-empty value is a credential: **delete the value by hand** and re-run the
-   > capture checks. Do not stop at that list — it is the conventions of frameworks this project has
-   > met, not a complete set.
+   > **A hit is a candidate, not a verdict — read each one before deleting anything.** The grep matches
+   > a _field name_, and a matching name does not prove the value is a credential. Two rules before you
+   > edit:
+   >
+   > - **Skip `type=submit|button|reset|image`.** Their `value` is the control's **visible label**, never
+   >   a credential. This is not hypothetical: TennisLink ships
+   >   `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`, which matches on `csrf` and
+   >   whose value is the words on the button. Deleting it corrupts the page for no privacy gain — the
+   >   same false positive the withdrawn automation hit before it was withdrawn (#80).
+   > - **Empty the credential-bearing attribute only** — `value` on an `<input>`, `content` on a
+   >   `<meta>` — and leave the element, its `name`/`id` and every other attribute alone.
+   >
+   > Then re-run the capture checks. And do not stop at that list: it is the conventions of frameworks
+   > this project has met, not a complete set.
    >
    > **And never resolve an allow-list refusal by adding a long opaque string to the vocabulary.** That
    > is the specific mistake this warning exists to prevent: the allow-list _will_ refuse a
