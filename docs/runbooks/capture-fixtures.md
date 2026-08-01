@@ -54,6 +54,17 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    provenance. **Copy it literally, including any `#fragment`** — the USTA profile's `uaid` lives
    nowhere else.
 
+   > **Unresolved, and it lands here rather than in the tooling: an opaque token in the URL is
+   > examined by nothing.** TennisLink's league pages address themselves as
+   > `StatsAndStandings.aspx?SearchType=3#&&s=<33-char opaque token>` — the entity reference lives in
+   > that token and nowhere else, so it cannot simply be dropped from the provenance. But no layer
+   > inspects it: the substitution map covers enumerated identities, the detectors cover ids the page
+   > advertises in markup, and `assertNoCredentialFields` reads `<input>`/`<meta>` tags, of which a
+   > bare URL has none. If that token turns out to be session-bound rather than an entity key,
+   > committing it in a provenance sidecar publishes it. **Before committing the first TennisLink
+   > fixture, establish which it is** — the cheap test is whether the same URL resolves from a
+   > different session. Until then, treat it as a credential.
+
 3. **HC: save the post-render DOM.** "Save Page As… → **Webpage, Complete**". For any client-rendered
    page (the USTA profile SPA, its WTN widget), wait for the content to actually appear first — a page
    saved mid-render parses as a structural miss, which is the single most common cause of a failed

@@ -523,8 +523,25 @@ const CREDENTIAL_FIELD =
 
 /** `<input>`/`<meta>` are the two tags that carry a credential in an attribute value. */
 const CREDENTIAL_BEARING_TAG = /<(?:input|meta)\b[^>]*>/gi;
-const NAME_OR_ID = /\b(?:name|id)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/gi;
-const VALUE_OR_CONTENT = /\b(value|content)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s">]+)/gi;
+// `(?<![-\w])` and not `\b`: `\b` matches after a hyphen, so `\bname=` also matches `data-name=` and
+// `\btype=` also matches `data-type=`. That is wrong in both directions, and one of them fails OPEN —
+// `<input data-type="submit" type="hidden" id="hdnCSRFToken" value="…">` would be read as a button
+// and skipped, leaving a live token in place. These patterns must therefore anchor to a real
+// attribute boundary, not to a word boundary.
+// (Provenance: Stage-4 adversarial pass on PR #79, fail-open lens.)
+const ATTR_START = "(?<![-\\w])";
+const NAME_OR_ID = new RegExp(
+  `${ATTR_START}(?:name|id)\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s">]+))`,
+  "gi",
+);
+const VALUE_OR_CONTENT = new RegExp(
+  `${ATTR_START}(value|content)\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s">]+)`,
+  "gi",
+);
+const VALUE_OR_CONTENT_CAPTURING = new RegExp(
+  `${ATTR_START}(?:value|content)\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s">]+))`,
+  "gi",
+);
 
 /**
  * A submit/button/reset/image `value` is the control's VISIBLE LABEL, never a credential. Real
@@ -533,7 +550,10 @@ const VALUE_OR_CONTENT = /\b(value|content)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s">]+)/g
  * would silently alter the page for no privacy gain. (Found by running this sweep over a live
  * signed-in page rather than only over the synthetic fixture.)
  */
-const LABEL_BEARING_TYPE = /\btype\s*=\s*(?:"|')?(?:submit|button|reset|image)\b/i;
+const LABEL_BEARING_TYPE = new RegExp(
+  `${ATTR_START}type\\s*=\\s*(?:"|')?(?:submit|button|reset|image)\\b`,
+  "i",
+);
 
 function credentialNamesIn(tag: string): string[] {
   if (LABEL_BEARING_TYPE.test(tag)) return [];
@@ -561,9 +581,9 @@ export function assertNoCredentialFields(html: string): void {
   for (const [tag] of html.matchAll(CREDENTIAL_BEARING_TAG)) {
     const names = credentialNamesIn(tag);
     if (names.length === 0) continue;
-    for (const match of tag.matchAll(
-      /\b(?:value|content)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/gi,
-    )) {
+    // The SAME pattern the stripper uses, not a second hand-written copy of it — a backstop that
+    // disagrees with the thing it backs up is not a backstop.
+    for (const match of tag.matchAll(VALUE_OR_CONTENT_CAPTURING)) {
       const value = match[1] ?? match[2] ?? match[3] ?? "";
       if (value !== "") survivors.push(`${names.join("/")} (${value.length} chars)`);
     }

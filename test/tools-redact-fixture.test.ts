@@ -7,6 +7,7 @@ import {
   decodeEntities,
   redact,
   redactHtml,
+  views,
 } from "../tools/redact-fixture.js";
 import { PolicyError } from "../tools/fixture-policy.js";
 
@@ -545,10 +546,19 @@ describe("credential stripping", () => {
   });
 
   it("leaves the token value nowhere in the output, in any view", () => {
-    const out = redactHtml(WEBFORMS, SUBS);
-    expect(out).not.toContain("a1BcDeF23GhIjK45LmNoPqRsTuVwXyZ0AbCdEfG9");
-    expect(out).not.toContain("/wEPDwULLTE2MTY2ODcyMjlkZBYCZg9kFgICAw9kFgI");
-    expect(out).not.toContain("s3cr3tT0k3nV4lu3");
+    // The title said "in any view" while the assertions checked only the raw string. `views()` is
+    // the same decoded/percent-decoded/rendered set `assertNoUnlistedPii` sweeps, so check that.
+    // (Provenance: Stage-4 adversarial pass on this PR, claim-vs-code lens.)
+    const secrets = [
+      "a1BcDeF23GhIjK45LmNoPqRsTuVwXyZ0AbCdEfG9",
+      "/wEPDwULLTE2MTY2ODcyMjlkZBYCZg9kFgICAw9kFgI",
+      "s3cr3tT0k3nV4lu3",
+    ];
+    const allViews = views(redactHtml(WEBFORMS, SUBS));
+    expect(allViews.length).toBeGreaterThan(1);
+    for (const view of allViews) {
+      for (const secret of secrets) expect(view).not.toContain(secret);
+    }
   });
 
   it("keeps the element and its attributes, emptying only the value", () => {
@@ -569,6 +579,22 @@ describe("credential stripping", () => {
     // silently alter user-visible markup for no privacy gain.
     const withButton = `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`;
     expect(valueOf(redactHtml(withButton, SUBS), "#btnCsrfRefreshPage")).toBe("Refresh Page");
+  });
+
+  // `\b` matches after a hyphen, so a `\btype=` / `\bname=` pattern also matches `data-type=` /
+  // `data-name=`. Both directions are wrong and one of them fails OPEN.
+  // (Provenance: Stage-4 adversarial pass on this PR, fail-open lens.)
+  it("is not fooled into skipping by a data-type attribute", () => {
+    const smuggled = `<input data-type="submit" type="hidden" id="hdnCSRFToken" value="SECRET">`;
+    const out = redactHtml(smuggled, SUBS);
+    expect(valueOf(out, "#hdnCSRFToken")).toBe("");
+    expect(out).not.toContain("SECRET");
+    expect(out).toContain('data-type="submit"');
+  });
+
+  it("does not read a data-name attribute as the field's name", () => {
+    const benign = `<input type="hidden" data-name="__VIEWSTATE" id="benign" value="keep me">`;
+    expect(valueOf(redactHtml(benign, SUBS), "#benign")).toBe("keep me");
   });
 
   it("never lets a token reach the allow-list refusal report", () => {
