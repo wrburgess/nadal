@@ -161,7 +161,8 @@ describe("tn report build (end-to-end via dispatch)", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --bogus"));
   });
 
-  // Issue #36 decided there is no `--pdf` in v1 (scope: nothing here is batch or unattended). The
+  // Issue #36 decided there is no `--pdf` in v1 — on proportion (a bounded, one-event saving against a
+  // permanent ~300 MB dependency), NOT on there being nothing to automate. See the runbook. The
   // `--bogus` test above pins the generic unrecognized-flag MECHANISM; this one pins the OUTCOME the
   // decision is actually about — no PDF artifact is produced — which the runbook states in prose and
   // which nothing else enforced.

@@ -87,10 +87,19 @@ There is **no `tn report build --pdf`**, and that is now a **decision, not a def
 ([#36](https://github.com/wrburgess/nadal/issues/36)). The spec anticipated one riding "the Playwright
 dependency the scrapers already carry", but no such dependency exists — the scrapers use plain `fetch`.
 
-**Why it was declined — scope and cost, stated plainly.** Nothing here is batch or unattended: one
-captain, one laptop, one weekend, and step 3 above already has you standing at the browser reading a
-dossier before you print the rest. `--pdf` would automate a keystroke a human is already there to press,
-for a ~300 MB browser download that CI would pay on every run.
+**Why it was declined — scope and cost, stated plainly, and stated smaller than an earlier draft did.**
+Be accurate about what `--pdf` would actually save, because the first version of this paragraph
+undercounted it: `tn report build sectionals` **is** a batch — it writes every team's dossier in one
+command — so printing that binder is one ⌘P-and-save **per team**, not one keystroke total. A `--pdf`
+mode would collapse those N print operations into the batch that already exists. That saving is real and
+grows with the field.
+
+It is still not worth it here, and the honest reason is proportion: the saving is a handful of manual
+saves, a handful of times, for **one event** — against a permanent ~300 MB browser dependency that CI
+would download on every run of every PR (`actions/setup-node`'s `cache: npm` does not cover
+`~/.cache/ms-playwright`), this module's first non-deterministic artifact, and a fidelity question
+nobody has answered yet (below). What does **not** support the decline is any claim that there is
+nothing to automate. There is; it is just small, bounded, and one-off.
 
 **What is *not* claimed, because an earlier draft of this paragraph claimed it and was wrong.** It would
 be convenient to say a `--pdf` flag renders "the same page you get from ⌘P". That does not follow, and
