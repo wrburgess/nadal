@@ -86,7 +86,7 @@ Same services; tool names mirror the grammar (`team_pull`, `player_show`, `lineu
 
 ### Reports
 
-Deterministic rendering from DB state: per-opponent dossier, own-team book, matchup sheets. Formats: **self-contained print-optimized HTML (primary)** and markdown (agent/diff-friendly), with `--pdf` via the Playwright dependency the scrapers already carry. Report templates are tested code in the app — agents fetch reports through MCP rather than composing documents per session (the economization principle applied up front).
+Deterministic rendering from DB state: per-opponent dossier, own-team book, matchup sheets. Formats: **self-contained print-optimized HTML (primary)** and markdown (agent/diff-friendly). ~~`--pdf` via the Playwright dependency the scrapers already carry~~ — **corrected: there is no such dependency, and v1 ships no `--pdf`** ([#36](https://github.com/wrburgess/nadal/issues/36)). PDF comes from the browser's own print path (⌘P → Save as PDF) over the dossier's inlined `@page`/`page-break-inside` CSS. Declined on **proportion, not on there being nothing to automate** — `report build sectionals` *is* a batch, so printing a binder is one ⌘P-and-save per team, and `--pdf` would fold those N operations into the batch that already exists. That saving is real but bounded (a handful of saves, a handful of times, for one event); the cost is a permanent ~300 MB browser dependency CI would re-download on every run, plus this module's first non-deterministic artifact. Explicitly *not* claimed — a headless PDF pipeline is separately configured from a print dialog and this project pins no browser, so `--pdf` would need its **own** fidelity verification rather than inheriting the preview's; that is work the decision avoids, not work it saves. A real need for unattended or run-to-run-identical PDFs would reopen it; print quality would not. Report templates are tested code in the app — agents fetch reports through MCP rather than composing documents per session (the economization principle applied up front).
 
 ### Request telemetry
 
@@ -95,6 +95,12 @@ Every CLI command and MCP tool call writes a **RequestLog** row via service-laye
 ## Stack
 
 TypeScript / Node 22, SQLite (better-sqlite3 + drizzle), vitest, Playwright for scraping, Hono for the MCP server. Zero-ops on a hotel laptop. courtview/courtgrab2 are mined for domain knowledge and scraping know-how, not code.
+
+**Both dependency claims in that sentence have been overtaken by what shipped — but they fail in different ways, and Playwright fails differently for each of its two intended uses. The distinction is drawn rather than flattened, because collapsing it would pre-decide an open issue:**
+
+- **Hono — wrong.** `tn mcp serve` speaks **stdio** via `@modelcontextprotocol/sdk`; nothing under `src/` imports Hono. Hono is an HTTP framework, needed only for MCP's streamable-HTTP transport, and the consumer is a local agent talking to a local SQLite file — no port, bind address, or auth story. (`docs/findings.md`; the SDK still pulls `@hono/node-server` transitively, which is its supply chain, not a choice here.)
+- **Playwright for `--pdf` — declined.** See § Reports above and [#36](https://github.com/wrburgess/nadal/issues/36).
+- **Playwright for scraping — anticipated, not yet built, and *not* declined.** Phase 3 ([#15](https://github.com/wrburgess/nadal/issues/15)) chose the seam-first path and ships plain `fetch` with **no browser dependency**; TennisLink ([#27](https://github.com/wrburgess/nadal/issues/27), § Ingestion above) is still open and may yet need one. So **v1 ships no browser today**, and that is a statement about what exists — not a decision against ever taking one for scraping.
 
 ## Factory model and SDLC
 

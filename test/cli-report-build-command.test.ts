@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -159,6 +159,36 @@ describe("tn report build (end-to-end via dispatch)", () => {
 
     expect(code).toBe(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --bogus"));
+  });
+
+  // Issue #36 decided there is no `--pdf` in v1 — on proportion (a bounded, one-event saving against a
+  // permanent ~300 MB dependency), NOT on there being nothing to automate. See the runbook. The
+  // `--bogus` test above pins the generic unrecognized-flag MECHANISM; this one pins the OUTCOME the
+  // decision is actually about — no PDF artifact is produced — which the runbook states in prose and
+  // which nothing else enforced.
+  //
+  // Asserting the exit code and the message alone would NOT establish that (a Reviewer finding on
+  // PR #61): a future change could write a PDF on seeing `--pdf` and *then* fall through to the same
+  // parser error, and both of those assertions would still pass. So the reports root is checked too.
+  // Both argument positions are covered, so the pin does not depend on where the flag sits.
+  it("--pdf produces no PDF and is rejected in either argument position (issue #36: no --pdf in v1)", async () => {
+    seedTeamWithRoster("Team A", []);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const pdfsUnderReportsRoot = () =>
+      readdirSync(reportsDir, { recursive: true }).filter((entry) => String(entry).endsWith(".pdf"));
+
+    const bare = await dispatch(["report", "build", "--pdf"]);
+    expect(bare).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --pdf"));
+    expect(pdfsUnderReportsRoot()).toEqual([]);
+
+    errorSpy.mockClear();
+
+    const afterTarget = await dispatch(["report", "build", "sectionals", "--pdf"]);
+    expect(afterTarget).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --pdf"));
+    expect(pdfsUnderReportsRoot()).toEqual([]);
   });
 
   it("a TN_REPORTS_PATH inside the repo tree at anything other than reports/ is refused, exit 1", async () => {
