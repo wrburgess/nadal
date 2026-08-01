@@ -589,7 +589,14 @@ const LABEL_BEARING_TYPES = new Set(["submit", "button", "reset", "image"]);
 /** The attributes that can carry a credential: `value` on an input, `content` on a meta. */
 const CREDENTIAL_ATTRS = ["value", "content"] as const;
 
-type CredentialSpan = { start: number; end: number; names: string[]; raw: string };
+type CredentialSpan = {
+  start: number;
+  end: number;
+  names: string[];
+  raw: string;
+  tagName: string;
+  attribs: Record<string, string>;
+};
 
 /**
  * Locate every credential-bearing attribute using the real parser, returning spans into the ORIGINAL
@@ -603,8 +610,20 @@ function findCredentialSpans(html: string): CredentialSpan[] {
 
   $("input, meta").each((_i, element) => {
     const attribs: Record<string, string> = element.attribs ?? {};
+    const start = element.startIndex;
+    const end = element.endIndex;
+    if (start === null || start === undefined || end === null || end === undefined) return;
+    const raw = html.slice(start, end);
+
+    // The label exemption must FAIL CLOSED. `<input type="submit" type="hidden" id="hdnCSRFToken"
+    // value="…">` is malformed but browser-tolerated, and parse5 keeps the FIRST `type` — so trusting
+    // the parsed value would exempt a hidden credential field as a button and skip it entirely. A
+    // duplicated `type` means the parsed view cannot be trusted about this element, so the exemption
+    // is refused rather than granted. This is the duplicate-attribute class applied to the exemption
+    // instead of to the value, and an exemption is exactly where that class is most dangerous.
+    const typeOccurrences = raw.match(/(?:^|[\s/])type\s*=/gi)?.length ?? 0;
     const type = (attribs.type ?? "").trim().toLowerCase();
-    if (LABEL_BEARING_TYPES.has(type)) return;
+    if (typeOccurrences <= 1 && LABEL_BEARING_TYPES.has(type)) return;
 
     const names = Object.entries(attribs)
       .filter(([key]) => key.toLowerCase() === "name" || key.toLowerCase() === "id")
@@ -612,75 +631,63 @@ function findCredentialSpans(html: string): CredentialSpan[] {
       .filter(isCredentialName);
     if (names.length === 0) return;
 
-    const start = element.startIndex;
-    const end = element.endIndex;
-    if (start === null || start === undefined || end === null || end === undefined) return;
-
-    found.push({ start, end, names, raw: html.slice(start, end) });
+    found.push({
+      start,
+      end,
+      names,
+      raw,
+      tagName: element.tagName,
+      attribs,
+    });
   });
 
   return found;
 }
 
 /**
- * Every non-empty credential attribute value present in a span's RAW BYTES.
+ * Serialise a credential-bearing tag from the parser's authoritative attribute map, emptying the
+ * credential attributes.
  *
- * Deliberately NOT read from the parser's `attribs`. A parsed attribute map is a LOSSY summary of the
- * bytes: given `value="public" value="SECRET"`, parse5 keeps the first and discards the second, but
- * the second is still in the file that gets committed. Trusting `attribs` therefore let a first-match
- * replace empty the decoy while the real token survived — and made the backstop agree, since it read
- * the same lossy view.
+ * ## Why no byte pattern at all
  *
- * The rule this encodes: use the parser to DELIMIT, and read the BYTES to decide. Anything that will
- * be written to disk must be checked as written, not as parsed.
- * (Provenance: Codex adversarial review round 2 on PR #79, rated critical.)
+ * Two consecutive review rounds found the same class of defect: a hand-written byte pattern
+ * disagreeing with parse5 about what an attribute value IS.
+ *
+ *  - Duplicate attributes — `value="public" value="SECRET"`. parse5 keeps the first and discards the
+ *    second, but the second stays in the bytes, so a first-match replace emptied the decoy.
+ *  - Unquoted values containing `=` — `value=x=9876…`. The HTML spec forbids `=` there, but the spec's
+ *    own error handling APPENDS it, so parse5 reads the whole thing while a spec-shaped character
+ *    class stopped at `x`, leaving `value=""=9876…` — a dangling token tail the backstop then
+ *    certified as clean.
+ *
+ * Patching the character class would have been a third round of the same mistake. The class only
+ * closes by removing the byte pattern: the parser already knows every attribute and its exact value,
+ * so the tag is rebuilt from that map instead of edited in place. Duplicates collapse (parse5 already
+ * discarded them), quoting is normalised, unquoted values are quoted, and every lexical question —
+ * `=`, `>`, mixed quotes, case, self-closing slashes — stops being ours to answer.
+ *
+ * The cost is that a credential-bearing tag loses its original formatting. That is acceptable
+ * precisely here and nowhere else in this module: these are hidden `<input>`s and `<meta>`s that no
+ * parser in `src/parsers/` reads, the element and all its attributes survive, and the
+ * "markup the parsers read is structurally identical" guarantee is unaffected.
+ * (Provenance: Codex adversarial review rounds 2 and 3 on PR #79, both rated critical.)
  */
-function credentialValuesInSpan(raw: string): { attr: string; value: string }[] {
-  const found: { attr: string; value: string }[] = [];
-  for (const attr of CREDENTIAL_ATTRS) {
-    const reader = ATTR_VALUE_READERS[attr];
-    if (reader === undefined) continue;
-    for (const match of raw.matchAll(reader)) {
-      const value = match[1] ?? match[2] ?? match[3] ?? "";
-      if (value !== "") found.push({ attr, value });
-    }
-  }
-  return found;
+function escapeAttributeValue(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
-/**
- * Static regex literals, one per credential-bearing attribute — deliberately NOT built from a
- * template string. An earlier revision composed this pattern with `new RegExp(\`…\${attr}…\`)`, and
- * the template literal ate every backslash before the RegExp ever saw it: `\\s` became `s`, so the
- * pattern read `[s/]value s* = s*` and matched nothing. The control silently stripped NOTHING while
- * every type-check passed. A security control should not depend on getting two layers of escaping
- * right, so the patterns are literals and the attribute set is closed.
- */
-const ATTR_VALUE_READERS: Record<string, RegExp> = {
-  value: /(?:^|[\s/])value\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>`=<]+))/gi,
-  content: /(?:^|[\s/])content\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>`=<]+))/gi,
-};
-
-const ATTR_VALUE_PATTERNS: Record<string, RegExp> = {
-  // GLOBAL, and that flag is load-bearing. Malformed-but-browser-tolerated markup may carry the
-  // attribute twice (`value="public" value="SECRET"`); parse5 keeps only the FIRST, so a first-match
-  // replace emptied the decoy and left the real token in the bytes.
-  value: /((?:^|[\s/])value\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s"'>`=<]+)/gi,
-  content: /((?:^|[\s/])content\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s"'>`=<]+)/gi,
-};
-
-/**
- * Replace an attribute's value with the empty string INSIDE one parser-delimited tag span. The span
- * is authoritative, so a quoted `>` cannot terminate it early; an unquoted value cannot contain `>`
- * under the HTML spec, so the unquoted branch is exact too.
- */
-function emptyAttributeInSpan(tag: string, attr: string): string {
-  const pattern = ATTR_VALUE_PATTERNS[attr];
-  if (pattern === undefined) return tag;
-  return tag.replace(pattern, (_match, prefix: string) => `${prefix}""`);
+function serialiseWithEmptiedCredentials(
+  tagName: string,
+  attribs: Record<string, string>,
+): string {
+  const rendered = Object.entries(attribs).map(([key, value]) => {
+    const emptied = CREDENTIAL_ATTRS.includes(key.toLowerCase() as (typeof CREDENTIAL_ATTRS)[number]);
+    return `${key}="${escapeAttributeValue(emptied ? "" : value)}"`;
+  });
+  return `<${tagName}${rendered.length > 0 ? ` ${rendered.join(" ")}` : ""}>`;
 }
 
-/** Empty the value of every credential-bearing field, leaving the markup otherwise identical. */
+/** Empty the value of every credential-bearing field, leaving the rest of the markup identical. */
 export function stripCredentialFields(html: string): string {
   const spans = findCredentialSpans(html);
   if (spans.length === 0) return html;
@@ -688,27 +695,43 @@ export function stripCredentialFields(html: string): string {
   // Rewrite right-to-left so earlier spans keep their original offsets.
   let out = html;
   for (const span of [...spans].sort((a, b) => b.start - a.start)) {
-    let tag = span.raw;
-    for (const attr of CREDENTIAL_ATTRS) tag = emptyAttributeInSpan(tag, attr);
-    out = out.slice(0, span.start) + tag + out.slice(span.end);
+    const rebuilt = serialiseWithEmptiedCredentials(span.tagName, span.attribs);
+    out = out.slice(0, span.start) + rebuilt + out.slice(span.end);
   }
   return out;
 }
 
 /**
- * Fail the capture if a credential field still carries a value in the bytes that would be written.
+ * Fail the capture if a credential field still carries a value.
+ *
  * Shares `findCredentialSpans` with the stripper — a backstop that can drift from the thing it backs
- * up is not a backstop — but reads the RAW span rather than the parsed attribute map, so a duplicate
- * attribute cannot hide behind the parser's first-wins normalisation. The message names the FIELD and
- * the length of what survived, never the value, since a secret does not become safe by being printed
- * in an error.
+ * up is not a backstop. Two independent conditions, because the parsed map alone is not sufficient on
+ * arbitrary INPUT:
+ *
+ *  1. any parsed credential attribute whose value is non-empty; and
+ *  2. a credential attribute appearing **more than once in the raw span**, which parse5 collapses to
+ *     one — the duplicate-attribute bypass. Output produced by `stripCredentialFields` is
+ *     parser-serialised and so can never trip this; only unprocessed input can.
+ *
+ * The message names the FIELD and the length of what survived, never the value, since a secret does
+ * not become safe by being printed in an error.
  */
 export function assertNoCredentialFields(html: string): void {
-  const survivors = findCredentialSpans(html).flatMap((span) =>
-    credentialValuesInSpan(span.raw).map(
-      ({ attr, value }) => `${span.names.join("/")} @${attr} (${value.length} chars)`,
-    ),
-  );
+  const survivors: string[] = [];
+
+  for (const span of findCredentialSpans(html)) {
+    const label = span.names.join("/");
+    for (const attr of CREDENTIAL_ATTRS) {
+      const value = span.attribs[attr];
+      if (value !== undefined && value !== "") {
+        survivors.push(`${label} @${attr} (${value.length} chars)`);
+      }
+      const occurrences = span.raw.match(new RegExp(`(?:^|[\\s/])${attr}\\s*=`, "gi"))?.length ?? 0;
+      if (occurrences > 1) {
+        survivors.push(`${label} @${attr} (${occurrences} duplicate attributes in raw markup)`);
+      }
+    }
+  }
 
   if (survivors.length > 0) {
     throw new RedactionError(

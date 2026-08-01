@@ -643,6 +643,8 @@ describe("credential stripping", () => {
     });
 
     it("handles single-quoted and unquoted values", () => {
+      // Quoting is normalised on a credential tag because it is rebuilt from the parsed attributes.
+      // That is confined to hidden inputs and metas, which no parser reads.
       const sq = redactHtml(`<input id="csrf" value='sq>uote' />`, SUBS);
       expect(sq).not.toContain("sq>uote");
       const uq = redactHtml(`<div><input id="csrf" value=unquoted><span>x</span></div>`, SUBS);
@@ -673,6 +675,37 @@ describe("credential stripping", () => {
         expect(() => assertNoCredentialFields(html)).toThrow(RedactionError);
         expect(() => assertNoCredentialFields(out)).not.toThrow();
       }
+    });
+
+    it("strips an unquoted value containing '=' , which the HTML spec forbids and parse5 keeps", () => {
+      // CRITICAL, round 3. The spec forbids `=` in an unquoted value, but its own ERROR HANDLING
+      // appends it — so parse5 read `x=9876…` while a spec-shaped character class stopped at `x`,
+      // leaving `value=""=9876…`: a dangling token tail the backstop then certified as clean.
+      const html = `<input type=hidden id=hdnCSRFToken value=x=98765432101234567890>`;
+      const out = redactHtml(html, SUBS);
+      expect(out).not.toContain("98765432101234567890");
+      expect(() => assertNoCredentialFields(html)).toThrow(RedactionError);
+      expect(() => assertNoCredentialFields(out)).not.toThrow();
+    });
+
+    it("refuses the label exemption when `type` is duplicated", () => {
+      // The duplicate-attribute class applied to the EXEMPTION rather than the value, which is where
+      // it is most dangerous: parse5 keeps the first `type` (`submit`), so trusting it would exempt a
+      // hidden credential field as a button and skip it entirely. Found by sweeping my own traces.
+      const html = `<input type="submit" type="hidden" id="hdnCSRFToken" value="SECRET">`;
+      const out = redactHtml(html, SUBS);
+      expect(out).not.toContain("SECRET");
+      expect(() => assertNoCredentialFields(html)).toThrow(RedactionError);
+    });
+
+    it("still exempts a genuine single-typed button label", () => {
+      const out = redactHtml(`<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`, SUBS);
+      expect(valueOf(out, "#btnCsrfRefreshPage")).toBe("Refresh Page");
+    });
+
+    it("handles uppercase tag and attribute names", () => {
+      const out = redactHtml(`<INPUT TYPE="hidden" ID="hdnCSRFToken" VALUE="SECRET">`, SUBS);
+      expect(out).not.toContain("SECRET");
     });
 
     it("strips several credential fields in one document without corrupting offsets", () => {
