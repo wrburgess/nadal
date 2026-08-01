@@ -658,6 +658,23 @@ describe("credential stripping", () => {
       expect(valueOf(redactHtml(`<input type="submit" name="csrfEnabled" value="Go">`, SUBS), 'input')).toBe("Go");
     });
 
+    it("empties BOTH halves of a duplicated credential attribute", () => {
+      // CRITICAL, round 2. Malformed-but-browser-tolerated markup can carry the attribute twice.
+      // parse5 keeps only the FIRST, so reading the parsed `attribs` emptied the decoy and left the
+      // real token in the bytes — and the backstop agreed, because it read the same lossy view.
+      // The rule: use the parser to DELIMIT, read the BYTES to decide.
+      for (const [html, secret] of [
+        [`<input type="hidden" id="hdnCSRFToken" value="public" value="SECRET">`, "SECRET"],
+        [`<meta name="csrf-token" content="ok" content="SECRET2">`, "SECRET2"],
+      ] as const) {
+        const out = redactHtml(html, SUBS);
+        expect(out).not.toContain(secret);
+        // The backstop must reject the ORIGINAL, not merely accept the cleaned output.
+        expect(() => assertNoCredentialFields(html)).toThrow(RedactionError);
+        expect(() => assertNoCredentialFields(out)).not.toThrow();
+      }
+    });
+
     it("strips several credential fields in one document without corrupting offsets", () => {
       // The rewrite splices by parser-supplied span, so it must walk right-to-left.
       const html = `<form><input type="hidden" name="__VIEWSTATE" value="AAA"><p>keep</p><input type="hidden" id="hdnCSRFToken" value="BBB"><meta name="csrf-token" content="CCC"></form>`;
