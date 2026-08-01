@@ -87,14 +87,26 @@ There is **no `tn report build --pdf`**, and that is now a **decision, not a def
 ([#36](https://github.com/wrburgess/nadal/issues/36)). The spec anticipated one riding "the Playwright
 dependency the scrapers already carry", but no such dependency exists — the scrapers use plain `fetch`.
 
-The reason it was declined is worth knowing, because it is not about cost: **a `--pdf` flag would drive
-the same Chromium over the same inlined stylesheet that ⌘P does.** It would automate a keystroke, not
-improve a page — identical bytes on the paper, for a ~300 MB browser download that CI would pay on every
-run. Nothing here is batch or unattended: step 3 already has you standing at the browser reading a
-dossier before you print the rest.
+**Why it was declined — scope and cost, stated plainly.** Nothing here is batch or unattended: one
+captain, one laptop, one weekend, and step 3 above already has you standing at the browser reading a
+dossier before you print the rest. `--pdf` would automate a keystroke a human is already there to press,
+for a ~300 MB browser download that CI would pay on every run.
 
-If that ever changes — a real need to generate binders unattended — the decision is cheap to reverse,
-and `test/cli-report-build-command.test.ts` holds the test that has to be changed to do it.
+**What is *not* claimed, because an earlier draft of this paragraph claimed it and was wrong.** It would
+be convenient to say a `--pdf` flag renders "the same page you get from ⌘P". That does not follow, and
+the difference cuts *toward* this decision rather than against it: this runbook never pins which browser
+you print from, and a headless Chromium PDF pipeline is separately configured from a print dialog
+(backgrounds, scale, headers/footers, and printer settings are all dialog-side choices). Concretely:
+Playwright's `page.pdf()` defaults `preferCSSPageSize` to `false`, so out of the box it **scales the
+page instead of honouring the `@page` rule** — the very rule this binder's letter/0.5in layout depends
+on. So a `--pdf` path would need its **own** fidelity verification against real dossiers — work this decision avoids
+rather than work it saves. What the repo does guarantee is narrower and is what actually matters here:
+the print CSS is **inlined into every generated file** (`@page` letter/0.5in, `page-break-inside: avoid`
+on each player block), so the page you preview needs no network and no external stylesheet.
+
+If a real need for unattended or run-to-run-identical PDFs ever appears, that is the argument that would
+reopen this — not print quality. The decision is cheap to reverse, and
+`test/cli-report-build-command.test.ts` holds the test that has to be changed to do it.
 
 ### 5. Re-run freely
 

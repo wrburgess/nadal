@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -161,25 +161,33 @@ describe("tn report build (end-to-end via dispatch)", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --bogus"));
   });
 
-  // Issue #36 decided there is NO `--pdf` in v1: the flag would drive the same Chromium over the
-  // same inline print CSS as the browser's own print path, so it would automate a keystroke rather
-  // than change the artifact. The test above pins the generic unrecognized-flag MECHANISM; this one
-  // pins THAT DECISION, which the runbook states in prose and nothing else enforced. Adding `--pdf`
-  // now requires deleting a test that names the issue, instead of silently widening `parseArgs`.
-  // Both argument positions are asserted so the pin does not depend on where the flag sits.
-  it("--pdf is rejected in either argument position (issue #36: no --pdf in v1)", async () => {
-    runMigrations();
+  // Issue #36 decided there is no `--pdf` in v1 (scope: nothing here is batch or unattended). The
+  // `--bogus` test above pins the generic unrecognized-flag MECHANISM; this one pins the OUTCOME the
+  // decision is actually about — no PDF artifact is produced — which the runbook states in prose and
+  // which nothing else enforced.
+  //
+  // Asserting the exit code and the message alone would NOT establish that (a Reviewer finding on
+  // PR #61): a future change could write a PDF on seeing `--pdf` and *then* fall through to the same
+  // parser error, and both of those assertions would still pass. So the reports root is checked too.
+  // Both argument positions are covered, so the pin does not depend on where the flag sits.
+  it("--pdf produces no PDF and is rejected in either argument position (issue #36: no --pdf in v1)", async () => {
+    seedTeamWithRoster("Team A", []);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const pdfsUnderReportsRoot = () =>
+      readdirSync(reportsDir, { recursive: true }).filter((entry) => String(entry).endsWith(".pdf"));
 
     const bare = await dispatch(["report", "build", "--pdf"]);
     expect(bare).toBe(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --pdf"));
+    expect(pdfsUnderReportsRoot()).toEqual([]);
 
     errorSpy.mockClear();
 
     const afterTarget = await dispatch(["report", "build", "sectionals", "--pdf"]);
     expect(afterTarget).toBe(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --pdf"));
+    expect(pdfsUnderReportsRoot()).toEqual([]);
   });
 
   it("a TN_REPORTS_PATH inside the repo tree at anything other than reports/ is refused, exit 1", async () => {
