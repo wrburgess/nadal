@@ -86,7 +86,7 @@ Same services; tool names mirror the grammar (`team_pull`, `player_show`, `lineu
 
 ### Reports
 
-Deterministic rendering from DB state: per-opponent dossier, own-team book, matchup sheets. Formats: **self-contained print-optimized HTML (primary)** and markdown (agent/diff-friendly), with `--pdf` via the Playwright dependency the scrapers already carry. Report templates are tested code in the app — agents fetch reports through MCP rather than composing documents per session (the economization principle applied up front).
+Deterministic rendering from DB state: per-opponent dossier, own-team book, matchup sheets. Formats: **self-contained print-optimized HTML (primary)** and markdown (agent/diff-friendly). ~~`--pdf` via the Playwright dependency the scrapers already carry~~ — **corrected: there is no such dependency, and v1 ships no `--pdf`** ([#36](https://github.com/wrburgess/nadal/issues/36)). PDF comes from the browser's own print path (⌘P → Save as PDF) over the dossier's inlined `@page`/`page-break-inside` CSS. A `--pdf` flag would drive *the same Chromium over the same stylesheet*, so it would automate a keystroke rather than improve an artifact — which is why this is a decision, not a deferral. Report templates are tested code in the app — agents fetch reports through MCP rather than composing documents per session (the economization principle applied up front).
 
 ### Request telemetry
 
@@ -95,6 +95,12 @@ Every CLI command and MCP tool call writes a **RequestLog** row via service-laye
 ## Stack
 
 TypeScript / Node 22, SQLite (better-sqlite3 + drizzle), vitest, Playwright for scraping, Hono for the MCP server. Zero-ops on a hotel laptop. courtview/courtgrab2 are mined for domain knowledge and scraping know-how, not code.
+
+**Two of those three are corrected by what shipped, and they fail differently — the distinction matters, so it is drawn rather than flattened:**
+
+- **Hono — wrong.** `tn mcp serve` speaks **stdio** via `@modelcontextprotocol/sdk`; nothing under `src/` imports Hono. Hono is an HTTP framework, needed only for MCP's streamable-HTTP transport, and the consumer is a local agent talking to a local SQLite file — no port, bind address, or auth story. (`docs/findings.md`; the SDK still pulls `@hono/node-server` transitively, which is its supply chain, not a choice here.)
+- **Playwright for `--pdf` — declined.** See § Reports above and [#36](https://github.com/wrburgess/nadal/issues/36).
+- **Playwright for scraping — anticipated, not yet built, and *not* declined.** Phase 3 ([#15](https://github.com/wrburgess/nadal/issues/15)) chose the seam-first path and ships plain `fetch` with **no browser dependency**; TennisLink ([#27](https://github.com/wrburgess/nadal/issues/27), § Ingestion above) is still open and may yet need one. So **v1 ships no browser today**, and that is a statement about what exists — not a decision against ever taking one for scraping.
 
 ## Factory model and SDLC
 

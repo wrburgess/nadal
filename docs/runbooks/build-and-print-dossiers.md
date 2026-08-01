@@ -83,10 +83,18 @@ Open `reports/<team-slug>/index.html` in a browser. Check:
 print-styled (US Letter, 0.5in margins, player blocks kept off page breaks), so it needs no network
 and no stylesheet.
 
-There is **no `tn report build --pdf`** in v1. The spec anticipated one riding "the Playwright
-dependency the scrapers already carry", but no such dependency exists — the scrapers use plain
-`fetch`. Adding a ~300 MB browser to print a page engineered to be printed is tracked as a
-follow-up rather than assumed. ⌘P is the v1 path.
+There is **no `tn report build --pdf`**, and that is now a **decision, not a deferral**
+([#36](https://github.com/wrburgess/nadal/issues/36)). The spec anticipated one riding "the Playwright
+dependency the scrapers already carry", but no such dependency exists — the scrapers use plain `fetch`.
+
+The reason it was declined is worth knowing, because it is not about cost: **a `--pdf` flag would drive
+the same Chromium over the same inlined stylesheet that ⌘P does.** It would automate a keystroke, not
+improve a page — identical bytes on the paper, for a ~300 MB browser download that CI would pay on every
+run. Nothing here is batch or unattended: step 3 already has you standing at the browser reading a
+dossier before you print the rest.
+
+If that ever changes — a real need to generate binders unattended — the decision is cheap to reverse,
+and `test/cli-report-build-command.test.ts` holds the test that has to be deleted to do it.
 
 ### 5. Re-run freely
 
