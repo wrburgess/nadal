@@ -106,21 +106,12 @@ client-rendered SPA); the TennisRecord pages are public and were fetched directl
 
 ## Not here: TennisLink
 
-TennisLink team, player-history and scorecard fixtures are absent because its **league** paths
-require a signed-in session: `leagues/Main/StatsAndStandings.aspx` redirects through
-`Dashboard/Main/Login.aspx` to `account.usta.com/authorize?...&audience=tennislink`. Spec § Ingestion
-classifies TennisLink as a public path; it is a login-assisted one. (The blanket claim that *every*
-TennisLink path is gated is too broad — `tournaments/schedule/Search.aspx` answers unauthenticated —
-but every artifact this repo wants lives on the gated league side.) This is still true for HTML: no
-scorecard PAGE is committed anywhere in this repo. The scorecard payload fixture below is a different
-thing entirely — see that section.
-
-**Capturing these is procedure, not a mystery** — [`docs/runbooks/capture-fixtures.md`](../../docs/runbooks/capture-fixtures.md)
-is the HC-driven session, including the two obstacles that cost a run to discover: TennisLink's team
-and player links are `javascript:` hrefs an automation harness cannot follow, so a human has to
-navigate; and its WebForms pages embed session credentials the redaction pipeline now strips
-automatically. What remains open is the parser work itself ([#27](https://github.com/wrburgess/nadal/issues/27)),
-which is corroborative — TennisRecord already supplies the scouting substrate.
+TennisLink team, player-history and scorecard fixtures are absent because every
+`tennislink.usta.com` league and tournament path now redirects to `account.usta.com` OAuth. Spec
+§ Ingestion classifies TennisLink as a public path; it is now a login-assisted one. Capturing these
+needs an HC login session — see `docs/findings.md` and the tracked follow-up issue. This is still
+true for HTML: no scorecard PAGE is committed anywhere in this repo. The scorecard payload
+fixture below is a different thing entirely — see that section.
 
 ## Scorecard payloads (#18)
 
