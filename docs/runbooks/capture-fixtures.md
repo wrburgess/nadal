@@ -54,16 +54,22 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    provenance. **Copy it literally, including any `#fragment`** — the USTA profile's `uaid` lives
    nowhere else.
 
-   > **Unresolved, and it lands here rather than in the tooling: an opaque token in the URL is
-   > examined by nothing.** TennisLink's league pages address themselves as
-   > `StatsAndStandings.aspx?SearchType=3#&&s=<33-char opaque token>` — the entity reference lives in
-   > that token and nowhere else, so it cannot simply be dropped from the provenance. But no layer
-   > inspects it: the substitution map covers only enumerated identities, and the detectors cover only
-   > ids the page advertises **in its markup**. Nothing examines a credential in a URL, just as nothing
-   > examines one in a hidden field (step 7). If that token turns out to be session-bound rather than an entity key,
-   > committing it in a provenance sidecar publishes it. **Before committing the first TennisLink
-   > fixture, establish which it is** — the cheap test is whether the same URL resolves from a
-   > different session. Until then, treat it as a credential.
+   > **An opaque token in the URL is _examined_, but not _understood_.** TennisLink's league pages
+   > address themselves as `StatsAndStandings.aspx?SearchType=3#&&s=<33-char opaque token>` — the
+   > entity reference lives in that token and nowhere else, so it cannot simply be dropped from the
+   > provenance.
+   >
+   > The good news, and it is easy to overstate the gap here: `capture-fixture.ts` runs the
+   > `sourceUrl` through `redact()` **with the vocabulary**, so the allow-list inspects it as content
+   > like any other atom. An unrecognised token therefore **refuses the capture** rather than shipping
+   > — the boundary holds.
+   >
+   > What is missing is a _credential-specific_ classifier: nothing can tell you whether that token is
+   > an entity key or session state. So the refusal lands you in the loop of step 6, where the
+   > tempting move is to make it go away by adding the token to the vocabulary. **Do not.** If the
+   > token is session-bound, that publishes it. **Before committing the first TennisLink fixture,
+   > establish which it is** — the cheap test is whether the same URL resolves from a different
+   > session. Until then, treat it as a credential.
 
 3. **HC: save the post-render DOM.** "Save Page As… → **Webpage, Complete**". For any client-rendered
    page (the USTA profile SPA, its WTN widget), wait for the content to actually appear first — a page
@@ -101,9 +107,9 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 
 7. **Agent: read the redacted fixture before committing it. A green pipeline is not sufficient.**
 
-   > ### ⚠️ Session credentials are NOT stripped for you. This step is manual, and it is the one that
+   > ### ⚠️ Session credentials are NOT stripped for you
    >
-   > matters most on a login-gated page.
+   > **This step is manual, and on a login-gated page it is the one that matters most.**
    >
    > **Nothing in this repository removes a session credential from a captured page.** A control to do
    > it was attempted and withdrawn — see [#80](https://github.com/wrburgess/nadal/issues/80) for why,
@@ -151,7 +157,16 @@ what the site advertises in its own markup, so they are the layer that does not 
 having remembered a name.
 
 Add a key to `DETECTOR_SETS` in `tools/capture-fixture.ts`, plus a committed
-`tools/fixture-vocabulary/<set>.txt`. Two constraints, both learned the hard way:
+`tools/fixture-vocabulary/<set>.txt`.
+
+**Then widen the CI gate's source union, or step 8 cannot be completed.**
+`test/fixtures-vocabulary-complete.test.ts` declares
+`const FIXTURES: { source: "tennisrecord" | "usta"; name: string }[]` — a closed union, so a
+fixture from a newly-named source **cannot be registered** until that type admits it. Widen the
+union (or derive it from `DETECTOR_SETS`) as part of adding the set, not as a surprise at
+registration time.
+
+Two further constraints, both learned the hard way:
 
 - **Id sweeps alone are not enough.** On the USTA capture, every id matched and was replaced, both
   sweeps passed — and the player's rendered _display name_ shipped anyway. A set needs a detector for
@@ -169,8 +184,10 @@ under-covers while appearing to pass, which is the exact failure mode above.
 
 - `npm test -- test/fixtures-vocabulary-complete.test.ts` — the policy re-runs over every committed
   fixture, including the new one.
-- The parser's own test loads it through `loadFixture(...)`, which fails loudly if the provenance
-  sidecar is missing or malformed.
+- The parser's own test loads it through `loadFixture(...)`, which throws if the provenance sidecar
+  is **missing or not valid JSON**. Note the limit: it `JSON.parse`s and casts, and does **not**
+  validate the fields — a sidecar with a missing, empty or wrong-typed `sourceUrl`/`fetchedAt` is
+  accepted, and the parser then receives invalid provenance. Check those two fields by eye.
 - Reopen the committed fixture and confirm it is the complete rendered page, not a partial or an error
   state — a saved "Record not found" page is still valid HTML and will redact cleanly.
 
