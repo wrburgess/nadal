@@ -2,13 +2,13 @@
 
 ## When to use this
 
-A parser is only as good as the page it was tested against — spec § *Testing* requires parsers to run
+A parser is only as good as the page it was tested against — spec § _Testing_ requires parsers to run
 against **raw captured pages** with hand-verified expected values, never against invented markup. So
 whenever a new parser is needed, or a site changes shape under an existing one, someone has to turn a
 real page into a committed fixture.
 
 That procedure existed before this runbook, but only inside
-[`test/fixtures/README.md`](../../test/fixtures/README.md) § *Re-capturing* — contributor
+[`test/fixtures/README.md`](../../test/fixtures/README.md) § _Re-capturing_ — contributor
 documentation, written for someone already in the code. This runbook is the **operator-facing** version:
 what the HC does, what the agent does, and where the session actually stalls.
 
@@ -16,9 +16,9 @@ Two variants, and the second is where the work is:
 
 - **Public page** (TennisRecord) — the agent can do the whole thing alone. No HC step.
 - **Login-assisted page** (USTA player-search, TennisLink) — the page only exists behind a signed-in
-  session, so the HC drives the browser. This is spec § *Operating loop*, HC step 2.
+  session, so the HC drives the browser. This is spec § _Operating loop_, HC step 2.
 
-For a *production pull* from a logged-in page — not a fixture — use
+For a _production pull_ from a logged-in page — not a fixture — use
 [login-assisted-scrape.md](login-assisted-scrape.md) instead. Same login, different destination: that
 one ends at `tn player pull`, this one ends at a committed file in `test/fixtures/`.
 
@@ -27,8 +27,8 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 - **The substitution map is required and is never committed.** It maps each real identity to its
   synthetic stand-in, and it lives **outside the repo**. Without `--map`, there is no capture.
 - **Know which detector set you need.** `tools/capture-fixture.ts` ships `tennisrecord`, `usta`, and
-  `none`. A new source needs a new set — see *Adding a detector set for a new source* below, and note
-  that it must be written **from the real markup**, so it is authored *during* this session, not before.
+  `none`. A new source needs a new set — see _Adding a detector set for a new source_ below, and note
+  that it must be written **from the real markup**, so it is authored _during_ this session, not before.
 - **`none` refuses by default, on purpose.** It resolves no vocabulary file, and the tool will not
   write a fixture without one.
 
@@ -58,9 +58,9 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    > examined by nothing.** TennisLink's league pages address themselves as
    > `StatsAndStandings.aspx?SearchType=3#&&s=<33-char opaque token>` — the entity reference lives in
    > that token and nowhere else, so it cannot simply be dropped from the provenance. But no layer
-   > inspects it: the substitution map covers enumerated identities, the detectors cover ids the page
-   > advertises in markup, and `assertNoCredentialFields` reads `<input>`/`<meta>` tags, of which a
-   > bare URL has none. If that token turns out to be session-bound rather than an entity key,
+   > inspects it: the substitution map covers only enumerated identities, and the detectors cover only
+   > ids the page advertises **in its markup**. Nothing examines a credential in a URL, just as nothing
+   > examines one in a hidden field (step 7). If that token turns out to be session-bound rather than an entity key,
    > committing it in a provenance sidecar publishes it. **Before committing the first TennisLink
    > fixture, establish which it is** — the cheap test is whether the same URL resolves from a
    > different session. Until then, treat it as a credential.
@@ -74,6 +74,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    below. Skip only when capturing from a source that already has both.
 
 5. **Agent: run the capture.**
+
    ```sh
    tsx tools/capture-fixture.ts \
        --file <the saved page> \
@@ -82,6 +83,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
        --detectors <set> \
        --out test/fixtures/<source>/<name>.html
    ```
+
    Use `--file`/`--source-url` for a saved page; `--url` fetches directly and is for public pages only.
 
 6. **Agent: work the refusal loop — expect several rounds, and do not shortcut it.** The allow-list
@@ -100,6 +102,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 7. **Agent: read the redacted fixture before committing it. A green pipeline is not sufficient.**
 
    > ### ⚠️ Session credentials are NOT stripped for you. This step is manual, and it is the one that
+   >
    > matters most on a login-gated page.
    >
    > **Nothing in this repository removes a session credential from a captured page.** A control to do
@@ -109,7 +112,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    >
    > This is not theoretical. A real signed-in TennisLink league page carries a **172-character
    > `hdnCSRFToken`** and a **14,420-character `__VIEWSTATE`** inline in the markup, both live session
-   > state belonging to *you*, the capturing operator — not to the page's subject, and therefore in no
+   > state belonging to _you_, the capturing operator — not to the page's subject, and therefore in no
    > substitution map built from scouting targets.
    >
    > **Before committing any fixture captured from a signed-in session, grep the redacted output for:**
@@ -123,7 +126,7 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    > met, not a complete set.
    >
    > **And never resolve an allow-list refusal by adding a long opaque string to the vocabulary.** That
-   > is the specific mistake this warning exists to prevent: the allow-list *will* refuse a
+   > is the specific mistake this warning exists to prevent: the allow-list _will_ refuse a
    > 172-character token, and the documented remedy for a refusal is to classify the atom and commit it
    > — which would publish the token. If a refusal shows you something opaque and high-entropy, treat
    > it as a credential, not as boilerplate.
@@ -151,7 +154,7 @@ Add a key to `DETECTOR_SETS` in `tools/capture-fixture.ts`, plus a committed
 `tools/fixture-vocabulary/<set>.txt`. Two constraints, both learned the hard way:
 
 - **Id sweeps alone are not enough.** On the USTA capture, every id matched and was replaced, both
-  sweeps passed — and the player's rendered *display name* shipped anyway. A set needs a detector for
+  sweeps passed — and the player's rendered _display name_ shipped anyway. A set needs a detector for
   **what a human reading the page would recognise**, not only for what looks like an identifier
   (`tools/capture-fixture.ts`, provenance: PR #26 adversarial review round 3).
 - **Stop id patterns at `&` or a quote, never at whitespace.** A query-param value can legitimately
@@ -159,7 +162,7 @@ Add a key to `DETECTOR_SETS` in `tools/capture-fixture.ts`, plus a committed
   away and lets the sweep pass on a first name it never recognised.
 
 **Write them from the markup in front of you.** A detector set authored before anyone has seen the page
-fails *quietly* — nothing leaks, because the allow-list still refuses unknown atoms, but the sweep
+fails _quietly_ — nothing leaks, because the allow-list still refuses unknown atoms, but the sweep
 under-covers while appearing to pass, which is the exact failure mode above.
 
 ## Verifying the capture landed
@@ -174,7 +177,7 @@ under-covers while appearing to pass, which is the exact failure mode above.
 ## Known limitations
 
 - **The map never enters the repo**, so a capture cannot be reproduced from a clean clone. That is the
-  intended trade-off: reproducibility of the *fixture* comes from committing the redacted output, not
+  intended trade-off: reproducibility of the _fixture_ comes from committing the redacted output, not
   from being able to re-derive it.
 - **Numeric identifiers are not constrained by the allow-list** (step 7). The detector sweep is what
   covers them, which is why a new source needs its own set rather than borrowing `none`.
