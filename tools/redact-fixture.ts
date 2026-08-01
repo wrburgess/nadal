@@ -354,6 +354,11 @@ export function redactHtml(html: string, substitutions: Substitution[]): string 
 
   out = out.replace(BASE64_DATA_URI, "data:image/png;base64,REDACTED");
 
+  // Before any substitution: a session credential is not an identity anyone would have listed in
+  // the map, so it must not depend on one. See `CREDENTIAL_FIELD` for why this is emptied rather
+  // than left for the allow-list to refuse.
+  out = stripCredentialFields(out);
+
   // Longest identity first, so a longer one ("Cory Hogan") is consumed before a shorter one that
   // is a prefix of it ("Cory") can carve it up.
   const ordered = [...substitutions].sort((a, b) => b.from.length - a.from.length);
@@ -485,6 +490,95 @@ export function normalizeForComparison(value: string): string {
 }
 
 /**
+ * Fields whose VALUE is a credential belonging to the capturing SESSION, not data about the page's
+ * subject — the class every other layer in this module was not built for.
+ *
+ * `NEVER_PUBLISH` below covers third-party PII (email, phone, address); the substitution map covers
+ * identities someone enumerated; the detectors cover ids the site advertises. A page captured from a
+ * logged-in session also carries the OPERATOR's secrets: TennisLink's league pages are ASP.NET
+ * WebForms and embed a 172-character `hdnCSRFToken` and a `__VIEWSTATE` blob directly in the markup.
+ *
+ * The allow-list would refuse such a token rather than ship it, so nothing leaks silently today —
+ * but a refusal is where this became dangerous rather than safe. `docs/runbooks/capture-fixtures.md`
+ * (and `test/fixtures/README.md` before it) tells an operator to resolve a refusal by classifying the
+ * atom and **adding it to the committed vocabulary**, and a 172-character opaque string reads as
+ * "boilerplate" to someone working that loop mechanically. Following the documented procedure
+ * correctly could therefore commit a live session token to a public repository.
+ *
+ * So these values are emptied BEFORE any sweep runs. That is lossless: no parser reads a hidden
+ * WebForms field, and the element, its `name`/`id` and every other attribute survive untouched — only
+ * the value goes. Emptying rather than substituting is deliberate: an empty value reduces to an empty
+ * SKELETON, so the allow-list admits it with no vocabulary entry, and stripping cannot itself push an
+ * operator back into the loop that caused the problem.
+ *
+ * Matching is by field NAME, which is exact and enumerable, rather than by "looks like a secret",
+ * which is neither — a heuristic over long alphanumeric runs would fire on legitimate page content.
+ * The cost of that choice is stated plainly: this is a blacklist, so a credential in a field named
+ * something not listed here still ships. `assertNoCredentialFields` is the backstop for the listed
+ * names only, and does not make the control complete.
+ * (Provenance: #27, observed on a live signed-in TennisLink session, 2026-08-01.)
+ */
+const CREDENTIAL_FIELD =
+  /^(?:__VIEWSTATE(?:GENERATOR|ENCRYPTED)?|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token)$|csrf/i;
+
+/** `<input>`/`<meta>` are the two tags that carry a credential in an attribute value. */
+const CREDENTIAL_BEARING_TAG = /<(?:input|meta)\b[^>]*>/gi;
+const NAME_OR_ID = /\b(?:name|id)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/gi;
+const VALUE_OR_CONTENT = /\b(value|content)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s">]+)/gi;
+
+/**
+ * A submit/button/reset/image `value` is the control's VISIBLE LABEL, never a credential. Real
+ * markup makes this matter: TennisLink ships `<input type="submit" id="btnCsrfRefreshPage"
+ * value="Refresh Page">`, which matches on "csrf" but whose value is user-visible text — emptying it
+ * would silently alter the page for no privacy gain. (Found by running this sweep over a live
+ * signed-in page rather than only over the synthetic fixture.)
+ */
+const LABEL_BEARING_TYPE = /\btype\s*=\s*(?:"|')?(?:submit|button|reset|image)\b/i;
+
+function credentialNamesIn(tag: string): string[] {
+  if (LABEL_BEARING_TYPE.test(tag)) return [];
+  return [...tag.matchAll(NAME_OR_ID)]
+    .map((m) => m[1] ?? m[2] ?? m[3] ?? "")
+    .filter((name) => CREDENTIAL_FIELD.test(name));
+}
+
+/** Empty the value of every credential-bearing field, leaving the markup otherwise identical. */
+export function stripCredentialFields(html: string): string {
+  return html.replace(CREDENTIAL_BEARING_TAG, (tag) =>
+    credentialNamesIn(tag).length === 0
+      ? tag
+      : tag.replace(VALUE_OR_CONTENT, (_match, attr: string) => `${attr}=""`),
+  );
+}
+
+/**
+ * Fail the capture if a listed credential field still carries a value. The message names the FIELD
+ * and the length of what survived — never the value, since a secret does not become safe by being
+ * printed in an error.
+ */
+export function assertNoCredentialFields(html: string): void {
+  const survivors: string[] = [];
+  for (const [tag] of html.matchAll(CREDENTIAL_BEARING_TAG)) {
+    const names = credentialNamesIn(tag);
+    if (names.length === 0) continue;
+    for (const match of tag.matchAll(
+      /\b(?:value|content)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/gi,
+    )) {
+      const value = match[1] ?? match[2] ?? match[3] ?? "";
+      if (value !== "") survivors.push(`${names.join("/")} (${value.length} chars)`);
+    }
+  }
+  if (survivors.length > 0) {
+    throw new RedactionError(
+      `output still carries a session credential in a known credential field — these belong to the capturing operator, not to the page's subject, and must never be committed:\n${survivors
+        .map((s) => `  ${s}`)
+        .join("\n")}`,
+      survivors,
+    );
+  }
+}
+
+/**
  * Identity classes that must NEVER appear in a committed fixture, whether or not anyone listed
  * them in the substitution map.
  *
@@ -572,6 +666,7 @@ export function redact(
     });
   }
   assertNoUnlistedPii(out);
+  assertNoCredentialFields(out);
   assertRedacted(out, {
     forbidden: substitutions.map((s) => s.from),
     detectors: options?.detectors,

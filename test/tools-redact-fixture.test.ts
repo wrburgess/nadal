@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as cheerio from "cheerio";
 import {
   RedactionError,
+  assertNoCredentialFields,
   assertRedacted,
   decodeEntities,
   redact,
@@ -511,5 +512,85 @@ describe("redact() wires in the allow-list policy", () => {
     expect(() =>
       redact("<div></Patrick Turner>", [], { vocabulary: new Set<string>() }),
     ).toThrow(PolicyError);
+  });
+});
+
+// A page captured from a logged-in session carries the SESSION's own secrets, not only the
+// subject's identity. TennisLink's league pages are ASP.NET WebForms and embed a 172-character
+// `hdnCSRFToken` plus `__VIEWSTATE` in the markup; none of the three redaction layers was built for
+// that class (`NEVER_PUBLISH` covers email/phone/address), and the allow-list's documented refusal
+// loop invites an operator to resolve the refusal by ADDING the token to the committed vocabulary.
+// (Provenance: #27, observed on a live signed-in TennisLink capture session, 2026-08-01.)
+describe("credential stripping", () => {
+  const WEBFORMS = `<html><body><form>
+<input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="/wEPDwULLTE2MTY2ODcyMjlkZBYCZg9kFgICAw9kFgI">
+<input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="/wEdAAaMOaLJRAP2">
+<input type="hidden" id="hdnCSRFToken" value="a1BcDeF23GhIjK45LmNoPqRsTuVwXyZ0AbCdEfG9">
+<input type="hidden" id="hdnCSRFSessionRefreshed" value="False">
+<meta name="csrf-token" content="s3cr3tT0k3nV4lu3">
+<input type="hidden" id="ctl00_mainContent_hdnCyear" value="2026">
+<table><tr><td>Dana Sample</td></tr></table>
+</form></body></html>`;
+
+  const valueOf = (html: string, sel: string): string | undefined =>
+    cheerio.load(html)(sel).attr("value");
+
+  it("empties every credential-bearing field value", () => {
+    const out = redactHtml(WEBFORMS, SUBS);
+    expect(valueOf(out, "#__VIEWSTATE")).toBe("");
+    expect(valueOf(out, "#__EVENTVALIDATION")).toBe("");
+    expect(valueOf(out, "#hdnCSRFToken")).toBe("");
+    expect(valueOf(out, "#hdnCSRFSessionRefreshed")).toBe("");
+    expect(cheerio.load(out)('meta[name="csrf-token"]').attr("content")).toBe("");
+  });
+
+  it("leaves the token value nowhere in the output, in any view", () => {
+    const out = redactHtml(WEBFORMS, SUBS);
+    expect(out).not.toContain("a1BcDeF23GhIjK45LmNoPqRsTuVwXyZ0AbCdEfG9");
+    expect(out).not.toContain("/wEPDwULLTE2MTY2ODcyMjlkZBYCZg9kFgICAw9kFgI");
+    expect(out).not.toContain("s3cr3tT0k3nV4lu3");
+  });
+
+  it("keeps the element and its attributes, emptying only the value", () => {
+    const $ = cheerio.load(redactHtml(WEBFORMS, SUBS));
+    expect($("#__VIEWSTATE").attr("type")).toBe("hidden");
+    expect($("#__VIEWSTATE").attr("name")).toBe("__VIEWSTATE");
+    expect($("input").length).toBe(5);
+  });
+
+  it("does not touch a non-credential hidden field the page uses as data", () => {
+    expect(valueOf(redactHtml(WEBFORMS, SUBS), "#ctl00_mainContent_hdnCyear")).toBe("2026");
+  });
+
+  it("leaves a button label alone even when its id matches the credential pattern", () => {
+    // Found by running this sweep over a real signed-in TennisLink page: `btnCsrfRefreshPage`
+    // matches on "csrf" but its value is the VISIBLE LABEL "Refresh Page". A submit/button/reset/
+    // image `value` is a label by definition and can never be a credential, so emptying it would
+    // silently alter user-visible markup for no privacy gain.
+    const withButton = `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`;
+    expect(valueOf(redactHtml(withButton, SUBS), "#btnCsrfRefreshPage")).toBe("Refresh Page");
+  });
+
+  it("never lets a token reach the allow-list refusal report", () => {
+    // The defect was not that a token leaked — the allow-list refuses it. It was that the token
+    // arrived in the operator's refusal list looking like boilerplate, and the documented way to
+    // clear a refusal is to commit the atom to the vocabulary. An emptied value reduces to an empty
+    // SKELETON, so it is admitted silently and never reaches that list. (The surrounding `id`/`name`
+    // attributes still get atomised like any other markup — that is unchanged and correct.)
+    let refusals = "";
+    try {
+      redact(WEBFORMS, SUBS, { vocabulary: new Set<string>(), standIns: ["Dana Sample"] });
+    } catch (error) {
+      refusals = (error as Error).message;
+    }
+    expect(refusals).not.toBe("");
+    expect(refusals).not.toContain("a1BcDeF23GhIjK45LmNoPqRsTuVwXyZ0AbCdEfG9");
+    expect(refusals).not.toContain("s3cr3tT0k3nV4lu3");
+    expect(refusals).not.toContain("wEPDwULLTE2MTY2ODcyMjlkZBYCZg9kFgICAw9kFgI");
+  });
+
+  it("fails closed if a credential field somehow still carries a value", () => {
+    const smuggled = `<html><body><input type="hidden" id="hdnCSRFToken" value="stillhere"></body></html>`;
+    expect(() => assertNoCredentialFields(smuggled)).toThrow(RedactionError);
   });
 });
