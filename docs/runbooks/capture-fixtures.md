@@ -139,10 +139,8 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 
    **`--file` names the `.scrubbed` copy, never the original.** On a login-gated page the original
    still carries the session token, so capturing it re-enters the refusal of step 4 with no way
-   forward. (On a public page there is no scrub step and `.scrubbed` will not exist — pass the saved
-   page itself.)
-
-   Use `--file`/`--source-url` for a saved page; `--url` fetches directly and is for public pages only.
+   forward. These steps are the login-assisted variant throughout; the public variant has its own
+   command below and does **not** use `.scrubbed`, which never exists there.
 
 7. **Agent: work the refusal loop — expect several rounds, and do not shortcut it.** The allow-list
    policy refuses on any content atom it cannot classify, reports **every** unclassified skeleton (not
@@ -185,6 +183,26 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    register the fixture in `test/fixtures-vocabulary-complete.test.ts`'s `FIXTURES` list — the CI gate
    that re-runs the policy over every committed fixture. A fixture missing from that array is a fixture
    nothing re-checks.
+
+## The public variant (TennisRecord)
+
+A public page needs **no HC step and no scrub step**: there is no session, so there is no session
+credential, and `.scrubbed` never exists. Steps 1-4 above do not apply. The agent fetches directly:
+
+```sh
+tsx tools/capture-fixture.ts \
+    --url "<the page URL>" \
+    --map <the map, outside the repo> \
+    --detectors tennisrecord \
+    --out test/fixtures/tennisrecord/<name>.html
+```
+
+Then work the same refusal loop (step 7), do the same pre-commit read-through minus the credential
+re-check (step 8), and register the fixture the same way (step 9).
+
+If you already have the page saved rather than fetching it live, swap `--url` for
+`--file <the saved page> --source-url "<the page URL>"` — the saved page **itself**, with no
+`.scrubbed` suffix.
 
 ## Adding a detector set for a new source
 
