@@ -94,7 +94,7 @@ run. Nothing here is batch or unattended: step 3 already has you standing at the
 dossier before you print the rest.
 
 If that ever changes — a real need to generate binders unattended — the decision is cheap to reverse,
-and `test/cli-report-build-command.test.ts` holds the test that has to be deleted to do it.
+and `test/cli-report-build-command.test.ts` holds the test that has to be changed to do it.
 
 ### 5. Re-run freely
 

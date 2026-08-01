@@ -96,7 +96,7 @@ Every CLI command and MCP tool call writes a **RequestLog** row via service-laye
 
 TypeScript / Node 22, SQLite (better-sqlite3 + drizzle), vitest, Playwright for scraping, Hono for the MCP server. Zero-ops on a hotel laptop. courtview/courtgrab2 are mined for domain knowledge and scraping know-how, not code.
 
-**Two of those three are corrected by what shipped, and they fail differently — the distinction matters, so it is drawn rather than flattened:**
+**Both dependency claims in that sentence have been overtaken by what shipped — but they fail in different ways, and Playwright fails differently for each of its two intended uses. The distinction is drawn rather than flattened, because collapsing it would pre-decide an open issue:**
 
 - **Hono — wrong.** `tn mcp serve` speaks **stdio** via `@modelcontextprotocol/sdk`; nothing under `src/` imports Hono. Hono is an HTTP framework, needed only for MCP's streamable-HTTP transport, and the consumer is a local agent talking to a local SQLite file — no port, bind address, or auth story. (`docs/findings.md`; the SDK still pulls `@hono/node-server` transitively, which is its supply chain, not a choice here.)
 - **Playwright for `--pdf` — declined.** See § Reports above and [#36](https://github.com/wrburgess/nadal/issues/36).
