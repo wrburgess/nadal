@@ -142,13 +142,21 @@ describe("identity ladder — category-Cf format characters in a scraped name (#
       }
     });
 
-    it("HANGUL FILLER U+3164 no longer forks — the residual an earlier revision wrongly accepted", () => {
+    it("NAMED RESIDUAL: the Hangul fillers still fork, because stripping them over-merges", () => {
+      // Deliberate, and the second correction in this PR's history of this one boundary. U+3164 is
+      // `Default_Ignorable`, so the widened class stripped it — until fix-verification showed that
+      // deleting a Hangul filler re-groups the surrounding jamo and merges two visibly different
+      // names (see test/name-key.test.ts). Over-merge is the silent direction, so the fillers are
+      // exempted by `\p{Script=Hangul}` and this fork is accepted ON THE RECORD rather than fixed.
+      //
+      // Pinned as a test rather than left to prose so that a future widening of the class fails here
+      // instead of silently re-introducing the collision.
       const { db, sqlite } = freshDb();
       try {
         expect(resolvePlayer(db, { name: "Anna Versteeg" }).kind).toBe("created");
         const filled = "Anna V" + HANGUL_FILLER + "e" + HANGUL_FILLER + "r" + HANGUL_FILLER + "steeg";
-        expect(resolvePlayer(db, { name: filled }).kind).toBe("matched");
-        expect(db.select().from(players).all()).toHaveLength(1);
+        expect(resolvePlayer(db, { name: filled }).kind).toBe("created"); // the accepted residual
+        expect(db.select().from(players).all()).toHaveLength(2);
       } finally {
         sqlite.close();
       }

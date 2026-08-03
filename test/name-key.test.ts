@@ -114,10 +114,35 @@ describe("nameKey", () => {
     // no derived class could reach a category-`Lo` character without reaching every real letter.
     // That reasoning was wrong: `Default_Ignorable_Code_Point` reaches both, and reaches nothing
     // visible.
-    for (const invisible of [CGJ, HANGUL_FILLER, CHOSEONG_FILLER, WORD_JOINER]) {
+    for (const invisible of [CGJ, WORD_JOINER]) {
       expect(nameKey("Vers" + invisible + "teeg")).toBe(nameKey("Versteeg"));
       expect(nameKey("V" + invisible + "e" + invisible + "r" + invisible + "steeg")).toBe(nameKey("Versteeg"));
     }
+  });
+
+  it("EXEMPTS the Hangul fillers — default-ignorable, but NOT context-free (Codex fix-verification)", () => {
+    // The correction to the correction, and the reason the exclusion is `\p{Script=Hangul}` rather
+    // than a hand-listed set of four code points.
+    //
+    // U+115F/U+1160/U+3164/U+FFA0 are `Default_Ignorable`, so the first version of the widened class
+    // stripped them — and that introduced a silent OVER-merge, which is the direction that matters.
+    // A Hangul filler is invisible ON ITS OWN but is a placeholder that completes a syllable block,
+    // so deleting it re-groups the surrounding jamo and a Korean renderer shows a different name.
+    // Reproduced exactly as the reviewer traced it: `<L,Vf><L,V>` and `<L><L,V>` both folded to
+    // `U+1100 U+B098`, so tier-2 silently merged two visibly different names.
+    const withFiller = "ᄀᅠ나"; // U+1100 U+1160 U+1102 U+1161 — an isolated jamo, then a syllable
+    const withoutFiller = "ᄀ나"; // U+1100 U+1102 U+1161 — renders differently
+    expect(namesEqual(withFiller, withoutFiller)).toBe(false);
+
+    // U+3164 therefore forks an identity again, and that is now a NAMED residual with a real reason
+    // rather than the wrong one an earlier revision gave for it.
+    expect(namesEqual("Vers" + HANGUL_FILLER + "teeg", "Versteeg")).toBe(false);
+    expect(namesEqual("Vers" + CHOSEONG_FILLER + "teeg", "Versteeg")).toBe(false);
+
+    // The exemption is script-scoped, not blanket: a real Hangul letter is untouched, and every
+    // non-Hangul invisible character is still stripped.
+    expect(nameKey("가")).toBe("가");
+    expect(nameKey("Vers" + CGJ + "teeg")).toBe(nameKey("Versteeg"));
   });
 
   it("GUARD COMPLETENESS: nothing a reader CAN see is stripped, checked against the catastrophic cases", () => {

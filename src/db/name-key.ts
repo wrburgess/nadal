@@ -56,11 +56,20 @@ import type { Db } from "../ingest/db-types.js";
  * trade (the bidi-spoof and transcription risks are real and these are not), but it is a real limit
  * and not a hypothetical one. It would be the wrong fold for a general-purpose name index.
  *
- * **One invisible character is still NOT folded, named rather than left to be rediscovered:** LINE
- * SEPARATOR (U+2028), which is `Zl` and carries `White_Space`, so the subtraction above deliberately
- * keeps it — it renders as a break, and folding it would be the same whitespace-semantics decision
- * this codebase has pinned the other way. It still forks an identity. One findings line, not a
- * silent extension.
+ * **Two invisible characters are still NOT folded, named rather than left to be rediscovered.** Both
+ * still fork an identity, and both are accepted on the record:
+ *
+ * - **LINE SEPARATOR (U+2028)** — `Zl` with `White_Space`. It renders as a break; folding it is the
+ *   whitespace-semantics decision this codebase has pinned the other way.
+ * - **The Hangul fillers (U+115F/U+1160/U+3164/U+FFA0)** — exempted above, because stripping them
+ *   over-merges. A fork here is the *safe* failure: it is loud (`ambiguous` or a visible second row)
+ *   where the merge was silent.
+ *
+ * This boundary has moved three times in one change — `\p{Cf}` alone was too narrow, adding
+ * `\p{Cc}`+`\p{Variation_Selector}` was still too narrow, adding `\p{Default_Ignorable}` was too
+ * wide — so it is worth stating what finally settled it: **"invisible" is not a property of a
+ * character, it is a property of a character IN CONTEXT.** Every remaining exemption is a character
+ * that is invisible alone and load-bearing beside something else.
  *
  * The widening is paired with its own refutation in `test/name-key.test.ts`, because widening a
  * strip class is the move most likely to cause a silent OVER-merge: combining accents, letters in
@@ -104,12 +113,23 @@ import type { Db } from "../ingest/db-types.js";
  *   exactly that. "No property reaches this" is a claim about the properties you happened to think
  *   of, and it was wrong here.
  *
- * **Minus `\p{White_Space}`, and that subtraction is the whole boundary.** The test is not "is it a
- * control character" but "does a reader see nothing": TAB and NEL are `Cc` yet render as a space or
- * a break, so `Jane<TAB>Doe` reads as two words and `JaneDoe` reads as one. Folding those together
- * would be a FALSE MERGE — the silent direction, forbidden outright by spec § Ingestion, and the
- * reason this is a subtraction instead of `\p{Cc}` wholesale. Subtracting also leaves the
- * long-standing "interior whitespace is NOT collapsed" behavior exactly as it was.
+ * **Two subtractions, and between them they are the whole boundary.** The test is not "is it
+ * invisible in isolation" but "can deleting it change what a reader sees":
+ *
+ * - **`\p{White_Space}`** — TAB and NEL are `Cc` yet render as a space or a break, so
+ *   `Jane<TAB>Doe` reads as two words and `JaneDoe` reads as one. This is also what leaves the
+ *   long-standing "interior whitespace is NOT collapsed" behavior exactly as it was.
+ * - **`\p{Script=Hangul}`** — the Hangul fillers U+115F/U+1160/U+3164/U+FFA0 are
+ *   `Default_Ignorable` and invisible ON THEIR OWN, but they are *placeholders that complete a
+ *   syllable block*, so deleting one re-groups the surrounding jamo. Traced by the Reviewer and
+ *   reproduced: `<L,Vf><L,V>` and `<L><L,V>` both folded to `U+1100 U+B098`, silently merging two
+ *   names a Korean renderer draws differently. Script-scoped rather than a hand-listed set of four
+ *   code points, and verified to exempt exactly those four and nothing else.
+ *
+ * Both subtractions exist for the same reason: a FALSE MERGE is the silent direction. A fold that
+ * splits one person is loud — the ladder reports `ambiguous` — while a fold that merges two people
+ * says nothing at all, which is why every widening of this class ships with assertions that specific
+ * things still fold APART.
  *
  * Checked rather than assumed, and asserted in `test/name-key.test.ts` over the whole code-point
  * space: **no `\p{Cf}` character carries `White_Space`**, so the subtraction takes nothing away from
@@ -123,7 +143,7 @@ import type { Db } from "../ingest/db-types.js";
  * identical across all 1.1M code points before choosing this one; it strips 489 characters.
  */
 const INVISIBLE =
-  /(?!\p{White_Space})[\p{Cc}\p{Cf}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}]/gu;
+  /(?![\p{White_Space}\p{Script=Hangul}])[\p{Cc}\p{Cf}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}]/gu;
 
 export function nameKey(s: string): string {
   return s.replace(INVISIBLE, "").trim().normalize("NFKC").toLowerCase();
