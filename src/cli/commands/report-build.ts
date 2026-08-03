@@ -8,7 +8,7 @@ import { resolveSeasonAnchor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
-import { seasonLabel, seasonStart } from "../window.js";
+import { seasonWindow } from "../window.js";
 
 const SECTIONALS_TARGET = "sectionals";
 
@@ -55,12 +55,11 @@ export const reportBuild: Command = {
       // and a fallback that looked identical to a real anchor would reproduce the defect this
       // fixes — a boundary that reads as anchored and is not.
       const anchor = resolveSeasonAnchor(db, eventName);
-      const since = seasonStart(anchor.value);
-      const season = seasonLabel(anchor.value);
+      const season = seasonWindow(anchor.value);
       let written: string[];
       let teamsCount: number;
       if (target === undefined || target === SECTIONALS_TARGET) {
-        written = writeSectionalsDossiers(db, { since, season, eventName });
+        written = writeSectionalsDossiers(db, { season, eventName });
         teamsCount = countTeams(db);
       } else {
         const resolution = resolveTeamTarget(db, target);
@@ -77,7 +76,7 @@ export const reportBuild: Command = {
           );
           return 1;
         }
-        written = writeTeamDossier(db, resolution.teamId, { since, season, eventName });
+        written = writeTeamDossier(db, resolution.teamId, { season, eventName });
         teamsCount = 1;
       }
 
@@ -96,7 +95,7 @@ export const reportBuild: Command = {
           // that came from: `event` means the event's own `starts_on`, `today` means it had none
           // (or none was named) and the clock was used. Printing only `season` would make those
           // two indistinguishable, which is the defect this change exists to remove.
-          ["season", season],
+          ["season", season.label],
           ["anchoredTo", anchor.anchoredTo],
         ],
         opts,

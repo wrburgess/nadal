@@ -19,6 +19,7 @@ import {
 import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "../query/home-team.js";
 import { NoCourtMatchHistoryError, getLineupPlan, resolveEventFormat } from "../query/lineup.js";
+import type { SeasonWindow } from "../cli/window.js";
 import type { ResolvedEventFormat } from "../query/lineup.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
@@ -172,12 +173,12 @@ function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): M
 export function buildTeamDossier(
   db: Db,
   teamId: number,
-  options: { since: string; season: string; event?: ResolvedEventFormat },
+  options: { season: SeasonWindow; event?: ResolvedEventFormat },
 ): TeamDossier {
   const homeTeam = resolveHomeTeam(db);
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
-  const team = getTeamProfile(db, teamId, { since: options.since, versusTeamId });
-  const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { since: options.since }));
+  const team = getTeamProfile(db, teamId, { since: options.season.since, versusTeamId });
+  const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { since: options.season.since }));
 
   // #17 PR B: spec § Deliverables #1 puts the predicted lineup in the dossier, not only behind the
   // `tn lineup plan` command. "No history to predict from" is a normal state for a team that has
@@ -199,7 +200,7 @@ export function buildTeamDossier(
     if (!(err instanceof NoCourtMatchHistoryError)) throw err;
   }
 
-  return { season: options.season, team, players, lineup };
+  return { season: options.season.label, team, players, lineup };
 }
 
 /** Everything `writeTeamDossier` needs to know BEFORE it writes a single byte: the two real,
@@ -245,7 +246,7 @@ type PreparedDossierWrite = {
 function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
-  options: { since: string; season: string; event?: ResolvedEventFormat },
+  options: { season: SeasonWindow; event?: ResolvedEventFormat },
   dirName?: string,
 ): PreparedDossierWrite {
   const dossier = buildTeamDossier(db, teamId, options);
@@ -329,13 +330,13 @@ function commitDossierWrite(prepared: PreparedDossierWrite): string[] {
 export function writeTeamDossier(
   db: Db,
   teamId: number,
-  options: { since: string; season: string; eventName?: string },
+  options: { season: SeasonWindow; eventName?: string },
   dirName?: string,
 ): string[] {
   // Resolved once, before anything is prepared — the same shape as the batch path below, so both
   // entry points refuse a bad event name before touching the filesystem rather than partway through.
   const event = options.eventName === undefined ? undefined : resolveEventFormat(db, options.eventName);
-  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, { since: options.since, season: options.season, event }, dirName));
+  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, { season: options.season, event }, dirName));
 }
 
 type TeamIndexEntry = { teamId: number; teamName: string; dirName: string };
@@ -390,7 +391,7 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
  * what this module actually provides, not a stronger one this comment used to imply.
  */
-export function writeSectionalsDossiers(db: Db, options: { since: string; season: string; eventName?: string }): string[] {
+export function writeSectionalsDossiers(db: Db, options: { season: SeasonWindow; eventName?: string }): string[] {
   // PHASE 0 — resolve the named event's format exactly ONCE, before any team is read or any leaf is
   // validated. Every dossier in this batch then predicts across the SAME slot set, which is what
   // `docs/cli/GRAMMAR.md` promises; a per-team lookup could not keep that promise across a
@@ -418,7 +419,7 @@ export function writeSectionalsDossiers(db: Db, options: { since: string; season
   // review, PR #38 round 2, Finding 3 [medium]; round 1 fixed the html-then-md ordering WITHIN one
   // team but never widened the guarantee to the whole batch this function drives).
   const preparedTeams = allTeams.map((team) =>
-    prepareTeamDossierWrite(db, team.id, { since: options.since, season: options.season, event }, dirNames.get(team.id)),
+    prepareTeamDossierWrite(db, team.id, { season: options.season, event }, dirNames.get(team.id)),
   );
 
   const entries: TeamIndexEntry[] = allTeams.map((t) => ({

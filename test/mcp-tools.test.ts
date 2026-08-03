@@ -893,7 +893,18 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const result = await client.callTool({ name: "report_build", arguments: { target: team.name } });
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(textOf(result)) as { target: string; teams: number; files: number; root: string };
-    expect(payload).toEqual({ target: team.name, teams: 1, files: 2, root: payload.root });
+    // Issue #90 added `season` + `anchoredTo` to this payload so an MCP caller can tell an
+    // event-anchored binder from one that fell back to the clock. Asserted exactly (`toEqual`, not
+    // `toMatchObject`) — this pin is what caught the two fields arriving, which is its whole job.
+    // No event was named here, so the honest answer is the current season, anchored to today.
+    expect(payload).toEqual({
+      target: team.name,
+      teams: 1,
+      files: 2,
+      root: payload.root,
+      season: String(new Date().getUTCFullYear()),
+      anchoredTo: "today",
+    });
   });
 
   it("an ambiguous target returns a structured error result listing candidates", async () => {

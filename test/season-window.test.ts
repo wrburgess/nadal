@@ -17,6 +17,7 @@ import { nameKey } from "../src/db/name-key.js";
 import { events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { seasonStart } from "../src/cli/window.js";
 import { MCP_TOOLS } from "../src/mcp/tools.js";
+import { encodeEventFormat } from "../src/query/event-format.js";
 import { resolveSeasonAnchor } from "../src/query/events.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -131,7 +132,7 @@ describe("season-anchored records (issue #90)", () => {
     function seedEvent(name: string, startsOn: string | null): void {
       const { db, sqlite } = openDb();
       db.insert(events)
-        .values({ name, kind: "tournament", startsOn, endsOn: startsOn, format: "S1:singles" })
+        .values({ name, kind: "tournament", startsOn, endsOn: startsOn, format: encodeEventFormat([{ slot: "S1", discipline: "singles" }]) })
         .run();
       sqlite.close();
     }
@@ -193,6 +194,31 @@ describe("season-anchored records (issue #90)", () => {
 
     expect(mcpProfile.teamRecord).toEqual({ wins: 2, losses: 0, undecided: 0, excludedUndated: 0 });
     expect(cliPrinted).toContain("record: 2-0");
+  });
+
+  it("MCP report_build reports its season AND which anchor it used, like the CLI", async () => {
+    // Codex adversarial review of PR #91, Finding 1 [high]: the CLI printed `anchoredTo`, this
+    // surface returned only paths and counts. An MCP client asking for an undated event therefore
+    // got a successful binder result indistinguishable from an event-anchored one — the silent
+    // wrong-season failure this whole issue is about, surviving on the surface nobody looked at.
+    seed();
+    const { db, sqlite } = openDb();
+    db.insert(events)
+      .values({ name: "Undated Event", kind: "tournament", startsOn: null, endsOn: null, format: encodeEventFormat([{ slot: "S1", discipline: "singles" }]) })
+      .run();
+    sqlite.close();
+    vi.setSystemTime(new Date("2027-01-02T12:00:00Z"));
+    const reportBuild = MCP_TOOLS.find((t) => t.name === "report_build");
+    if (reportBuild === undefined) throw new Error("report_build tool is missing from MCP_TOOLS");
+
+    const payload = (await reportBuild.handler({ event: "Undated Event" })) as {
+      season: string;
+      anchoredTo: string;
+    };
+
+    // The clock says 2027 and the event carries no date: the result must SAY it fell back.
+    expect(payload.season).toBe("2027");
+    expect(payload.anchoredTo).toBe("today");
   });
 
   it("pins the renamed record key on the real MCP wire", async () => {

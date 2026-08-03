@@ -46,3 +46,34 @@ export function seasonStart(anchor: SeasonAnchor = new Date()): string {
 export function seasonLabel(anchor: SeasonAnchor = new Date()): string {
   return String(anchorYear(anchor)).padStart(4, "0");
 }
+
+/** Brands `SeasonWindow` so only `seasonWindow` below can build one. A REAL symbol, matching the
+ * `ResolvedEventFormat` precedent in src/query/lineup.ts: a type-only brand vanishes at runtime and
+ * would not stop a hand-built literal. Not exported, so no caller outside this module can name the
+ * key, and a `const` symbol is `unique symbol`, so none can forge it structurally either. */
+const seasonWindowBrand = Symbol("seasonWindow");
+
+/**
+ * A season, resolved once: the inclusive lower bound to filter by, and the label to print beside
+ * the resulting numbers.
+ *
+ * **One object rather than two parameters, for a reason a plain pair could not carry.** As loose
+ * `{ since, season }` arguments, a caller could hand the report writers `since: "2025-01-01"` with
+ * `season: "2026"` — the dossier would then be filtered to 2025 and titled 2026, with every number
+ * on the page correct for a season the page does not name. The CLI and MCP callers happened to
+ * derive both from one anchor, but nothing in the API required it, so one fact could split into two
+ * disagreeing keys at the report boundary. (Codex adversarial review of PR #91, Finding 2 [medium].)
+ */
+export type SeasonWindow = {
+  /** Inclusive lower bound, `YYYY-01-01`. */
+  readonly since: string;
+  /** Display label for that season, `YYYY`. */
+  readonly label: string;
+  readonly [seasonWindowBrand]: true;
+};
+
+/** Resolve an anchor into the one object that carries both the boundary and its label. */
+export function seasonWindow(anchor: SeasonAnchor = new Date()): SeasonWindow {
+  const year = String(anchorYear(anchor)).padStart(4, "0");
+  return Object.freeze({ since: `${year}-01-01`, label: year, [seasonWindowBrand]: true as const });
+}
