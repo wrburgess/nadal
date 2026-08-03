@@ -900,6 +900,36 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
     }
   });
 
+  // The SINGLE-leaf half of the close-failure gap (Codex adversarial review, PR #83, [high]). The
+  // reported instance was the multi-leaf set writer, but the missing cleanup lived in the shared
+  // primitive, so `writeNewOutputFile` had the identical hole — the largest recurring class in this
+  // repo is "fixed the named instance, not the class", and one test per caller is what keeps it
+  // fixed. Removing the close's `try`/`catch` fails this test and the set-writer one together.
+  it("REGRESSION: a CLOSE that fails after a successful write leaves no file behind", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-close-fails");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      // Closes for real, THEN reports failure — a deferred writeback error releases the descriptor
+      // and is still a real error. That ordering is what makes a re-close a double-close.
+      vi.mocked(fsModule.closeSync).mockImplementationOnce(((fd: number) => {
+        realCloseSync(fd);
+        throw new Error("simulated close failure (deferred writeback error)");
+      }) as unknown as typeof fsModule.closeSync);
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "CONTENT THAT MUST NOT SURVIVE")).toThrow(
+        "simulated close failure",
+      );
+      expect(existsSync(candidate)).toBe(false);
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("a normal call opens, verifies, writes, and returns the real path written", () => {
     const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
     try {
@@ -1161,6 +1191,52 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
       // The second leaf was never attempted, and the first never existed. `mockImplementationOnce`
       // covers exactly one open, so a second one would have called through and created `b.html` —
       // its absence is what proves the set stopped at the refusal rather than carrying on.
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #83, [high]. `close(2)` is a THIRD failure domain, distinct from the
+  // open and the write: on NFS/FUSE and some local filesystems it is where deferred writeback errors
+  // (ENOSPC, EIO) are finally reported, so a leaf can open cleanly, accept every byte, and still fail
+  // at close with its content never durably stored. The `closeSync` that ends a successful write used
+  // to sit OUTSIDE the failure-protected block, so such a leaf was cleaned up by nothing: its own
+  // handler never ran, and — because the function threw before returning — it was never recorded in
+  // the set writer's `written` list either, so the reverse walk could not reach it. The result was the
+  // orphan this whole PR exists to remove, one leaf further along.
+  it("REGRESSION: a leaf whose CLOSE fails is rolled back too, along with the leaves before it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-close-fails");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      // The first leaf closes normally; the second closes AND THEN reports failure — the real shape
+      // of a deferred writeback error, where the descriptor is genuinely released and the error is
+      // still real. Closing for real matters: it is what makes a second close a double-close, which
+      // is why the fix must not simply re-close.
+      let closes = 0;
+      vi.mocked(fsModule.closeSync).mockImplementation(((fd: number) => {
+        closes += 1;
+        realCloseSync(fd);
+        if (closes > 1) throw new Error("simulated close failure (deferred writeback error)");
+      }) as unknown as typeof fsModule.closeSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "UN-REDACTED CAPTURE" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated close failure");
+      } finally {
+        vi.mocked(fsModule.closeSync).mockImplementation(realCloseSync);
+      }
+
+      // NEITHER leaf survives: not the one whose close failed, and not the one written before it.
       expect(readdirSync(subDir)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });

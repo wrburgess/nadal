@@ -532,11 +532,16 @@ export function openNewOutputFileSafely(
  * every path check, the `O_CREAT|O_EXCL` open, and the post-open verification above are unchanged
  * either way; only the bytes handed to the write loop differ.
  *
- * Any throw past the open — verification failure, or a failure of `writeSync` itself — closes the fd
- * and best-effort unlinks `realPath` so no partial file survives, then rethrows the ORIGINAL error
- * (mirrors `overwriteOutputFile`'s existing cleanup shape below: a cleanup failure must never mask
- * the real one). `openNewOutputFileSafely` already cleans up after itself on a verification failure,
- * so this only has its own cleanup to do for a failure in the write step.
+ * **Any** throw past the open best-effort unlinks `realPath` so no partial file survives, then
+ * rethrows the ORIGINAL error (mirrors `overwriteOutputFile`'s existing cleanup shape below: a
+ * cleanup failure must never mask the real one). Stated as "any throw" rather than as a list of the
+ * three failure domains, deliberately: the previous wording enumerated the verification and the
+ * `writeSync` failure and thereby described `closeSync` — the third domain, and the one where
+ * deferred writeback errors actually surface — as covered when it was not (Codex adversarial review,
+ * PR #83, [high]). An enumeration that reads as complete is exactly how that gap stayed invisible;
+ * see `writeThroughVerifiedFd`'s comment on why the close's cleanup nonetheless differs in shape.
+ * `openNewOutputFileSafely` already cleans up after itself on a verification failure, so this has its
+ * own cleanup to do only for the write and close steps.
  */
 export function writeNewOutputFile(
   root: string,
@@ -601,7 +606,26 @@ function writeThroughVerifiedFd(
     unlinkIfStillOurs(realPath, openedStat);
     throw err;
   }
-  closeSync(fd);
+
+  // `close(2)` is a THIRD failure domain, not a formality after a successful write (Codex adversarial
+  // review, PR #83, [high]). On NFS, FUSE, and some local filesystems it is where DEFERRED WRITEBACK
+  // errors surface — ENOSPC or EIO for bytes `writeSync` already accepted — so a leaf can open
+  // cleanly, take every byte, and still fail here with its content never durably stored. This used to
+  // sit outside the protected block above, so such a leaf was cleaned up by NOTHING: its own handler
+  // never ran, and the throw happened before the return, so a multi-leaf caller never recorded it in
+  // its written-set either and the rollback walk could not reach it. That is the exact orphan this
+  // module's callers rely on not existing, one leaf further along.
+  //
+  // Handled separately from the write rather than by widening the `try` above, because the CLEANUP
+  // differs: there is no `closeQuietly` here. POSIX leaves the descriptor unspecified after a failed
+  // `close`, and Linux has already deallocated it — so re-closing risks operating on a number the
+  // runtime may since have handed to something else. Unlink, do not re-close.
+  try {
+    closeSync(fd);
+  } catch (err) {
+    unlinkIfStillOurs(realPath, openedStat);
+    throw err;
+  }
   return { realPath, openedStat };
 }
 
