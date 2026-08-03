@@ -997,6 +997,30 @@ describe("id-less key domains are disjoint", () => {
     }
     // ...and the sentinel itself carries none of them, which is what makes the domains disjoint.
     expect(tags.some((t) => NULL_SENTINEL.startsWith(t))).toBe(false);
+
+    // A SWEEP, not another list. The comment above claims this holds "for inputs nobody thought to
+    // list" — a fixed array cannot support that claim, and a comment asserting coverage the code
+    // does not enforce is its own defect class (rules/testing.md -> Anti-Patterns). Every code point
+    // through U+02FF, which includes U+0000 ITSELF (the sentinel's own character), built with
+    // `String.fromCharCode` so no escape has to survive to disk — the trap #66 is about.
+    for (let cp = 0; cp <= 0x2ff; cp += 1) {
+      const c = String.fromCharCode(cp);
+      // The bare character, and both ways it can be glued to the sentinel's tail. `c + "null"` at
+      // cp 0 IS the sentinel, so this sweep re-enters the adversarial case from every direction.
+      for (const input of [c, `${c}null`, `null${c}`]) {
+        const where = `U+${cp.toString(16).padStart(4, "0")} as ${JSON.stringify(input)}`;
+        for (const [name, key] of [
+          ["normalizeTimeKey", normalizeTimeKey(input)],
+          ["normalizeSiteKey", normalizeSiteKey(input)],
+        ] as const) {
+          expect(key, `${name}(${where}) collided with the null sentinel`).not.toBe(NULL_SENTINEL);
+          expect(
+            tags.some((t) => key.startsWith(t)),
+            `${name}(${where}) returned ${JSON.stringify(key)}, which carries no key-domain tag`,
+          ).toBe(true);
+        }
+      }
+    }
   });
 
   it("REGRESSION: a dash-timed fixture and a null-timed fixture stay two rows", () => {

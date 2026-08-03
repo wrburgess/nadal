@@ -47,14 +47,14 @@ const NUL_ESCAPE = "\\u0000";
  * legitimately-binary fixture is tracked, this fails loudly and its message tells that author what
  * to do — visible and deliberate, rather than a dead extension point that reads as coverage.
  */
-export type NulOffender = { path: string; offset: number };
+type NulOffender = { path: string; offset: number };
 
 /**
  * Pure over its input, so the synthetic cases below can prove this guard is capable of failing —
  * the shape `test/cli-grammar-parity.test.ts` uses, and for the same reason. A scan that only ever
  * ran against the real tree could not distinguish "nothing is wrong" from "nothing was read".
  */
-export function findNulBytes(files: { path: string; bytes: Buffer }[]): NulOffender[] {
+function findNulBytes(files: { path: string; bytes: Buffer }[]): NulOffender[] {
   const offenders: NulOffender[] = [];
   for (const file of files) {
     const offset = file.bytes.indexOf(0x00);
@@ -174,13 +174,21 @@ describe("no tracked file contains a raw NUL byte", () => {
   it("scans every git-tracked file and finds no raw NUL byte", () => {
     const paths = trackedPaths();
 
-    // Non-vacuity, both halves. A scan that globbed nothing is green and silent, and so is one that
-    // quietly skipped the one offending file: `read === listed` makes a shrinking scanned set
-    // impossible, and a tracked-but-missing path throws here by design rather than being filtered
-    // away into a smaller, still-green scan.
+    // Non-vacuity. Two ways this scan goes green while checking nothing: it globs an EMPTY list, or
+    // it globs the WRONG tree — a `cwd` resolving elsewhere returns a plausible, entirely clean file
+    // list and no error. Both are closed below: a non-empty list, plus two paths that must be in it
+    // (this file, and the file the guard was written for).
+    //
+    // What keeps the scanned set from silently SHRINKING is `readTracked` throwing — not an
+    // assertion. An earlier draft compared read-count to listed-count here; `paths.map` cannot
+    // change length, so that assertion could never fail while reading exactly like the guarantee.
+    // Deleted rather than kept: a check that cannot fail is the failure mode this file exists to
+    // prevent, one level up.
     expect(paths.length).toBeGreaterThan(0);
+    expect(paths).toContain("src/ingest/upsert.ts");
+    expect(paths).toContain("test/source-no-nul-bytes.test.ts");
+
     const files = paths.map((path) => ({ path, bytes: readTracked(path) }));
-    expect(files.length).toBe(paths.length);
 
     const offenders = findNulBytes(files);
     expect(offenders, describeOffenders(offenders)).toEqual([]);
