@@ -43,6 +43,30 @@ describe("logMcpTool", () => {
     expect(row?.command).toBe("player_note");
   });
 
+  it("classifies a hostile thrown value without throwing, and still re-throws it (Reviewer finding 3 on PR #84)", async () => {
+    // `logMcpTool` line 118 carried the same unchecked `err instanceof Error ? err.constructor.name`
+    // classifier as `logRequest`, named by the Reviewer in the same finding. Both halves of this
+    // function's contract are asserted, not just the new one: the classifier must not throw, AND
+    // the original error must still reach the caller — telemetry may not swallow a tool failure.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf(): never {
+          throw new Error("trap");
+        },
+      },
+    );
+    await expect(
+      logMcpTool("player_note", { name: "X" }, async () => {
+        throw hostile;
+      }),
+    ).rejects.toBe(hostile);
+
+    const [row] = rows();
+    expect(row?.outcome).toBe("error:unknown");
+    expect(row?.command).toBe("player_note");
+  });
+
   it("sanitizes control and bidi characters embedded anywhere in the args object before persisting", async () => {
     const rtlOverride = String.fromCharCode(0x202e);
     const dirty = { name: `a\nb`, note: `c${rtlOverride}d`, nested: { text: `e\nf` } };

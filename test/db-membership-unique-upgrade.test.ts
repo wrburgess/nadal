@@ -81,6 +81,52 @@ describe("upgrading an existing v0 database (Codex round-1 finding on PR #20)", 
     }
   });
 
+  it("reconciles each (team, player) group independently — a wrong GROUP BY is data loss, not a no-op", () => {
+    // Reviewer finding 2 on PR #84. The survivor-id assertion above pins MIN vs MAX, and cannot see
+    // the GROUPING KEY at all: its three rows share both `player_id` and `team_id`, so they form a
+    // single group and `GROUP BY player_id` returns exactly the same survivor as
+    // `GROUP BY team_id, player_id`. That mutation is an upgrade-time DATA LOSS — it would delete a
+    // player's membership in every team but one — and the fixture could not distinguish it.
+    //
+    // This fixture is TWO players x TWO teams, which is one step past what the Reviewer proposed.
+    // Their suggested row (one player, a second team) catches `GROUP BY player_id` but NOT
+    // `GROUP BY team_id`: with a single player, grouping by team alone yields the same survivors as
+    // grouping by both. Measured before writing this, on the real DELETE:
+    //
+    //   ids (player, team):  1(1,1)  2(1,1)  3(1,2)  4(2,1)  5(2,1)
+    //   GROUP BY team_id, player_id  -> [1, 3, 4]   (correct)
+    //   GROUP BY player_id           -> [1, 4]      caught
+    //   GROUP BY team_id             -> [1, 3]      caught
+    //   MAX(id), correct grouping    -> [2, 3, 5]   caught
+    const dbPath = freshDbPath();
+    applyV0Schema(dbPath);
+
+    const seed = new Database(dbPath);
+    seed.exec(`INSERT INTO players (canonical_name) VALUES ('Jane Doe')`);
+    seed.exec(`INSERT INTO players (canonical_name) VALUES ('John Roe')`);
+    seed.exec(`INSERT INTO teams (name) VALUES ('Team A')`);
+    seed.exec(`INSERT INTO teams (name) VALUES ('Team B')`);
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`); // id 1
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`); // id 2 — dup of 1
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 2, NULL)`); // id 3 — same player, other team
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (2, 1, NULL)`); // id 4 — same team, other player
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (2, 1, NULL)`); // id 5 — dup of 4
+    seed.close();
+
+    expect(() => runMigrations(dbPath)).not.toThrow();
+
+    const after = new Database(dbPath);
+    try {
+      const rows = after.prepare("SELECT id FROM team_memberships ORDER BY id").all() as Array<{ id: number }>;
+      // Exact equality on the whole surviving set, not a count: the three wrong groupings above all
+      // produce a DIFFERENT SET, and two of them produce a different LENGTH — so a length assertion
+      // would catch some and a set assertion catches all.
+      expect(rows.map((r) => r.id)).toEqual([1, 3, 4]);
+    } finally {
+      after.close();
+    }
+  });
+
   it("does not touch non-NULL-event rows, including ones that share a (team, player) pair with a NULL-event row", () => {
     const dbPath = freshDbPath();
     applyV0Schema(dbPath);

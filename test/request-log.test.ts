@@ -140,4 +140,40 @@ describe("request telemetry", () => {
       errorSpy.mockRestore();
     }
   });
+
+  it("classifies a hostile thrown value without throwing — Reviewer finding 3 on PR #84", async () => {
+    // The Reviewer's trace, verbatim. `outcome` was built with
+    // `err instanceof Error ? err.constructor.name : "unknown"`, and `instanceof` invokes this
+    // Proxy's getPrototypeOf trap — so the CLASSIFIER threw, `logRequest` rejected, and the
+    // wrapped call's exit code never came back. The first pass of #64 hardened the message read
+    // and left the class read standing: a partial class fix, which is the shape this whole PR is
+    // about.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf(): never {
+          throw new Error("trap");
+        },
+      },
+    );
+    const code = await logRequest("cli", "x", [], async () => {
+      throw hostile;
+    });
+    expect(code).toBe(1);
+    expect(rows()[0]?.outcome).toBe("error:unknown");
+  });
+
+  it("classifies an Error whose constructor was removed — no Proxy required", async () => {
+    // The weaker variant, found while verifying the Reviewer's trace rather than taken from it:
+    // `.constructor` is a writable property like `.message`, so `err.constructor.name` throws a
+    // plain TypeError with no exotic object involved at all. Worth its own case because it shows
+    // the finding is not confined to Proxies, which is how it would otherwise be remembered.
+    const err = new Error("boom");
+    Object.defineProperty(err, "constructor", { value: undefined, configurable: true });
+    const code = await logRequest("cli", "x", [], async () => {
+      throw err;
+    });
+    expect(code).toBe(1);
+    expect(rows()[0]?.outcome).toBe("error:unknown");
+  });
 });

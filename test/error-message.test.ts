@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorMessage } from "../src/error-message.js";
+import { errorClass, errorMessage } from "../src/error-message.js";
 
 /**
  * An `Error` whose `message` is not a string. TypeScript types `Error.prototype.message` as
@@ -103,5 +103,70 @@ describe("errorMessage", () => {
     );
     expect(() => errorMessage(hostile)).not.toThrow();
     expect(errorMessage(hostile)).toBe("[unprintable error message]");
+  });
+});
+
+describe("errorClass", () => {
+  it("returns an ordinary Error's constructor name", () => {
+    expect(errorClass(new Error("boom"))).toBe("Error");
+  });
+
+  it("returns a subclass's own name", () => {
+    class BoomError extends Error {}
+    expect(errorClass(new BoomError("boom"))).toBe("BoomError");
+  });
+
+  it("returns 'unknown' for a non-Error throw — the branch the original expression already had", () => {
+    expect(errorClass("a thrown string")).toBe("unknown");
+    expect(errorClass(undefined)).toBe("unknown");
+  });
+
+  it("returns 'unknown' when `instanceof` itself throws — Reviewer finding 3 on PR #84", () => {
+    // The Reviewer's trace. `err instanceof Error` invokes this Proxy's getPrototypeOf trap, so
+    // building `error:<ClassName>` threw from inside `logRequest`'s catch and the wrapped call's
+    // exit code never came back.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf(): never {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(() => errorClass(hostile)).not.toThrow();
+    expect(errorClass(hostile)).toBe("unknown");
+  });
+
+  it("returns 'unknown' when the constructor was removed — no Proxy required", () => {
+    const err = new Error("boom");
+    Object.defineProperty(err, "constructor", { value: undefined, configurable: true });
+    expect(errorClass(err)).toBe("unknown");
+  });
+
+  it("returns 'unknown' for an ANONYMOUS class rather than the empty string", () => {
+    // Kills the `name.length > 0` half of the guard, which nothing else reaches. Without it an
+    // anonymous Error subclass writes the outcome `"error:"` — a telemetry value that names no
+    // class and is indistinguishable from a truncation.
+    //
+    // Destructured out of an array because a plain `const X = class extends Error {}` would get the
+    // name "X" from JS's NamedEvaluation and so would NOT be anonymous; array destructuring is not
+    // a NamedEvaluation position, so the class keeps its empty name. (The comma-operator form does
+    // the same thing at runtime but is a `tsc` error — TS2695.) The first assertion pins that the
+    // fixture really is anonymous, since the whole test is vacuous if it is not.
+    const [AnonError] = [class extends Error {}];
+    expect(AnonError.name).toBe("");
+    expect(errorClass(new AnonError("boom"))).toBe("unknown");
+  });
+
+  it("returns 'unknown' when the constructor's name is not a string", () => {
+    // Kills the `typeof name === "string"` half. A Symbol here would otherwise be interpolated
+    // into `error:${...}`, and template interpolation THROWS on a Symbol — the same asymmetry
+    // errorMessage exists for, arriving by a different route.
+    const err = new Error("boom");
+    const ctor = function (): void {};
+    Object.defineProperty(ctor, "name", { value: Symbol("weird") });
+    Object.defineProperty(err, "constructor", { value: ctor, configurable: true });
+    expect(() => errorClass(err)).not.toThrow();
+    expect(errorClass(err)).toBe("unknown");
   });
 });

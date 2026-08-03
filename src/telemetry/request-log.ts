@@ -1,6 +1,6 @@
 import { openDb } from "../db/client.js";
 import { requestLog } from "../db/schema.js";
-import { errorMessage } from "../error-message.js";
+import { errorClass, errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
 
 type RequestLogRow = {
@@ -52,7 +52,11 @@ export async function logRequest(
     code = await fn();
     if (code !== 0) outcome = `error:exit-${code}`;
   } catch (err) {
-    outcome = `error:${err instanceof Error ? err.constructor.name : "unknown"}`;
+    // `errorClass`, not an inline `instanceof` + `.constructor.name` (Reviewer finding 3 on
+    // PR #84): both operations throw on a hostile caught value — a Proxy trapping
+    // getPrototypeOf, or an Error with `constructor` redefined — which made THIS catch throw
+    // and `logRequest` reject instead of returning the wrapped call's exit code.
+    outcome = `error:${errorClass(err)}`;
     code = 1;
   }
   writeRequestLogRow({
@@ -115,7 +119,7 @@ export async function logMcpTool<T>(tool: string, args: unknown, fn: () => Promi
       args: sanitizedArgs,
       startedAt,
       endedAt: new Date().toISOString(),
-      outcome: `error:${err instanceof Error ? err.constructor.name : "unknown"}`,
+      outcome: `error:${errorClass(err)}`,
     });
     throw err;
   }

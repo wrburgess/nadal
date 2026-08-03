@@ -9,16 +9,38 @@ type GrammarRow = { noun: string; verb: string; summary: string };
 // `tn db backup-all`) must still be captured — with the narrower [a-z]+ pattern such a row simply
 // never matches, so the "every GRAMMAR.md row is a registered command" direction below passes
 // vacuously (0 rows checked) instead of actually verifying it.
-const ROW_PATTERN = /^\|\s*`tn ([a-z0-9-]+) ([a-z0-9-]+)[^`]*`\s*\|\s*([^|]+?)\s*\|/;
+//
+// ` {0,3}` before the pipe, not `^\|` (Reviewer finding 1 on PR #84): CommonMark/GFM allow a table
+// row to be indented up to three spaces, so `  | `tn db migrate` | … |` RENDERS as a real command
+// row while a column-0-anchored pattern skips it — a duplicate the reader sees and the guard does
+// not. Four spaces is an indented code block and is correctly not a row, which is why the bound is
+// 3 rather than `\s*`.
+// Still `^`-anchored — the relaxation is from "column 0" to "columns 0-3", NOT to "anywhere on the
+// line". Dropping the anchor would let a pipe inside a prose sentence match and register a command.
+const ROW_PATTERN = /^ {0,3}\|\s*`tn ([a-z0-9-]+) ([a-z0-9-]+)[^`]*`\s*\|\s*([^|]+?)\s*\|/;
+const TABLE_LINE = /^ {0,3}\|/;
 
 // Pure over its input so a test can feed it synthetic markdown — which is what makes the
 // duplicate-row guard below provably non-vacuous rather than a check that would also pass on an
 // empty parse (rules/testing.md: "never let a fixture satisfy a loop's exit condition before the
 // case under test is reached").
+//
+// Scoped to the FIRST contiguous table block after the heading, not to every line after it (the
+// other half of Reviewer finding 1). Splitting on `## Commands` and scanning to end-of-file means
+// any later table — an examples table, a future `## Exit codes` table — is read as command-registry
+// content, and the bijection assertion below turns that misreading into a failure. Stopping at the
+// first non-table line bounds the parse to the one table this file is about.
 function parseGrammarRows(md: string): GrammarRow[] {
   const section = md.split("## Commands")[1] ?? "";
   const rows: GrammarRow[] = [];
+  let inTable = false;
   for (const line of section.split("\n")) {
+    const isTableLine = TABLE_LINE.test(line);
+    if (!isTableLine) {
+      if (inTable) break; // the Commands table has ended; everything after it is prose
+      continue; // still in the blank lines between the heading and the table
+    }
+    inTable = true;
     const m = ROW_PATTERN.exec(line);
     if (m) rows.push({ noun: m[1]!, verb: m[2]!, summary: m[3]! });
   }
@@ -124,6 +146,54 @@ describe("grammar parity", () => {
     const rows = parseGrammarRows(synthetic);
     expect(rows).toHaveLength(3);
     expect(duplicateKeys(rows.map(key))).toEqual(["db migrate"]);
+  });
+
+  // Reviewer finding 1 on PR #84, both halves. The bijection assertion above derives from
+  // structure, but only over what the PARSER sees — so a duplicate the parser skips is a duplicate
+  // the guard cannot report, and the structural framing buys nothing. These two fixtures are the
+  // parser's own guard.
+  it("counts an INDENTED duplicate row — Markdown allows 0-3 spaces before a table pipe", () => {
+    // The Reviewer's trace. `  | `tn db migrate` | … |` renders as a second command row and
+    // contradicts GRAMMAR.md's "one spelling per operation", but the column-0-anchored pattern
+    // skipped it and the duplicate assertion passed.
+    const synthetic = [
+      "## Commands",
+      "",
+      "| Command | Summary |",
+      "|---------|---------|",
+      "| `tn db migrate` | Apply pending schema migrations |",
+      "  | `tn db migrate` | Apply pending schema migrations |",
+      "",
+    ].join("\n");
+
+    expect(parseGrammarRows(synthetic)).toHaveLength(2);
+    expect(duplicateKeys(parseGrammarRows(synthetic).map(key))).toEqual(["db migrate"]);
+  });
+
+  it("stops at the end of the Commands table — a later table is not command-registry content", () => {
+    // The other half. Splitting on `## Commands` and scanning to end-of-file reads any later table
+    // as command rows; combined with the new sorted-key equality, a future examples table would
+    // fail the bijection for a reason that has nothing to do with the registry. Four leading
+    // spaces is an indented code block, not a table row, and is asserted as excluded too — that is
+    // the boundary that makes `{0,3}` a rule rather than a guess.
+    const synthetic = [
+      "## Commands",
+      "",
+      "| Command | Summary |",
+      "|---------|---------|",
+      "| `tn db migrate` | Apply pending schema migrations |",
+      "",
+      "Some prose about exit codes follows, and then an unrelated table:",
+      "",
+      "| Example | Meaning |",
+      "|---------|---------|",
+      "| `tn team pull` | not a registry row — this table is illustrative |",
+      "",
+      "    | `tn mcp serve` | four spaces: an indented code block, not a table row |",
+      "",
+    ].join("\n");
+
+    expect(parseGrammarRows(synthetic).map(key)).toEqual(["db migrate"]);
   });
 
   // #64 finding `:33`: GRAMMAR.md's summary-line paragraph asserted that EVERY value field is

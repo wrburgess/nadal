@@ -44,3 +44,33 @@ export function errorMessage(err: unknown): string {
     return UNPRINTABLE;
   }
 }
+
+/**
+ * The sibling of `errorMessage` for the OTHER thing this codebase reads off a caught value: its
+ * class name, used to build a telemetry `outcome` of the form `error:<ClassName>`.
+ *
+ * It exists because the first pass of #64 swept `err.message` and left
+ * `err instanceof Error ? err.constructor.name : "unknown"` standing — the identical hazard on a
+ * different property, in the two functions (`logRequest`, `logMcpTool`) whose stated contract is
+ * that telemetry never breaks the request. The independent Reviewer found it on PR #84 with a
+ * concrete trace: a thrown `Proxy` whose `getPrototypeOf` trap throws makes the `instanceof` itself
+ * throw, so `logRequest` REJECTS instead of returning the wrapped call's exit code. It does not even
+ * need a Proxy — an `Error` with `constructor` redefined to `undefined` throws on `.name`.
+ *
+ * Fixing the message read and not the class read was a partial class fix, which is the exact shape
+ * (`docs/findings.md` class C1) the rest of this PR is about. Kept beside `errorMessage` so the two
+ * unconstrained reads have one home and neither can be hardened without the other being noticed.
+ *
+ * `"unknown"` is the fallback because it is the value the original expression already used for a
+ * non-`Error` throw — this widens *when* that branch is taken, and invents no new outcome vocabulary
+ * for `request_log.outcome` to grow.
+ */
+export function errorClass(err: unknown): string {
+  try {
+    if (!(err instanceof Error)) return "unknown";
+    const name: unknown = (err.constructor as { name?: unknown } | undefined)?.name;
+    return typeof name === "string" && name.length > 0 ? name : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
