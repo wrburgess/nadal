@@ -4,6 +4,7 @@ import {
   constants as fsConstants,
   existsSync,
   fstatSync,
+  fsyncSync,
   lstatSync,
   openSync,
   readSync,
@@ -380,16 +381,64 @@ function closeQuietly(fd: number): void {
  * anything that is not a confirmed inode match is skipped, so the guard errs toward leaving files
  * alone. So this is a large reduction in blast radius, NOT a guarantee that cleanup never deletes a
  * file it does not own — do not read the first line as promising that.
+ *
+ * WHY THE CALLER MUST STILL HOLD THE FD, demonstrated rather than theorised (#65, PR #83 — a CI
+ * failure on Linux that passed on macOS): `{dev, ino}` does not survive as an identity across an
+ * unlink-and-recreate, because **inode numbers are REUSED**. On ext4 in particular, deleting a file
+ * and immediately creating another in the same directory routinely hands out the same inode number,
+ * so a replacement at our pathname can read as "still ours" here — and be deleted. The `nlink` sample
+ * in `openNewOutputFileSafely` does not help: that catches a second name for OUR inode, not a
+ * different file wearing its number after we let it go.
+ *
+ * Comparing more `Stats` fields would not fix it (a recreate can coincide on those too, and a
+ * heuristic that is usually right is the shape this module keeps having to retract), and neither
+ * would `unlinkat` — that anchors the directory lookup, not the inode, so it still removes whatever
+ * currently occupies the name. What DOES fix it is denying the recycle: an inode with a live
+ * descriptor can never be freed, so while the caller holds the fd there is nothing to reallocate and
+ * the comparison above cannot match a stranger. That is why this function is private and why
+ * `unlinkOwnedLeafThenClose` is the only sanctioned caller.
  */
 function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): void {
   try {
     const current = lstatSync(path);
     if (current.dev !== ours.dev || current.ino !== ours.ino) return;
+    // CALLERS MUST STILL HOLD THE FD OPEN when they call this — see `unlinkOwnedLeafThenClose` below,
+    // which is the only sanctioned way to invoke it. `{dev, ino}` is a recyclable identity: once the
+    // descriptor is closed and the file unlinked, the inode is freed and the very next file created
+    // in that directory can be handed the same number, at which point this comparison matches a file
+    // we never created and the `unlinkSync` destroys it (Codex adversarial review, PR #83 round 7,
+    // [critical]). Holding the descriptor makes the inode unfreeable, so no other file can be wearing
+    // its number at the moment of the check — that ordering, not a richer stat comparison, is what
+    // makes this sound.
     unlinkSync(path);
   } catch {
     // Best-effort: the entry may already be gone, or be unreadable. Either way the ORIGINAL error is
     // what propagates, never a cleanup failure.
   }
+}
+
+/**
+ * The ONLY sanctioned way to remove a leaf this module created: unlink it **while its descriptor is
+ * still open**, then close. Every cleanup path funnels through here so the ordering cannot be got
+ * wrong in one of them (Codex adversarial review, PR #83 round 7, [critical]).
+ *
+ * The order is the whole mechanism. `unlinkIfStillOurs` proves ownership by comparing `{dev, ino}`,
+ * and that identity is **recyclable**: an inode number is handed out again as soon as the inode is
+ * freed, which happens when its last link is removed AND its last descriptor is closed. Close first
+ * and there is a window in which some other file can be wearing our number, so the comparison matches
+ * a file we never created and the unlink destroys it — turning a cleanup into data loss, which is the
+ * bug this module already shipped once (PR #48) in a different form. Unlink first, with the
+ * descriptor still held, and the inode provably cannot have been freed, so nothing else can be
+ * wearing its number at the moment of the check.
+ *
+ * That is a real closure, not a narrowed window: it does not depend on timing, on the filesystem's
+ * allocation policy, or on a richer stat comparison. It is also the reason no native facility is
+ * needed here — `unlinkat(dirfd, name, 0)` anchors the directory lookup but still removes whatever
+ * inode currently occupies `name`, so it would not close this at all.
+ */
+function unlinkOwnedLeafThenClose(fd: number, path: string, ours: { dev: number; ino: number }): void {
+  unlinkIfStillOurs(path, ours);
+  closeQuietly(fd);
 }
 
 /**
@@ -429,9 +478,15 @@ function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): vo
  * pedantry: a hard link created after the `nlink` sample below gives the SAME inode a second name,
  * which may be outside the root. Redirection is closed; exclusivity is sampled, not held.
  *
- * On ANY verification failure the newly-opened fd is closed and the (very likely empty, since the
- * caller has not written anything through it yet) file it created is best-effort unlinked, so a
- * refused open leaves no half-open resource and no stray empty file where a symlink pointed.
+ * On ANY verification failure the newly-opened fd is **close-attempted** and the (very likely empty,
+ * since the caller has not written anything through it yet) file it created is best-effort unlinked.
+ * Both qualifiers are load-bearing and neither may be dropped: cleanup closes through
+ * `closeQuietly`, which swallows a failing close, and unlinks through `unlinkIfStillOurs`, which
+ * skips an inode that is no longer ours. So a refused open leaves no stray content — not "no
+ * resource at all", which is what this sentence used to say (Codex adversarial review, PR #83, final
+ * merge-gate pass: the earlier round's precision sweep corrected six sites and missed this one,
+ * because the grep looked for "the fd is closed" and this reads "the newly-opened fd is closed").
+ * `writeNewOutputFileSet`'s residual list is the canonical statement of what survives.
  */
 export function openNewOutputFileSafely(
   root: string,
@@ -451,7 +506,28 @@ export function openNewOutputFileSafely(
   // to prove that whatever `realPath` names at cleanup time is still the file this call created,
   // rather than an unrelated file an attacker has since arranged to sit there. `dev`/`ino` are fixed
   // for the life of an fd, so this snapshot stays valid however verification goes.
-  const openedStat = fstatSync(fd);
+  //
+  // This capture is itself a failure domain, and it used to be the only post-open one with no
+  // handler: a throw here escaped before the cleanup `try` below began, leaking the descriptor
+  // outright and leaving the empty file `wx` had just created — and, for a multi-leaf caller,
+  // escaping before any value was returned, so the leaf was never recorded and rollback could not
+  // reach it (Codex adversarial review, PR #83 fix-verification pass 1, [high]).
+  //
+  // The handler close-attempts the fd (via `closeQuietly`, which swallows a failing close — see
+  // `writeNewOutputFile`'s doc comment on why this is "close-attempted" rather than "closed") and
+  // DELIBERATELY LEAVES THE FILE. The asymmetry with every other
+  // cleanup path in this module is load-bearing, not an omission: `unlinkIfStillOurs` needs exactly
+  // the `{dev, ino}` this call just failed to obtain, so there is no identity to check the path
+  // against — and unlinking a path this module cannot prove it owns is the PR #48 [critical]
+  // data-loss bug, where cleanup followed a swapped component and destroyed an unrelated file. An
+  // empty file inside the already-validated root is the strictly safer of the two failures.
+  let openedStat: ReturnType<typeof fstatSync>;
+  try {
+    openedStat = fstatSync(fd);
+  } catch (err) {
+    closeQuietly(fd);
+    throw err;
+  }
 
   try {
     // Containment is checked BEFORE the component walk (Codex adversarial review, PR #48, [low]).
@@ -514,8 +590,9 @@ export function openNewOutputFileSafely(
       );
     }
   } catch (err) {
-    closeQuietly(fd);
-    unlinkIfStillOurs(realPath, openedStat);
+    // Unlink BEFORE closing — `unlinkOwnedLeafThenClose` is the only sanctioned ordering; see its
+    // doc comment for why the reverse is a data-loss bug rather than a style preference.
+    unlinkOwnedLeafThenClose(fd, realPath, openedStat);
     throw err;
   }
 
@@ -532,11 +609,33 @@ export function openNewOutputFileSafely(
  * every path check, the `O_CREAT|O_EXCL` open, and the post-open verification above are unchanged
  * either way; only the bytes handed to the write loop differ.
  *
- * Any throw past the open — verification failure, or a failure of `writeSync` itself — closes the fd
- * and best-effort unlinks `realPath` so no partial file survives, then rethrows the ORIGINAL error
- * (mirrors `overwriteOutputFile`'s existing cleanup shape below: a cleanup failure must never mask
- * the real one). `openNewOutputFileSafely` already cleans up after itself on a verification failure,
- * so this only has its own cleanup to do for a failure in the write step.
+ * **The cleanup guarantee is bounded by where the file's IDENTITY is captured**, and is stated that
+ * way rather than as a count of failure domains or as a universal over "any throw" — two earlier
+ * wordings of this paragraph were each falsified by the next review round, the first by enumerating
+ * two of three domains and the second by asserting a quantifier one path did not satisfy (Codex
+ * adversarial review, PR #83, [high] both times). Deriving the bound from the structure is what stops
+ * a third:
+ *
+ * - **Before** `openNewOutputFileSafely` captures `{dev, ino}` — i.e. a throw from the open itself or
+ *   from the `fstatSync` that captures it — the fd is **close-attempted** and the (empty) file is
+ *   **left**, since nothing can prove which inode `realPath` names. This module never unlinks a path
+ *   it cannot prove it owns; see that function's own comment.
+ * - **After** the capture — every verification, the write loop, and the close — the fd is
+ *   **close-attempted** and `realPath` is best-effort unlinked (best-effort in `unlinkIfStillOurs`'s
+ *   precise sense), then the ORIGINAL error is rethrown. Mirrors `overwriteOutputFile`'s cleanup
+ *   shape below: a cleanup failure must never mask the real one.
+ *
+ * **"Close-attempted", not "closed"** (Codex adversarial review, PR #83 fix-verification pass 2).
+ * Cleanup closes through `closeQuietly`, which SWALLOWS a failing close so the original error is what
+ * the caller sees — so a cleanup whose own `closeSync` errors leaves the descriptor in a state this
+ * module does not observe and cannot report. It is deliberately not retried: POSIX leaves the fd
+ * unspecified after a failed close, so a second attempt could act on a number the runtime has since
+ * reused. Recorded in `writeNewOutputFileSet`'s canonical residual list rather than fixed here; the
+ * contract predates this change (PR #48) and applies to every cleanup path in the module.
+ *
+ * So the honest one-liner is *"once we know what we created, we try to clean it up"* — not
+ * *"nothing is ever left behind"*. See `writeThroughVerifiedFd` for why the close's cleanup, though
+ * on the covered side of the identity line, still differs in shape from the write's.
  */
 export function writeNewOutputFile(
   root: string,
@@ -544,6 +643,35 @@ export function writeNewOutputFile(
   permittedDir: string,
   content: string | Uint8Array,
 ): string {
+  const { fd, realPath } = writeThroughVerifiedFd(root, candidatePath, permittedDir, content);
+  // Single leaf: nothing later can fail, so there is no rollback to keep the inode pinned for, and
+  // the descriptor is closed immediately. A close failure here propagates WITHOUT unlinking — the
+  // `fsync` above already proved the bytes durable, and once the descriptor is gone this module can
+  // no longer prove the path names our inode, so deleting by that path could destroy a file that
+  // inherited the recycled number. Leaving a durable, complete file is the safe direction; it is
+  // listed in `writeNewOutputFileSet`'s canonical residual list.
+  closeSync(fd);
+  return realPath;
+}
+
+/**
+ * The shared body of `writeNewOutputFile` above and `writeNewOutputFileSet` below — identical
+ * behavior to what `writeNewOutputFile` did inline before the split, returning the created file's
+ * `{dev, ino}` alongside the real path rather than discarding it.
+ *
+ * That identity is the whole reason for the extraction (#65). `unlinkIfStillOurs` — the ONLY safe way
+ * to remove a leaf in this module, since a bare `unlinkSync` follows directory components and deletes
+ * whatever an attacker-planted symlink resolves to (PR #48, [critical]) — needs the inode of the file
+ * the caller created. A multi-leaf writer that has to undo an earlier leaf therefore needs that stat,
+ * and `writeNewOutputFile`'s `string` return cannot carry it. Splitting rather than widening that
+ * return keeps the exported signature (and every existing caller and test) untouched.
+ */
+function writeThroughVerifiedFd(
+  root: string,
+  candidatePath: string,
+  permittedDir: string,
+  content: string | Uint8Array,
+): { fd: number; realPath: string; openedStat: { dev: number; ino: number } } {
   const { fd, realPath, openedStat } = openNewOutputFileSafely(root, candidatePath, permittedDir);
   try {
     // Looped, not a single `writeSync`. `fs.writeSync` issues ONE `write(2)` and returns the number
@@ -575,13 +703,137 @@ export function writeNewOutputFile(
       }
       written += justWritten;
     }
+
+    // `close(2)` is a THIRD failure domain, not a formality after a successful write (Codex
+    // adversarial review, PR #83, [high]): on NFS, FUSE, and some local filesystems it is where
+    // DEFERRED WRITEBACK errors surface — ENOSPC or EIO for bytes `writeSync` already accepted — so
+    // a leaf can open cleanly, take every byte, and still fail with its content never durably
+    // stored. `fsync` is the same domain reached EARLIER, and that is the entire reason it is here
+    // (round 7, [critical]): cleanup after a failed CLOSE is unsound, because the descriptor is gone
+    // and the inode may already have been freed and its number recycled, so `unlinkIfStillOurs`
+    // could match — and delete — a different file that inherited it. Forcing those errors out at
+    // `fsync`, while the descriptor is still HELD, is what keeps the cleanup below provably ours.
+    //
+    // A successful `fsync` also establishes that the bytes are durable, so a `close` that fails
+    // afterwards is a descriptor problem rather than a data one — which is why the caller is allowed
+    // to leave that leaf in place instead of deleting it by a path it can no longer prove it owns.
+    fsyncSync(fd);
   } catch (err) {
-    closeQuietly(fd);
-    unlinkIfStillOurs(realPath, openedStat);
+    unlinkOwnedLeafThenClose(fd, realPath, openedStat);
     throw err;
   }
-  closeSync(fd);
-  return realPath;
+
+  // The descriptor is handed back STILL OPEN, deliberately. `unlinkIfStillOurs` proves ownership with
+  // a recyclable `{dev, ino}`, so a caller that may need to roll this leaf back later
+  // (`writeNewOutputFileSet`, once a LATER leaf fails) has to keep the inode unfreeable until it
+  // decides — and holding this descriptor is what does that. Closing here and re-deriving identity
+  // later would reintroduce exactly the recycled-identity hole this ordering exists to close.
+  // Callers close it with `closeSync` on success or `unlinkOwnedLeafThenClose` on failure; dropping
+  // it silently leaks a descriptor.
+  return { fd, realPath, openedStat };
+}
+
+/**
+ * Writes a SET of leaves that only make sense together, undoing the ones already written if a later
+ * one is refused (#65). Returns the real paths written, in the order given.
+ *
+ * `writeNewOutputFile` above handles ONE leaf: a failure past the point its identity is captured
+ * close-attempts the fd and best-effort unlinks the file it created (both qualifiers in the precise
+ * senses that function's doc comment defines). What it cannot do is speak for a SIBLING written by a
+ * separate call — and a caller writing a pair in sequence
+ * (`src/ingest/archive.ts`: a raw capture plus its `.provenance.json` record) had exactly that gap.
+ * Both PATHS were pre-validated together, so a pre-check refusal correctly wrote nothing; but the
+ * refusals `writeNewOutputFile` raises at WRITE time — the post-open verification, an `O_CREAT|O_EXCL`
+ * open that fails, ENOSPC/EIO in the write loop — happen after the first leaf is already on disk and
+ * closed. The result was an un-redacted capture with no record of where it came from, when, or at what
+ * status: not an escape (it stays inside the validated root) but a broken pairing invariant, and one
+ * `archivePage`'s own doc comment claimed could not happen.
+ *
+ * Rollback walks the written leaves in REVERSE and removes each through `unlinkIfStillOurs`, never a
+ * bare `unlinkSync` — see that function's doc comment for why the distinction is the difference
+ * between a cleanup and a data-loss bug. The ORIGINAL error is what propagates; `unlinkIfStillOurs`
+ * swallows its own failures, so a cleanup problem can never mask the real one.
+ *
+ * **What this does NOT provide, stated because the sentence it replaces overclaimed exactly here.**
+ * The set is not atomic and this function does not make it so:
+ *
+ * - Rollback is BEST-EFFORT by construction. `unlinkIfStillOurs` deliberately skips any leaf whose
+ *   inode no longer matches the one this call created — that skip is PR #48's fix, not a gap in
+ *   this one — so an actor who has already replaced a written leaf keeps it. That direction is the
+ *   safe one and is not closable here.
+ *
+ *   The DANGEROUS converse — a replacement that inherits our recycled inode number and is therefore
+ *   deleted — **is closed**, and is no longer a residual: every cleanup unlinks while the leaf's
+ *   descriptor is still open (`unlinkOwnedLeafThenClose`), and a held descriptor makes the inode
+ *   unfreeable and so unrecyclable. An earlier revision of this list recorded it as an accepted
+ *   limitation "not closable without `unlinkat`"; both halves of that were wrong — `unlinkat` would
+ *   not have closed it (it anchors the directory lookup, not the inode), and ordering did.
+ * - A crash, a `SIGKILL`, or a power loss between two leaves rolls back nothing at all. No
+ *   userspace-only writer can promise otherwise.
+ * - A leaf that fails **before its identity is captured** (the open, or the `fstatSync` that captures
+ *   it) is never recorded here at all, so the walk cannot reach it — and by design nothing else
+ *   removes it either, because no identity exists to check a path against. `writeNewOutputFile`'s doc
+ *   comment above states that boundary once; this is the same line, seen from the set.
+ * - **The residue is not only on disk.** A cleanup whose own `closeSync` fails leaves a DESCRIPTOR in
+ *   a state this module does not observe: `closeQuietly` swallows the error so the caller still sees
+ *   the original one, and the close is deliberately not retried (POSIX leaves the fd unspecified
+ *   after a failed close, so a second attempt could act on a number the runtime has since reused).
+ *   Pre-dates this function — it is the contract of every cleanup path in the module, PR #48 onward —
+ *   and it is listed here because a residual list that covered only files read as complete while
+ *   omitting a whole KIND of residue (Codex adversarial review, PR #83 fix-verification pass 2).
+ *
+ * **This list is canonical for what THIS FUNCTION leaves behind** — the leaves it wrote and the
+ * descriptors it opened — and callers reference it rather than restating it. Its scope is bounded by
+ * OWNERSHIP, not by kind: anything a caller created before calling (a parent directory it `mkdir`ed,
+ * a lock file, a temp area) is that caller's residue and belongs in the caller's own comment, because
+ * this function never learns it exists and cannot speak for it. `src/ingest/archive.ts` documents its
+ * own `mkdirSync` that way.
+ *
+ * That ownership bound is deliberate and replaced a by-kind list. Four review rounds on this PR each
+ * falsified a *re-enumeration* of these residuals — two had drifted from the code, one covered only
+ * files and omitted descriptors, and one omitted directories a caller had created — which is the
+ * signature of a list that cannot be finished by adding another entry. "Everything this function
+ * created and did not remove" is answerable from the code; "every kind of thing that can be left
+ * anywhere" is not.
+ *
+ * It also does NOT re-run `assertOutputPathSafe` on the leaves, exactly as `writeNewOutputFile` does
+ * not: pre-validating the candidate paths stays CALLER policy (the layering is unchanged, not
+ * forgotten). A caller writing a set should validate every path in it before calling, which is what
+ * makes a pre-check refusal write nothing at all.
+ */
+export function writeNewOutputFileSet(
+  root: string,
+  permittedDir: string,
+  leaves: ReadonlyArray<{ candidatePath: string; content: string | Uint8Array }>,
+): string[] {
+  // Every written leaf's descriptor is HELD until the whole set is known to have succeeded. That is
+  // the rollback's correctness condition, not a resource-management style: `unlinkIfStillOurs` proves
+  // ownership with `{dev, ino}`, an identity the filesystem RECYCLES as soon as the inode is freed —
+  // and the inode cannot be freed while a descriptor holds it. Closing each leaf as it completed
+  // (the obvious shape) would leave every earlier leaf identified by a number some other file could
+  // already be wearing by rollback time, so cleanup could delete a file this module never created
+  // (Codex adversarial review, PR #83 round 7, [critical]).
+  const written: Array<{ fd: number; realPath: string; openedStat: { dev: number; ino: number } }> = [];
+  try {
+    for (const leaf of leaves) {
+      written.push(writeThroughVerifiedFd(root, leaf.candidatePath, permittedDir, leaf.content));
+    }
+  } catch (err) {
+    // Reverse order, so a set whose leaves have any ordering relationship is undone the way it was
+    // built. Each leaf is unlinked while its own descriptor is still open, then closed —
+    // `unlinkOwnedLeafThenClose` is the only sanctioned ordering. Neither it nor `unlinkIfStillOurs`
+    // throws, so every leaf is attempted even if an earlier one could not be removed.
+    for (const leaf of [...written].reverse()) {
+      unlinkOwnedLeafThenClose(leaf.fd, leaf.realPath, leaf.openedStat);
+    }
+    throw err;
+  }
+  // The set is complete: no rollback can be needed, so the descriptors are released. `closeQuietly`
+  // rather than `closeSync` — every leaf is already `fsync`ed and durable by this point, so a close
+  // failure here reports nothing the caller can act on and must not turn a fully successful write
+  // set into a thrown error.
+  for (const leaf of written) closeQuietly(leaf.fd);
+  return written.map((leaf) => leaf.realPath);
 }
 
 /**
