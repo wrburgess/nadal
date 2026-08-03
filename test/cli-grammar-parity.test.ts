@@ -114,11 +114,22 @@ describe("grammar parity", () => {
   // containment check would have been the same shape of guard a third time; deriving it from the
   // structure is what closes the class (docs/findings.md class C5).
   //
+  // WHAT THIS DOES NOT COVER, stated here rather than left to be rediscovered — the bijection holds
+  // over WHAT THE PARSER SEES, and `parseGrammarRows` locates its table by splitting on the literal
+  // text `## Commands`, not by matching an ATX heading. A document containing that string in prose
+  // followed by a decoy table redirects the parse, and a duplicate in the real table below is then
+  // invisible to this test. Verified reachable; ACCEPTED as a residual rather than patched — see the
+  // `residual`-labelled issue linked from PR #84, and PROJECT.md -> Review Lenses, which bounds
+  // fix-verification and says to escalate on recurrence rather than iterate. Three consecutive
+  // review rounds each found a different way this hand-rolled markdown parse was wrong; a fourth
+  // patch was the move that rule exists to prevent. The permanent fix is to stop parsing the doc
+  // (generate the table from COMMANDS, or checksum it), which is a separate issue.
+  //
   // The registry half is new coverage the finding did not ask for and that falls straight out of
   // that framing: `COMMANDS` is a plain array with no uniqueness constraint, so two entries sharing
   // a noun/verb are possible TODAY — `dispatch`'s `.find()` would silently shadow the second and
   // `helpText()` would print the pair twice. Same invariant, other side of the seam.
-  it("GRAMMAR.md and the registry are in bijection — no duplicate row, no duplicate registration", () => {
+  it("GRAMMAR.md and the registry are in bijection over the parsed table — no duplicate row, no duplicate registration", () => {
     const docKeys = grammarRows().map(key);
     const registryKeys = COMMANDS.map(key);
 
@@ -194,6 +205,47 @@ describe("grammar parity", () => {
     ].join("\n");
 
     expect(parseGrammarRows(synthetic).map(key)).toEqual(["db migrate"]);
+  });
+
+  // ACCEPTED RESIDUAL, pinned executably rather than described in prose — the disposition the HC
+  // chose on PR #84 after PROJECT.md -> Review Lenses' escalate-on-recurrence bound fired on this
+  // parser (three consecutive review rounds, three different markdown-parsing defects).
+  //
+  // This test asserts the LIMITATION, not a desired behavior. It exists so the residual is a fact
+  // the suite states rather than a sentence in a closed issue, and so that anyone who later fixes
+  // the parser is told — this test will go RED, and the correct response is to delete it together
+  // with the residual issue, not to work around it. That is the signal, and it is deliberate.
+  it("KNOWN LIMITATION: a decoy table after an inline `## Commands` mention hides a real duplicate", () => {
+    const realTable = [
+      "| Command | Summary |",
+      "|---------|---------|",
+      "| `tn db migrate` | Apply pending schema migrations |",
+      "| `tn team show` | Show a team's roster |",
+    ].join("\n");
+    const decoyed = [
+      "See `## Commands` below.",
+      "",
+      realTable,
+      "",
+      "## Commands",
+      "",
+      realTable,
+      "| `tn db migrate` | Apply pending schema migrations |", // the duplicate a reader WOULD see
+      "",
+    ].join("\n");
+
+    // The parse latches onto the decoy, so the duplicate in the real table below is never read.
+    // Exact equality on the whole key list, not a `.not.toContain` — a weaker assertion would also
+    // pass if the parse returned nothing at all, and "the guard is blind" and "the guard is empty"
+    // are different residuals.
+    expect(parseGrammarRows(decoyed).map(key)).toEqual(["db migrate", "team show"]);
+    expect(duplicateKeys(parseGrammarRows(decoyed).map(key))).toEqual([]);
+
+    // ...while the duplicate is genuinely there: the same document, parsed from the REAL heading,
+    // does report it. This second half is what makes the first half a statement about the PARSER
+    // rather than about the fixture — without it, the fixture could simply have no duplicate in it.
+    const fromRealHeading = decoyed.slice(decoyed.indexOf("\n## Commands") + 1);
+    expect(duplicateKeys(parseGrammarRows(fromRealHeading).map(key))).toEqual(["db migrate"]);
   });
 
   // #64 finding `:33`: GRAMMAR.md's summary-line paragraph asserted that EVERY value field is
