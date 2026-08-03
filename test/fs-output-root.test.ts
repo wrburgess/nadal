@@ -793,68 +793,6 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
     }
   });
 
-  // Codex adversarial review, PR #83 round 7, [critical], and the case the `linkSync`-pinned test
-  // above deliberately EXCLUDES. That test pins our inode so the replacement is guaranteed a
-  // different one — which proves the guard behaves when identity differs, and says nothing about the
-  // case where the allocator hands the replacement OUR recycled number. This is that case, and it is
-  // the one that used to delete someone else's file.
-  //
-  // The closure is ordering, not a better identity check: cleanup now unlinks WHILE THE FD IS STILL
-  // OPEN. An inode with a live descriptor can never be freed, so it can never be reallocated, so
-  // nothing else can be wearing its number at the moment of the check. No pin, no mock of the
-  // allocator — the property holds by construction on every filesystem, which is why this test does
-  // not need the `linkSync` its sibling does.
-  //
-  // **This test is only MEANINGFUL on a filesystem that actually recycles inode numbers**, and that
-  // is stated rather than glossed: on macOS/APFS it passes vacuously, and reverting the ordering to
-  // close-then-unlink does NOT turn it red there. Its authority comes from Linux/ext4 in CI — where
-  // this exact construction (unlink, immediately recreate, same directory) has already been OBSERVED
-  // deleting the replacement, which is what made it a CI failure on this PR rather than a
-  // hypothesis. So: green here proves little, green in CI proves the fix. Do not "simplify" it by
-  // mocking `lstatSync` to fake a recycled identity — the fix relies on the kernel's allocation
-  // guarantee, not on a code check, so a faked allocator would defeat the real fix too and the test
-  // would then pass against a broken implementation.
-  it("REGRESSION: a replacement that RECYCLES our inode number is still not deleted", async () => {
-    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
-    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
-    try {
-      const subDir = join(root, "team-set-recycled");
-      mkdirSync(subDir, { recursive: true });
-      const leaf = join(subDir, "index.html");
-      const sidecar = `${leaf}.provenance.json`;
-
-      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
-        if (typeof target === "string" && target.endsWith(".provenance.json")) {
-          // Deliberately NOT pinned: unlink and immediately recreate in the same directory, which is
-          // the allocation pattern that hands back the same inode number on ext4. Whether it does so
-          // on the machine running this test is not the point — the fix must make the outcome
-          // identical either way, which is what the assertions below check.
-          unlinkSync(leaf);
-          writeFileSync(leaf, "SOMEONE ELSE'S DATA", "utf8");
-          throw new Error("simulated provenance open failure");
-        }
-        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
-      }) as unknown as typeof fsModule.openSync);
-
-      try {
-        expect(() =>
-          writeNewOutputFileSet(root, "reports", [
-            { candidatePath: leaf, content: "OURS" },
-            { candidatePath: sidecar, content: '{"redacted":false}' },
-          ]),
-        ).toThrow("simulated provenance open failure");
-      } finally {
-        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
-      }
-
-      // Survives even if the allocator recycled our number into it.
-      expect(existsSync(leaf)).toBe(true);
-      expect(readFileSync(leaf, "utf8")).toBe("SOMEONE ELSE'S DATA");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   // Codex adversarial review, PR #48, [critical]. `unlink` follows directory components like every
   // other path call, so a cleanup that unlinks by PATH after a symlink swap deletes whatever sits at
   // the corresponding name in the attacker-chosen directory. Refusing to write somewhere while
@@ -1193,6 +1131,138 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
     vi.mocked(fsModule.unlinkSync).mockReset();
     vi.mocked(fsModule.fstatSync).mockReset();
     vi.mocked(fsModule.fsyncSync).mockReset();
+  });
+
+  // Codex adversarial review, PR #83 round 7, [critical], and the case the `linkSync`-pinned test
+  // above deliberately EXCLUDES. That test pins our inode so the replacement is guaranteed a
+  // different one — which proves the guard behaves when identity differs, and says nothing about the
+  // case where the allocator hands the replacement OUR recycled number. This is that case, and it is
+  // the one that used to delete someone else's file.
+  //
+  // The closure is ordering, not a better identity check: cleanup now unlinks WHILE THE FD IS STILL
+  // OPEN. An inode with a live descriptor can never be freed, so it can never be reallocated, so
+  // nothing else can be wearing its number at the moment of the check. No pin, no mock of the
+  // allocator — the property holds by construction on every filesystem, which is why this test does
+  // not need the `linkSync` its sibling does.
+  //
+  // **This test is only MEANINGFUL on a filesystem that actually recycles inode numbers**, and that
+  // is stated rather than glossed: on macOS/APFS it passes vacuously, and reverting the ordering to
+  // close-then-unlink does NOT turn it red there. Its authority comes from Linux/ext4 in CI — where
+  // this exact construction (unlink, immediately recreate, same directory) has already been OBSERVED
+  // deleting the replacement, which is what made it a CI failure on this PR rather than a
+  // hypothesis. So: green here proves little, green in CI proves the fix. Do not "simplify" it by
+  // mocking `lstatSync` to fake a recycled identity — the fix relies on the kernel's allocation
+  // guarantee, not on a code check, so a faked allocator would defeat the real fix too and the test
+  // would then pass against a broken implementation.
+  it("REGRESSION: a replacement that RECYCLES our inode number is still not deleted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-recycled");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith(".provenance.json")) {
+          throw new Error("simulated provenance open failure");
+        }
+        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+
+      // The replacement is created INSIDE THE CLOSE — after the descriptor is genuinely released and
+      // before anything else runs. That timing is the entire point (Codex adversarial review, PR #83
+      // round 8): an earlier version of this test created it while the set writer still held the
+      // leaf's fd, so the inode could not be recycled and the identity check skipped it under BOTH
+      // orderings — the test could not fail, on any filesystem, and its "verified on Linux CI" claim
+      // was empty. Releasing the descriptor first is what makes the number available to be recycled,
+      // which is the state the guard has to survive.
+      vi.mocked(fsModule.closeSync).mockImplementation(((fd: number) => {
+        realCloseSync(fd);
+        // Under the FIX the leaf is already unlinked by now, so there is nothing to displace and this
+        // simply creates the replacement. Under close-then-unlink the leaf is still present, its
+        // inode has just been freed, and the recreate can inherit that number — at which point the
+        // identity check that follows matches a file this module never created.
+        if (existsSync(leaf)) unlinkSync(leaf);
+        writeFileSync(leaf, "SOMEONE ELSE'S DATA", "utf8");
+      }) as unknown as typeof fsModule.closeSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "OURS" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated provenance open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+        vi.mocked(fsModule.closeSync).mockImplementation(realCloseSync);
+      }
+
+      // Survives even if the allocator recycled our number into it.
+      expect(existsSync(leaf)).toBe(true);
+      expect(readFileSync(leaf, "utf8")).toBe("SOMEONE ELSE'S DATA");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The ORDERING itself, asserted directly — and this is the test that actually guards the round-7
+  // [critical] fix, because it is the only one that is deterministic on every filesystem.
+  //
+  // The behavioral test above depends on the kernel actually recycling the inode number, which ext4
+  // does and APFS does not, so on a developer machine it can pass against a broken implementation.
+  // Rather than leave the critical guarantee resting on "CI will catch it", the invariant the fix
+  // rests on — unlink strictly before close — is observed directly. Reverse the two statements in
+  // `unlinkOwnedLeafThenClose` and this fails everywhere, immediately, with a legible diff.
+  it("REGRESSION: rollback unlinks the leaf BEFORE releasing its descriptor", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-order");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      // Only the FIRST leaf is written, and only the rollback closes or unlinks anything — so the
+      // recorded sequence is exactly this leaf's cleanup, with nothing else to filter out.
+      const calls: string[] = [];
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith(".provenance.json")) {
+          throw new Error("simulated provenance open failure");
+        }
+        return (actual.openSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+      vi.mocked(fsModule.unlinkSync).mockImplementation(((p: string) => {
+        calls.push("unlink");
+        return actual.unlinkSync(p);
+      }) as unknown as typeof fsModule.unlinkSync);
+      vi.mocked(fsModule.closeSync).mockImplementation(((fd: number) => {
+        calls.push("close");
+        return actual.closeSync(fd);
+      }) as unknown as typeof fsModule.closeSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "OURS" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated provenance open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(actual.openSync);
+        vi.mocked(fsModule.unlinkSync).mockImplementation(actual.unlinkSync);
+        vi.mocked(fsModule.closeSync).mockImplementation(actual.closeSync);
+      }
+
+      // Exactly one unlink and one close, unlink first. Asserted as the whole sequence rather than
+      // with an index comparison, so an extra close (a double-close) or a missing unlink fails too.
+      expect(calls).toEqual(["unlink", "close"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("writes every leaf and returns their real paths in the order given", () => {
