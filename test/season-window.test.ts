@@ -195,6 +195,26 @@ describe("season-anchored records (issue #90)", () => {
     expect(cliPrinted).toContain("record: 2-0");
   });
 
+  it("pins the renamed record key on the real MCP wire", async () => {
+    // The rename is deliberate — a field called `sixMonth` holding a season record is the
+    // claim-vs-code shape this repo keeps recording — but it IS a wire-shape change for any MCP
+    // consumer, and `test/mcp-tool-parity.test.ts` checks tool names, not payload shape. Pinned
+    // here so the next change to these keys has to be deliberate too, in the same spirit as the
+    // `retiredAt` pin in test/mcp-tools.test.ts.
+    seed();
+    vi.setSystemTime(new Date("2026-08-03T12:00:00Z"));
+    const playerShow = MCP_TOOLS.find((t) => t.name === "player_show");
+    if (playerShow === undefined) throw new Error("player_show tool is missing from MCP_TOOLS");
+
+    const payload = (await playerShow.handler({ target: "Randy Burgess" })) as {
+      singlesRecord: Record<string, unknown>;
+      doublesRecord: Record<string, unknown>;
+    };
+
+    expect(Object.keys(payload.singlesRecord).sort()).toEqual(["allTime", "season"]);
+    expect(Object.keys(payload.doublesRecord).sort()).toEqual(["allTime", "season"]);
+  });
+
   it("leaves `tn lineup plan` alone — it does not window, and must not start", async () => {
     // Scope guard. `src/query/lineup.ts` has no date filter, so a lineup prediction sees all
     // history; this change must not have introduced one by way of a shared helper.
