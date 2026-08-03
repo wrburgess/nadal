@@ -284,8 +284,17 @@ export function retireAbsentMemberships(
  * So: `null` gets a key nothing else can produce; a recognised clock time gets `clock:HH:MM`; anything
  * else gets `raw:` over its stripped form, falling back to `lit:` over the case-folded original when
  * stripping would leave nothing — so `"—"` and `"---"` stay distinct from each other *and* from null.
+ *
+ * WRITTEN AS AN ESCAPE, NEVER A LITERAL BYTE (issue #66). The sentinel's VALUE is a NUL and must stay
+ * one — that is what makes it unproducible. Its SPELLING in this file must not be: a raw 0x00 byte
+ * here classified the whole file as binary, so `rg`, `grep` and every recursive search reported ZERO
+ * matches in it, silently. An audit that grepped this file for a symbol it does contain got a clean
+ * empty result — twice, on record. Prefer `\u0000` over `\0`: both are NUL today, but `\0` followed
+ * by a digit is a legacy octal escape and a SyntaxError in a module, one edit away.
+ * `test/source-no-nul-bytes.test.ts` enforces the byte; `test/ingest-upsert-idempotency.test.ts`
+ * pins the value, so neither half can drift without a red test.
  */
-const NULL_KEY = " null";
+const NULL_KEY = "\u0000null";
 
 function looseKey(value: string): string {
   const stripped = value.toLowerCase().replace(/[^a-z0-9]/g, "");
