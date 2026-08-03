@@ -30,6 +30,16 @@ const TABLE_LINE = /^ {0,3}\|/;
 // any later table — an examples table, a future `## Exit codes` table — is read as command-registry
 // content, and the bijection assertion below turns that misreading into a failure. Stopping at the
 // first non-table line bounds the parse to the one table this file is about.
+//
+// ACCEPTED RESIDUAL (#85, Reviewer finding 5 on PR #84): `md.split("## Commands")` matches the
+// first TEXT occurrence, not an ATX heading. Prose containing the literal `## Commands` (say, in
+// backticks) followed by a byte-for-byte decoy copy of the command table redirects the parse to the
+// decoy, and a duplicate row added to the REAL table below is then invisible to every assertion in
+// this file. Reaching it takes all three of those author actions at once; the threat model here is
+// an accidental double row, which the guard does catch. Not patched: this parser hit the
+// escalate-on-recurrence bound (three review rounds, three new parse defects), so the durable fix
+// is removing the parser — generating the table from `COMMANDS` — which awaits triage as a
+// findings-log idea, not another regex.
 function parseGrammarRows(md: string): GrammarRow[] {
   const section = md.split("## Commands")[1] ?? "";
   const rows: GrammarRow[] = [];
@@ -114,16 +124,11 @@ describe("grammar parity", () => {
   // containment check would have been the same shape of guard a third time; deriving it from the
   // structure is what closes the class (docs/findings.md class C5).
   //
-  // WHAT THIS DOES NOT COVER, stated here rather than left to be rediscovered — the bijection holds
-  // over WHAT THE PARSER SEES, and `parseGrammarRows` locates its table by splitting on the literal
-  // text `## Commands`, not by matching an ATX heading. A document containing that string in prose
-  // followed by a decoy table redirects the parse, and a duplicate in the real table below is then
-  // invisible to this test. Verified reachable; ACCEPTED as a residual rather than patched — see the
-  // `residual`-labelled issue linked from PR #84, and PROJECT.md -> Review Lenses, which bounds
-  // fix-verification and says to escalate on recurrence rather than iterate. Three consecutive
-  // review rounds each found a different way this hand-rolled markdown parse was wrong; a fourth
-  // patch was the move that rule exists to prevent. The permanent fix is to stop parsing the doc
-  // (generate the table from COMMANDS, or checksum it), which is a separate issue.
+  // WHAT THIS DOES NOT COVER: the bijection holds over WHAT THE PARSER SEES, so it inherits
+  // `parseGrammarRows`'s accepted residual (#85 — see its comment above, and the executable pin at
+  // the bottom of this file). Repeated here in one line rather than in full, because the word
+  // "bijection" invites a reader to assume the claim is unconditional and this is where they read
+  // it. That is also why the title says "over the parsed table".
   //
   // The registry half is new coverage the finding did not ask for and that falls straight out of
   // that framing: `COMMANDS` is a plain array with no uniqueness constraint, so two entries sharing
@@ -207,9 +212,9 @@ describe("grammar parity", () => {
     expect(parseGrammarRows(synthetic).map(key)).toEqual(["db migrate"]);
   });
 
-  // ACCEPTED RESIDUAL, pinned executably rather than described in prose — the disposition the HC
-  // chose on PR #84 after PROJECT.md -> Review Lenses' escalate-on-recurrence bound fired on this
-  // parser (three consecutive review rounds, three different markdown-parsing defects).
+  // ACCEPTED RESIDUAL #85, pinned executably rather than only described in prose — the disposition
+  // the HC chose on PR #84 after PROJECT.md -> Review Lenses' escalate-on-recurrence bound fired on
+  // this parser (three consecutive review rounds, three different markdown-parsing defects).
   //
   // This test asserts the LIMITATION, not a desired behavior. It exists so the residual is a fact
   // the suite states rather than a sentence in a closed issue, and so that anyone who later fixes
