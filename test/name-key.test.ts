@@ -24,6 +24,14 @@ const VS1 = "\uFE00"; // VARIATION SELECTOR-1
 const TAB = "\u0009";
 const NEL = "\u0085"; // NEXT LINE — a C1 control, but White_Space=Yes
 
+// Default-ignorable characters that NO general category above reaches — the round-1 reviewer finding.
+// U+034F is `Mn`, the Hangul fillers are `Lo`; `\p{Default_Ignorable_Code_Point}` is the property that
+// actually means "render this as nothing", and it reaches all of them without reaching one real letter.
+const CGJ = "\u034F"; // COMBINING GRAPHEME JOINER
+const HANGUL_FILLER = "\u3164";
+const CHOSEONG_FILLER = "\u115F";
+const WORD_JOINER = "\u2060";
+
 describe("nameKey", () => {
   it("folds a composed accented name and its NFD-decomposed spelling to the same key", () => {
     const composed = "Élodie"; // U+00C9 (precomposed)
@@ -95,6 +103,34 @@ describe("nameKey", () => {
       expect(nameKey("Vers" + invisible + "teeg")).toBe(nameKey("Versteeg"));
       expect(nameKey("V" + invisible + "e" + invisible + "r" + invisible + "steeg")).toBe(nameKey("Versteeg"));
     }
+  });
+
+  it("strips DEFAULT-IGNORABLE characters that no general category reaches (Codex review, #62)", () => {
+    // Round-1 reviewer finding, reproduced against a live DB before being accepted. U+034F COMBINING
+    // GRAPHEME JOINER is category `Mn` and NFKC-stable, so neither Cc, Cf nor Variation_Selector
+    // reaches it — and three of them pushed the key length past the ±FUZZY_MAX_DISTANCE band, which
+    // is the silent-duplicate branch all over again. The same hole covered U+3164 HANGUL FILLER,
+    // which an earlier revision of this PR had NAMED as an accepted residual on the reasoning that
+    // no derived class could reach a category-`Lo` character without reaching every real letter.
+    // That reasoning was wrong: `Default_Ignorable_Code_Point` reaches both, and reaches nothing
+    // visible.
+    for (const invisible of [CGJ, HANGUL_FILLER, CHOSEONG_FILLER, WORD_JOINER]) {
+      expect(nameKey("Vers" + invisible + "teeg")).toBe(nameKey("Versteeg"));
+      expect(nameKey("V" + invisible + "e" + invisible + "r" + invisible + "steeg")).toBe(nameKey("Versteeg"));
+    }
+  });
+
+  it("GUARD COMPLETENESS: nothing a reader CAN see is stripped, checked against the catastrophic cases", () => {
+    // Widening a strip class is the move most likely to cause a silent over-merge, so the widening
+    // is paired with its own refutation. A combining accent is the case that would be catastrophic
+    // and quiet: strip U+0301 and `Élodie` folds to `elodie`, merging it with a genuinely different
+    // spelling while every other test in this file still passes.
+    for (const visible of ["́", "̀", "é", "A", "ㄱ", "ั", "ִ", "ّ", "一", "\u{1F600}"]) {
+      expect(nameKey("a" + visible + "b")).toBe(nameKey("a" + visible + "b"));
+      expect(nameKey("a" + visible + "b")).not.toBe("ab");
+    }
+    // The NFD guarantee at the top of this file survives the widening.
+    expect(nameKey("Élodie")).toBe(nameKey("Élodie".normalize("NFD")));
   });
 
   it("KEEPS the invisible characters that RENDER AS WHITESPACE — the line the strip stops at", () => {

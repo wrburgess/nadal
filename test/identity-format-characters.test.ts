@@ -18,6 +18,8 @@ const ESC = "\u001B";
 const DEL = "\u007F";
 const C1 = "\u0090"; // DEVICE CONTROL STRING — a C1 control, invisible
 const VS1 = "\uFE00"; // VARIATION SELECTOR-1
+const CGJ = "\u034F"; // COMBINING GRAPHEME JOINER — Mn, reached only by Default_Ignorable
+const HANGUL_FILLER = "\u3164"; // Lo, likewise
 
 /**
  * Issue #62 as a caller meets it, rather than as the fold sees it.
@@ -126,6 +128,32 @@ describe("identity ladder — category-Cf format characters in a scraped name (#
       }
     });
 
+    it("U+034F COMBINING GRAPHEME JOINER no longer forks — the round-1 reviewer's exact trace", () => {
+      // Reproduced before being accepted: this returned `created` with 2 player rows. U+034F is
+      // category `Mn` and NFKC-stable, so Cc/Cf/Variation_Selector all miss it, and three of them
+      // push the key length 3 past the ±FUZZY_MAX_DISTANCE band — the silent-duplicate branch again.
+      const { db, sqlite } = freshDb();
+      try {
+        expect(resolvePlayer(db, { name: "Anna Versteeg" }).kind).toBe("created");
+        expect(resolvePlayer(db, { name: "Anna V" + CGJ + "e" + CGJ + "r" + CGJ + "steeg" }).kind).toBe("matched");
+        expect(db.select().from(players).all()).toHaveLength(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("HANGUL FILLER U+3164 no longer forks — the residual an earlier revision wrongly accepted", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        expect(resolvePlayer(db, { name: "Anna Versteeg" }).kind).toBe("created");
+        const filled = "Anna V" + HANGUL_FILLER + "e" + HANGUL_FILLER + "r" + HANGUL_FILLER + "steeg";
+        expect(resolvePlayer(db, { name: filled }).kind).toBe("matched");
+        expect(db.select().from(players).all()).toHaveLength(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+
     it("SAD PATH: a name differing by RENDERED whitespace is NOT silently merged", () => {
       // The other side of the same boundary, at the ladder rather than the fold. A TAB renders, so
       // `Anna<TAB>Versteeg` and `AnnaVersteeg` are different names and the fold must not merge them.
@@ -195,6 +223,18 @@ describe("identity ladder — category-Cf format characters in a scraped name (#
           name: "S" + RLO + "p" + RLO + "r" + RLO + "ingfield A",
         });
         expect(forked.kind).toBe("matched");
+        expect(db.select().from(teams).all()).toHaveLength(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("U+034F no longer forks a TEAM either — the reviewer asked for both ladders", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        expect(resolveTeam(db, { name: "Springfield A" }).kind).toBe("created");
+        const joined = "S" + CGJ + "p" + CGJ + "r" + CGJ + "ingfield A";
+        expect(resolveTeam(db, { name: joined }).kind).toBe("matched");
         expect(db.select().from(teams).all()).toHaveLength(1);
       } finally {
         sqlite.close();

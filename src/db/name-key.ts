@@ -56,13 +56,17 @@ import type { Db } from "../ingest/db-types.js";
  * trade (the bidi-spoof and transcription risks are real and these are not), but it is a real limit
  * and not a hypothetical one. It would be the wrong fold for a general-purpose name index.
  *
- * **Two invisible characters are still NOT folded, and they are named rather than left to be
- * rediscovered:** HANGUL FILLER (U+3164), which is category `Lo` — a letter — so no property-derived
- * class reaches it without also reaching every real letter; and LINE SEPARATOR (U+2028), which is
- * `Zl` and carries `White_Space`, so the subtraction above deliberately keeps it. Both still fork an
- * identity. Closing them means either enumerating exceptions (which this class exists to avoid) or
- * ruling on whether a rendered break is "the same name" — a whitespace-semantics decision this
- * codebase has deliberately pinned the other way. One findings line, not a silent extension.
+ * **One invisible character is still NOT folded, named rather than left to be rediscovered:** LINE
+ * SEPARATOR (U+2028), which is `Zl` and carries `White_Space`, so the subtraction above deliberately
+ * keeps it — it renders as a break, and folding it would be the same whitespace-semantics decision
+ * this codebase has pinned the other way. It still forks an identity. One findings line, not a
+ * silent extension.
+ *
+ * The widening is paired with its own refutation in `test/name-key.test.ts`, because widening a
+ * strip class is the move most likely to cause a silent OVER-merge: combining accents, letters in
+ * several scripts, CJK and emoji are all asserted to survive, and the NFD composed/decomposed
+ * guarantee at the top of this doc is re-asserted after the widening. Strip U+0301 by accident and
+ * `Élodie` folds to `elodie` while every other test here still passes.
  *
  * Deliberately NOT folded, because each is a different class rather than an invisible-character one:
  * curly vs straight apostrophe (`O’Brien` / `O'Brien`), a real hyphen vs a soft hyphen once the
@@ -88,6 +92,17 @@ import type { Db } from "../ingest/db-types.js";
  * - `\p{Cc}` — control: NUL, ESC, DEL, and the C1 block. Every bit as invisible on a scraped page as
  *   a bidi override, and every bit as easy for an upstream template to emit.
  * - `\p{Variation_Selector}` — selects a glyph variant and renders as nothing on its own.
+ * - `\p{Default_Ignorable_Code_Point}` — **the property that actually means "render this as
+ *   nothing"**, and the one the three general categories above were only approximating. It reaches
+ *   U+034F COMBINING GRAPHEME JOINER (category `Mn`) and the Hangul fillers U+115F/U+1160/U+3164
+ *   (category `Lo`) — invisible characters that no general category can pick out without also
+ *   picking out every real combining mark or every real letter.
+ *
+ *   This one arrived from the independent Reviewer, and it corrected a mistake worth recording: an
+ *   earlier revision NAMED U+3164 as an accepted residual, arguing no derived class could reach a
+ *   category-`Lo` character without reaching every letter. That was false — `Default_Ignorable` does
+ *   exactly that. "No property reaches this" is a claim about the properties you happened to think
+ *   of, and it was wrong here.
  *
  * **Minus `\p{White_Space}`, and that subtraction is the whole boundary.** The test is not "is it a
  * control character" but "does a reader see nothing": TAB and NEL are `Cc` yet render as a space or
@@ -107,7 +122,8 @@ import type { Db } from "../ingest/db-types.js";
  * happily runs it — green tests, red typecheck. The two forms were verified character-for-character
  * identical across all 1.1M code points before choosing this one; it strips 489 characters.
  */
-const INVISIBLE = /(?!\p{White_Space})[\p{Cc}\p{Cf}\p{Variation_Selector}]/gu;
+const INVISIBLE =
+  /(?!\p{White_Space})[\p{Cc}\p{Cf}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}]/gu;
 
 export function nameKey(s: string): string {
   return s.replace(INVISIBLE, "").trim().normalize("NFKC").toLowerCase();
