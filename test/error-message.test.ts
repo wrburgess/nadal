@@ -158,14 +158,46 @@ describe("errorClass", () => {
     expect(errorClass(new AnonError("boom"))).toBe("unknown");
   });
 
-  it("returns 'unknown' when the constructor's name is not a string", () => {
-    // Kills the `typeof name === "string"` half. A Symbol here would otherwise be interpolated
-    // into `error:${...}`, and template interpolation THROWS on a Symbol — the same asymmetry
-    // errorMessage exists for, arriving by a different route.
+  it("returns 'unknown' when the constructor's name is a Symbol", () => {
+    // A Symbol here would otherwise be interpolated into `error:${...}`, and template interpolation
+    // THROWS on a Symbol — the same asymmetry errorMessage exists for, arriving by another route.
+    //
+    // This case does NOT on its own prove the `typeof name === "string"` half is mutation-killed —
+    // see the next test, which is the one that does.
     const err = new Error("boom");
     const ctor = function (): void {};
     Object.defineProperty(ctor, "name", { value: Symbol("weird") });
     Object.defineProperty(err, "constructor", { value: ctor, configurable: true });
+    expect(() => errorClass(err)).not.toThrow();
+    expect(errorClass(err)).toBe("unknown");
+  });
+
+  it("returns 'unknown' for a non-string name that HAS a length — the case that kills the typeof guard", () => {
+    // Reviewer finding on PR #84 @ 5e6dad8, and it was a correction to a claim I had made rather
+    // than to the code: the commit asserted that BOTH halves of `errorClass`'s guard were
+    // mutation-killed, and that was false.
+    //
+    // The mutant is `name.length > 0` alone, keeping a type assertion so `tsc` stays happy. Every
+    // fixture above survives it, including the Symbol one — `Symbol("weird").length` is `undefined`
+    // and `undefined > 0` is false, so that mutant still answers "unknown". The `typeof` half was
+    // therefore load-bearing and untested at the same time.
+    //
+    // A name that is not a string but DOES report `length: 1` separates them. Verified against the
+    // mutant before writing this: it returns the OBJECT, and `` `error:${obj}` `` then invokes
+    // `toString` and throws inside `logRequest`'s catch — the exact totality regression this guard
+    // exists to prevent.
+    const err = new Error("boom");
+    Object.defineProperty(err, "constructor", {
+      value: {
+        name: {
+          length: 1,
+          toString(): string {
+            throw new Error("boom");
+          },
+        },
+      },
+      configurable: true,
+    });
     expect(() => errorClass(err)).not.toThrow();
     expect(errorClass(err)).toBe("unknown");
   });

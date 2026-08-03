@@ -163,6 +163,31 @@ describe("request telemetry", () => {
     expect(rows()[0]?.outcome).toBe("error:unknown");
   });
 
+  it("survives a constructor whose name is a length-bearing non-string (Reviewer, PR #84 @ 5e6dad8)", async () => {
+    // The end-to-end half of the errorClass unit test of the same shape. The Reviewer's point was
+    // that under a weakened guard this value is RETURNED rather than rejected, and `logRequest`
+    // then interpolates it into `error:${...}`, invoking its throwing `toString` inside the catch.
+    // Asserted here at the level that actually matters: the wrapped call still returns its exit
+    // code, and the persisted outcome is a real string.
+    const err = new Error("boom");
+    Object.defineProperty(err, "constructor", {
+      value: {
+        name: {
+          length: 1,
+          toString(): string {
+            throw new Error("boom");
+          },
+        },
+      },
+      configurable: true,
+    });
+    const code = await logRequest("cli", "x", [], async () => {
+      throw err;
+    });
+    expect(code).toBe(1);
+    expect(rows()[0]?.outcome).toBe("error:unknown");
+  });
+
   it("classifies an Error whose constructor was removed — no Proxy required", async () => {
     // The weaker variant, found while verifying the Reviewer's trace rather than taken from it:
     // `.constructor` is a writable property like `.message`, so `err.constructor.name` throws a
