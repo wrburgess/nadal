@@ -11,7 +11,7 @@ import { playerAliases, players, teams } from "../src/db/schema.js";
 import { NameKeyNotBackfilledError, resolvePlayer, resolveTeam } from "../src/ingest/identity.js";
 import { buildLegacyMigrationsFolder } from "./helpers/legacy-migrations.js";
 
-const RLO = "‮"; // RIGHT-TO-LEFT OVERRIDE — see test/name-key.test.ts for why this is an escape
+const RLO = "\u202E"; // RIGHT-TO-LEFT OVERRIDE — see test/name-key.test.ts for why this is an escape
 
 /**
  * The fold that shipped BEFORE #62, written out literally.

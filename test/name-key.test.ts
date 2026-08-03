@@ -5,12 +5,24 @@ import { editDistance, FUZZY_MAX_DISTANCE, nameKey, nameKeyLength, namesEqual } 
 // load-bearing: a literal would be invisible in this source (the very property under test), and a
 // literal NUL-adjacent control character can flip a file's binary classification so that grep drops
 // it from recursive searches entirely — the trap `src/ingest/upsert.ts` already sets for this repo.
-const RLO = "‮"; // RIGHT-TO-LEFT OVERRIDE — the bidi spoof this issue is named for
-const ZWSP = "​"; // ZERO WIDTH SPACE
-const ZWNJ = "‌"; // ZERO WIDTH NON-JOINER
-const ZWJ = "‍"; // ZERO WIDTH JOINER
-const SHY = "­"; // SOFT HYPHEN
-const BOM = "﻿"; // ZERO WIDTH NO-BREAK SPACE / BOM
+const RLO = "\u202E"; // RIGHT-TO-LEFT OVERRIDE — the bidi spoof this issue is named for
+const ZWSP = "\u200B"; // ZERO WIDTH SPACE
+const ZWNJ = "\u200C"; // ZERO WIDTH NON-JOINER
+const ZWJ = "\u200D"; // ZERO WIDTH JOINER
+const SHY = "\u00AD"; // SOFT HYPHEN
+const BOM = "\uFEFF"; // ZERO WIDTH NO-BREAK SPACE / BOM
+
+// Category-Cc (control) and the variation selectors — the adjacent invisible classes. These are NOT
+// Cf, so the first pass at #62 left every one of them forking an identity exactly as Cf had.
+const NUL = "\u0000";
+const ESC = "\u001B";
+const DEL = "\u007F";
+const C1 = "\u0090"; // DEVICE CONTROL STRING — a C1 control, invisible
+const VS1 = "\uFE00"; // VARIATION SELECTOR-1
+
+// Kept, deliberately: these are Cc but carry `White_Space`, so they RENDER as a space or a break.
+const TAB = "\u0009";
+const NEL = "\u0085"; // NEXT LINE — a C1 control, but White_Space=Yes
 
 describe("nameKey", () => {
   it("folds a composed accented name and its NFD-decomposed spelling to the same key", () => {
@@ -73,6 +85,52 @@ describe("nameKey", () => {
     expect(nameKey(RLO + ZWSP + BOM)).not.toBeNull();
   });
 
+  it("strips the ADJACENT invisible classes too — Cc and variation selectors, not just Cf (#62)", () => {
+    // Found by the adversarial pass's permanent lens ("what class is not on this list?") after the
+    // Cf-only fold was already green: nine other invisible-character classes forked an identity in
+    // exactly the same way, because `\p{Cf}` names one category and the DEFECT is "a character a
+    // human cannot see". A control character is every bit as attacker-controllable as a bidi
+    // override and every bit as invisible on the page.
+    for (const invisible of [NUL, ESC, DEL, C1, VS1]) {
+      expect(nameKey("Vers" + invisible + "teeg")).toBe(nameKey("Versteeg"));
+      expect(nameKey("V" + invisible + "e" + invisible + "r" + invisible + "steeg")).toBe(nameKey("Versteeg"));
+    }
+  });
+
+  it("KEEPS the invisible characters that RENDER AS WHITESPACE — the line the strip stops at", () => {
+    // The boundary is not "is it a control character", it is "does a reader see nothing". TAB and
+    // NEL are Cc but carry `White_Space`, so they render as a space or a break: `Jane<TAB>Doe` reads
+    // as two words and `JaneDoe` reads as one, and folding them together would be a FALSE MERGE —
+    // the silent direction, forbidden outright by spec § Ingestion. So the guard subtracts
+    // `\p{White_Space}` rather than hand-listing exceptions, and this pins the consequence.
+    expect(namesEqual("Jane" + TAB + "Doe", "JaneDoe")).toBe(false);
+    expect(namesEqual("Jane" + NEL + "Doe", "JaneDoe")).toBe(false);
+    // ...and the pre-existing "interior whitespace is not collapsed" rule is untouched by all this.
+    expect(namesEqual("Jane   Doe", "Jane Doe")).toBe(false);
+  });
+
+  it("GUARD COMPLETENESS: the strip DERIVES from Unicode properties and never enumerates characters", () => {
+    // The property algebra is the guard, so it is asserted as an algebra. Two things must hold, and
+    // the second is the one that could silently regress #62's own fix:
+    //   1. every Cc character that is NOT White_Space folds away;
+    //   2. subtracting White_Space removes NOTHING from the Cf class — verified across the whole
+    //      code-point space, because if any Cf character were White_Space the subtraction would
+    //      quietly reopen the bidi-override hole this file exists to close.
+    for (let cp = 0x00; cp <= 0x9f; cp++) {
+      const ch = String.fromCodePoint(cp);
+      if (!/\p{Cc}/u.test(ch)) continue;
+      const shouldSurvive = /\p{White_Space}/u.test(ch);
+      expect(nameKey("a" + ch + "b")).toBe(shouldSurvive ? nameKey("a" + ch + "b") : "ab");
+      if (!shouldSurvive) expect(nameKey("a" + ch + "b")).toBe("ab");
+    }
+    const cfWhitespace: string[] = [];
+    for (let cp = 0; cp <= 0x10ffff; cp++) {
+      const ch = String.fromCodePoint(cp);
+      if (/\p{Cf}/u.test(ch) && /\p{White_Space}/u.test(ch)) cfWhitespace.push(ch);
+    }
+    expect(cfWhitespace).toEqual([]);
+  });
+
   it("folds Unicode COMPATIBILITY variants too — NFKC, not NFC (docs/findings.md:319)", () => {
     // The sibling defect in this same one-line function, found during #18 and logged rather than
     // fixed: NFC composes combining marks but does not fold full-width forms, so a vision model
@@ -120,6 +178,10 @@ describe("nameKey", () => {
       "Ｎｏｒｂｕｒｙ",
       "ﬁnnegan",
       "Ⅳ",
+      "Vers" + NUL + "teeg",
+      "Vers" + ESC + DEL + C1 + "teeg",
+      "Vers" + VS1 + "teeg",
+      "Jane" + TAB + "Doe",
     ];
     for (const value of cases) {
       expect(nameKey(nameKey(value))).toBe(nameKey(value));

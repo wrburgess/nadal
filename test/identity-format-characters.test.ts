@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
+import { namesEqual } from "../src/db/name-key.js";
 import { players, teams } from "../src/db/schema.js";
 import { resolvePlayer, resolveTeam } from "../src/ingest/identity.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
-// See test/name-key.test.ts for why these are escapes and never literal bytes.
-const RLO = "‮"; // RIGHT-TO-LEFT OVERRIDE
-const ZWSP = "​"; // ZERO WIDTH SPACE
+// Escapes, never literal bytes — and this file is why the rule is written down rather than assumed.
+// An earlier draft inlined the control characters directly and they did not survive being written:
+// U+0000/U+001B/U+007F/U+0090 arrived as PLAIN SPACES, so the loop below silently asserted something
+// about spaces while reading as though it covered control characters. A `\u` escape is ordinary ASCII
+// in the file, so it cannot be mangled in transit and cannot flip the file's binary classification
+// (which would drop it from every recursive grep — the trap `src/ingest/upsert.ts` sets for this repo).
+const RLO = "\u202E"; // RIGHT-TO-LEFT OVERRIDE
+const ZWSP = "\u200B"; // ZERO WIDTH SPACE
+const NUL = "\u0000";
+const ESC = "\u001B";
+const DEL = "\u007F";
+const C1 = "\u0090"; // DEVICE CONTROL STRING — a C1 control, invisible
+const VS1 = "\uFE00"; // VARIATION SELECTOR-1
 
 /**
  * Issue #62 as a caller meets it, rather than as the fold sees it.
@@ -92,6 +103,45 @@ describe("identity ladder — category-Cf format characters in a scraped name (#
         expect(resolvePlayer(db, { name: "Nova Norbury" }).kind).toBe("created");
         expect(resolvePlayer(db, { name: "Ｎｏｖａ Ｎｏｒｂｕｒｙ" }).kind).toBe("matched");
         expect(db.select().from(players).all()).toHaveLength(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("the ADJACENT invisible classes no longer fork either — Cc and variation selectors", () => {
+      // The permanent review lens found these after the Cf-only fold was green: every one of them
+      // created a second row against a live DB, exactly as Cf had. Measured the same way — by the
+      // row count, not the result kind.
+      const { db, sqlite } = freshDb();
+      try {
+        expect(resolvePlayer(db, { name: "Anna Versteeg" }).kind).toBe("created");
+        const invisibles = [NUL, ESC, DEL, C1, VS1];
+        for (const ch of invisibles) {
+          const probe = "Anna V" + ch + "ers" + ch + "te" + ch + "eg";
+          expect(resolvePlayer(db, { name: probe }).kind).toBe("matched");
+        }
+        expect(db.select().from(players).all()).toHaveLength(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("SAD PATH: a name differing by RENDERED whitespace is NOT silently merged", () => {
+      // The other side of the same boundary, at the ladder rather than the fold. A TAB renders, so
+      // `Anna<TAB>Versteeg` and `AnnaVersteeg` are different names and the fold must not merge them.
+      // Without this, the tests above would also pass on a fold that stripped whitespace too.
+      //
+      // The ladder's answer here is `ambiguous`, not `created`, and that is CORRECT rather than a
+      // near miss: tier 2 finds no key match (the fold kept them distinct — the property under
+      // test), and tier 3 then reports a genuine distance-1 near-miss for a human to settle. What
+      // matters is the pair of outcomes it rules out — a silent merge onto the existing row, and a
+      // silent second row — so both are asserted directly.
+      const { db, sqlite } = freshDb();
+      try {
+        expect(resolvePlayer(db, { name: "AnnaVersteeg" }).kind).toBe("created");
+        expect(namesEqual("AnnaVersteeg", "Anna\tVersteeg")).toBe(false); // the fold keeps them apart
+        expect(resolvePlayer(db, { name: "Anna\tVersteeg" }).kind).toBe("ambiguous"); // asked, not merged
+        expect(db.select().from(players).all()).toHaveLength(1); // and nothing was silently written
       } finally {
         sqlite.close();
       }

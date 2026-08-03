@@ -16,13 +16,18 @@ import type { Db } from "../ingest/db-types.js";
  *
  * ## The fold has three steps, and each one is here for a defect on the record (#62)
  *
- * 1. **Strip `\p{Cf}`** (category Format: RIGHT-TO-LEFT OVERRIDE, the zero-width space/joiner/
- *    non-joiner, soft hyphen, BOM). Without it, `Versteeg` and `Versteeg<U+202E>` render identically
- *    to a human and produce two keys, so a scraped page carrying an invisible character forks one
- *    person into two rows. Derived from the Unicode general category rather than an enumerated
- *    character list, so a Cf character nobody here thought to name is still folded.
+ * 1. **Strip every character a reader cannot see** — the `INVISIBLE` class defined below. Without it,
+ *    `Versteeg` and `Versteeg<U+202E>` render identically to a human and produce two keys, so a
+ *    scraped page carrying an invisible character forks one person into two rows.
  *
- *    Worth knowing how it actually failed, because it was not a single failure: one or two format
+ *    The class is deliberately **wider than the issue that prompted it**. #62 named category Cf, and
+ *    the first fix stripped exactly that — after which an adversarial pass measured nine *other*
+ *    invisible classes forking an identity in precisely the same way (NUL, ESC, DEL, the C1 block,
+ *    variation selectors). `\p{Cf}` is one Unicode category; the DEFECT is "a character a human
+ *    cannot see", and a control character is every bit as invisible on the page and every bit as easy
+ *    for an upstream template to emit.
+ *
+ *    Worth knowing how it actually failed, because it was not a single failure: one or two invisible
  *    characters left an `editDistance` of 1-2, inside `FUZZY_MAX_DISTANCE`, so tier 3 caught them
  *    and returned `ambiguous` — wrong, but loud, and it halted a pull to ask about a player already
  *    on file. THREE pushed the distance past the band, so the ladder fell through every tier and
@@ -43,13 +48,21 @@ import type { Db } from "../ingest/db-types.js";
  *    **NFKC does not subsume step 1** — `NFKC("Vers<U+202E>teeg") !== "Versteeg"`, verified in the
  *    test suite rather than assumed. Neither half is redundant.
  *
- * ## The accepted limit, stated where the next reader stands
+ * ## The accepted limits, stated where the next reader stands
  *
  * `\p{Cf}` includes ZERO WIDTH JOINER, ZERO WIDTH NON-JOINER and SOFT HYPHEN, which are
  * **semantically meaningful** in Indic, Persian and Arabic orthography — stripping them can fold two
  * genuinely different spellings together. For a Springfield USTA league roster that is the right
  * trade (the bidi-spoof and transcription risks are real and these are not), but it is a real limit
  * and not a hypothetical one. It would be the wrong fold for a general-purpose name index.
+ *
+ * **Two invisible characters are still NOT folded, and they are named rather than left to be
+ * rediscovered:** HANGUL FILLER (U+3164), which is category `Lo` — a letter — so no property-derived
+ * class reaches it without also reaching every real letter; and LINE SEPARATOR (U+2028), which is
+ * `Zl` and carries `White_Space`, so the subtraction above deliberately keeps it. Both still fork an
+ * identity. Closing them means either enumerating exceptions (which this class exists to avoid) or
+ * ruling on whether a rendered break is "the same name" — a whitespace-semantics decision this
+ * codebase has deliberately pinned the other way. One findings line, not a silent extension.
  *
  * Deliberately NOT folded, because each is a different class rather than an invisible-character one:
  * curly vs straight apostrophe (`O’Brien` / `O'Brien`), a real hyphen vs a soft hyphen once the
@@ -67,8 +80,37 @@ import type { Db } from "../ingest/db-types.js";
  * needs a migration that NULLs `name_key` on `players`, `player_aliases` and `teams` so the backfill
  * re-derives them — `drizzle/0010_moaning_sasquatch.sql` is the worked example.
  */
+/**
+ * Every character a reader cannot see, expressed as an algebra over Unicode properties rather than
+ * as a list — so a character nobody here thought to name is still covered.
+ *
+ * - `\p{Cf}` — format: RIGHT-TO-LEFT OVERRIDE, zero-width space/joiner/non-joiner, soft hyphen, BOM.
+ * - `\p{Cc}` — control: NUL, ESC, DEL, and the C1 block. Every bit as invisible on a scraped page as
+ *   a bidi override, and every bit as easy for an upstream template to emit.
+ * - `\p{Variation_Selector}` — selects a glyph variant and renders as nothing on its own.
+ *
+ * **Minus `\p{White_Space}`, and that subtraction is the whole boundary.** The test is not "is it a
+ * control character" but "does a reader see nothing": TAB and NEL are `Cc` yet render as a space or
+ * a break, so `Jane<TAB>Doe` reads as two words and `JaneDoe` reads as one. Folding those together
+ * would be a FALSE MERGE — the silent direction, forbidden outright by spec § Ingestion, and the
+ * reason this is a subtraction instead of `\p{Cc}` wholesale. Subtracting also leaves the
+ * long-standing "interior whitespace is NOT collapsed" behavior exactly as it was.
+ *
+ * Checked rather than assumed, and asserted in `test/name-key.test.ts` over the whole code-point
+ * space: **no `\p{Cf}` character carries `White_Space`**, so the subtraction takes nothing away from
+ * the format-character strip. Were that untrue, this line would quietly reopen the bidi-override
+ * hole it exists to close.
+ *
+ * The subtraction is written as a **negative lookahead** rather than the `v` flag's set-difference
+ * syntax (`[[...]--\p{White_Space}]`), which reads better and does not compile: `v` requires
+ * `target: es2024` and this project targets ES2023, so `tsc` rejects it while Vitest's transform
+ * happily runs it — green tests, red typecheck. The two forms were verified character-for-character
+ * identical across all 1.1M code points before choosing this one; it strips 489 characters.
+ */
+const INVISIBLE = /(?!\p{White_Space})[\p{Cc}\p{Cf}\p{Variation_Selector}]/gu;
+
 export function nameKey(s: string): string {
-  return s.replace(/\p{Cf}/gu, "").trim().normalize("NFKC").toLowerCase();
+  return s.replace(INVISIBLE, "").trim().normalize("NFKC").toLowerCase();
 }
 
 /** Case-insensitive, Unicode-aware, whitespace-trimmed name comparison — by construction the same
