@@ -56,6 +56,100 @@ describe("tn event add (end-to-end via dispatch)", () => {
     }
   });
 
+  it("accepts an optional trailing format positional and reports the courts in the summary line", async () => {
+    runMigrations();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch([
+      "event",
+      "add",
+      "Springfield Sectionals 2026",
+      "tournament",
+      "2026-08-28",
+      "2026-08-30",
+      "S1:singles,D1:doubles",
+    ]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('format="S1:singles,D1:doubles"'));
+
+    const { db, sqlite } = openDb();
+    try {
+      const row = db.select().from(events).all()[0]!;
+      expect(row.format).toEqual([
+        { slot: "S1", discipline: "singles" },
+        { slot: "D1", discipline: "doubles" },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("omitting the format leaves the summary line BYTE IDENTICAL to before this feature existed", async () => {
+    runMigrations();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["event", "add", "Springfield Sectionals 2026", "tournament", "2026-08-28", "2026-08-30"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(
+      'event add status=ok event="Springfield Sectionals 2026" kind="tournament" startsOn="2026-08-28" endsOn="2026-08-30" created="true"',
+    );
+  });
+
+  it("refuses an invalid format, naming the syntax, exit 1, nothing written", async () => {
+    runMigrations();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch([
+      "event",
+      "add",
+      "Springfield Sectionals 2026",
+      "tournament",
+      "2026-08-28",
+      "2026-08-30",
+      "garbage",
+    ]);
+
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("status=error"));
+
+    const { db, sqlite } = openDb();
+    try {
+      expect(db.select().from(events).all(), "an invalid format must write nothing").toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a repeat that OMITS the format preserves the one already stored, end to end", async () => {
+    runMigrations();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await dispatch([
+      "event",
+      "add",
+      "Springfield Sectionals 2026",
+      "tournament",
+      "2026-08-28",
+      "2026-08-30",
+      "S1:singles,D1:doubles",
+    ]);
+    await dispatch(["event", "add", "Springfield Sectionals 2026", "tournament", "2026-08-28", "2026-08-31"]);
+
+    const { db, sqlite } = openDb();
+    try {
+      const row = db.select().from(events).all()[0]!;
+      expect(row.endsOn).toBe("2026-08-31");
+      expect(row.format, "an omitted format on a repeat must not clobber the stored one").toEqual([
+        { slot: "S1", discipline: "singles" },
+        { slot: "D1", discipline: "doubles" },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("--json replaces the summary line with the same fields", async () => {
     runMigrations();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -175,8 +269,10 @@ describe("tn event add (end-to-end via dispatch)", () => {
       runMigrations();
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
+      // Six positionals: name + kind + starts-on + ends-on + format (the now-documented fifth) +
+      // one genuinely extra token beyond that.
       const code = await dispatch([
-        "event", "add", "Springfield", "tournament", "2026-08-28", "2026-08-30", "extra",
+        "event", "add", "Springfield", "tournament", "2026-08-28", "2026-08-30", "S1:singles", "extra",
       ]);
 
       expect(code).toBe(1);

@@ -9,13 +9,24 @@
 // defect #16 shipped and #17 PR A fixed one layer over.
 
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
-import { courtMatches, players, ratingObservations, teamMatches, teamMemberships, teams } from "../db/schema.js";
+import { courtMatches, events, players, ratingObservations, teamMatches, teamMemberships, teams } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoCourtMatchHistoryError, predictedLineup } from "./derive.js";
+import type { EventCourt } from "./event-format.js";
+import { readEventFormat } from "./event-format.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
 import type { LineupBasis, LineupConfidence, PredictedLineupResult, RatingSource } from "./types.js";
 
 export { NoCourtMatchHistoryError };
+
+/** No row on file under the given name — `events.name` is unique, so this is the same
+ * resolve-by-exact-name-or-refuse mechanism `src/ingest/match-add.ts` already uses. Nothing is ever
+ * inferred from a partial or fuzzy match. */
+export class UnknownEventError extends Error {}
+
+/** The named event exists, but its `format` column is `null` — no silent fall back to the observed
+ * slot set; naming the event lets a presenter tell the operator exactly what to add. */
+export class EventHasNoFormatError extends Error {}
 
 export type LineupPlanPlayer = {
   playerId: number;
@@ -46,6 +57,10 @@ export type LineupPlan = {
   /** Roster players with no observation in `ratingSource`, by name, so the gap is printable. */
   unranked: LineupPlanPlayer[];
   slotSource: PredictedLineupResult["slotSource"];
+  /** Which event supplied `slots`' court list, when one did — `null` when `slotSource` is
+   * `"observed"`. The pure `derive.ts` layer stays event-name-free (it only ever sees a slot list,
+   * never a name); this DB assembly layer is what attaches the name a presenter can print. */
+  slotEvent: { id: number; name: string } | null;
   observedCourtMatches: number;
   /** Court matches these players appeared in that belong to some OTHER team (or to no team match
    * on file) and were therefore not used as evidence. Reported rather than silently dropped: a
@@ -59,19 +74,54 @@ export type LineupPlan = {
  * Builds a team's predicted lineup: the roster from `team_memberships`, that roster's court-match
  * history, and every rating observation for those players, run through `predictedLineup`.
  *
+ * `eventName` (#63), when given, resolves against `events.name` (exact match, never inferred) and
+ * its stored format REPLACES the derived slot set outright — `slotSource: "event-format"`, and
+ * `slotEvent` names which one. Omitted, this is byte-identical to the pre-#63 behavior: the slot set
+ * is derived from observed history and `slotSource` stays `"observed"`. The event is the parameter
+ * of the QUESTION being asked ("what does Springfield's format say"), not a property stored against
+ * the team — see the assessment on issue #63 for why a per-team link was rejected in favor of this.
+ *
  * Throws `NoCourtMatchHistoryError` when the team has no court matches of its OWN on file — a
  * caller renders that as an honest absence rather than an empty lineup, which would read as "we
  * predict nobody plays". `report build` catches it for exactly that reason. Note that a roster
  * whose members have extensive individual histories can still refuse here, and correctly so: those
- * matches belong to other teams and say nothing about how THIS team fields courts.
+ * matches belong to other teams and say nothing about how THIS team fields courts. Throws
+ * `UnknownEventError` / `EventHasNoFormatError` / `InvalidEventFormatError` for a bad `eventName` —
+ * see each class's own doc comment.
  *
  * A player on the roster more than once (one `team_memberships` row per event — the schema allows
  * it, and a district roster plus a travel roster is the normal case) is counted ONCE here: the
  * roster is a set of people, and a duplicate id would let the same player be placed on two courts.
  */
-export function getLineupPlan(db: Db, teamId: number): LineupPlan {
+export function getLineupPlan(db: Db, teamId: number, eventName?: string): LineupPlan {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getLineupPlan: no team with id ${teamId}`);
+
+  // #63: resolved FIRST, before any roster/court-match read — the event name is a property of the
+  // QUESTION being asked, not of the team, so there is nothing team-specific to fetch before
+  // validating it. Exact match against `events.name` (the unique key), the same
+  // resolve-by-name-or-refuse mechanism `src/ingest/match-add.ts` already uses. No silent fall back
+  // to the observed slot set when a named event lacks a format — that would be the exact silent-lie
+  // class this repo has logged before.
+  let slotSet: EventCourt[] | undefined;
+  let slotEvent: { id: number; name: string } | null = null;
+  if (eventName !== undefined) {
+    const eventRow = db.select().from(events).where(eq(events.name, eventName)).all()[0];
+    if (eventRow === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
+    // `readEventFormat` throws `InvalidEventFormatError` on a corrupted stored value (defense in
+    // depth — only `addEvent` writes this column in production) — allowed to propagate as-is rather
+    // than being re-wrapped, since it is already its own distinct, presenter-renderable class.
+    const format = readEventFormat(eventRow.format);
+    if (format === null) {
+      throw new EventHasNoFormatError(
+        `event "${eventName}" has no format on file — add one first, e.g. ` +
+          `tn event add "${eventName}" ${eventRow.kind} ${eventRow.startsOn ?? "<starts-on>"} ` +
+          `${eventRow.endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
+      );
+    }
+    slotSet = format;
+    slotEvent = { id: eventRow.id, name: eventRow.name };
+  }
 
   // Issue #49: a retired member must never be predicted onto a court — the headline symptom the
   // issue was filed for. Filtered here, at the roster read, rather than after the fact: the pure
@@ -154,6 +204,7 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
         observedOn: o.observedOn,
       })),
     })),
+    slotSet,
   });
 
   // `player #<id>` is unreachable in practice — every id below came from the roster query this map
@@ -180,6 +231,7 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
     ranked: prediction.rankedPlayerIds.map(named),
     unranked: prediction.unrankedPlayerIds.map(named),
     slotSource: prediction.slotSource,
+    slotEvent,
     observedCourtMatches: prediction.observedCourtMatches,
     excludedOtherTeamMatches,
     rosterSize: rosterPlayerIds.length,

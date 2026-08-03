@@ -6,14 +6,17 @@
 // makes it reachable.
 //
 // Deliberately narrow. `tn event show`, which the spec's *Planned* grammar list does name, stays
-// unbuilt, and `events.format` (court slots) takes no value here — the predicted-lineup slot set
-// derives from observed court-match history instead (see `derive.ts`'s `predictedLineup`), so a
-// `--format` input would be a promise the code does not keep.
+// unbuilt. `events.format` (court slots) DOES take a value here (#63) — the predicted-lineup slot
+// set can now be supplied by a named event's format instead of always being derived from observed
+// court-match history (see `derive.ts`'s `predictedLineup` and `query/lineup.ts`'s `getLineupPlan`);
+// this is the one writer for it, sharing `event-format.ts`'s validator with the reader so the two can
+// never disagree about what a legal format is.
 
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { availability, events } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
+import { type EventCourt, parseEventFormat } from "./event-format.js";
 import { isIsoDay } from "./iso-day.js";
 
 export class MissingEventNameError extends Error {}
@@ -38,6 +41,12 @@ export type AddEventInput = {
   startsOn: string;
   /** ISO date, inclusive. */
   endsOn: string;
+  /** Raw text, `parseEventFormat`'s syntax (e.g. `"S1:singles,D1:doubles"`) — the SAME validator the
+   * CLI and MCP surfaces both defer to, so the two can never accept a shape the other would refuse.
+   * Omitted (never an empty string — a caller that means "no format" leaves this `undefined`)
+   * preserves whatever is already stored; given, it REPLACES the stored value. There is no way to
+   * CLEAR a stored format back to `null` in v1 — a stated limitation, not an oversight. */
+  format?: string;
 };
 
 export type AddEventResult = {
@@ -46,6 +55,8 @@ export type AddEventResult = {
   kind: "league" | "tournament";
   startsOn: string;
   endsOn: string;
+  /** `null` when no format has ever been stored for this event. */
+  format: EventCourt[] | null;
   /** False when this call updated an event that already existed under the same name. */
   created: boolean;
 };
@@ -57,8 +68,9 @@ export type AddEventResult = {
  *
  * Refuses, naming the reason via a distinct error class, when: the name is blank; the kind is not
  * `league` or `tournament`; either endpoint is not a real `YYYY-MM-DD` calendar date; the range is
- * inverted; or an UPDATE would move the range off availability already recorded against this event.
- * Every check runs BEFORE any write, so a refusal leaves the table untouched.
+ * inverted; the format text does not parse (`InvalidEventFormatError`, from `event-format.ts`); or
+ * an UPDATE would move the range off availability already recorded against this event. Every check —
+ * including the format parse — runs BEFORE any write, so a refusal leaves the table untouched.
  *
  * Both endpoints go through the shared `isIsoDay` rule rather than a local copy. `starts_on` and
  * `ends_on` are compared as TEXT by `setAvailability`'s day lookup, so a malformed endpoint here
@@ -67,6 +79,13 @@ export type AddEventResult = {
  *
  * The range is inclusive at both ends, matching `eventsForDay`'s `starts_on <= day <= ends_on`, so
  * a single-day event (`startsOn === endsOn`) is legal and resolves for that one day.
+ *
+ * `input.format` follows the same "never clobber a stored value with an incoming null" semantics
+ * `upsertTeamMatch` already runs for `scheduledTime`/`site` (`src/ingest/match-add.ts`): omitted
+ * (`undefined`) PRESERVES whatever format is already stored, and given REPLACES it outright. Without
+ * this, a routine `tn event add` call made only to correct a date would silently delete a format
+ * recorded earlier. There is no way to CLEAR a stored format back to `null` in v1 — an accepted
+ * limitation, not an oversight.
  */
 export function addEvent(db: Db, input: AddEventInput): AddEventResult {
   const name = input.name.trim();
@@ -94,6 +113,11 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
   if (input.endsOn < input.startsOn) {
     throw new EventRangeInvertedError(`ends-on "${input.endsOn}" is before starts-on "${input.startsOn}"`);
   }
+
+  // Parsed BEFORE the transaction, alongside every other input check — a malformed format must
+  // refuse without ever opening a write, exactly like the kind/date checks above it.
+  const incomingFormat: EventCourt[] | undefined =
+    input.format === undefined ? undefined : parseEventFormat(input.format);
 
   // Everything below runs in ONE `BEGIN IMMEDIATE` transaction, because the range guard is a
   // read-then-write and the two halves must not be separable.
@@ -141,12 +165,18 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
       }
     }
 
+    // Omitted -> preserve whatever is already stored (`null` for a brand-new event); given ->
+    // replace outright. Computed once so the SAME value is written and returned — `row.format` is
+    // read back below only to confirm the write, never re-derived independently of it.
+    const formatToWrite: EventCourt[] | null =
+      incomingFormat !== undefined ? incomingFormat : ((existing?.format as EventCourt[] | null | undefined) ?? null);
+
     const row = tx
       .insert(events)
-      .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn })
+      .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn, format: formatToWrite })
       .onConflictDoUpdate({
         target: events.name,
-        set: { kind, startsOn: input.startsOn, endsOn: input.endsOn },
+        set: { kind, startsOn: input.startsOn, endsOn: input.endsOn, format: formatToWrite },
       })
       .returning()
       .get();
@@ -157,6 +187,7 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
       kind,
       startsOn: input.startsOn,
       endsOn: input.endsOn,
+      format: formatToWrite,
       created: existing === undefined,
     };
   }, { behavior: "immediate" });

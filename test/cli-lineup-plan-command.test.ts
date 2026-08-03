@@ -11,6 +11,7 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, ratingObservations, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
+import { addEvent } from "../src/query/events.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -265,6 +266,106 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
     const planCode = await dispatch(["lineup", "plan", "NE/Penland/40&Over3.5M"]);
     expect(planCode).toBe(1);
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("only this team's own"));
+  });
+
+  describe("an optional trailing event positional (#63)", () => {
+    it("tn lineup plan <team> (no event) stays byte-identical to the pre-#63 output", async () => {
+      seedVersteeg({ withRatings: true });
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M"]);
+
+      expect(code).toBe(0);
+      const output = logSpy.mock.calls.at(-1)?.[0] as string;
+      expect(output).toContain("courts: 4, from this team's observed match history (not the event format)");
+    });
+
+    it("tn lineup plan <team> <event> renders the event's court count and --json carries slotSource/slotEvent", async () => {
+      seedVersteeg({ withRatings: true });
+      runMigrations();
+      const { db, sqlite } = openDb();
+      addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles,D2:doubles",
+      });
+      sqlite.close();
+
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const code = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const output = logSpy.mock.calls.at(-1)?.[0] as string;
+      expect(output).toContain('from the format of event "Springfield Sectionals 2026"');
+      // The silent-lie regression: the OLD sentence must be genuinely absent, not merely
+      // outnumbered by the new one.
+      expect(output).not.toContain("from this team's observed match history (not the event format)");
+      expect(output).toContain("courts: 3");
+      // D3 (Ira/Juno) is real history but not part of the three-court event format.
+      expect(output).not.toMatch(/D3/);
+
+      const jsonCode = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M", "Springfield Sectionals 2026", "--json"]);
+      expect(jsonCode).toBe(0);
+      const payload = JSON.parse(logSpy.mock.calls.at(-1)?.[0] as string) as {
+        slotSource: string;
+        slotEvent: { id: number; name: string } | null;
+      };
+      expect(payload.slotSource).toBe("event-format");
+      expect(payload.slotEvent).toMatchObject({ name: "Springfield Sectionals 2026" });
+    });
+
+    it("tn lineup plan <team> <unknown-event> exits 1, naming the event", async () => {
+      seedVersteeg();
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      const code = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M", "No Such Event"]);
+
+      expect(code).toBe(1);
+      // Pinned to the actual refusal text, not merely "the name appears somewhere" — a parse error
+      // quoting the same string would otherwise satisfy a looser assertion for the wrong reason. The
+      // event name is checked separately because the summary line backslash-escapes its inner quotes.
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unknown event"));
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("No Such Event"));
+    });
+
+    it("tn lineup plan <team> <event-without-format> exits 1, saying to add a format", async () => {
+      seedVersteeg();
+      runMigrations();
+      const { db, sqlite } = openDb();
+      addEvent(db, { name: "Formatless Event", kind: "league", startsOn: "2026-03-01", endsOn: "2026-06-30" });
+      sqlite.close();
+
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const code = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M", "Formatless Event"]);
+
+      expect(code).toBe(1);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("tn event add"));
+    });
+
+    it("escapes an event name containing terminal-hostile characters in the rendered output", async () => {
+      seedVersteeg();
+      runMigrations();
+      const RTL_OVERRIDE = String.fromCharCode(0x202e);
+      const { db, sqlite } = openDb();
+      addEvent(db, {
+        name: `Springfield${RTL_OVERRIDE}Sectionals`,
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles,D2:doubles,D3:doubles",
+      });
+      sqlite.close();
+
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const code = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M", `Springfield${RTL_OVERRIDE}Sectionals`]);
+
+      expect(code).toBe(0);
+      const output = logSpy.mock.calls.at(-1)?.[0] as string;
+      expect(output).not.toContain(RTL_OVERRIDE);
+      expect(output).toContain("Springfield");
+    });
   });
 
   describe("refusals", () => {

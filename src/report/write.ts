@@ -168,7 +168,11 @@ function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): M
  * and `getTeamProfile` keeps its existing "not available" `headToHead: null` path — already tested
  * in src/query/team-profile.ts's own suite, unchanged by this.
  */
-export function buildTeamDossier(db: Db, teamId: number, options: { since: string }): TeamDossier {
+export function buildTeamDossier(
+  db: Db,
+  teamId: number,
+  options: { since: string; eventName?: string },
+): TeamDossier {
   const homeTeam = resolveHomeTeam(db);
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
   const team = getTeamProfile(db, teamId, { since: options.since, versusTeamId });
@@ -180,9 +184,14 @@ export function buildTeamDossier(db: Db, teamId: number, options: { since: strin
   // than being allowed to fail the whole dossier build — a `report build` over five teams must not
   // die because one of them has no matches yet. Any OTHER error still propagates: a genuine bug in
   // the heuristic should surface, not be swallowed into a missing section.
+  //
+  // #63: `options.eventName`, when given, threads straight through to `getLineupPlan` — the event
+  // applies to EVERY dossier a `report build` run writes, so a bad name (unknown, or on file with no
+  // format) is exactly as caller-fixable here as it is for `tn lineup plan` directly, and propagates
+  // the same way (only `NoCourtMatchHistoryError` is caught, per-team).
   let lineup: TeamDossier["lineup"] = null;
   try {
-    lineup = getLineupPlan(db, teamId);
+    lineup = getLineupPlan(db, teamId, options.eventName);
   } catch (err) {
     if (!(err instanceof NoCourtMatchHistoryError)) throw err;
   }
@@ -233,7 +242,7 @@ type PreparedDossierWrite = {
 function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
-  options: { since: string },
+  options: { since: string; eventName?: string },
   dirName?: string,
 ): PreparedDossierWrite {
   const dossier = buildTeamDossier(db, teamId, options);
@@ -317,7 +326,7 @@ function commitDossierWrite(prepared: PreparedDossierWrite): string[] {
 export function writeTeamDossier(
   db: Db,
   teamId: number,
-  options: { since: string },
+  options: { since: string; eventName?: string },
   dirName?: string,
 ): string[] {
   return commitDossierWrite(prepareTeamDossierWrite(db, teamId, options, dirName));
@@ -375,7 +384,7 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
  * what this module actually provides, not a stronger one this comment used to imply.
  */
-export function writeSectionalsDossiers(db: Db, options: { since: string }): string[] {
+export function writeSectionalsDossiers(db: Db, options: { since: string; eventName?: string }): string[] {
   // Same load-bearing `ORDER BY teams.id` as `resolveDirNameForTeam` above, and for the identical
   // reason: this function's own collision-disambiguation only agrees with a later single-team
   // refresh's disambiguation if both see teams in the same order, and SQL does not grant that for

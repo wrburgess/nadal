@@ -273,6 +273,180 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     }
   });
 
+  // #63: event_add's new optional `format` input, and the twins lineup_plan/report_build gain for
+  // an optional `event`.
+  it("event_add accepts an optional format over MCP and returns the parsed courts", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "event_add",
+      arguments: {
+        target: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).toEqual({
+      event: "Springfield Sectionals 2026",
+      kind: "tournament",
+      startsOn: "2026-08-28",
+      endsOn: "2026-08-30",
+      created: true,
+      format: [
+        { slot: "S1", discipline: "singles" },
+        { slot: "D1", discipline: "doubles" },
+      ],
+    });
+  });
+
+  it("event_add refuses an invalid format over MCP as a tool error, writing nothing", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "event_add",
+      arguments: {
+        target: "Springfield",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "garbage",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const { db, sqlite } = openDb();
+    try {
+      expect(db.select().from(events).all(), "a refusal must write nothing").toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("lineup_plan accepts an optional event over MCP, and its format replaces the derived slot set", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Event Team" }).returning().get();
+    const opponent = db.insert(teams).values({ name: "Event Opponent" }).returning().get();
+    const p1 = db.insert(players).values({ canonicalName: "Ada Ashby" }).returning().get();
+    const p2 = db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    for (const p of [p1, p2]) {
+      db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
+    }
+    const tm = db
+      .insert(teamMatches)
+      .values({ homeTeamId: team.id, visitingTeamId: opponent.id, sourceMatchId: "mcp-event-tm" })
+      .returning()
+      .get();
+    const cm = upsertCourtMatch(db, {
+      teamMatchId: tm.id,
+      slot: "D1",
+      discipline: "doubles",
+      winnerSide: "home",
+      score: "6-3 6-4",
+      leagueContext: "40+ 3.5",
+      playedOn: "2026-05-01",
+      sourceMatchId: "mcp-event-cm",
+    });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p1.id, side: "home" });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p2.id, side: "home" });
+    db.insert(events)
+      .values({
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: [{ slot: "D1", discipline: "doubles" }],
+      })
+      .run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "lineup_plan",
+      arguments: { target: team.name, event: "Springfield Sectionals 2026" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(result)) as { slotSource: string; slotEvent: { name: string } | null };
+    expect(payload.slotSource).toBe("event-format");
+    expect(payload.slotEvent).toMatchObject({ name: "Springfield Sectionals 2026" });
+  });
+
+  it("lineup_plan over MCP with an unknown event returns a structured error result naming it", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    db.insert(teams).values({ name: "Event Team" }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "lineup_plan",
+      arguments: { target: "Event Team", event: "No Such Event" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("No Such Event");
+  });
+
+  it("report_build accepts an optional event over MCP and every dossier uses its courts", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Report Event Team" }).returning().get();
+    const opponent = db.insert(teams).values({ name: "Report Event Opponent" }).returning().get();
+    const p1 = db.insert(players).values({ canonicalName: "Ada Ashby" }).returning().get();
+    const p2 = db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    for (const p of [p1, p2]) {
+      db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
+    }
+    const tm = db
+      .insert(teamMatches)
+      .values({ homeTeamId: team.id, visitingTeamId: opponent.id, sourceMatchId: "mcp-report-event-tm" })
+      .returning()
+      .get();
+    const cm = upsertCourtMatch(db, {
+      teamMatchId: tm.id,
+      slot: "D1",
+      discipline: "doubles",
+      winnerSide: "home",
+      score: "6-3 6-4",
+      leagueContext: "40+ 3.5",
+      playedOn: "2026-05-01",
+      sourceMatchId: "mcp-report-event-cm",
+    });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p1.id, side: "home" });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p2.id, side: "home" });
+    db.insert(events)
+      .values({
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: [{ slot: "D1", discipline: "doubles" }],
+      })
+      .run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "report_build",
+      arguments: { target: team.name, event: "Springfield Sectionals 2026" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(result)) as { teams: number; files: number };
+    expect(payload.teams).toBe(1);
+    expect(payload.files).toBe(2);
+  });
+
   it("match_add writes the same rows as the CLI — same service, asserted through the tool", async () => {
     runMigrations();
     const { db, sqlite } = openDb();

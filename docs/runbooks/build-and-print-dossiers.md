@@ -66,6 +66,21 @@ tn report build "IA/Versteeg/40&Over3.5M"
 
 Expected summary line: `report build status=ok target="…" teams=N files=2N+2 root="…"`, exit 0.
 
+**If you have recorded Springfield's own court format** (a one-time setup step —
+`tn event add "Springfield Sectionals 2026" tournament 2026-08-28 2026-08-30
+"S1:singles,D1:doubles,D2:doubles,D3:doubles"`, per
+[predict-an-opponent-lineup.md](predict-an-opponent-lineup.md) step 0), name it as a trailing
+argument and EVERY dossier this run writes uses that format's courts instead of each team's own
+observed history:
+
+```
+tn report build sectionals "Springfield Sectionals 2026"
+```
+
+An unknown event name, or one on file with no format, refuses the WHOLE build (nothing written) —
+the same two refusals `tn lineup plan` gives, since a partial batch built under two different
+understandings of "the event" would be worse than no batch at all.
+
 ### 3. Read one before you print all of them
 
 Open `reports/<team-slug>/index.html` in a browser. Check:
@@ -146,10 +161,11 @@ about an opponent since last time (useful mid-event).
 - **The predicted lineup is a guess, and the dossier says so.** Every dossier now carries a
   *"Predicted lineup (a guess)"* section (#17 PR B). Read the confidence and the "Based on" column
   before planning against it: a row reading `placed by rating — no shared history` is not a
-  prediction about pairings at all. The courts listed are the ones this team has been *seen* to
-  field, not the event's format, and only matches belonging to **this team** count as evidence — the
-  section says how many were excluded as belonging elsewhere. The rule itself, and how to read it
-  critically, is in [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md).
+  prediction about pairings at all. **By default** the courts listed are the ones this team has been
+  *seen* to field, not the event's format — name the event on the build (step 2's setup note, #63)
+  to use its own courts for every dossier instead — and only matches belonging to **this team** count
+  as evidence — the section says how many were excluded as belonging elsewhere. The rule itself, and
+  how to read it critically, is in [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md).
 - **A team with no court matches of its own renders the lineup section as an explicit absence**
   rather than an empty table. Pull it (the prompt form in *Before you start*) and rebuild.
 - **`events` has no player-scoped writer yet** — hence the "Not collected yet" block for that

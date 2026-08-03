@@ -10,7 +10,14 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { events, players, ratingObservations, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
-import { NoCourtMatchHistoryError, getLineupPlan } from "../src/query/lineup.js";
+import { addEvent } from "../src/query/events.js";
+import { InvalidEventFormatError } from "../src/query/event-format.js";
+import {
+  EventHasNoFormatError,
+  NoCourtMatchHistoryError,
+  UnknownEventError,
+  getLineupPlan,
+} from "../src/query/lineup.js";
 import { resolveTeamTarget } from "../src/query/team-profile.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -405,6 +412,106 @@ describe("getLineupPlan", () => {
       expect(resolution.kind).toBe("ok");
       if (resolution.kind !== "ok") throw new Error("expected ok");
       expect(getLineupPlan(db, resolution.teamId).teamId).toBe(teamId);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// #63: `getLineupPlan`'s optional third argument — an event name, resolved by exact `events.name`
+// (the same mechanism `src/ingest/match-add.ts` already uses, never inferred).
+describe("getLineupPlan — an event's format overrides the derived slot set", () => {
+  useTnDbPath();
+
+  it("uses the named event's courts, in the format's order, and names the event on the result", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder", "Del Duxbury", "Emory Ellerby"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 6, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 5, ourMatch);
+      playDoubles(db, "D2", [ids["Del Duxbury"]!, ids["Emory Ellerby"]!], 4, ourMatch);
+      const event = addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles",
+      });
+
+      const plan = getLineupPlan(db, teamId, "Springfield Sectionals 2026");
+
+      expect(plan.slots.map((s) => s.slot), "D2 is real history but not part of the event's format").toEqual([
+        "S1",
+        "D1",
+      ]);
+      expect(plan.slotSource).toBe("event-format");
+      expect(plan.slotEvent).toEqual({ id: event.eventId, name: "Springfield Sectionals 2026" });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses an unknown event name", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      expect(() => getLineupPlan(db, teamId, "No Such Event")).toThrow(UnknownEventError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses a named event that exists but has no format on file", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      addEvent(db, { name: "Formatless Event", kind: "league", startsOn: "2026-03-01", endsOn: "2026-06-30" });
+
+      expect(() => getLineupPlan(db, teamId, "Formatless Event")).toThrow(EventHasNoFormatError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("fails closed (InvalidEventFormatError) when the stored format is corrupted by a raw insert", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      const event = db
+        .insert(events)
+        .values({
+          name: "Corrupted Event",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          // Bypasses `addEvent`'s own writer/validator entirely — a shape our own writer would never
+          // produce (an object, not an array of court entries).
+          format: { not: "a court list" },
+        })
+        .returning()
+        .get();
+
+      expect(event.name).toBe("Corrupted Event");
+      expect(() => getLineupPlan(db, teamId, "Corrupted Event")).toThrow(InvalidEventFormatError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("no event argument -> today's result, unchanged", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 3, ourMatch);
+
+      const plan = getLineupPlan(db, teamId);
+
+      expect(plan.slotSource).toBe("observed");
+      expect(plan.slotEvent).toBeNull();
     } finally {
       sqlite.close();
     }

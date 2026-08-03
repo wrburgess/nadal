@@ -20,6 +20,7 @@ import {
   MissingEventNameError,
   addEvent,
 } from "../src/query/events.js";
+import { InvalidEventFormatError } from "../src/query/event-format.js";
 import { setAvailability } from "../src/query/availability.js";
 import { availability } from "../src/db/schema.js";
 import { setHomeTeam } from "../src/query/home-team.js";
@@ -164,6 +165,110 @@ describe("addEvent", () => {
   });
 });
 
+// #63: `events.format` shipped in the schema with zero writers, zero readers, and zero tests. This
+// is the closing-the-loop suite for THAT column, the same shape as the block above closed the loop
+// for `starts_on`/`ends_on`.
+describe("addEvent's format", () => {
+  useTnDbPath();
+
+  it("stores a format, returned as the parsed court list", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const result = addEvent(db, { ...SPRINGFIELD, format: "S1:singles,D1:doubles,D2:doubles,D3:doubles" });
+      expect(result.format).toEqual([
+        { slot: "S1", discipline: "singles" },
+        { slot: "D1", discipline: "doubles" },
+        { slot: "D2", discipline: "doubles" },
+        { slot: "D3", discipline: "doubles" },
+      ]);
+
+      const stored = db.select().from(events).all()[0]!;
+      expect(stored.format).toEqual(result.format);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("has no format when none is ever given", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const result = addEvent(db, SPRINGFIELD);
+      expect(result.format).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("preserves a stored format when a repeat add OMITS the format argument — never clobbers with null", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      addEvent(db, { ...SPRINGFIELD, format: "S1:singles,D1:doubles" });
+      // A routine date correction, format not mentioned.
+      const second = addEvent(db, { ...SPRINGFIELD, endsOn: "2026-08-31" });
+
+      expect(second.format, "an omitted format must not null out what was already stored").toEqual([
+        { slot: "S1", discipline: "singles" },
+        { slot: "D1", discipline: "doubles" },
+      ]);
+      expect(second.endsOn).toBe("2026-08-31");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("replaces a stored format when a repeat add SUPPLIES a different one", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      addEvent(db, { ...SPRINGFIELD, format: "S1:singles,D1:doubles" });
+      const second = addEvent(db, { ...SPRINGFIELD, format: "S1:singles,D1:doubles,D2:doubles" });
+
+      expect(second.format).toEqual([
+        { slot: "S1", discipline: "singles" },
+        { slot: "D1", discipline: "doubles" },
+        { slot: "D2", discipline: "doubles" },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses an invalid format, and the row is left completely unchanged (created path)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      expect(() => addEvent(db, { ...SPRINGFIELD, format: "garbage" })).toThrow(InvalidEventFormatError);
+      expect(db.select().from(events).all(), "a refusal must write nothing").toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses an invalid format on an update too, leaving the previously-stored row untouched", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      addEvent(db, { ...SPRINGFIELD, format: "S1:singles" });
+      expect(() => addEvent(db, { ...SPRINGFIELD, endsOn: "2026-08-31", format: "garbage" })).toThrow(
+        InvalidEventFormatError,
+      );
+
+      const stored = db.select().from(events).all()[0]!;
+      expect(stored.endsOn, "the refused update must not have applied ANY of its fields").toBe("2026-08-30");
+      expect(stored.format).toEqual([{ slot: "S1", discipline: "singles" }]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("validates the format BEFORE the transaction — the invalid-kind check and an invalid format both leave the table untouched, in combination", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      expect(() => addEvent(db, { ...SPRINGFIELD, kind: "sectionals", format: "garbage" })).toThrow();
+      expect(db.select().from(events).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
 // Found by the independent Codex review of PR #47 (rated medium). `addEvent` promises an in-place
 // update, and `setAvailability` validates day-within-range only when a row is WRITTEN — so moving or
 // narrowing a range afterwards would strand availability on an event that no longer contains its
@@ -243,9 +348,13 @@ describe("addEvent will not move a range off availability already recorded again
         endsOn: "2026-06-30",
       });
       expect(other.created).toBe(true);
-      expect(addEvent(db, { ...other, name: "Some Other Event", startsOn: "2026-04-01", endsOn: "2026-04-02" }).created).toBe(
-        false,
-      );
+      // Built explicitly rather than by spreading `other` (an AddEventResult, not an AddEventInput):
+      // `other.format` is `EventCourt[] | null`, not the `string | undefined` `addEvent` accepts, so
+      // spreading it here would forward a value the writer's own input type does not admit.
+      expect(
+        addEvent(db, { name: "Some Other Event", kind: other.kind, startsOn: "2026-04-01", endsOn: "2026-04-02" })
+          .created,
+      ).toBe(false);
     } finally {
       sqlite.close();
     }
