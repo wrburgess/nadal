@@ -602,10 +602,29 @@ const SHAPE_EXEMPT_HTTP_EQUIV = "origin-trial";
  *    false refusals that the narrow rules were avoiding — see `SHAPE_EXEMPT_HTTP_EQUIV` above for
  *    the one exemption that measurement did justify.
  *
- * **Neither signal is a complete detector.** The convention list is a fixed set of known
- * frameworks, not a catalogue of every possible name; the shape signal has a 64-character
- * threshold, under which a short unnamed opaque value passes both signals. Both gaps are the
- * manual scrub's job, not this function's.
+ * **What this does NOT cover — the complete list, verified by executing each case rather than
+ * reasoning about it.** Stated exhaustively on purpose: a limits paragraph that enumerates only
+ * some of its gaps is read as enumerating all of them, and that is how a control comes to be
+ * trusted past its edge. Every line below was confirmed to pass this function unrefused:
+ *
+ * - **Element scope: `<input>` and `<meta>` only.** A credential anywhere else is invisible here —
+ *   `<div data-csrf-token="…">` and `<textarea name="__VIEWSTATE">…</textarea>` both pass.
+ * - **Attribute scope: `value` on an `<input>`, `content` on a `<meta>`, and nothing else.**
+ *   `<input type="hidden" id="x" data-token="…">` passes: the element is in scope, the attribute
+ *   is not.
+ * - **The convention list is a fixed set of known frameworks**, not a catalogue of every possible
+ *   name.
+ * - **The shape signal has a 64-character threshold**, under which a short unnamed opaque value
+ *   passes both signals.
+ * - **The `submit`/`button`/`reset`/`image` exemption is unconditional**, so
+ *   `<input type="submit" name="__VIEWSTATE" value="…">` passes. That is the deliberate price of
+ *   the recorded false positive this exemption exists for (`btnCsrfRefreshPage`, whose `value` is
+ *   the words on a button); the exemption cannot be narrowed to signal 3 alone without
+ *   re-breaking it, because that false positive is a signal-2 match.
+ *
+ * Every one of these is the **manual scrub's** job (`docs/runbooks/capture-fixtures.md` step 4),
+ * whose `grep` runs over raw bytes and therefore reaches all of them. That grep is a real backstop,
+ * not a formality — this function does not supersede it.
  *
  * **Two exemptions, and they are scoped differently — stated precisely, because an exemption
  * described more broadly than it is written is how a control comes to be trusted for something it

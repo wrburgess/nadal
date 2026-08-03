@@ -120,8 +120,11 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
    > console.log('no automated refusal — that is NOT a clean bill of health, run the grep below too');
    > "
    >
-   > # The manual backstop — the convention list above is not exhaustive and the shape check has a
-   > # threshold, so this grep is still load-bearing, not a formality:
+   > # The manual backstop — this grep is still load-bearing, not a formality. It runs over RAW
+   > # BYTES, so it reaches things the automated check structurally cannot: that check looks only at
+   > # `<input>`/`<meta>` elements and only at their `value`/`content` attributes, so a credential in
+   > # a `data-` attribute, in a `<textarea>`, or on any other element is invisible to it. Its
+   > # convention list is also not exhaustive and its shape check has a 64-character threshold.
    > grep -oiE '(__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token|_token|csrfmiddlewaretoken|csrf|xsrf)[^>]{0,40}' <the saved page>.scrubbed
    > ```
    >

@@ -547,7 +547,7 @@ describe("assertNoSessionCredentials", () => {
     expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
   });
 
-  it("refuses an UNNAMED hidden input on shape alone (an 80-char opaque value, no name match)", () => {
+  it("refuses a hidden input on shape alone — its name matches no convention (an 80-char opaque value)", () => {
     const html = credentialPage(`<input type="hidden" name="q7" value="${"A1b2C3d4".repeat(10)}">`);
 
     expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
@@ -704,6 +704,23 @@ describe("assertNoSessionCredentials", () => {
     const html = credentialPage(`<input type name="q7" value="${"A1b2C3d4".repeat(10)}">`);
 
     expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  // The documented limits, pinned executably. `assertNoSessionCredentials`'s docstring claims to
+  // list what it does NOT cover, exhaustively — and a limits list is exactly the kind of claim that
+  // rots into being wider than the code. These cases make it checkable: each one must PASS, and if
+  // a future change starts refusing one, the docstring is out of date and this test says so.
+  // (They go green against a no-op control too — that is fine, and not what they are for; 22 other
+  // tests in this file die under a no-op stub, which is what pins the control's substance.)
+  it.each([
+    ["element scope: a credential on a div", `<div data-csrf-token="TOKEN"></div>`],
+    ["element scope: a credential in a textarea", `<textarea name="__VIEWSTATE">TOKEN</textarea>`],
+    ["attribute scope: an in-scope element, an out-of-scope attribute", `<input type="hidden" id="x" data-token="TOKEN">`],
+    ["the unconditional submit exemption", `<input type="submit" name="__VIEWSTATE" value="TOKEN">`],
+  ])("documents a known limit — %s", (_label, inner) => {
+    const html = credentialPage(inner.replace("TOKEN", "A1b2C3d4".repeat(10)));
+
+    expect(() => assertNoSessionCredentials(html)).not.toThrow();
   });
 
   it("passes an origin-trial meta — the one measured shape exemption", () => {
