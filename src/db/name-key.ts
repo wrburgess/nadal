@@ -113,22 +113,43 @@ import type { Db } from "../ingest/db-types.js";
  *   exactly that. "No property reaches this" is a claim about the properties you happened to think
  *   of, and it was wrong here.
  *
- * **Two subtractions, and between them they are the whole boundary.** The test is not "is it
- * invisible in isolation" but "can deleting it change what a reader sees":
+ * **Two qualifiers, and between them they are the whole boundary.** The question is not "is this
+ * character invisible in isolation" but "can deleting it change what a reader sees":
  *
- * - **`\p{White_Space}`** — TAB and NEL are `Cc` yet render as a space or a break, so
+ * - **NOT `\p{White_Space}`** — TAB and NEL are `Cc` yet render as a space or a break, so
  *   `Jane<TAB>Doe` reads as two words and `JaneDoe` reads as one. This is also what leaves the
  *   long-standing "interior whitespace is NOT collapsed" behavior exactly as it was.
- * - **`\p{Script=Hangul}`** — the Hangul fillers U+115F/U+1160/U+3164/U+FFA0 are
- *   `Default_Ignorable` and invisible ON THEIR OWN, but they are *placeholders that complete a
- *   syllable block*, so deleting one re-groups the surrounding jamo. Traced by the Reviewer and
- *   reproduced: `<L,Vf><L,V>` and `<L><L,V>` both folded to `U+1100 U+B098`, silently merging two
- *   names a Korean renderer draws differently. Script-scoped rather than a hand-listed set of four
- *   code points, and verified to exempt exactly those four and nothing else.
+ * - **ONLY `Script=Common | Inherited | Latin`** — i.e. strip an invisible character only when it
+ *   belongs to no complex script. This is the qualifier that took four revisions to find, and the
+ *   history is recorded below because the wrong versions all looked right.
  *
- * Both subtractions exist for the same reason: a FALSE MERGE is the silent direction. A fold that
+ * ### Why a script scope, and why PER CHARACTER
+ *
+ * The class was revised four times in one change, each time because a review pass found a real
+ * defect in the previous version: `\p{Cf}` alone was too narrow (nine other invisible classes still
+ * forked); adding `\p{Cc}`+`\p{Variation_Selector}` was still too narrow (U+034F); adding
+ * `\p{Default_Ignorable_Code_Point}` was too WIDE — it swept in the Hangul fillers, and deleting one
+ * re-groups the surrounding jamo, so `<L,Vf><L,V>` and `<L><L,V>` both folded to `U+1100 U+B098`,
+ * silently merging two names a Korean renderer draws differently. Subtracting `Script=Hangul` then
+ * over-merged Mongolian, where U+180E VOWEL SEPARATOR is a lexical break and U+180B FVS1 selects a
+ * required glyph form. Five scripts had characters in the class.
+ *
+ * **The premise was wrong, not the list.** There is no Unicode property equal to "safe to delete
+ * from a name", because **invisibility is contextual** — every widening eventually reaches a script
+ * whose invisible characters are load-bearing. So the guard asks a different question entirely, and
+ * the answer generalizes instead of enumerating: a character is strippable only if it belongs to no
+ * complex script. Mongolian, Hangul, Khmer, Kaithi and Egyptian controls are all exempted by the
+ * same clause, and so is the next script nobody here has thought of.
+ *
+ * **Per character, not per name.** Scoping per name — "if the name touches a complex script, strip
+ * nothing" — reads simpler and hands an attacker a one-character bypass: append an invisible
+ * Mongolian separator to a Latin name and the bidi override in the rest of it survives untouched,
+ * reopening this very defect. Per character, the override is stripped (its script is `Common`) while
+ * the Mongolian character is kept (its script is not). Pinned by an ANTI-BYPASS test.
+ *
+ * Both qualifiers exist for the same reason: a FALSE MERGE is the silent direction. A fold that
  * splits one person is loud — the ladder reports `ambiguous` — while a fold that merges two people
- * says nothing at all, which is why every widening of this class ships with assertions that specific
+ * says nothing at all, which is why every revision of this class ships with assertions that specific
  * things still fold APART.
  *
  * Checked rather than assumed, and asserted in `test/name-key.test.ts` over the whole code-point
@@ -143,7 +164,7 @@ import type { Db } from "../ingest/db-types.js";
  * identical across all 1.1M code points before choosing this one; it strips 489 characters.
  */
 const INVISIBLE =
-  /(?![\p{White_Space}\p{Script=Hangul}])[\p{Cc}\p{Cf}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}]/gu;
+  /(?![\p{White_Space}])(?=[\p{Script=Common}\p{Script=Inherited}\p{Script=Latin}])[\p{Cc}\p{Cf}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}]/gu;
 
 export function nameKey(s: string): string {
   return s.replace(INVISIBLE, "").trim().normalize("NFKC").toLowerCase();

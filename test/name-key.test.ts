@@ -120,6 +120,44 @@ describe("nameKey", () => {
     }
   });
 
+  it("EXEMPTS every COMPLEX-SCRIPT invisible, not just Hangul — the boundary's final form", () => {
+    // The escalation this PR reached, and the HC's ruling on it. Four revisions of the strip class
+    // each fixed one script and were then shown too narrow or too wide by the next review pass:
+    // Cf alone -> +Cc/VS -> +Default_Ignorable (over-merged Hangul) -> -Hangul (over-merged
+    // Mongolian). Five scripts had characters in the class.
+    //
+    // The premise was wrong, not the list: there is no property equal to "safe to delete from a
+    // name", because INVISIBILITY IS CONTEXTUAL. So the guard now asks a different question — does
+    // this character BELONG to a complex script? — and strips only invisibles whose own script is
+    // Common, Inherited or Latin. That eliminates the whole over-merge class instead of subtracting
+    // one script per review round.
+    for (const [a, b] of [
+      ["ᠬᠠᠨᠠ", "ᠬᠠᠨ᠎ᠠ"], // Mongolian VOWEL SEPARATOR: a lexical break
+      ["ᠭᠠᠯ", "ᠭ᠋ᠠᠯ"], // Mongolian FVS1: selects a required glyph form
+      ["ᄀᅠ나", "ᄀ나"], // Hangul filler: completes a syllable block
+      ["a឴b", "ab"], // Khmer INHERENT AQ
+      ["a𑂽b", "ab"], // Kaithi NUMBER SIGN
+      ["a𓐰b", "ab"], // Egyptian VERTICAL JOINER
+    ]) {
+      expect(namesEqual(a!, b!)).toBe(false);
+    }
+  });
+
+  it("ANTI-BYPASS: a complex-script character elsewhere does NOT disable the strip", () => {
+    // The reason the script scope is applied PER CHARACTER and not per name. Scoping per name — "if
+    // the name touches a complex script, strip nothing" — reads simpler and hands an attacker a
+    // one-character bypass: append an invisible Mongolian separator and the bidi override in the
+    // rest of the name survives untouched, reopening #62 exactly.
+    //
+    // Per character, the override is stripped because ITS script is Common, while the Mongolian
+    // character is kept because its script is not. Both names keep the separator; only the RLO goes.
+    const MVS = "᠎";
+    expect(namesEqual("Anna Vers" + RLO + "teeg" + MVS, "Anna Versteeg" + MVS)).toBe(true);
+    expect(namesEqual("Anna Vers" + CGJ + "teeg" + MVS, "Anna Versteeg" + MVS)).toBe(true);
+    // ...and the Mongolian character is still load-bearing between two names that differ only by it.
+    expect(namesEqual("Anna Versteeg" + MVS, "Anna Versteeg")).toBe(false);
+  });
+
   it("EXEMPTS the Hangul fillers — default-ignorable, but NOT context-free (Codex fix-verification)", () => {
     // The correction to the correction, and the reason the exclusion is `\p{Script=Hangul}` rather
     // than a hand-listed set of four code points.
