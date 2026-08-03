@@ -15,7 +15,7 @@
  */
 
 import * as cheerio from "cheerio";
-import type { AnyNode } from "domhandler";
+import type { AnyNode, ChildNode, Element } from "domhandler";
 // Deliberately circular with tools/fixture-policy.ts, which imports normalisation helpers back
 // from this module. Both references are used only inside function BODIES (never at module-scope
 // evaluation), which is the shape Node's ESM loader resolves without a "before initialization"
@@ -559,6 +559,34 @@ const OPAQUE_TOKEN_SHAPE = /^[A-Za-z0-9+/=._-]{64,}$/;
 const SHAPE_EXEMPT_HTTP_EQUIV = "origin-trial";
 
 /**
+ * Text that still looks like an in-scope element, and so must be re-parsed rather than trusted as
+ * text — the trigger for the raw-text sweep in `assertNoSessionCredentials`.
+ *
+ * **Why this exists.** An element selector only sees *elements*, and HTML has containers whose
+ * contents the parser produces as **text** no matter what they look like: `<noscript>` (RAWTEXT
+ * while scripting is enabled, which is cheerio's default), `<textarea>` and `<title>` (RCDATA in
+ * every mode), `<iframe>`, `<noframes>`, `<noembed>`, `<xmp>`. A real
+ * `<input type="hidden" name="__VIEWSTATE" value="…">` inside any of them is invisible to
+ * `$("input, meta")`, and — measured — five of those seven then carried the token all the way
+ * through `redact()` into the returned bytes.
+ *
+ * **Why a trigger on the text rather than a list of container names.** The container list is the
+ * enumeration, and enumerations fail at their edges — the recurring shape this project has logged
+ * repeatedly. Asking instead *"is there text here that would be an in-scope element if it were
+ * parsed?"* derives the guard from the structure of the problem: whatever container hid it, and
+ * however deeply nested, the hidden markup still has to look like markup to matter.
+ *
+ * Over-matching is safe and deliberate: a false trigger costs one extra fragment parse that finds
+ * nothing. Under-matching is the only dangerous direction, so this pattern is loose on purpose.
+ * (Provenance: Codex adversarial review on PR #86 found the `<noscript>` instance; measuring it
+ * showed six containers affected, so the fix is written against the class.)
+ */
+const IN_SCOPE_ELEMENT_IN_TEXT = /<\s*(?:input|meta)[\s/>]/i;
+
+/** Bound on the raw-text re-parse recursion — nesting past this is pathological, not real markup. */
+const RAW_TEXT_SWEEP_MAX_DEPTH = 3;
+
+/**
  * Refuse a capture that still carries what looks like the CAPTURING OPERATOR's own session state
  * — a CSRF/anti-forgery token, an ASP.NET WebForms `__VIEWSTATE` blob, or an unnamed opaque
  * credential of the same shape — rather than a scouting subject's identity.
@@ -607,8 +635,17 @@ const SHAPE_EXEMPT_HTTP_EQUIV = "origin-trial";
  * some of its gaps is read as enumerating all of them, and that is how a control comes to be
  * trusted past its edge. Every line below was confirmed to pass this function unrefused:
  *
- * - **Element scope: `<input>` and `<meta>` only.** A credential anywhere else is invisible here —
- *   `<div data-csrf-token="…">` and `<textarea name="__VIEWSTATE">…</textarea>` both pass.
+ * - **Element scope: `<input>` and `<meta>` only.** A credential carried by any *other* element is
+ *   invisible here — `<div data-csrf-token="…">` passes, and so does a bare token sitting as the
+ *   text of `<textarea name="__VIEWSTATE">…</textarea>`, because that token is text rather than an
+ *   attribute of an in-scope element.
+ *
+ *   **Not a limit, and worth stating so the two are not confused:** an in-scope element that a
+ *   raw-text container *hid* from the selector — an `<input>` inside `<noscript>`, `<textarea>`,
+ *   `<title>`, `<iframe>`, `<noframes>`, `<noembed>` or `<xmp>` — **is** caught, by the raw-text
+ *   sweep in `collectInScopeElements`. The distinction is whether the credential is an attribute of
+ *   a real `<input>`/`<meta>` (caught, wherever it is nested) or merely text that happens to sit
+ *   inside some other element (not caught).
  * - **Attribute scope: `value` on an `<input>`, `content` on a `<meta>`, and nothing else.**
  *   `<input type="hidden" id="x" data-token="…">` passes: the element is in scope, the attribute
  *   is not.
@@ -640,24 +677,65 @@ const SHAPE_EXEMPT_HTTP_EQUIV = "origin-trial";
  *
  * Nothing else is exempt from anything.
  */
-export function assertNoSessionCredentials(html: string): void {
-  const survivors: string[] = [];
-  const parseErrorCodes: string[] = [];
+/**
+ * Every `<input>`/`<meta>` in `html`, INCLUDING ones a raw-text container hid from the selector by
+ * making them text — plus every parse-error code seen across all parses.
+ *
+ * Each text node that still looks like in-scope markup (`IN_SCOPE_ELEMENT_IN_TEXT`) is re-parsed as
+ * a fragment and swept the same way, to `RAW_TEXT_SWEEP_MAX_DEPTH`. The elements come back for the
+ * caller's ordinary signal checks, so the hidden ones get the identical treatment — same signals,
+ * same exemptions — rather than a parallel rule set that could drift from them.
+ */
+function collectInScopeElements(
+  html: string,
+  depth: number,
+  found: { elements: Element[]; parseErrorCodes: string[] },
+): void {
+  if (depth > RAW_TEXT_SWEEP_MAX_DEPTH) return;
+
   const $ = cheerio.load(html, {
     sourceCodeLocationInfo: true,
     onParseError: (err) => {
-      parseErrorCodes.push(err.code);
+      found.parseErrorCodes.push(err.code);
     },
   });
 
-  if (parseErrorCodes.includes("duplicate-attribute")) {
+  $("input, meta").each((_, el) => {
+    if (el.type === "tag") found.elements.push(el);
+  });
+
+  const hidden: string[] = [];
+  const walk = (nodes: ChildNode[]): void => {
+    for (const node of nodes) {
+      if (node.type === "text" && IN_SCOPE_ELEMENT_IN_TEXT.test(node.data)) hidden.push(node.data);
+      const children = (node as { children?: ChildNode[] }).children;
+      if (children !== undefined) walk(children);
+    }
+  };
+  walk($.root().toArray() as unknown as ChildNode[]);
+
+  for (const text of hidden) collectInScopeElements(text, depth + 1, found);
+}
+
+export function assertNoSessionCredentials(html: string): void {
+  const survivors: string[] = [];
+  const found: { elements: Element[]; parseErrorCodes: string[] } = {
+    elements: [],
+    parseErrorCodes: [],
+  };
+  collectInScopeElements(html, 0, found);
+
+  if (found.parseErrorCodes.includes("duplicate-attribute")) {
     survivors.push(
       "document contains a duplicate HTML attribute (e.g. two `value=` or `type=` on one tag) — the parsed attribute map cannot be trusted to match the source bytes",
     );
   }
 
-  $("input, meta").each((_, el) => {
-    if (el.type !== "tag") return;
+  // NOTE: `continue`, not `return`. This loop replaced a cheerio `.each()` callback, where `return`
+  // meant "skip this element"; in a `for` loop the same keyword would exit the WHOLE function and
+  // silently stop checking every element after the first exempt or empty one — a fail-open that no
+  // existing test would have caught, since they all use single-element fixtures.
+  for (const el of found.elements) {
     const tag = el.tagName.toLowerCase();
     const rawName = el.attribs.name ?? "";
     const rawId = el.attribs.id ?? "";
@@ -666,7 +744,7 @@ export function assertNoSessionCredentials(html: string): void {
     const type = el.attribs.type?.trim().toLowerCase() ?? "";
     const exempt = tag === "input" && EXEMPT_INPUT_TYPES.has(type);
 
-    if (exempt || value === "") return;
+    if (exempt || value === "") continue;
 
     const label = rawName || rawId || "(unnamed)";
 
@@ -674,11 +752,11 @@ export function assertNoSessionCredentials(html: string): void {
       survivors.push(
         `<${tag}> "${label}" — name/id matches a known CSRF/anti-forgery/view-state convention`,
       );
-      return;
+      continue;
     }
 
     // The shape signal applies to EVERY remaining element — every non-exempt `<input>` (the
-    // `EXEMPT_INPUT_TYPES` return above already removed the visible-label cases, which is all that
+    // `EXEMPT_INPUT_TYPES` skip above already removed the visible-label cases, which is all that
     // a narrower `type === "hidden"` test was buying) and every `<meta>` but an `origin-trial` one.
     // Both narrowings that once stood here failed open; the docstring above records what each let
     // through and the corpus measurement that showed neither was preventing a real refusal.
@@ -687,7 +765,7 @@ export function assertNoSessionCredentials(html: string): void {
     if (shapeApplies && OPAQUE_TOKEN_SHAPE.test(value)) {
       survivors.push(`<${tag}> "${label}" — value is a long opaque token (shape signal)`);
     }
-  });
+  }
 
   if (survivors.length > 0) {
     throw new RedactionError(

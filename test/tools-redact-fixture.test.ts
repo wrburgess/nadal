@@ -706,6 +706,48 @@ describe("assertNoSessionCredentials", () => {
     expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
   });
 
+  // Raw-text containers. Codex's adversarial review on PR #86 found the `<noscript>` instance;
+  // measuring it showed six containers hid an in-scope element from the selector, and five of them
+  // carried the token all the way through redact() into the returned bytes. The fix targets the
+  // class (re-parse text that still looks like in-scope markup), so the test does too.
+  it.each(["noscript", "textarea", "title", "iframe", "noembed", "noframes", "xmp"])(
+    "refuses a credential hidden from the element selector inside <%s>",
+    (container) => {
+      const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+      const html = credentialPage(`<${container}>${field}</${container}>`);
+
+      expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+    },
+  );
+
+  it("refuses Codex's exact reported trace, end to end through redact()", () => {
+    const token = "A1b2C3d4".repeat(10);
+    const html = `<html><head></head><body><noscript><input type="hidden" name="__VIEWSTATE" value="${token}"></noscript></body></html>`;
+
+    expect(() => redact(html, [], { vocabulary: new Set() })).toThrow(RedactionError);
+  });
+
+  it("refuses a credential nested two containers deep", () => {
+    const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+    const html = credentialPage(`<noscript><textarea>${field}</textarea></noscript>`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("keeps checking after an exempt element — a later credential is still caught", () => {
+    // Guards the loop's `continue`. This body was once a cheerio `.each()` callback where `return`
+    // meant "skip this element"; as a `for` loop the same keyword exits the whole function, so an
+    // exempt or empty-valued element appearing FIRST would silently suppress every check after it.
+    // Every other test here uses a single-element fixture and would not see that.
+    const html = credentialPage(
+      `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">` +
+        `<input type="hidden" id="alsoEmpty" value="">` +
+        `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
   // The documented limits, pinned executably. `assertNoSessionCredentials`'s docstring claims to
   // list what it does NOT cover, exhaustively — and a limits list is exactly the kind of claim that
   // rots into being wider than the code. These cases make it checkable: each one must PASS, and if
