@@ -609,8 +609,9 @@ function writeThroughVerifiedFd(
  * Writes a SET of leaves that only make sense together, undoing the ones already written if a later
  * one is refused (#65). Returns the real paths written, in the order given.
  *
- * `writeNewOutputFile` above is all-or-nothing for ONE leaf: any failure past its open closes the fd
- * and unlinks the file it created, so a refused write leaves nothing behind. What it cannot do is
+ * `writeNewOutputFile` above handles ONE leaf: any failure past its open closes the fd and
+ * best-effort unlinks the file it created (best-effort in the precise sense `unlinkIfStillOurs`
+ * documents — an inode that is no longer ours is left alone, deliberately). What it cannot do is
  * speak for a SIBLING written by a separate call — and a caller writing a pair in sequence
  * (`src/ingest/archive.ts`: a raw capture plus its `.provenance.json` record) had exactly that gap.
  * Both PATHS were pre-validated together, so a pre-check refusal correctly wrote nothing; but the

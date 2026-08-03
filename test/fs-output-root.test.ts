@@ -430,11 +430,17 @@ describe("assertOutputPathSafe", () => {
 describe("overwriteOutputFile never has a window where the destination is missing (round 3, Finding 2 [high])", () => {
   let dir: string;
 
+  // `mockReset`, not `mockClear`, for the reason spelled out on the `#33 fd-anchored write` block
+  // below (#65). Every `mockImplementationOnce` in THIS block does happen to be consumed today — each
+  // one is the trigger for its own test's failure — but that is precisely the reasoning the leak
+  // defeats: an unconsumed once-mock is invisible in its own test's result, so "I checked and they
+  // are all consumed" is a statement about today's control flow, not a property the teardown holds.
+  // Reset here too, so a future test added to this block cannot reintroduce the class.
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
-    vi.mocked(fsModule.writeFileSync).mockClear();
-    vi.mocked(fsModule.renameSync).mockClear();
-    vi.mocked(fsModule.lstatSync).mockClear();
+    vi.mocked(fsModule.writeFileSync).mockReset();
+    vi.mocked(fsModule.renameSync).mockReset();
+    vi.mocked(fsModule.lstatSync).mockReset();
   });
 
   it("REGRESSION: a failure while writing the replacement content must not delete the existing good file", () => {
@@ -1083,6 +1089,78 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
 
       // Neither half of the pair survives — asserted on the DIRECTORY, so a stray file under any
       // name (a partial, a temp artifact) fails this too.
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The loop's ITERATION, which the two-leaf cases above cannot check: with only one leaf ever
+  // written before the failure, a rollback that undoes just the first, or just the most recent, is
+  // indistinguishable from one that undoes them all. Verified by mutation rather than asserted —
+  // `written.slice(-1)` in place of the full reverse walk passes every other test in this PR and
+  // fails only this one. Three leaves is the smallest set that can tell them apart.
+  it("REGRESSION: rolls back EVERY leaf already written, not just one of them", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-three");
+      mkdirSync(subDir, { recursive: true });
+      const first = join(subDir, "a.html");
+      const second = join(subDir, "b.html");
+      const third = join(subDir, "c.html");
+
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith("c.html")) {
+          throw new Error("simulated third-leaf open failure");
+        }
+        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: first, content: "A" },
+            { candidatePath: second, content: "B" },
+            { candidatePath: third, content: "C" },
+          ]),
+        ).toThrow("simulated third-leaf open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+      }
+
+      // BOTH earlier leaves gone — not just the most recent one, and not just the first.
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The other end of the same loop: when the FIRST leaf is the one refused, `written` is empty and
+  // the rollback walk must be a no-op rather than throwing on an empty set. The per-leaf writer has
+  // already cleaned up after itself by then, so nothing may be left behind either.
+  it("a refusal on the FIRST leaf leaves nothing behind and rolls back nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    try {
+      const subDir = join(root, "team-set-first-fails");
+      mkdirSync(subDir, { recursive: true });
+      const first = join(subDir, "a.html");
+      const second = join(subDir, "b.html");
+
+      vi.mocked(fsModule.openSync).mockImplementationOnce(() => {
+        throw new Error("simulated first-leaf open failure");
+      });
+
+      expect(() =>
+        writeNewOutputFileSet(root, "reports", [
+          { candidatePath: first, content: "A" },
+          { candidatePath: second, content: "B" },
+        ]),
+      ).toThrow("simulated first-leaf open failure");
+
+      // The second leaf was never attempted, and the first never existed. `mockImplementationOnce`
+      // covers exactly one open, so a second one would have called through and created `b.html` —
+      // its absence is what proves the set stopped at the refusal rather than carrying on.
       expect(readdirSync(subDir)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
