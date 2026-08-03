@@ -119,11 +119,32 @@ export function resolveEventFormat(db: Db, eventName: string): ResolvedEventForm
         `${eventRow.endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
     );
   }
-  return {
-    event: { id: eventRow.id, name: eventRow.name },
-    slotSet: format,
-    [resolvedEventFormat]: true,
+  const resolved = {
+    event: Object.freeze({ id: eventRow.id, name: eventRow.name }),
+    // Deep-frozen, not merely `readonly`: `readonly` is erased at compile time, so a holder could
+    // reach through `resolved.slotSet[0].slot = "…"` and mutate the courts a whole batch is
+    // predicting across, between one team and the next.
+    slotSet: Object.freeze(format.map((court) => Object.freeze({ ...court }))),
   };
+  // NON-enumerable, so object spread and `Object.assign` do not carry it — `{ ...a, slotSet: b.slotSet }`
+  // therefore produces a value without the brand, which `getLineupPlan` rejects at runtime.
+  Object.defineProperty(resolved, resolvedEventFormat, { value: true, enumerable: false });
+  return Object.freeze(resolved) as ResolvedEventFormat;
+}
+
+/** Runtime half of the opacity guarantee. The brand's TYPE stops a caller naming it; this stops a
+ * caller reconstructing the value around it — and the two are not redundant, because TypeScript
+ * models an object spread from the declared type, so `{ ...a }` can still typecheck as a
+ * `ResolvedEventFormat` while carrying no brand at runtime. Checking here is what makes the
+ * non-enumerable brand mean something rather than merely look like it does. */
+function assertResolvedByUs(value: ResolvedEventFormat): void {
+  if ((value as Record<symbol, unknown>)[resolvedEventFormat] !== true) {
+    throw new Error(
+      "getLineupPlan: the resolved event format was not produced by resolveEventFormat — a copied or " +
+        "reconstructed value can pair one event's courts with another event's identity, which is the " +
+        "provenance guarantee this type exists to hold",
+    );
+  }
 }
 
 export type LineupPlan = LineupSlotProvenance & {
@@ -186,6 +207,7 @@ export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedE
   // comment for the race that motivates it.
   const resolved: ResolvedEventFormat | undefined =
     event === undefined ? undefined : typeof event === "string" ? resolveEventFormat(db, event) : event;
+  if (resolved !== undefined) assertResolvedByUs(resolved);
   const slotSet = resolved === undefined ? undefined : [...resolved.slotSet];
   // Derived from the resolved event's own identity, never accepted as a second field alongside the
   // slot set — so the courts predicted and the event named can not disagree.

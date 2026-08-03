@@ -613,6 +613,24 @@ describe("getLineupPlan — an event's format overrides the derived slot set", (
       // The value exposes no separate provenance field to swap — the presenter-facing event name is
       // derived from the same object the slot set came from.
       expect(Object.keys(two)).toEqual(["event", "slotSet"]);
+
+      // Codex round 3 [medium]: a spread used to carry the brand, so `{ ...a, slotSet: b.slotSet }`
+      // produced a value `getLineupPlan` trusted — B's courts labelled event A. The brand is now
+      // non-enumerable, so the spread does not carry it, and the runtime check refuses the result.
+      //
+      // Asserted at RUNTIME deliberately. The natural-looking compile-time regression does not
+      // exist: TypeScript models an object spread from the DECLARED type, so this expression still
+      // typechecks as a `ResolvedEventFormat` (verified against this project's own tsconfig). A
+      // non-enumerable brand alone would therefore have looked like a fix while changing nothing an
+      // attacker-shaped caller would notice — the runtime check is the half that closes it.
+      const mixed = { ...one, slotSet: two.slotSet };
+      expect(Object.getOwnPropertySymbols(mixed), "a spread must not carry the brand").toHaveLength(0);
+      expect(() => getLineupPlan(db, teamId, mixed)).toThrow(/not produced by resolveEventFormat/);
+
+      // And the courts a batch is predicting across cannot be mutated between teams. `readonly` is
+      // erased at runtime, so this needs a real freeze, not a type.
+      expect(Object.isFrozen(two.slotSet)).toBe(true);
+      expect(Object.isFrozen(two.slotSet[0])).toBe(true);
     } finally {
       sqlite.close();
     }
