@@ -70,4 +70,38 @@ describe("errorMessage", () => {
     expect(() => errorMessage(noProto)).not.toThrow();
     expect(errorMessage(noProto)).toBe("[unprintable error message]");
   });
+
+  it("falls back when the message GETTER throws — the read itself, not just the coercion", () => {
+    // Found by this PR's own adversarial pass, and the sharpest case here: the first draft guarded
+    // only the `String()` call, so `err.message` was read OUTSIDE the try. An Error carrying a
+    // throwing getter then threw straight out of the function whose whole contract is that it does
+    // not — the remedy had inherited the shape of the bug it was written to fix. Reading a property
+    // off an attacker-shaped object is an operation that can throw, exactly like coercing one.
+    const err = new Error();
+    Object.defineProperty(err, "message", {
+      get(): string {
+        throw new Error("getter blew up");
+      },
+      configurable: true,
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(() => errorMessage(err)).not.toThrow();
+    expect(errorMessage(err)).toBe("[unprintable error message]");
+  });
+
+  it("falls back when `instanceof` itself throws — a Proxy trapping getPrototypeOf", () => {
+    // The same argument one step earlier in the expression: `err instanceof Error` is not a free
+    // operation either. It is inside the try for the same reason the property read is, and this
+    // pins that rather than leaving it to the reader to notice from the brace placement.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf(): never {
+          throw new Error("prototype trap blew up");
+        },
+      },
+    );
+    expect(() => errorMessage(hostile)).not.toThrow();
+    expect(errorMessage(hostile)).toBe("[unprintable error message]");
+  });
 });

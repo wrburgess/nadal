@@ -24,14 +24,21 @@ const UNPRINTABLE = "[unprintable error message]";
  * throws and on a null-prototype object (`Object.create(null)` has no `toString` at all). Coercing
  * without that guard would move the same defect one step down instead of closing it.
  *
+ * **The whole body is inside the `try`, including the `err.message` READ** — the first draft of this
+ * function guarded only the `String()` call, and an `Error` carrying a throwing `message` GETTER
+ * (or a Proxy trapping `getPrototypeOf`) therefore threw straight out of the function whose entire
+ * contract is that it does not. Caught by this PR's own adversarial pass, and it is the same defect
+ * class one level further in: the remedy inherited the shape of the bug. Reading a property off an
+ * attacker-shaped object IS an operation that can throw, exactly like coercing one.
+ *
  * `String()` and template interpolation do NOT agree, which is why the two interpolating call
  * sites use this function too rather than relying on the template literal's own coercion:
  * `String(Symbol("x"))` returns `"Symbol(x)"`, while `` `${Symbol("x")}` `` throws.
  */
 export function errorMessage(err: unknown): string {
-  const raw: unknown = err instanceof Error ? err.message : err;
-  if (typeof raw === "string") return raw;
   try {
+    const raw: unknown = err instanceof Error ? err.message : err;
+    if (typeof raw === "string") return raw;
     return String(raw);
   } catch {
     return UNPRINTABLE;
