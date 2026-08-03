@@ -96,24 +96,59 @@ export function parseEventFormat(input: string): EventCourt[] {
 }
 
 /**
+ * A validated court list -> the exact string written to `events.format`. Paired with
+ * `readEventFormat` below so ONE module owns the on-disk encoding as well as the shape: the column
+ * is plain `text` rather than drizzle `{ mode: "json" }` precisely so that nothing else in the
+ * codebase ever decodes it (see `src/db/schema.ts`'s comment on the column).
+ */
+export function encodeEventFormat(courts: EventCourt[]): string {
+  return JSON.stringify(courts);
+}
+
+/**
  * The stored `events.format` column value -> a validated court list, or `null` when the column is
- * null (no format recorded yet). **Fails closed**: anything that our own writer (`parseEventFormat`,
- * via `addEvent`) would not have produced throws, rather than being coerced or silently dropped —
- * defense in depth, since only `addEvent` writes this column in production, but the DB itself
- * enforces no shape on a `text` column.
+ * null (no format recorded yet). **Fails closed**: anything that our own writer (`parseEventFormat`
+ * + `encodeEventFormat`, via `addEvent`) would not have produced throws a named
+ * `InvalidEventFormatError`, rather than being coerced, silently dropped, or surfacing as some other
+ * library's exception.
+ *
+ * **Decoding happens here, and only here.** The column is plain `text`, so this function owns the
+ * `JSON.parse` and converts its `SyntaxError` into the same refusal class as every other malformed
+ * value. Under drizzle's `{ mode: "json" }` that parse would instead run inside drizzle's row mapper
+ * for every reader of the table — so a hand-corrupted value would throw a raw `SyntaxError` out of
+ * `eventsForDay`, `match add` and `addEvent` before any guard ran. That is the whole reason the mode
+ * is not used; keeping the two in sync is this function's job.
+ *
+ * Defense in depth: only `addEvent` writes this column in production, but SQLite enforces no shape
+ * on a `text` column, so a hand-edited database is exactly the case this exists for.
  */
 export function readEventFormat(raw: unknown): EventCourt[] | null {
-  if (raw === null) return null;
+  if (raw === null || raw === undefined) return null;
 
-  if (!Array.isArray(raw)) {
-    throw new InvalidEventFormatError(`stored event format is not an array: ${JSON.stringify(raw)}`);
+  if (typeof raw !== "string") {
+    throw new InvalidEventFormatError(`stored event format is not text: ${JSON.stringify(raw)}`);
   }
-  if (raw.length === 0) {
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    // The message deliberately does NOT echo the stored bytes: an unparseable column value is
+    // arbitrary content, and the operator needs the event and the fix, not the garbage.
+    throw new InvalidEventFormatError(
+      "stored event format is not valid JSON — re-record it with tn event add <name> <kind> <starts-on> <ends-on> <format>",
+    );
+  }
+
+  if (!Array.isArray(decoded)) {
+    throw new InvalidEventFormatError(`stored event format is not an array: ${JSON.stringify(decoded)}`);
+  }
+  if (decoded.length === 0) {
     throw new InvalidEventFormatError("stored event format is an empty array");
   }
 
   const courts: EventCourt[] = [];
-  for (const entry of raw) {
+  for (const entry of decoded) {
     const result = eventCourtSchema.safeParse(entry);
     if (!result.success) {
       throw new InvalidEventFormatError(`stored event format entry is malformed: ${JSON.stringify(entry)}`);

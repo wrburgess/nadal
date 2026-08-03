@@ -160,7 +160,7 @@ function renderPredictedLineupMarkdown(dossier: TeamDossier): string {
           ? "."
           : `; unrated: ${lineup.unranked.map((p) => escapeMarkdownCell(p.canonicalName)).join(", ")}.`),
     lineup.slotSource === "event-format"
-      ? `**Courts:** ${lineup.slots.length}, from the format of event "${escapeMarkdownCell(lineup.slotEvent!.name)}".`
+      ? `**Courts:** ${lineup.slots.length}, from the format of event "${escapeMarkdownCell(lineup.slotEvent.name)}".`
       : `**Courts:** ${lineup.slots.length}, taken from this team's observed match history — not from the event format.`,
     lineup.excludedOtherTeamMatches === 0
       ? null

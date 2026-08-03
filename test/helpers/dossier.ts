@@ -4,7 +4,7 @@
 // like. Every field a renderer might touch is present, following the same hand-built-input
 // discipline `test/query-derive.test.ts` uses rather than routing through a real DB.
 
-import type { LineupPlan } from "../../src/query/lineup.js";
+import type { LineupPlan, LineupSlotProvenance } from "../../src/query/lineup.js";
 import type { PlayerProfile } from "../../src/query/player-profile.js";
 import type { TeamProfile } from "../../src/query/team-profile.js";
 import type { TeamDossier } from "../../src/report/types.js";
@@ -66,7 +66,17 @@ export function buildTeamProfile(overrides: Partial<TeamProfile> = {}): TeamProf
 /** A predicted lineup with one settled partnership, one thin one, and one player left over — so a
  * renderer test exercises the confident, the low-confidence and the not-placed paths at once
  * (#17 PR B). Pass `lineup: null` to `buildDossier` for the no-history case instead. */
-export function buildLineupPlan(overrides: Partial<LineupPlan> = {}): LineupPlan {
+/**
+ * `provenance` is a SEPARATE parameter rather than part of `overrides` because `LineupPlan`'s
+ * `slotSource`/`slotEvent` pair is a discriminated union (#63): a loose `Partial<LineupPlan>` spread
+ * could set one half without the other, which is exactly the invalid state the union exists to make
+ * unrepresentable. Passing the pair whole means a test cannot build a plan the production code could
+ * never produce.
+ */
+export function buildLineupPlan(
+  overrides: Partial<Omit<LineupPlan, "slotSource" | "slotEvent">> = {},
+  provenance: LineupSlotProvenance = { slotSource: "observed", slotEvent: null },
+): LineupPlan {
   return {
     teamId: 1,
     teamName: "Test Team",
@@ -112,12 +122,11 @@ export function buildLineupPlan(overrides: Partial<LineupPlan> = {}): LineupPlan
       { playerId: 5, canonicalName: "Emory Ellerby" },
     ],
     unranked: [{ playerId: 6, canonicalName: "Ira Inglewood" }],
-    slotSource: "observed",
-    slotEvent: null,
     observedCourtMatches: 12,
     excludedOtherTeamMatches: 0,
     rosterSize: 6,
     ...overrides,
+    ...provenance,
   };
 }
 

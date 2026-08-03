@@ -90,7 +90,15 @@ export const events = sqliteTable("events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull().unique(),          // e.g. Sectionals 2026 (Springfield)
   kind: text("kind").notNull(),                   // league | tournament
-  format: text("format", { mode: "json" }),       // court slots, pools/rr, per spec: format is data
+  // Court slots, pools/rr, per spec: format is data. Stored as a JSON string in a PLAIN text column,
+  // NOT drizzle's `{ mode: "json" }` (#63). The DDL is byte-identical either way (`format text`, so
+  // this is not a migration), but the mode decides WHO calls `JSON.parse` — and under `json` mode
+  // drizzle parses it while mapping EVERY row of this table, for every reader. A value the parser
+  // rejects would then throw a raw `SyntaxError` out of `eventsForDay` (`tn player avail`),
+  // `match add`, and `addEvent` itself — four commands with nothing to do with formats — before any
+  // guard could see it. Plain text confines decoding to `query/event-format.ts`'s `readEventFormat`,
+  // which is the only reader and fails closed with a named refusal.
+  format: text("format"),
   startsOn: text("starts_on"),
   endsOn: text("ends_on"),
 });

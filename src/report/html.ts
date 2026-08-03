@@ -223,7 +223,7 @@ function renderPredictedLineupHtml(dossier: TeamDossier): string {
   );
   footnotes.push(
     lineup.slotSource === "event-format"
-      ? `<strong>Courts:</strong> ${lineup.slots.length}, from the format of event "${escapeHtml(lineup.slotEvent!.name)}".`
+      ? `<strong>Courts:</strong> ${lineup.slots.length}, from the format of event "${escapeHtml(lineup.slotEvent.name)}".`
       : `<strong>Courts:</strong> ${lineup.slots.length}, taken from this team's observed match history — ` +
           "not from the event format.",
   );

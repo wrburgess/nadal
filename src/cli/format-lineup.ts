@@ -79,7 +79,7 @@ export function formatLineupPlan(plan: LineupPlan): string {
   // the other.
   lines.push(
     plan.slotSource === "event-format"
-      ? `  courts: ${plan.slots.length}, from the format of event "${formatName(plan.slotEvent!.name)}"`
+      ? `  courts: ${plan.slots.length}, from the format of event "${formatName(plan.slotEvent.name)}"`
       : `  courts: ${plan.slots.length}, from this team's observed match history (not the event format)`,
   );
   // Only when there is something to say. Without this line a prediction built on 7 matches, for a

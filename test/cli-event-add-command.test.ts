@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readEventFormat } from "../src/query/event-format.js";
 import { dispatch } from "../src/cli/router.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { availability, events, players, teamMemberships, teams } from "../src/db/schema.js";
@@ -76,7 +77,7 @@ describe("tn event add (end-to-end via dispatch)", () => {
     const { db, sqlite } = openDb();
     try {
       const row = db.select().from(events).all()[0]!;
-      expect(row.format).toEqual([
+      expect(readEventFormat(row.format)).toEqual([
         { slot: "S1", discipline: "singles" },
         { slot: "D1", discipline: "doubles" },
       ]);
@@ -141,7 +142,7 @@ describe("tn event add (end-to-end via dispatch)", () => {
     try {
       const row = db.select().from(events).all()[0]!;
       expect(row.endsOn).toBe("2026-08-31");
-      expect(row.format, "an omitted format on a repeat must not clobber the stored one").toEqual([
+      expect(readEventFormat(row.format), "an omitted format on a repeat must not clobber the stored one").toEqual([
         { slot: "S1", discipline: "singles" },
         { slot: "D1", discipline: "doubles" },
       ]);

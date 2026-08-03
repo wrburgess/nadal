@@ -9,7 +9,12 @@
 // become a doubles court. Refusing names both legal values rather than guessing which one was meant.
 
 import { describe, expect, it } from "vitest";
-import { InvalidEventFormatError, parseEventFormat, readEventFormat } from "../src/query/event-format.js";
+import {
+  InvalidEventFormatError,
+  encodeEventFormat,
+  parseEventFormat,
+  readEventFormat,
+} from "../src/query/event-format.js";
 
 describe("parseEventFormat", () => {
   it("parses a comma-separated slot:discipline list, order preserved", () => {
@@ -81,36 +86,76 @@ describe("parseEventFormat", () => {
     expect(() => parseEventFormat("S1:doubles:extra")).toThrow(InvalidEventFormatError);
   });
 
-  it("round-trips through JSON.stringify/parse into readEventFormat unchanged", () => {
+  it("round-trips through encodeEventFormat/readEventFormat unchanged", () => {
     const parsed = parseEventFormat("S1:singles,D1:doubles,D2:doubles,D3:doubles");
-    const roundTripped = readEventFormat(JSON.parse(JSON.stringify(parsed)));
+    const roundTripped = readEventFormat(encodeEventFormat(parsed));
     expect(roundTripped).toEqual(parsed);
   });
 });
 
 describe("readEventFormat", () => {
+  // The column is plain `text` (see src/db/schema.ts), so every case below hands this function the
+  // RAW stored string — the same thing drizzle returns — rather than an already-parsed value. That
+  // distinction is load-bearing: passing a parsed object would make each case trip the "not text"
+  // guard and never reach the shape validation it is meant to exercise.
   it("returns null for a null column value", () => {
     expect(readEventFormat(null)).toBeNull();
   });
 
+  it("returns null for an undefined column value", () => {
+    expect(readEventFormat(undefined)).toBeNull();
+  });
+
   it("returns the validated list for a well-formed stored value", () => {
     const stored = [
-      { slot: "S1", discipline: "singles" },
-      { slot: "D1", discipline: "doubles" },
+      { slot: "S1", discipline: "singles" as const },
+      { slot: "D1", discipline: "doubles" as const },
     ];
-    expect(readEventFormat(stored)).toEqual(stored);
+    expect(readEventFormat(encodeEventFormat(stored))).toEqual(stored);
+  });
+
+  // The case that motivated the column being plain `text` rather than drizzle `{ mode: "json" }`:
+  // under json mode this parse ran inside drizzle's row mapper for EVERY reader of the events table,
+  // so unparseable bytes threw a raw SyntaxError out of `eventsForDay` (`tn player avail`),
+  // `match add` and `addEvent` — four commands with nothing to do with formats — before any guard
+  // could see them. Here it is one named refusal, from the only decoder there is.
+  it.each([
+    ["bytes that are not JSON at all", "not json at all"],
+    ["truncated JSON", '[{"slot":"S1","disc'],
+    ["the empty string", ""],
+    ["a bare word", "S1:singles"],
+  ])("fails closed with a NAMED refusal on %s", (_label, raw) => {
+    expect(() => readEventFormat(raw)).toThrow(InvalidEventFormatError);
+  });
+
+  it("never echoes the unparseable bytes back in the message", () => {
+    expect(() => readEventFormat("sekrit-looking garbage")).toThrow(
+      /stored event format is not valid JSON — re-record it/,
+    );
+    try {
+      readEventFormat("sekrit-looking garbage");
+    } catch (err) {
+      expect((err as Error).message).not.toContain("sekrit-looking garbage");
+    }
   });
 
   it.each([
-    ["a non-array (plain object)", { slot: "S1", discipline: "singles" }],
-    ["a non-array (string)", "S1:singles"],
-    ["a non-array (number)", 42],
+    ["a non-string column value (number)", 42],
+    ["a non-string column value (already-parsed array)", [{ slot: "S1", discipline: "singles" }]],
+  ])("fails closed on %s", (_label, raw) => {
+    expect(() => readEventFormat(raw)).toThrow(InvalidEventFormatError);
+  });
+
+  it.each([
+    ["valid JSON that is not an array (object)", { slot: "S1", discipline: "singles" }],
+    ["valid JSON that is not an array (string)", "S1:singles"],
+    ["valid JSON that is not an array (number)", 42],
     ["an array of non-objects", ["S1:singles", "D1:doubles"]],
     ["an empty array", []],
     ["an array of wrong-shaped objects", [{ court: "S1", type: "singles" }]],
     ["an array with an unknown discipline", [{ slot: "S1", discipline: "single" }]],
     ["an array with a duplicate slot", [{ slot: "D1", discipline: "doubles" }, { slot: "D1", discipline: "doubles" }]],
-  ])("fails closed on %s", (_label, raw) => {
-    expect(() => readEventFormat(raw)).toThrow(InvalidEventFormatError);
+  ])("fails closed on %s", (_label, decoded) => {
+    expect(() => readEventFormat(JSON.stringify(decoded))).toThrow(InvalidEventFormatError);
   });
 });

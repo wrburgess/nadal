@@ -54,10 +54,7 @@ describe("predicted-lineup section — markdown", () => {
   // asserted by the OLD sentence's absence, not merely the new one's presence, per the plan's own
   // "silent-lie" regression shape.
   it("names the event when slotSource is event-format, and the old observed sentence is genuinely absent", () => {
-    const lineup = buildLineupPlan({
-      slotSource: "event-format",
-      slotEvent: { id: 1, name: "Springfield Sectionals 2026" },
-    });
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield Sectionals 2026" } });
     const md = renderDossierMarkdown(buildDossier({ lineup }));
 
     expect(md).toContain('**Courts:** 3, from the format of event "Springfield Sectionals 2026".');
@@ -65,10 +62,7 @@ describe("predicted-lineup section — markdown", () => {
   });
 
   it("escapes an event name with markdown metacharacters", () => {
-    const lineup = buildLineupPlan({
-      slotSource: "event-format",
-      slotEvent: { id: 1, name: "Springfield | <script>alert(1)</script>" },
-    });
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield | <script>alert(1)</script>" } });
     const md = renderDossierMarkdown(buildDossier({ lineup }));
 
     expect(md, "a raw pipe would corrupt the surrounding prose").not.toContain("| Springfield | <script>");
@@ -125,10 +119,7 @@ describe("predicted-lineup section — HTML", () => {
   });
 
   it("names the event when slotSource is event-format, and the old observed sentence is genuinely absent", () => {
-    const lineup = buildLineupPlan({
-      slotSource: "event-format",
-      slotEvent: { id: 1, name: "Springfield Sectionals 2026" },
-    });
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield Sectionals 2026" } });
     const html = renderDossier(buildDossier({ lineup }));
 
     expect(html).toContain('<strong>Courts:</strong> 3, from the format of event "Springfield Sectionals 2026".');
@@ -136,10 +127,7 @@ describe("predicted-lineup section — HTML", () => {
   });
 
   it("escapes an event name containing markup", () => {
-    const lineup = buildLineupPlan({
-      slotSource: "event-format",
-      slotEvent: { id: 1, name: "Springfield <script>alert(1)</script>" },
-    });
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield <script>alert(1)</script>" } });
     const html = renderDossier(buildDossier({ lineup }));
 
     expect(html).not.toContain("<script>alert(1)</script>");

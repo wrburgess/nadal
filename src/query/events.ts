@@ -16,7 +16,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { availability, events } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
-import { type EventCourt, parseEventFormat } from "./event-format.js";
+import { type EventCourt, encodeEventFormat, parseEventFormat, readEventFormat } from "./event-format.js";
 import { isIsoDay } from "./iso-day.js";
 
 export class MissingEventNameError extends Error {}
@@ -166,17 +166,25 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
     }
 
     // Omitted -> preserve whatever is already stored (`null` for a brand-new event); given ->
-    // replace outright. Computed once so the SAME value is written and returned — `row.format` is
-    // read back below only to confirm the write, never re-derived independently of it.
+    // replace outright. Computed once so the SAME value is written and returned.
+    //
+    // The preserve branch goes through `readEventFormat` rather than casting `existing.format`: a
+    // cast would let a corrupted stored value be copied forward AND handed back as an
+    // `AddEventResult.format` typed `EventCourt[]` that it is not — the CLI then renders
+    // `undefined:undefined` from it. Validating means a date correction on an event whose format is
+    // unreadable REFUSES instead, which is the same fail-closed answer `getLineupPlan` gives for the
+    // same column. Applying the guard on one read path and not the other is what would make the
+    // module's "fails closed" claim untrue.
     const formatToWrite: EventCourt[] | null =
-      incomingFormat !== undefined ? incomingFormat : ((existing?.format as EventCourt[] | null | undefined) ?? null);
+      incomingFormat !== undefined ? incomingFormat : readEventFormat(existing?.format ?? null);
 
+    const encodedFormat = formatToWrite === null ? null : encodeEventFormat(formatToWrite);
     const row = tx
       .insert(events)
-      .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn, format: formatToWrite })
+      .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn, format: encodedFormat })
       .onConflictDoUpdate({
         target: events.name,
-        set: { kind, startsOn: input.startsOn, endsOn: input.endsOn, format: formatToWrite },
+        set: { kind, startsOn: input.startsOn, endsOn: input.endsOn, format: encodedFormat },
       })
       .returning()
       .get();

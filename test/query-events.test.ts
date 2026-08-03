@@ -20,7 +20,7 @@ import {
   MissingEventNameError,
   addEvent,
 } from "../src/query/events.js";
-import { InvalidEventFormatError } from "../src/query/event-format.js";
+import { InvalidEventFormatError, readEventFormat } from "../src/query/event-format.js";
 import { setAvailability } from "../src/query/availability.js";
 import { availability } from "../src/db/schema.js";
 import { setHomeTeam } from "../src/query/home-team.js";
@@ -182,8 +182,11 @@ describe("addEvent's format", () => {
         { slot: "D3", discipline: "doubles" },
       ]);
 
+      // The column is plain `text`, so the stored value is the encoded string — asserted THROUGH
+      // `readEventFormat` rather than against a hand-written literal, so this test also pins that
+      // what `addEvent` writes is exactly what the only reader accepts.
       const stored = db.select().from(events).all()[0]!;
-      expect(stored.format).toEqual(result.format);
+      expect(readEventFormat(stored.format)).toEqual(result.format);
     } finally {
       sqlite.close();
     }
@@ -211,6 +214,33 @@ describe("addEvent's format", () => {
         { slot: "D1", discipline: "doubles" },
       ]);
       expect(second.endsOn).toBe("2026-08-31");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The preserve branch reads the stored value, so it needs the SAME fail-closed guard the reader
+  // uses. Casting instead would copy a corrupted value forward AND hand it back typed
+  // `EventCourt[]`, which the CLI then renders as `undefined:undefined` — a guard applied on one
+  // read path and skipped on the other is not a guard.
+  it("refuses rather than copying forward a corrupted stored format when the format argument is omitted", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      // Raw sql, not `db.insert`: drizzle's writer would encode whatever it is handed, so only
+      // bytes written outside the ORM reproduce a hand-edited database.
+      sqlite
+        .prepare("INSERT INTO events (name, kind, starts_on, ends_on, format) VALUES (?,?,?,?,?)")
+        .run(SPRINGFIELD.name, "tournament", "2026-08-28", "2026-08-30", "not json at all");
+
+      expect(() => addEvent(db, { ...SPRINGFIELD, endsOn: "2026-08-31" })).toThrow(InvalidEventFormatError);
+
+      // And the refusal left the row untouched, like every other refusal in this module.
+      const row = sqlite.prepare("SELECT ends_on, format FROM events WHERE name = ?").get(SPRINGFIELD.name) as {
+        ends_on: string;
+        format: string;
+      };
+      expect(row.ends_on).toBe("2026-08-30");
+      expect(row.format).toBe("not json at all");
     } finally {
       sqlite.close();
     }
@@ -252,7 +282,7 @@ describe("addEvent's format", () => {
 
       const stored = db.select().from(events).all()[0]!;
       expect(stored.endsOn, "the refused update must not have applied ANY of its fields").toBe("2026-08-30");
-      expect(stored.format).toEqual([{ slot: "S1", discipline: "singles" }]);
+      expect(readEventFormat(stored.format)).toEqual([{ slot: "S1", discipline: "singles" }]);
     } finally {
       sqlite.close();
     }

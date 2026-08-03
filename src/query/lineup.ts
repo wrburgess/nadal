@@ -15,7 +15,7 @@ import { NoCourtMatchHistoryError, predictedLineup } from "./derive.js";
 import type { EventCourt } from "./event-format.js";
 import { readEventFormat } from "./event-format.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
-import type { LineupBasis, LineupConfidence, PredictedLineupResult, RatingSource } from "./types.js";
+import type { LineupBasis, LineupConfidence, RatingSource } from "./types.js";
 
 export { NoCourtMatchHistoryError };
 
@@ -42,7 +42,22 @@ export type LineupPlanSlot = {
   support: number;
 };
 
-export type LineupPlan = {
+/**
+ * Where `slots`' court list came from, as a DISCRIMINATED PAIR rather than two independent fields
+ * (#63). `slotSource` and `slotEvent` are not free to disagree: `"event-format"` always has an
+ * event, `"observed"` never does. Expressing that in the type is what lets the three presenters
+ * narrow on `slotSource` and reach `slotEvent.name` without a non-null assertion — with two loose
+ * fields, each presenter had to assert the invariant separately (`slotEvent!.name`), which is three
+ * copies of a rule the type could hold once, and a crash for any caller that built the pair wrong.
+ *
+ * The JSON shape is unchanged: these remain two sibling keys, so `slotSource === "observed"` reads
+ * exactly as before for every existing caller and test.
+ */
+export type LineupSlotProvenance =
+  | { slotSource: "observed"; slotEvent: null }
+  | { slotSource: "event-format"; slotEvent: { id: number; name: string } };
+
+export type LineupPlan = LineupSlotProvenance & {
   teamId: number;
   teamName: string;
   slots: LineupPlanSlot[];
@@ -56,11 +71,6 @@ export type LineupPlan = {
   ranked: LineupPlanPlayer[];
   /** Roster players with no observation in `ratingSource`, by name, so the gap is printable. */
   unranked: LineupPlanPlayer[];
-  slotSource: PredictedLineupResult["slotSource"];
-  /** Which event supplied `slots`' court list, when one did — `null` when `slotSource` is
-   * `"observed"`. The pure `derive.ts` layer stays event-name-free (it only ever sees a slot list,
-   * never a name); this DB assembly layer is what attaches the name a presenter can print. */
-  slotEvent: { id: number; name: string } | null;
   observedCourtMatches: number;
   /** Court matches these players appeared in that belong to some OTHER team (or to no team match
    * on file) and were therefore not used as evidence. Reported rather than silently dropped: a
@@ -103,8 +113,11 @@ export function getLineupPlan(db: Db, teamId: number, eventName?: string): Lineu
   // resolve-by-name-or-refuse mechanism `src/ingest/match-add.ts` already uses. No silent fall back
   // to the observed slot set when a named event lacks a format — that would be the exact silent-lie
   // class this repo has logged before.
+  // Built as ONE value, never as two fields set independently, so the `LineupSlotProvenance` union
+  // above is satisfied by construction — there is no code path here that could produce
+  // `"event-format"` without an event, or an event without `"event-format"`.
   let slotSet: EventCourt[] | undefined;
-  let slotEvent: { id: number; name: string } | null = null;
+  let provenance: LineupSlotProvenance = { slotSource: "observed", slotEvent: null };
   if (eventName !== undefined) {
     const eventRow = db.select().from(events).where(eq(events.name, eventName)).all()[0];
     if (eventRow === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
@@ -120,7 +133,7 @@ export function getLineupPlan(db: Db, teamId: number, eventName?: string): Lineu
       );
     }
     slotSet = format;
-    slotEvent = { id: eventRow.id, name: eventRow.name };
+    provenance = { slotSource: "event-format", slotEvent: { id: eventRow.id, name: eventRow.name } };
   }
 
   // Issue #49: a retired member must never be predicted onto a court — the headline symptom the
@@ -230,8 +243,11 @@ export function getLineupPlan(db: Db, teamId: number, eventName?: string): Lineu
     ratingSource: prediction.ratingSource,
     ranked: prediction.rankedPlayerIds.map(named),
     unranked: prediction.unrankedPlayerIds.map(named),
-    slotSource: prediction.slotSource,
-    slotEvent,
+    // Spread as the discriminated pair, never as two independent keys. `prediction.slotSource` is
+    // not copied here because it is not a second source of truth: `predictedLineup` derives it from
+    // whether `slotSet` was passed, and `slotSet` and `provenance` are set in the SAME branch above,
+    // so the two agree by construction rather than by a check that could be forgotten.
+    ...provenance,
     observedCourtMatches: prediction.observedCourtMatches,
     excludedOtherTeamMatches,
     rosterSize: rosterPlayerIds.length,

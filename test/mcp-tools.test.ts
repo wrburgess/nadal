@@ -18,6 +18,7 @@ import { backfillNameKeys } from "../src/db/name-key.js";
 import { courtMatchPlayers, courtMatches, events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
 import { createMcpServer } from "../src/mcp/server.js";
+import { encodeEventFormat } from "../src/query/event-format.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
 import { sixMonthsAgo } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
@@ -361,7 +362,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
         kind: "tournament",
         startsOn: "2026-08-28",
         endsOn: "2026-08-30",
-        format: [{ slot: "D1", discipline: "doubles" }],
+        format: encodeEventFormat([{ slot: "D1", discipline: "doubles" }]),
       })
       .run();
     backfillNameKeys(db);
@@ -429,7 +430,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
         kind: "tournament",
         startsOn: "2026-08-28",
         endsOn: "2026-08-30",
-        format: [{ slot: "D1", discipline: "doubles" }],
+        format: encodeEventFormat([{ slot: "D1", discipline: "doubles" }]),
       })
       .run();
     backfillNameKeys(db);
