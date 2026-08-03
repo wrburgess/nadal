@@ -458,7 +458,9 @@ export function openNewOutputFileSafely(
   // escaping before any value was returned, so the leaf was never recorded and rollback could not
   // reach it (Codex adversarial review, PR #83 fix-verification pass 1, [high]).
   //
-  // The handler closes the fd and DELIBERATELY LEAVES THE FILE. The asymmetry with every other
+  // The handler close-attempts the fd (via `closeQuietly`, which swallows a failing close — see
+  // `writeNewOutputFile`'s doc comment on why this is "close-attempted" rather than "closed") and
+  // DELIBERATELY LEAVES THE FILE. The asymmetry with every other
   // cleanup path in this module is load-bearing, not an omission: `unlinkIfStillOurs` needs exactly
   // the `{dev, ino}` this call just failed to obtain, so there is no identity to check the path
   // against — and unlinking a path this module cannot prove it owns is the PR #48 [critical]
@@ -559,17 +561,25 @@ export function openNewOutputFileSafely(
  * a third:
  *
  * - **Before** `openNewOutputFileSafely` captures `{dev, ino}` — i.e. a throw from the open itself or
- *   from the `fstatSync` that captures it — the fd is closed and the (empty) file is **left**, since
- *   nothing can prove which inode `realPath` names. This module never unlinks a path it cannot prove
- *   it owns; see that function's own comment.
- * - **After** the capture — every verification, the write loop, and the close — the fd is closed and
- *   `realPath` is best-effort unlinked (best-effort in `unlinkIfStillOurs`'s precise sense), then the
- *   ORIGINAL error is rethrown. Mirrors `overwriteOutputFile`'s cleanup shape below: a cleanup
- *   failure must never mask the real one.
+ *   from the `fstatSync` that captures it — the fd is **close-attempted** and the (empty) file is
+ *   **left**, since nothing can prove which inode `realPath` names. This module never unlinks a path
+ *   it cannot prove it owns; see that function's own comment.
+ * - **After** the capture — every verification, the write loop, and the close — the fd is
+ *   **close-attempted** and `realPath` is best-effort unlinked (best-effort in `unlinkIfStillOurs`'s
+ *   precise sense), then the ORIGINAL error is rethrown. Mirrors `overwriteOutputFile`'s cleanup
+ *   shape below: a cleanup failure must never mask the real one.
  *
- * So the honest one-liner is *"once we know what we created, we clean it up"* — not *"nothing is ever
- * left behind"*. See `writeThroughVerifiedFd` for why the close's cleanup, though on the covered side
- * of that line, still differs in shape from the write's.
+ * **"Close-attempted", not "closed"** (Codex adversarial review, PR #83 fix-verification pass 2).
+ * Cleanup closes through `closeQuietly`, which SWALLOWS a failing close so the original error is what
+ * the caller sees — so a cleanup whose own `closeSync` errors leaves the descriptor in a state this
+ * module does not observe and cannot report. It is deliberately not retried: POSIX leaves the fd
+ * unspecified after a failed close, so a second attempt could act on a number the runtime has since
+ * reused. Recorded in `writeNewOutputFileSet`'s canonical residual list rather than fixed here; the
+ * contract predates this change (PR #48) and applies to every cleanup path in the module.
+ *
+ * So the honest one-liner is *"once we know what we created, we try to clean it up"* — not
+ * *"nothing is ever left behind"*. See `writeThroughVerifiedFd` for why the close's cleanup, though
+ * on the covered side of the identity line, still differs in shape from the write's.
  */
 export function writeNewOutputFile(
   root: string,
@@ -661,10 +671,10 @@ function writeThroughVerifiedFd(
  * Writes a SET of leaves that only make sense together, undoing the ones already written if a later
  * one is refused (#65). Returns the real paths written, in the order given.
  *
- * `writeNewOutputFile` above handles ONE leaf: any failure past its open closes the fd and
- * best-effort unlinks the file it created (best-effort in the precise sense `unlinkIfStillOurs`
- * documents — an inode that is no longer ours is left alone, deliberately). What it cannot do is
- * speak for a SIBLING written by a separate call — and a caller writing a pair in sequence
+ * `writeNewOutputFile` above handles ONE leaf: a failure past the point its identity is captured
+ * close-attempts the fd and best-effort unlinks the file it created (both qualifiers in the precise
+ * senses that function's doc comment defines). What it cannot do is speak for a SIBLING written by a
+ * separate call — and a caller writing a pair in sequence
  * (`src/ingest/archive.ts`: a raw capture plus its `.provenance.json` record) had exactly that gap.
  * Both PATHS were pre-validated together, so a pre-check refusal correctly wrote nothing; but the
  * refusals `writeNewOutputFile` raises at WRITE time — the post-open verification, an `O_CREAT|O_EXCL`
@@ -690,10 +700,19 @@ function writeThroughVerifiedFd(
  *   it) is never recorded here at all, so the walk cannot reach it — and by design nothing else
  *   removes it either, because no identity exists to check a path against. `writeNewOutputFile`'s doc
  *   comment above states that boundary once; this is the same line, seen from the set.
+ * - **The residue is not only on disk.** A cleanup whose own `closeSync` fails leaves a DESCRIPTOR in
+ *   a state this module does not observe: `closeQuietly` swallows the error so the caller still sees
+ *   the original one, and the close is deliberately not retried (POSIX leaves the fd unspecified
+ *   after a failed close, so a second attempt could act on a number the runtime has since reused).
+ *   Pre-dates this function — it is the contract of every cleanup path in the module, PR #48 onward —
+ *   and it is listed here because a residual list that covered only files read as complete while
+ *   omitting a whole KIND of residue (Codex adversarial review, PR #83 fix-verification pass 2).
  *
  * **This list is the canonical statement of what is left behind** — callers reference it rather than
- * restating it. Two rounds of review on this PR each falsified a *re-enumeration* of these residuals
- * that had drifted from the code, so the residuals are recorded in exactly one place on purpose.
+ * restating it. Three rounds of review on this PR each falsified a *re-enumeration* of these
+ * residuals: two that had drifted from the code, and one that enumerated only on-disk residue. So the
+ * residuals are recorded in exactly one place on purpose, and the list is over *kinds* of residue
+ * (files, descriptors) rather than over the failures that produce them.
  *
  * It also does NOT re-run `assertOutputPathSafe` on the leaves, exactly as `writeNewOutputFile` does
  * not: pre-validating the candidate paths stays CALLER policy (the layering is unchanged, not
