@@ -390,3 +390,60 @@ describe("archivePage race window: a directory swapped for a symlink between res
     }
   });
 });
+
+// Issue #65. `archivePage` writes TWO leaves that are meant to be a pair — the raw capture and its
+// `.provenance.json` sibling — and both PATHS are pre-validated together. The two WRITES were not:
+// a refusal on the second left the first sitting on disk, an un-redacted capture with no record of
+// where it came from, when, or at what status. `archivePage`'s own doc comment asserted the
+// opposite ("a refusal writes NOTHING — not even the leaf file, half the pair"), which held for a
+// PRE-CHECK refusal and not for a WRITE-TIME one.
+//
+// The failure is injected at `openSync` — the OPEN path — while the fix changes the ROLLBACK path.
+// The two are deliberately independent: the mechanism that turns this test red is not the mechanism
+// the fix touches, so a green result here cannot come from the seed being neutralized by the change
+// under test. That is the shape `docs/findings.md` records for #63 — "a corruption test that seeds
+// THROUGH the ORM cannot reproduce ORM-level corruption, and passes either way" — applied to a
+// filesystem seed instead of a database one. Verified by mutation, not by reading: removing the
+// rollback loop turns this test red.
+describe("archivePage pair integrity: a refusal on the SECOND leaf must not orphan the first", () => {
+  useTnRawPath();
+
+  it("REGRESSION: when the provenance write is refused, the already-written html leaf does not survive", async () => {
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+
+    // Call through for every open EXCEPT the provenance leaf's, which fails the way an ordinary
+    // ENOSPC/EACCES would — after the html leaf is already fully written and closed.
+    vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+      if (typeof target === "string" && target.endsWith(".provenance.json")) {
+        throw new Error("simulated provenance open failure (disk full)");
+      }
+      return (realOpenSync as (...a: unknown[]) => number)(target, ...rest);
+    }) as unknown as typeof fsModule.openSync);
+
+    let thrown: unknown;
+    try {
+      archivePage({
+        sourceSet: "tennisrecord",
+        slug: "orphan",
+        url: "https://example.test/team",
+        body: "UN-REDACTED CAPTURE THAT MUST NOT BE LEFT UNATTRIBUTED",
+        httpStatus: 200,
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      // Restore CALL-THROUGH, not a bare `vi.fn()`: this is a persistent `mockImplementation`, so a
+      // stub returning `undefined` would leak into every later test in this file that opens a file.
+      vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+    }
+
+    // The ORIGINAL error propagates — never a cleanup failure, and never swallowed into a success.
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("simulated provenance open failure");
+
+    // The property under test: neither half of the pair is left behind. Asserted on the directory
+    // rather than on the leaf path (which `archivePage` never returned, having thrown), so a stray
+    // file under ANY name — including a partial or a temp artifact — fails this.
+    expect(readdirSync(join(resolve(rawRoot()), "tennisrecord"))).toEqual([]);
+  });
+});

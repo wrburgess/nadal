@@ -544,6 +544,27 @@ export function writeNewOutputFile(
   permittedDir: string,
   content: string | Uint8Array,
 ): string {
+  return writeThroughVerifiedFd(root, candidatePath, permittedDir, content).realPath;
+}
+
+/**
+ * The shared body of `writeNewOutputFile` above and `writeNewOutputFileSet` below — identical
+ * behavior to what `writeNewOutputFile` did inline before the split, returning the created file's
+ * `{dev, ino}` alongside the real path rather than discarding it.
+ *
+ * That identity is the whole reason for the extraction (#65). `unlinkIfStillOurs` — the ONLY safe way
+ * to remove a leaf in this module, since a bare `unlinkSync` follows directory components and deletes
+ * whatever an attacker-planted symlink resolves to (PR #48, [critical]) — needs the inode of the file
+ * the caller created. A multi-leaf writer that has to undo an earlier leaf therefore needs that stat,
+ * and `writeNewOutputFile`'s `string` return cannot carry it. Splitting rather than widening that
+ * return keeps the exported signature (and every existing caller and test) untouched.
+ */
+function writeThroughVerifiedFd(
+  root: string,
+  candidatePath: string,
+  permittedDir: string,
+  content: string | Uint8Array,
+): { realPath: string; openedStat: { dev: number; ino: number } } {
   const { fd, realPath, openedStat } = openNewOutputFileSafely(root, candidatePath, permittedDir);
   try {
     // Looped, not a single `writeSync`. `fs.writeSync` issues ONE `write(2)` and returns the number
@@ -581,7 +602,63 @@ export function writeNewOutputFile(
     throw err;
   }
   closeSync(fd);
-  return realPath;
+  return { realPath, openedStat };
+}
+
+/**
+ * Writes a SET of leaves that only make sense together, undoing the ones already written if a later
+ * one is refused (#65). Returns the real paths written, in the order given.
+ *
+ * `writeNewOutputFile` above is all-or-nothing for ONE leaf: any failure past its open closes the fd
+ * and unlinks the file it created, so a refused write leaves nothing behind. What it cannot do is
+ * speak for a SIBLING written by a separate call — and a caller writing a pair in sequence
+ * (`src/ingest/archive.ts`: a raw capture plus its `.provenance.json` record) had exactly that gap.
+ * Both PATHS were pre-validated together, so a pre-check refusal correctly wrote nothing; but the
+ * refusals `writeNewOutputFile` raises at WRITE time — the post-open verification, an `O_CREAT|O_EXCL`
+ * open that fails, ENOSPC/EIO in the write loop — happen after the first leaf is already on disk and
+ * closed. The result was an un-redacted capture with no record of where it came from, when, or at what
+ * status: not an escape (it stays inside the validated root) but a broken pairing invariant, and one
+ * `archivePage`'s own doc comment claimed could not happen.
+ *
+ * Rollback walks the written leaves in REVERSE and removes each through `unlinkIfStillOurs`, never a
+ * bare `unlinkSync` — see that function's doc comment for why the distinction is the difference
+ * between a cleanup and a data-loss bug. The ORIGINAL error is what propagates; `unlinkIfStillOurs`
+ * swallows its own failures, so a cleanup problem can never mask the real one.
+ *
+ * **What this does NOT provide, stated because the sentence it replaces overclaimed exactly here.**
+ * The set is not atomic and this function does not make it so:
+ *
+ * - Rollback is BEST-EFFORT by construction. `unlinkIfStillOurs` deliberately skips any leaf whose
+ *   inode no longer matches the one this call created — that skip is PR #48's fix, not a gap in
+ *   this one — so an actor who has already replaced a written leaf keeps it.
+ * - A crash, a `SIGKILL`, or a power loss between two leaves rolls back nothing at all. No
+ *   userspace-only writer can promise otherwise.
+ *
+ * It also does NOT re-run `assertOutputPathSafe` on the leaves, exactly as `writeNewOutputFile` does
+ * not: pre-validating the candidate paths stays CALLER policy (the layering is unchanged, not
+ * forgotten). A caller writing a set should validate every path in it before calling, which is what
+ * makes a pre-check refusal write nothing at all.
+ */
+export function writeNewOutputFileSet(
+  root: string,
+  permittedDir: string,
+  leaves: ReadonlyArray<{ candidatePath: string; content: string | Uint8Array }>,
+): string[] {
+  const written: Array<{ realPath: string; openedStat: { dev: number; ino: number } }> = [];
+  try {
+    for (const leaf of leaves) {
+      written.push(writeThroughVerifiedFd(root, leaf.candidatePath, permittedDir, leaf.content));
+    }
+  } catch (err) {
+    // Reverse order, so a set whose leaves have any ordering relationship is undone the way it was
+    // built. `unlinkIfStillOurs` never throws, so every leaf is attempted even if an earlier one
+    // could not be removed.
+    for (const leaf of [...written].reverse()) {
+      unlinkIfStillOurs(leaf.realPath, leaf.openedStat);
+    }
+    throw err;
+  }
+  return written.map((leaf) => leaf.realPath);
 }
 
 /**

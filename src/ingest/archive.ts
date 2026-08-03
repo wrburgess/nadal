@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { assertOutputPathSafe, writeNewOutputFile } from "../fs/output-root.js";
+import { assertOutputPathSafe, writeNewOutputFileSet } from "../fs/output-root.js";
 
 const DEFAULT_RAW_DIR = "raw";
 
@@ -71,8 +71,24 @@ function nextTimestamp(): string {
  * raw page — "the TDD substrate and the re-parse archive" — and archiving BEFORE parsing is what
  * makes a parser failure recoverable: the page is already safely on disk.
  *
- * Every path this function would touch is checked with `assertArchivePathSafe` before anything is
- * written, so a refusal writes NOTHING — not even the leaf file, half the pair.
+ * The capture and its provenance record are a PAIR — a raw page with no record of where it came
+ * from, when, or at what status is not a usable archive entry — so what a refusal leaves on disk is
+ * stated below in three separate parts, because the single sentence that used to stand here ("a
+ * refusal writes NOTHING — not even the leaf file, half the pair") was true of only the first of
+ * them and was read as covering all three (#65):
+ *
+ * 1. **A pre-check refusal writes nothing.** Every path this function would touch is checked with
+ *    `assertArchivePathSafe` BEFORE anything is written, so a rejected `sourceSet`/`slug`/root never
+ *    reaches a write call at all. Unchanged.
+ * 2. **A write-time refusal rolls the pair back.** The per-leaf writer's own refusals — the
+ *    post-open verification, an `O_CREAT|O_EXCL` open that fails, ENOSPC/EIO in the write loop —
+ *    happen AFTER the pre-checks, so a failure on the SECOND leaf used to leave the first one
+ *    orphaned. Both leaves now go through `writeNewOutputFileSet`, which removes the already-written
+ *    ones (via the inode-verified unlink, never a bare `unlinkSync`) and rethrows the original error.
+ * 3. **The pair is still NOT atomic, and this comment does not claim it is.** Rollback is
+ *    best-effort: a leaf whose inode no longer matches the one this call created is deliberately
+ *    skipped (PR #48's fix, not a gap here), and a crash or `SIGKILL` between the two leaves rolls
+ *    back nothing. See `writeNewOutputFileSet`'s doc comment for the precise statement.
  */
 export function archivePage(input: ArchivePageInput): string {
   const fetchedAt = nextTimestamp();
@@ -88,8 +104,27 @@ export function archivePage(input: ArchivePageInput): string {
   assertArchivePathSafe(provenancePath);
 
   mkdirSync(dir, { recursive: true });
-  // `writeNewOutputFile` (src/fs/output-root.ts — shared with `src/report/write.ts` so this
-  // hardening lives in exactly one place) resolves the REAL destination the same way
+
+  const provenance: ArchiveProvenance = {
+    sourceUrl: input.url,
+    fetchedAt,
+    httpStatus: input.httpStatus,
+    redacted: false,
+    // `input.body` may already be raw bytes (#18) — byte-length is `Buffer.byteLength` for a
+    // string (UTF-8 encoded length, not JS `.length`) and the buffer's own `.byteLength` otherwise.
+    bytes: typeof input.body === "string" ? Buffer.byteLength(input.body, "utf8") : input.body.byteLength,
+  };
+
+  // ONE call carrying both leaves, rather than two independent writes (#65). Every field of
+  // `provenance` above derives from `input` and the timestamp — never from the capture write's result
+  // — so the whole set is constructible before anything touches the disk, which is what lets the pair
+  // be handed over as a set at all. The leaf goes FIRST so the order matches the pair's natural
+  // reading order; rollback undoes it in reverse.
+  //
+  // `writeNewOutputFileSet` writes each leaf through `writeNewOutputFile`'s own primitive, so
+  // everything below describes what still happens PER LEAF — unchanged by #65, which added only the
+  // cross-leaf rollback. That primitive (src/fs/output-root.ts — shared with `src/report/write.ts` so
+  // this hardening lives in exactly one place) resolves the REAL destination the same way
   // `resolveRealOutputPath` always did — re-running the symlink-component check now that the
   // directory genuinely exists (`mkdirSync(..., { recursive: true })` treats an existing
   // symlink-to-a-directory as "already there" and succeeds silently, so the pre-check alone would
@@ -113,7 +148,7 @@ export function archivePage(input: ArchivePageInput): string {
   // REMAINING, same review round 2: that link-count check is a point-in-time sample, so a hard link
   // created AFTER it passes is not caught. Like the pre-open window below, it is not closable in pure
   // Node — both would need control this runtime does not expose.
-  // REMAINING: an actor who wins the PRE-OPEN window — before `writeNewOutputFile` ever calls
+  // REMAINING: an actor who wins the PRE-OPEN window — before the per-leaf writer ever calls
   // `openSync` — can still cause an EMPTY file to be created at a location of their choosing; the
   // call then fails closed on the post-open verification and writes no CONTENT there. Pure Node has
   // no `openat`/`O_NOFOLLOW` directory-handle write, so closing that narrower window would need a
@@ -126,18 +161,10 @@ export function archivePage(input: ArchivePageInput): string {
   // set TN_RAW_PATH to a temp dir, so nothing exercised the one configuration the README describes.
   // (Codex adversarial review, PR #31 round 3.) `resolveRealOutputPath` checks the root, not the
   // directory, preserving that fix.
-  writeNewOutputFile(rawRoot(), leafPath, DEFAULT_RAW_DIR, input.body);
-
-  const provenance: ArchiveProvenance = {
-    sourceUrl: input.url,
-    fetchedAt,
-    httpStatus: input.httpStatus,
-    redacted: false,
-    // `input.body` may already be raw bytes (#18) — byte-length is `Buffer.byteLength` for a
-    // string (UTF-8 encoded length, not JS `.length`) and the buffer's own `.byteLength` otherwise.
-    bytes: typeof input.body === "string" ? Buffer.byteLength(input.body, "utf8") : input.body.byteLength,
-  };
-  writeNewOutputFile(rawRoot(), provenancePath, DEFAULT_RAW_DIR, JSON.stringify(provenance, null, 2));
+  writeNewOutputFileSet(rawRoot(), DEFAULT_RAW_DIR, [
+    { candidatePath: leafPath, content: input.body },
+    { candidatePath: provenancePath, content: JSON.stringify(provenance, null, 2) },
+  ]);
 
   // The REAL path is what we wrote through (that is the containment property); the LOGICAL path is
   // what we hand back. They differ whenever the root legitimately resolves elsewhere — on macOS a
