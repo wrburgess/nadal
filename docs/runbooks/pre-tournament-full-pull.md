@@ -228,6 +228,27 @@ Once every relevant team is refreshed, follow
 [build-and-print-dossiers.md](build-and-print-dossiers.md) from its own step 1 — it starts from "is
 the data here what I expect" and ends at a printed dossier.
 
+**If Sectionals' own court format is known, record it once (#63)** — a setup step, not part of the
+recurring refresh loop, so it belongs here rather than in either of those two runbooks' own numbered
+steps:
+
+```
+tn event add "Springfield Sectionals 2026" tournament 2026-08-28 2026-08-30 "S1:singles,D1:doubles,D2:doubles,D3:doubles"
+```
+
+Idempotent on the event name — safe to re-run every time you refresh, and it never clobbers a
+previously-recorded format with a later call that omits the fifth argument. Once it is on file, name
+the event on both the prediction and the build:
+
+```
+tn lineup plan "<opponent>" "Springfield Sectionals 2026"
+tn report build sectionals "Springfield Sectionals 2026"
+```
+
+so every prediction and every dossier uses the tournament's own courts, rather than each team's own
+observed history — see [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md) step 0 for the
+full syntax and what it changes in the output.
+
 ## Known limitations
 
 - **Live network, human-in-the-loop, and absent — see *Three boundaries* above.** A clean run of

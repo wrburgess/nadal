@@ -1,27 +1,40 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
+import { InvalidEventFormatError } from "../../query/event-format.js";
+import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
-import { globalFlags, parseArgs } from "../args.js";
+import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
 import { sixMonthsAgo } from "../window.js";
 
 const SECTIONALS_TARGET = "sectionals";
 
+/** Every error a bad `[event]` argument can throw (#63) — caller-fixable, so it exits 1 with a
+ * diagnostic rather than an uncaught throw, matching every other refusal in this command. */
+function isEventRefusal(err: unknown): err is UnknownEventError | EventHasNoFormatError | InvalidEventFormatError {
+  return (
+    err instanceof UnknownEventError || err instanceof EventHasNoFormatError || err instanceof InvalidEventFormatError
+  );
+}
+
 /**
- * Spec § Interfaces: `tn report build [sectionals|<team>] [--json]`. `<team>` builds that one
- * team's dossier; `sectionals` — and bare, no target — builds one dossier per team in the DB plus a
- * top-level index. Unlike `player show`/`team show` (Task 5/6), this command's ok path IS a
- * `key=value` summary line (`emitSummary`): the deliverable here is a list of files written, which
- * fits that shape naturally, rather than a profile that would not.
+ * Spec § Interfaces: `tn report build [sectionals|<team>] [event] [--json]`. `<team>` builds that
+ * one team's dossier; `sectionals` — and bare, no target — builds one dossier per team in the DB
+ * plus a top-level index. The optional trailing `event` (#63) resolves against `events.name` and its
+ * format REPLACES the derived slot set for EVERY dossier this run builds — the same optional
+ * trailing positional `tn lineup plan`/`tn player avail` already use, no new flags. Unlike
+ * `player show`/`team show` (Task 5/6), this command's ok path IS a `key=value` summary line
+ * (`emitSummary`): the deliverable here is a list of files written, which fits that shape naturally,
+ * rather than a profile that would not.
  */
 export const reportBuild: Command = {
   noun: "report",
   verb: "build",
   summary: "Render per-opponent scouting dossiers (HTML + markdown) to disk",
   run: async (args) => {
-    const parsed = parseArgs(args, [], []);
+    const parsed = parsePayloadArgs(args, 1);
     const opts = globalFlags(parsed.flags);
     if (parsed.error !== undefined) {
       emitSummary("report build", "error", [["message", parsed.error]], opts);
@@ -31,6 +44,7 @@ export const reportBuild: Command = {
     // `undefined` and `"sectionals"` are the SAME instruction (spec: "Bare (no target) is
     // equivalent to sectionals") — anything else names a single team.
     const target = parsed.target;
+    const [eventName] = parsed.payload;
     const since = sixMonthsAgo();
 
     const { db, sqlite } = openDb();
@@ -38,7 +52,7 @@ export const reportBuild: Command = {
       let written: string[];
       let teamsCount: number;
       if (target === undefined || target === SECTIONALS_TARGET) {
-        written = writeSectionalsDossiers(db, { since });
+        written = writeSectionalsDossiers(db, { since, eventName });
         teamsCount = countTeams(db);
       } else {
         const resolution = resolveTeamTarget(db, target);
@@ -55,7 +69,7 @@ export const reportBuild: Command = {
           );
           return 1;
         }
-        written = writeTeamDossier(db, resolution.teamId, { since });
+        written = writeTeamDossier(db, resolution.teamId, { since, eventName });
         teamsCount = 1;
       }
 
@@ -80,6 +94,10 @@ export const reportBuild: Command = {
       // matching every other command's contract of "a failure is a nonzero exit with a message",
       // not a stack trace on stderr.
       if (err instanceof OutputPathError) {
+        emitSummary("report build", "error", [["message", err.message]], opts);
+        return 1;
+      }
+      if (isEventRefusal(err)) {
         emitSummary("report build", "error", [["message", err.message]], opts);
         return 1;
       }

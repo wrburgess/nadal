@@ -407,11 +407,14 @@ function rankRoster(input: PredictedLineupInput): {
  *  4. Anyone still unplaced is **listed**, with their court-match count, never dropped; a slot with
  *     nobody left is reported short or empty rather than omitted.
  *
- * The **slot set is derived from observed history**, not from `events.format`: nothing links a team
- * to an event today (`team_memberships.event_id` and `team_matches.event_id` are null on every real
- * pull), so a team's event format is not reachable from a team. A team whose league history has
- * five courts is therefore predicted across five even at a four-court event — `slotSource` says
- * where the set came from so a presenter can state that rather than hide it.
+ * The **slot set is derived from observed history by default** — `input.slotSet` absent, exactly
+ * today's behavior, `slotSource: "observed"`. **When `input.slotSet` is given (#63), it REPLACES the
+ * derived set outright**: `slotOrder` becomes the given list's own order (not the observed-discipline
+ * ranking below), each slot's discipline comes from the list rather than from observed rows, and
+ * `slotSource` becomes `"event-format"`. An observed slot absent from the given set is simply not in
+ * `slotOrder` — its players cascade through the ordinary leftover machinery like any other unplaced
+ * pair; a format slot the team has never played is filled by the same rating-ranked leftover step
+ * that already reports a slot "short or empty rather than omitted".
  *
  * Undated rows COUNT here, unlike in `windowedRecord` — a date window is meaningless without a
  * date, but court-assignment tendency has no window, so excluding them would discard real evidence.
@@ -420,6 +423,12 @@ export function predictedLineup(input: PredictedLineupInput): PredictedLineupRes
   const roster = new Set(input.rosterPlayerIds);
   if (roster.size === 0) {
     throw new NoCourtMatchHistoryError("no roster players to predict a lineup for");
+  }
+  if (input.slotSet !== undefined && input.slotSet.length === 0) {
+    // Unreachable through `event-format.ts`'s own writer, which refuses an empty format before it
+    // is ever stored — guarded anyway, since this function is pure and callable directly with any
+    // input.
+    throw new Error("predictedLineup: slotSet, when given, must not be empty");
   }
 
   // Only rows a roster player actually took part in, each reduced to that team's own participants.
@@ -471,22 +480,41 @@ export function predictedLineup(input: PredictedLineupInput): PredictedLineupRes
     }
   }
 
-  const slotDiscipline = new Map<string, Discipline>();
-  for (const [slot, counts] of disciplineCounts) {
-    const [best] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-    slotDiscipline.set(slot, best![0]);
+  // The slot set and each slot's discipline: derived from OBSERVED history by default, or taken
+  // verbatim from `input.slotSet` when the caller supplied one (#63) — see this function's own doc
+  // comment for the full rule. `pairCounts`/`singlesCounts`/`courtMatchesByPlayer` above are always
+  // built from observed rows regardless of which branch runs: an event's format supplies WHICH
+  // courts exist and their discipline, never which players have played together.
+  let slotOrder: string[];
+  let slotDiscipline: Map<string, Discipline>;
+  if (input.slotSet !== undefined) {
+    slotOrder = input.slotSet.map((c) => c.slot);
+    slotDiscipline = new Map(input.slotSet.map((c) => [c.slot, c.discipline as Discipline]));
+  } else {
+    slotDiscipline = new Map<string, Discipline>();
+    for (const [slot, counts] of disciplineCounts) {
+      const [best] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+      slotDiscipline.set(slot, best![0]);
+    }
+    slotOrder = Array.from(disciplineCounts.keys()).sort((a, b) => {
+      const da = disciplineRank(slotDiscipline.get(a)!);
+      const db = disciplineRank(slotDiscipline.get(b)!);
+      if (da !== db) return da - db;
+      const na = slotNumber(a);
+      const nb = slotNumber(b);
+      if (na !== nb) return na - nb;
+      return a.localeCompare(b);
+    });
   }
-
-  const slotOrder = Array.from(disciplineCounts.keys()).sort((a, b) => {
-    const da = disciplineRank(slotDiscipline.get(a)!);
-    const db = disciplineRank(slotDiscipline.get(b)!);
-    if (da !== db) return da - db;
-    const na = slotNumber(a);
-    const nb = slotNumber(b);
-    if (na !== nb) return na - nb;
-    return a.localeCompare(b);
-  });
   const slotIndex = new Map(slotOrder.map((slot, i) => [slot, i]));
+  // A slot's rank in `slotOrder`, or +Infinity when the slot is not in it at all. Once the slot set
+  // can differ from the observed one (#63), a pair's OWN historical `bySlot` entries (built from
+  // observed rows, below) can name a slot absent from `slotOrder` entirely — plain `slotIndex.get`
+  // then yields `undefined`, and `undefined - number` is `NaN`, which is not a crash but a silently
+  // UNSTABLE sort (Array.prototype.sort's behavior on a NaN-returning comparator is unspecified).
+  // `slotRank` guarantees an absent slot always sorts LAST, deterministically, rather than sometimes
+  // participating in the tie-break and sometimes not depending on input order.
+  const slotRank = (slot: string): number => slotIndex.get(slot) ?? Number.POSITIVE_INFINITY;
 
   // --- placement -------------------------------------------------------------------------------
   const placed = new Map<string, { playerIds: number[]; support: number; basis: LineupBasis }>();
@@ -524,7 +552,7 @@ export function predictedLineup(input: PredictedLineupInput): PredictedLineupRes
       const total = Array.from(bySlot.values()).reduce((sum, n) => sum + n, 0);
       const slots = Array.from(bySlot.entries())
         .map(([slot, count]) => ({ slot, count }))
-        .sort((a, b) => b.count - a.count || slotIndex.get(a.slot)! - slotIndex.get(b.slot)!);
+        .sort((a, b) => b.count - a.count || slotRank(a.slot) - slotRank(b.slot));
       return { low, high, count: total, bySlot: slots };
     })
     .filter((p) => p.count >= MIN_PARTNERSHIP_COUNT);
@@ -593,8 +621,7 @@ export function predictedLineup(input: PredictedLineupInput): PredictedLineupRes
     if (proposals.length === 0) break;
 
     proposals.sort(
-      (a, b) =>
-        b.pair.count - a.pair.count || byStrength(a.pair, b.pair) || slotIndex.get(a.slot)! - slotIndex.get(b.slot)!,
+      (a, b) => b.pair.count - a.pair.count || byStrength(a.pair, b.pair) || slotRank(a.slot) - slotRank(b.slot),
     );
     const { slot, pair } = proposals[0]!;
     place(slot, [pair.low, pair.high], pair.count, "history");
@@ -646,7 +673,7 @@ export function predictedLineup(input: PredictedLineupInput): PredictedLineupRes
     ratingSource: source,
     rankedPlayerIds: ranked,
     unrankedPlayerIds: unranked,
-    slotSource: "observed",
+    slotSource: input.slotSet !== undefined ? "event-format" : "observed",
     observedCourtMatches: ourRows.length,
   };
 }

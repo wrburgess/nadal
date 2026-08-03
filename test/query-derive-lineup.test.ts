@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { NoCourtMatchHistoryError, predictedLineup } from "../src/query/derive.js";
+import type { EventCourt } from "../src/query/event-format.js";
 import type { CourtMatchRow, PredictedLineupInput, RatingSource, Side } from "../src/query/types.js";
 
 let nextRowId = 0;
@@ -461,6 +462,181 @@ describe("predictedLineup — the slot set comes from observed history", () => {
 
     expect(result.slots.map((s) => s.slot), "D4 belongs to nobody on this roster").toEqual(["S1", "D1"]);
     expect(result.observedCourtMatches).toBe(4);
+  });
+});
+
+describe("predictedLineup — an event format overrides the derived slot set (#63)", () => {
+  it("uses exactly the format's slots, in the format's order, over a wider observed history", () => {
+    const slotSet: EventCourt[] = [
+      { slot: "S1", discipline: "singles" },
+      { slot: "D1", discipline: "doubles" },
+      { slot: "D2", discipline: "doubles" },
+      { slot: "D3", discipline: "doubles" },
+    ];
+    const rows = [
+      ...singles("S1", 1, 6),
+      ...doubles("D1", [2, 3], 5),
+      ...doubles("D2", [4, 5], 4),
+      ...doubles("D3", [6, 7], 3),
+      ...doubles("D4", [8, 9], 3), // a fifth court the team has fielded, absent from the event's format
+    ];
+
+    const result = predictedLineup({
+      rows,
+      rosterPlayerIds: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      ratings: ratingsFor({}),
+      slotSet,
+    });
+
+    expect(result.slots.map((s) => s.slot)).toEqual(["S1", "D1", "D2", "D3"]);
+    expect(result.slotSource).toBe("event-format");
+    expect(placement(result).D1).toEqual([2, 3]);
+    // 8 and 9 have real history together, but D4 is not one of the event's courts — they cascade to
+    // unplaced rather than getting a fifth slot invented for them.
+    expect(result.unplaced.map((u) => u.playerId).sort((a, b) => a - b)).toEqual([8, 9]);
+  });
+
+  it("places a format slot the team has never played, by rating, reported short rather than omitted", () => {
+    const slotSet: EventCourt[] = [
+      { slot: "S1", discipline: "singles" },
+      { slot: "D1", discipline: "doubles" },
+      { slot: "D2", discipline: "doubles" },
+    ];
+    const rows = [...singles("S1", 1, 4), ...doubles("D1", [2, 3], 3)];
+
+    const result = predictedLineup({
+      rows,
+      rosterPlayerIds: [1, 2, 3, 4, 5],
+      ratings: ratingsFor({ 4: { ntrp: 4.0 }, 5: { ntrp: 3.9 } }),
+      slotSet,
+    });
+
+    expect(result.slots.map((s) => s.slot)).toEqual(["S1", "D1", "D2"]);
+    const d2 = result.slots.find((s) => s.slot === "D2")!;
+    expect(d2.playerIds.slice().sort((a, b) => a - b)).toEqual([4, 5]);
+    expect(d2.basis).toBe("rating");
+    expect(d2.support).toBe(0);
+  });
+
+  it("the format wins when observed history at that slot is modal-singles", () => {
+    const slotSet: EventCourt[] = [
+      { slot: "S1", discipline: "singles" },
+      { slot: "D1", discipline: "doubles" },
+    ];
+    // D1 is modal-SINGLES in the observed rows (3 singles rows vs 1 doubles row) — the format still
+    // declares it doubles, and the format wins.
+    const rows = [
+      ...singles("S1", 1, 4),
+      ...singles("D1", 2, 3),
+      row("D1", "doubles", [3, 4], []),
+    ];
+
+    const result = predictedLineup({
+      rows,
+      rosterPlayerIds: [1, 2, 3, 4],
+      ratings: ratingsFor({}),
+      slotSet,
+    });
+
+    const d1 = result.slots.find((s) => s.slot === "D1")!;
+    expect(d1.discipline).toBe("doubles");
+    expect(d1.playerIds).toHaveLength(2);
+  });
+
+  it("sends the surplus to unplaced, never dropped, when the roster outnumbers the format's seats", () => {
+    const slotSet: EventCourt[] = [{ slot: "S1", discipline: "singles" }];
+    const rows = [...singles("S1", 1, 4)];
+
+    const result = predictedLineup({ rows, rosterPlayerIds: [1, 2, 3], ratings: ratingsFor({}), slotSet });
+
+    expect(result.slots.map((s) => s.slot)).toEqual(["S1"]);
+    expect(placement(result).S1).toEqual([1]);
+    expect(result.unplaced.map((u) => u.playerId).sort((a, b) => a - b)).toEqual([2, 3]);
+  });
+
+  it("fills every slot by rating when observed history is entirely disjoint from the format — still a valid, weak prediction", () => {
+    const slotSet: EventCourt[] = [
+      { slot: "S1", discipline: "singles" },
+      { slot: "D1", discipline: "doubles" },
+    ];
+    // All observed history is at a court (D9) that is not part of the format at all.
+    const rows = [...doubles("D9", [1, 2], 4), ...doubles("D9", [3, 4], 1)];
+
+    const result = predictedLineup({
+      rows,
+      rosterPlayerIds: [1, 2, 3, 4],
+      ratings: ratingsFor({ 1: { ntrp: 4.2 }, 2: { ntrp: 4.1 }, 3: { ntrp: 3.5 }, 4: { ntrp: 3.4 } }),
+      slotSet,
+    });
+
+    expect(result.slots.map((s) => s.slot)).toEqual(["S1", "D1"]);
+    expect(result.slots.every((s) => s.basis === "rating")).toBe(true);
+    // Best two together, best pair to the earliest slot, exactly the leftover rule.
+    expect(result.slots.map((s) => s.playerIds.slice().sort((a, b) => a - b))).toEqual([[1], [2, 3]]);
+    expect(result.unplaced.map((u) => u.playerId)).toEqual([4]);
+  });
+
+  it("byte-identical to today's result when slotSet is omitted — the no-event path is unchanged", () => {
+    const rows = [...singles("S1", 1, 6), ...doubles("D1", [2, 3], 5)];
+    const withoutSlotSet = predictedLineup({ rows, rosterPlayerIds: [1, 2, 3], ratings: ratingsFor({}) });
+    const withUndefinedSlotSet = predictedLineup({
+      rows,
+      rosterPlayerIds: [1, 2, 3],
+      ratings: ratingsFor({}),
+      slotSet: undefined,
+    });
+
+    expect(withUndefinedSlotSet).toEqual(withoutSlotSet);
+    expect(withoutSlotSet.slotSource).toBe("observed");
+  });
+
+  it("throws on an empty slotSet rather than silently deriving one", () => {
+    const rows = [...singles("S1", 1, 4)];
+    expect(() => predictedLineup({ rows, rosterPlayerIds: [1], ratings: ratingsFor({}), slotSet: [] })).toThrow();
+  });
+
+  it("still refuses NoCourtMatchHistoryError with zero court-match rows, even with a slotSet given", () => {
+    const slotSet: EventCourt[] = [{ slot: "S1", discipline: "singles" }];
+    expect(() =>
+      predictedLineup({ rows: [], rosterPlayerIds: [1, 2, 3], ratings: ratingsFor({}), slotSet }),
+    ).toThrow(NoCourtMatchHistoryError);
+  });
+
+  // Regression for the latent `slotIndex.get(a.slot)!` hazard: once the slot set can differ from the
+  // observed set, a pair's OWN historical slot list can include a slot that is not in the format at
+  // all, and the tie-break comparator used to look it up unconditionally, yielding `undefined` and a
+  // NaN comparison result — a silently UNSTABLE sort, not a crash. This pins the deterministically
+  // CORRECT resolution: a tied, in-format slot always outranks a tied, out-of-format one, regardless
+  // of which order the rows happened to be seen in.
+  it("resolves a pair's slot preference deterministically even when a tied historical slot is absent from the format", () => {
+    const slotSet: EventCourt[] = [
+      { slot: "S1", discipline: "singles" },
+      { slot: "D1", discipline: "doubles" },
+      { slot: "D2", discipline: "doubles" },
+    ];
+    // The pair's bySlot history is built in THIS row order — D2 first, then the out-of-format D9,
+    // then D1 — all tied at 3. Without a fallback rank for the out-of-format slot, the comparator's
+    // NaN result on the D9 comparisons leaves this exact input order undisturbed, so the pair's
+    // "current preference" resolves to D2 rather than the correctly-ranked D1.
+    const rows = [
+      ...singles("S1", 1, 4),
+      ...doubles("D2", [2, 3], 3),
+      ...doubles("D9", [2, 3], 3),
+      ...doubles("D1", [2, 3], 3),
+    ];
+
+    const result = predictedLineup({
+      rows,
+      rosterPlayerIds: [1, 2, 3],
+      ratings: ratingsFor({}),
+      slotSet,
+    });
+
+    expect(result.slots.map((s) => s.slot)).toEqual(["S1", "D1", "D2"]);
+    expect(placement(result).D1, "the pair lands on its correctly-ranked preferred slot, D1").toEqual([2, 3]);
+    const d2 = result.slots.find((s) => s.slot === "D2")!;
+    expect(d2.playerIds, "nobody left for D2 — never corrupted into holding the pair instead of D1").toEqual([]);
+    expect(d2.basis).toBe("rating");
   });
 });
 

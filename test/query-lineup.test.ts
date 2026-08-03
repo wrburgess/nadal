@@ -10,7 +10,16 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { events, players, ratingObservations, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
-import { NoCourtMatchHistoryError, getLineupPlan } from "../src/query/lineup.js";
+import { setAvailability } from "../src/query/availability.js";
+import { addEvent } from "../src/query/events.js";
+import { InvalidEventFormatError } from "../src/query/event-format.js";
+import {
+  EventHasNoFormatError,
+  NoCourtMatchHistoryError,
+  UnknownEventError,
+  getLineupPlan,
+  resolveEventFormat,
+} from "../src/query/lineup.js";
 import { resolveTeamTarget } from "../src/query/team-profile.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -405,6 +414,239 @@ describe("getLineupPlan", () => {
       expect(resolution.kind).toBe("ok");
       if (resolution.kind !== "ok") throw new Error("expected ok");
       expect(getLineupPlan(db, resolution.teamId).teamId).toBe(teamId);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// #63: `getLineupPlan`'s optional third argument — an event name, resolved by exact `events.name`
+// (the same mechanism `src/ingest/match-add.ts` already uses, never inferred).
+describe("getLineupPlan — an event's format overrides the derived slot set", () => {
+  useTnDbPath();
+
+  it("uses the named event's courts, in the format's order, and names the event on the result", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder", "Del Duxbury", "Emory Ellerby"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 6, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 5, ourMatch);
+      playDoubles(db, "D2", [ids["Del Duxbury"]!, ids["Emory Ellerby"]!], 4, ourMatch);
+      const event = addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles",
+      });
+
+      const plan = getLineupPlan(db, teamId, "Springfield Sectionals 2026");
+
+      expect(plan.slots.map((s) => s.slot), "D2 is real history but not part of the event's format").toEqual([
+        "S1",
+        "D1",
+      ]);
+      expect(plan.slotSource).toBe("event-format");
+      expect(plan.slotEvent).toEqual({ id: event.eventId, name: "Springfield Sectionals 2026" });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses an unknown event name", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      expect(() => getLineupPlan(db, teamId, "No Such Event")).toThrow(UnknownEventError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses a named event that exists but has no format on file", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      addEvent(db, { name: "Formatless Event", kind: "league", startsOn: "2026-03-01", endsOn: "2026-06-30" });
+
+      expect(() => getLineupPlan(db, teamId, "Formatless Event")).toThrow(EventHasNoFormatError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("fails closed (InvalidEventFormatError) when the stored format is corrupted by a raw insert", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      const event = db
+        .insert(events)
+        .values({
+          name: "Corrupted Event",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          // Bypasses `addEvent`'s own writer/validator entirely — VALID JSON of a shape our own
+          // writer would never produce (an object, not an array of court entries).
+          format: JSON.stringify({ not: "a court list" }),
+        })
+        .returning()
+        .get();
+
+      expect(event.name).toBe("Corrupted Event");
+      expect(() => getLineupPlan(db, teamId, "Corrupted Event")).toThrow(InvalidEventFormatError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The narrower half of the same guard, and the one that used to escape it: bytes that are not
+  // JSON at all. `events.format` is a plain `text` column precisely so this decode happens in
+  // `readEventFormat` and surfaces as a named refusal; under drizzle's `{ mode: "json" }` it threw a
+  // raw SyntaxError out of the row mapper instead, which no caller catches and no CLI renders.
+  it("fails closed (InvalidEventFormatError, not a raw SyntaxError) when the stored format is not JSON at all", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      // RAW sql, deliberately not `db.insert(...)`: drizzle's own writer encodes whatever it is
+      // handed, so an insert THROUGH drizzle can never produce the corruption under test — it would
+      // store `"\"not json at all\""`, which is valid JSON. Only bytes written outside the ORM
+      // reproduce a hand-edited database, which is the whole scenario this guard exists for.
+      sqlite
+        .prepare("INSERT INTO events (name, kind, starts_on, ends_on, format) VALUES (?,?,?,?,?)")
+        .run("Unparseable Event", "tournament", "2026-08-28", "2026-08-30", "not json at all");
+
+      let caught: unknown;
+      try {
+        getLineupPlan(db, teamId, "Unparseable Event");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(InvalidEventFormatError);
+      expect(caught, "a SyntaxError here would escape every CLI refusal branch").not.toBeInstanceOf(SyntaxError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The blast radius, asserted directly rather than argued in a comment. A malformed format must
+  // stay confined to the format reader: `setAvailability` resolves its event through `eventsForDay`,
+  // which `select()`s every column of every event whose range covers the day, so under a
+  // JSON-decoding column mode ONE corrupt row would break `tn player avail` for every event sharing
+  // that day — a command with nothing to do with court formats.
+  it("a corrupt format on one event does not break unrelated reads of the events table", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      db.update(teams).set({ isHome: true }).where(eq(teams.id, teamId)).run();
+      // Raw sql for the same reason as the test above — see its comment.
+      sqlite
+        .prepare("INSERT INTO events (name, kind, starts_on, ends_on, format) VALUES (?,?,?,?,?)")
+        .run("Corrupt Overlapping Event", "tournament", "2026-08-28", "2026-08-30", "not json at all");
+      addEvent(db, {
+        name: "Healthy Event",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles",
+      });
+
+      // Same day, two events, one of them corrupt — the availability writer must still work.
+      expect(() =>
+        setAvailability(db, {
+          playerId: ids["Ada Ashby"]!,
+          day: "2026-08-28",
+          status: "available",
+          eventName: "Healthy Event",
+        }),
+      ).not.toThrow();
+
+      // And a plan against the healthy event still resolves, with the corrupt row sitting beside it.
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      expect(getLineupPlan(db, teamId, "Healthy Event").slotSource).toBe("event-format");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Codex adversarial review of PR #82, round 2, Finding 2 [medium]. The resolved value is opaque:
+  // only `resolveEventFormat` can build one, and it carries the event's IDENTITY rather than a
+  // second, separately-constructed provenance field — so the courts predicted and the event named
+  // cannot be recombined from two different events.
+  it("a resolved format carries its own event identity — the courts and the named event cannot disagree", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 3, ourMatch);
+      addEvent(db, {
+        name: "Two Court Event",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles",
+      });
+      addEvent(db, {
+        name: "One Court Event",
+        kind: "tournament",
+        startsOn: "2026-09-01",
+        endsOn: "2026-09-02",
+        format: "S1:singles",
+      });
+
+      const two = resolveEventFormat(db, "Two Court Event");
+      const one = resolveEventFormat(db, "One Court Event");
+
+      for (const [resolved, courts, name] of [
+        [two, 2, "Two Court Event"],
+        [one, 1, "One Court Event"],
+      ] as const) {
+        const plan = getLineupPlan(db, teamId, resolved);
+        expect(plan.slots).toHaveLength(courts);
+        expect(plan.slotEvent).toEqual({ id: resolved.event.id, name });
+      }
+
+      // The value exposes no separate provenance field to swap — the presenter-facing event name is
+      // derived from the same object the slot set came from.
+      expect(Object.keys(two)).toEqual(["event", "slotSet"]);
+
+      // Codex round 3 [medium]: a spread used to carry the brand, so `{ ...a, slotSet: b.slotSet }`
+      // produced a value `getLineupPlan` trusted — B's courts labelled event A. The brand is now
+      // non-enumerable, so the spread does not carry it, and the runtime check refuses the result.
+      //
+      // Asserted at RUNTIME deliberately. The natural-looking compile-time regression does not
+      // exist: TypeScript models an object spread from the DECLARED type, so this expression still
+      // typechecks as a `ResolvedEventFormat` (verified against this project's own tsconfig). A
+      // non-enumerable brand alone would therefore have looked like a fix while changing nothing an
+      // attacker-shaped caller would notice — the runtime check is the half that closes it.
+      const mixed = { ...one, slotSet: two.slotSet };
+      expect(Object.getOwnPropertySymbols(mixed), "a spread must not carry the brand").toHaveLength(0);
+      expect(() => getLineupPlan(db, teamId, mixed)).toThrow(/not produced by resolveEventFormat/);
+
+      // And the courts a batch is predicting across cannot be mutated between teams. `readonly` is
+      // erased at runtime, so this needs a real freeze, not a type.
+      expect(Object.isFrozen(two.slotSet)).toBe(true);
+      expect(Object.isFrozen(two.slotSet[0])).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("no event argument -> today's result, unchanged", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 3, ourMatch);
+
+      const plan = getLineupPlan(db, teamId);
+
+      expect(plan.slotSource).toBe("observed");
+      expect(plan.slotEvent).toBeNull();
     } finally {
       sqlite.close();
     }

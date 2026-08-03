@@ -9,13 +9,24 @@
 // defect #16 shipped and #17 PR A fixed one layer over.
 
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
-import { courtMatches, players, ratingObservations, teamMatches, teamMemberships, teams } from "../db/schema.js";
+import { courtMatches, events, players, ratingObservations, teamMatches, teamMemberships, teams } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoCourtMatchHistoryError, predictedLineup } from "./derive.js";
+import type { EventCourt } from "./event-format.js";
+import { readEventFormat } from "./event-format.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
-import type { LineupBasis, LineupConfidence, PredictedLineupResult, RatingSource } from "./types.js";
+import type { LineupBasis, LineupConfidence, RatingSource } from "./types.js";
 
 export { NoCourtMatchHistoryError };
+
+/** No row on file under the given name — `events.name` is unique, so this is the same
+ * resolve-by-exact-name-or-refuse mechanism `src/ingest/match-add.ts` already uses. Nothing is ever
+ * inferred from a partial or fuzzy match. */
+export class UnknownEventError extends Error {}
+
+/** The named event exists, but its `format` column is `null` — no silent fall back to the observed
+ * slot set; naming the event lets a presenter tell the operator exactly what to add. */
+export class EventHasNoFormatError extends Error {}
 
 export type LineupPlanPlayer = {
   playerId: number;
@@ -31,7 +42,112 @@ export type LineupPlanSlot = {
   support: number;
 };
 
-export type LineupPlan = {
+/**
+ * Where `slots`' court list came from, as a DISCRIMINATED PAIR rather than two independent fields
+ * (#63). `slotSource` and `slotEvent` are not free to disagree: `"event-format"` always has an
+ * event, `"observed"` never does. Expressing that in the type is what lets the three presenters
+ * narrow on `slotSource` and reach `slotEvent.name` without a non-null assertion — with two loose
+ * fields, each presenter had to assert the invariant separately (`slotEvent!.name`), which is three
+ * copies of a rule the type could hold once, and a crash for any caller that built the pair wrong.
+ *
+ * The JSON shape is unchanged: these remain two sibling keys, so `slotSource === "observed"` reads
+ * exactly as before for every existing caller and test.
+ */
+export type LineupSlotProvenance =
+  | { slotSource: "observed"; slotEvent: null }
+  | { slotSource: "event-format"; slotEvent: { id: number; name: string } };
+
+/** Brands `ResolvedEventFormat` so only `resolveEventFormat` can build one. A REAL symbol, not a
+ * `declare const` phantom: a type-only brand disappears at runtime, so the object literal below
+ * would have thrown `resolvedEventFormat is not defined` on the first call — caught by the tests
+ * immediately. Not exported, so no caller outside this module can name the key, and a `const`
+ * symbol is typed `unique symbol`, so none can forge it structurally either. */
+const resolvedEventFormat = Symbol("resolvedEventFormat");
+
+/**
+ * A named event's format, already looked up and validated: the slot set to predict across, together
+ * with the identity of the event it came from. Resolved ONCE by `resolveEventFormat` and reusable
+ * across many `getLineupPlan` calls.
+ *
+ * **Opaque by construction, for a reason a plain structural type could not carry.** As two loose
+ * public fields (`slotSet` + a separately-built provenance), a caller could resolve event A and
+ * event B and hand over `{ slotSet: A.slotSet, provenance: B.provenance }` — predicting across A's
+ * courts while all three presenters state the courts came from B. That needs no `any` and no
+ * malformed data, and it defeats the provenance guarantee the batch fix exists to provide. Carrying
+ * only the event's IDENTITY, and letting `getLineupPlan` derive the provenance from it, removes the
+ * second field to disagree with; the brand removes the ability to fabricate the first.
+ * (Codex adversarial review of PR #82, round 2, Finding 2 [medium].)
+ */
+export type ResolvedEventFormat = {
+  readonly event: { readonly id: number; readonly name: string };
+  readonly slotSet: readonly EventCourt[];
+  readonly [resolvedEventFormat]: true;
+};
+
+/**
+ * Looks up a named event and validates its stored format, or refuses. Exact match against
+ * `events.name` (the unique key) — the same resolve-by-name-or-refuse mechanism
+ * `src/ingest/match-add.ts` already uses; nothing is inferred from a partial or fuzzy match. No
+ * silent fall back to the observed slot set when a named event has no format: that would be the
+ * exact silent-lie class this repo has logged before.
+ *
+ * **Separated from `getLineupPlan` so a BATCH caller can resolve once and reuse.** `tn report build`
+ * renders one dossier per team, and nadal genuinely runs two PROCESSES against one WAL database
+ * (`tn mcp serve` beside a CLI invocation), so a concurrent `tn event add` committing between two
+ * teams' dossiers would otherwise let ONE batch emit a two-court dossier and a four-court dossier
+ * that each name the same event — while `docs/cli/GRAMMAR.md` promises the named event's format
+ * applies to *every* dossier the run builds. A per-team lookup cannot keep that promise; one
+ * up-front resolution can. (Codex adversarial review of PR #82, Finding 1 [high].)
+ *
+ * Resolving up front also moves the refusal EARLIER, which is the same batch discipline
+ * `writeSectionalsDossiers` already applies to filesystem leaves: a bad event name now refuses
+ * before any dossier is prepared, rather than on the first team that happens to have court history
+ * — and it closes the case where a build over a team set that is empty, or entirely without
+ * history, would have accepted an unknown event name in silence.
+ */
+export function resolveEventFormat(db: Db, eventName: string): ResolvedEventFormat {
+  const eventRow = db.select().from(events).where(eq(events.name, eventName)).all()[0];
+  if (eventRow === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
+  // `readEventFormat` throws `InvalidEventFormatError` on a corrupted stored value (defense in
+  // depth — only `addEvent` writes this column in production) — allowed to propagate as-is rather
+  // than being re-wrapped, since it is already its own distinct, presenter-renderable class.
+  const format = readEventFormat(eventRow.format);
+  if (format === null) {
+    throw new EventHasNoFormatError(
+      `event "${eventName}" has no format on file — add one first, e.g. ` +
+        `tn event add "${eventName}" ${eventRow.kind} ${eventRow.startsOn ?? "<starts-on>"} ` +
+        `${eventRow.endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
+    );
+  }
+  const resolved = {
+    event: Object.freeze({ id: eventRow.id, name: eventRow.name }),
+    // Deep-frozen, not merely `readonly`: `readonly` is erased at compile time, so a holder could
+    // reach through `resolved.slotSet[0].slot = "…"` and mutate the courts a whole batch is
+    // predicting across, between one team and the next.
+    slotSet: Object.freeze(format.map((court) => Object.freeze({ ...court }))),
+  };
+  // NON-enumerable, so object spread and `Object.assign` do not carry it — `{ ...a, slotSet: b.slotSet }`
+  // therefore produces a value without the brand, which `getLineupPlan` rejects at runtime.
+  Object.defineProperty(resolved, resolvedEventFormat, { value: true, enumerable: false });
+  return Object.freeze(resolved) as ResolvedEventFormat;
+}
+
+/** Runtime half of the opacity guarantee. The brand's TYPE stops a caller naming it; this stops a
+ * caller reconstructing the value around it — and the two are not redundant, because TypeScript
+ * models an object spread from the declared type, so `{ ...a }` can still typecheck as a
+ * `ResolvedEventFormat` while carrying no brand at runtime. Checking here is what makes the
+ * non-enumerable brand mean something rather than merely look like it does. */
+function assertResolvedByUs(value: ResolvedEventFormat): void {
+  if ((value as Record<symbol, unknown>)[resolvedEventFormat] !== true) {
+    throw new Error(
+      "getLineupPlan: the resolved event format was not produced by resolveEventFormat — a copied or " +
+        "reconstructed value can pair one event's courts with another event's identity, which is the " +
+        "provenance guarantee this type exists to hold",
+    );
+  }
+}
+
+export type LineupPlan = LineupSlotProvenance & {
   teamId: number;
   teamName: string;
   slots: LineupPlanSlot[];
@@ -45,7 +161,6 @@ export type LineupPlan = {
   ranked: LineupPlanPlayer[];
   /** Roster players with no observation in `ratingSource`, by name, so the gap is printable. */
   unranked: LineupPlanPlayer[];
-  slotSource: PredictedLineupResult["slotSource"];
   observedCourtMatches: number;
   /** Court matches these players appeared in that belong to some OTHER team (or to no team match
    * on file) and were therefore not used as evidence. Reported rather than silently dropped: a
@@ -59,19 +174,47 @@ export type LineupPlan = {
  * Builds a team's predicted lineup: the roster from `team_memberships`, that roster's court-match
  * history, and every rating observation for those players, run through `predictedLineup`.
  *
+ * `eventName` (#63), when given, resolves against `events.name` (exact match, never inferred) and
+ * its stored format REPLACES the derived slot set outright — `slotSource: "event-format"`, and
+ * `slotEvent` names which one. Omitted, this is byte-identical to the pre-#63 behavior: the slot set
+ * is derived from observed history and `slotSource` stays `"observed"`. The event is the parameter
+ * of the QUESTION being asked ("what does Springfield's format say"), not a property stored against
+ * the team — see the assessment on issue #63 for why a per-team link was rejected in favor of this.
+ *
  * Throws `NoCourtMatchHistoryError` when the team has no court matches of its OWN on file — a
  * caller renders that as an honest absence rather than an empty lineup, which would read as "we
  * predict nobody plays". `report build` catches it for exactly that reason. Note that a roster
  * whose members have extensive individual histories can still refuse here, and correctly so: those
- * matches belong to other teams and say nothing about how THIS team fields courts.
+ * matches belong to other teams and say nothing about how THIS team fields courts. Throws
+ * `UnknownEventError` / `EventHasNoFormatError` / `InvalidEventFormatError` for a bad `eventName` —
+ * see each class's own doc comment.
  *
  * A player on the roster more than once (one `team_memberships` row per event — the schema allows
  * it, and a district roster plus a travel roster is the normal case) is counted ONCE here: the
  * roster is a set of people, and a duplicate id would let the same player be placed on two courts.
  */
-export function getLineupPlan(db: Db, teamId: number): LineupPlan {
+export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedEventFormat): LineupPlan {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getLineupPlan: no team with id ${teamId}`);
+
+  // #63: resolved FIRST, before any roster/court-match read — the event is a property of the
+  // QUESTION being asked, not of the team, so there is nothing team-specific to fetch before
+  // validating it.
+  //
+  // A caller may pass a NAME (resolved here, one lookup, the ordinary single-team case) or an
+  // ALREADY-RESOLVED format. The second form exists for a BATCH caller — `report build` over every
+  // team — which must resolve once and reuse, never once per team; see `resolveEventFormat`'s doc
+  // comment for the race that motivates it.
+  const resolved: ResolvedEventFormat | undefined =
+    event === undefined ? undefined : typeof event === "string" ? resolveEventFormat(db, event) : event;
+  if (resolved !== undefined) assertResolvedByUs(resolved);
+  const slotSet = resolved === undefined ? undefined : [...resolved.slotSet];
+  // Derived from the resolved event's own identity, never accepted as a second field alongside the
+  // slot set — so the courts predicted and the event named can not disagree.
+  const provenance: LineupSlotProvenance =
+    resolved === undefined
+      ? { slotSource: "observed", slotEvent: null }
+      : { slotSource: "event-format", slotEvent: { id: resolved.event.id, name: resolved.event.name } };
 
   // Issue #49: a retired member must never be predicted onto a court — the headline symptom the
   // issue was filed for. Filtered here, at the roster read, rather than after the fact: the pure
@@ -154,6 +297,7 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
         observedOn: o.observedOn,
       })),
     })),
+    slotSet,
   });
 
   // `player #<id>` is unreachable in practice — every id below came from the roster query this map
@@ -179,7 +323,11 @@ export function getLineupPlan(db: Db, teamId: number): LineupPlan {
     ratingSource: prediction.ratingSource,
     ranked: prediction.rankedPlayerIds.map(named),
     unranked: prediction.unrankedPlayerIds.map(named),
-    slotSource: prediction.slotSource,
+    // Spread as the discriminated pair, never as two independent keys. `prediction.slotSource` is
+    // not copied here because it is not a second source of truth: `predictedLineup` derives it from
+    // whether `slotSet` was passed, and `slotSet` and `provenance` are set in the SAME branch above,
+    // so the two agree by construction rather than by a check that could be forgotten.
+    ...provenance,
     observedCourtMatches: prediction.observedCourtMatches,
     excludedOtherTeamMatches,
     rosterSize: rosterPlayerIds.length,
