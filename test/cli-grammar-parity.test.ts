@@ -30,6 +30,16 @@ const TABLE_LINE = /^ {0,3}\|/;
 // any later table — an examples table, a future `## Exit codes` table — is read as command-registry
 // content, and the bijection assertion below turns that misreading into a failure. Stopping at the
 // first non-table line bounds the parse to the one table this file is about.
+//
+// ACCEPTED RESIDUAL (#85, Reviewer finding 5 on PR #84): `md.split("## Commands")` matches the
+// first TEXT occurrence, not an ATX heading. Prose containing the literal `## Commands` (say, in
+// backticks) followed by a byte-for-byte decoy copy of the command table redirects the parse to the
+// decoy, and a duplicate row added to the REAL table below is then invisible to every assertion in
+// this file. Reaching it takes all three of those author actions at once; the threat model here is
+// an accidental double row, which the guard does catch. Not patched: this parser hit the
+// escalate-on-recurrence bound (three review rounds, three new parse defects), so the durable fix
+// is removing the parser — generating the table from `COMMANDS` — which awaits triage as a
+// findings-log idea, not another regex.
 function parseGrammarRows(md: string): GrammarRow[] {
   const section = md.split("## Commands")[1] ?? "";
   const rows: GrammarRow[] = [];
