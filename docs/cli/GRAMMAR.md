@@ -198,5 +198,13 @@ any other in-repo path (e.g. `src`) is refused, exit 1.
 The optional trailing `[event]` (#63) is the same disambiguator `tn lineup plan` accepts, and it
 applies to **every** dossier this run builds: each team's predicted-lineup section uses the named
 event's format instead of that team's own observed history, with the same refusals (unknown event,
-or one with no format on file) as `tn lineup plan` — a bad name aborts the whole build rather than
-producing dossiers that silently disagree about which slot set is in effect.
+or one with no format on file) as `tn lineup plan`.
+
+**The event's format is resolved exactly once, before any dossier is prepared** — not once per team.
+That is what makes "every dossier" true rather than merely intended: nadal runs `tn mcp serve`
+alongside a CLI invocation against one WAL database, so a `tn event add` committing part way through
+a build is an ordinary concurrent-process interleaving, and a per-team lookup would let one batch
+emit a two-court dossier and a four-court dossier that each name the same event. Resolving up front
+also moves the refusal earlier: a bad name aborts the whole build **with nothing written**, in the
+same fail-before-any-write direction the output-path validation already takes, and it is caught even
+when no team on file has any lineup to build.

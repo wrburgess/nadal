@@ -14,6 +14,7 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
+import { resolveEventFormat } from "../src/query/lineup.js";
 import { addEvent } from "../src/query/events.js";
 import { renderDossier } from "../src/report/html.js";
 import { renderDossierMarkdown } from "../src/report/markdown.js";
@@ -318,7 +319,12 @@ describe("buildTeamDossier wires the real prediction in", () => {
         format: "D1:doubles",
       });
 
-      const dossier = buildTeamDossier(db, team.id, { since: "2026-01-01", eventName: "Springfield Sectionals 2026" });
+      // `buildTeamDossier` takes an ALREADY-RESOLVED event, never a name — the resolution belongs to
+      // the batch entry point so one build cannot straddle two format versions.
+      const dossier = buildTeamDossier(db, team.id, {
+        since: "2026-01-01",
+        event: resolveEventFormat(db, "Springfield Sectionals 2026"),
+      });
 
       expect(dossier.lineup).not.toBeNull();
       expect(dossier.lineup!.slotSource).toBe("event-format");

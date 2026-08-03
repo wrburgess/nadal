@@ -57,6 +57,54 @@ export type LineupSlotProvenance =
   | { slotSource: "observed"; slotEvent: null }
   | { slotSource: "event-format"; slotEvent: { id: number; name: string } };
 
+/** A named event's format, already looked up and validated — the slot set to predict across, paired
+ * with the provenance a presenter prints. Resolved ONCE by `resolveEventFormat` and reusable across
+ * many `getLineupPlan` calls. */
+export type ResolvedEventFormat = {
+  slotSet: EventCourt[];
+  provenance: Extract<LineupSlotProvenance, { slotSource: "event-format" }>;
+};
+
+/**
+ * Looks up a named event and validates its stored format, or refuses. Exact match against
+ * `events.name` (the unique key) — the same resolve-by-name-or-refuse mechanism
+ * `src/ingest/match-add.ts` already uses; nothing is inferred from a partial or fuzzy match. No
+ * silent fall back to the observed slot set when a named event has no format: that would be the
+ * exact silent-lie class this repo has logged before.
+ *
+ * **Separated from `getLineupPlan` so a BATCH caller can resolve once and reuse.** `tn report build`
+ * renders one dossier per team, and nadal genuinely runs two PROCESSES against one WAL database
+ * (`tn mcp serve` beside a CLI invocation), so a concurrent `tn event add` committing between two
+ * teams' dossiers would otherwise let ONE batch emit a two-court dossier and a four-court dossier
+ * that each name the same event — while `docs/cli/GRAMMAR.md` promises the named event's format
+ * applies to *every* dossier the run builds. A per-team lookup cannot keep that promise; one
+ * up-front resolution can. (Codex adversarial review of PR #82, Finding 1 [high].)
+ *
+ * Resolving up front also moves the refusal EARLIER, which is the same batch discipline
+ * `writeSectionalsDossiers` already applies to filesystem leaves: a bad event name now refuses
+ * before any dossier is prepared, rather than on the first team that happens to have court history
+ * — and it closes the case where a build over a team set that is empty, or entirely without
+ * history, would have accepted an unknown event name in silence.
+ */
+export function resolveEventFormat(db: Db, eventName: string): ResolvedEventFormat {
+  const eventRow = db.select().from(events).where(eq(events.name, eventName)).all()[0];
+  if (eventRow === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
+  // `readEventFormat` throws `InvalidEventFormatError` on a corrupted stored value (defense in
+  // depth — only `addEvent` writes this column in production) — allowed to propagate as-is rather
+  // than being re-wrapped, since it is already its own distinct, presenter-renderable class.
+  const format = readEventFormat(eventRow.format);
+  if (format === null) {
+    throw new EventHasNoFormatError(
+      `event "${eventName}" has no format on file — add one first, e.g. ` +
+        `tn event add "${eventName}" ${eventRow.kind} ${eventRow.startsOn ?? "<starts-on>"} ` +
+        `${eventRow.endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
+    );
+  }
+  // Built as one value, never as two fields set independently, so the `LineupSlotProvenance` union
+  // is satisfied by construction — nothing here can produce `"event-format"` without an event.
+  return { slotSet: format, provenance: { slotSource: "event-format", slotEvent: { id: eventRow.id, name: eventRow.name } } };
+}
+
 export type LineupPlan = LineupSlotProvenance & {
   teamId: number;
   teamName: string;
@@ -103,38 +151,22 @@ export type LineupPlan = LineupSlotProvenance & {
  * it, and a district roster plus a travel roster is the normal case) is counted ONCE here: the
  * roster is a set of people, and a duplicate id would let the same player be placed on two courts.
  */
-export function getLineupPlan(db: Db, teamId: number, eventName?: string): LineupPlan {
+export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedEventFormat): LineupPlan {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getLineupPlan: no team with id ${teamId}`);
 
-  // #63: resolved FIRST, before any roster/court-match read — the event name is a property of the
+  // #63: resolved FIRST, before any roster/court-match read — the event is a property of the
   // QUESTION being asked, not of the team, so there is nothing team-specific to fetch before
-  // validating it. Exact match against `events.name` (the unique key), the same
-  // resolve-by-name-or-refuse mechanism `src/ingest/match-add.ts` already uses. No silent fall back
-  // to the observed slot set when a named event lacks a format — that would be the exact silent-lie
-  // class this repo has logged before.
-  // Built as ONE value, never as two fields set independently, so the `LineupSlotProvenance` union
-  // above is satisfied by construction — there is no code path here that could produce
-  // `"event-format"` without an event, or an event without `"event-format"`.
-  let slotSet: EventCourt[] | undefined;
-  let provenance: LineupSlotProvenance = { slotSource: "observed", slotEvent: null };
-  if (eventName !== undefined) {
-    const eventRow = db.select().from(events).where(eq(events.name, eventName)).all()[0];
-    if (eventRow === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
-    // `readEventFormat` throws `InvalidEventFormatError` on a corrupted stored value (defense in
-    // depth — only `addEvent` writes this column in production) — allowed to propagate as-is rather
-    // than being re-wrapped, since it is already its own distinct, presenter-renderable class.
-    const format = readEventFormat(eventRow.format);
-    if (format === null) {
-      throw new EventHasNoFormatError(
-        `event "${eventName}" has no format on file — add one first, e.g. ` +
-          `tn event add "${eventName}" ${eventRow.kind} ${eventRow.startsOn ?? "<starts-on>"} ` +
-          `${eventRow.endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
-      );
-    }
-    slotSet = format;
-    provenance = { slotSource: "event-format", slotEvent: { id: eventRow.id, name: eventRow.name } };
-  }
+  // validating it.
+  //
+  // A caller may pass a NAME (resolved here, one lookup, the ordinary single-team case) or an
+  // ALREADY-RESOLVED format. The second form exists for a BATCH caller — `report build` over every
+  // team — which must resolve once and reuse, never once per team; see `resolveEventFormat`'s doc
+  // comment for the race that motivates it.
+  const resolved: ResolvedEventFormat | undefined =
+    event === undefined ? undefined : typeof event === "string" ? resolveEventFormat(db, event) : event;
+  const slotSet = resolved?.slotSet;
+  const provenance: LineupSlotProvenance = resolved?.provenance ?? { slotSource: "observed", slotEvent: null };
 
   // Issue #49: a retired member must never be predicted onto a court — the headline symptom the
   // issue was filed for. Filtered here, at the roster read, rather than after the fact: the pure

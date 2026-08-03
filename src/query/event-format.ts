@@ -25,10 +25,32 @@ export class InvalidEventFormatError extends Error {}
 
 const disciplineSchema = z.enum(["singles", "doubles"]);
 
-const eventCourtSchema = z.object({
-  slot: z.string().min(1),
-  discipline: disciplineSchema,
-});
+/**
+ * The ONE definition of a legal court entry, applied to both directions — which is what makes the
+ * reader's accept-set exactly the writer's output-set rather than merely similar to it.
+ *
+ * Two of these rules exist because the first draft had them only on the writing side, and a reader
+ * that accepts what its own writer cannot produce is not fail-closed (Codex adversarial review of
+ * PR #82, Finding 2 [medium]):
+ *
+ * - **`slot` must be canonical — already trimmed.** `parseEventFormat` trims before validating, so
+ *   `" D1 "` can never be written; a reader that took only `min(1)` accepted it anyway, and the slot
+ *   then flows into `derive.ts` as a court literally named `" D1 "`. That matches no observed row,
+ *   so the team's real `D1` history is silently skipped and the lineup reports a malformed court as
+ *   supplied by the event. It also walks straight past `requireDistinctSlots`, since `"D1"` and
+ *   `" D1 "` are different strings — two courts where the event has one.
+ * - **`.strict()`.** An entry carrying keys our writer never emits came from somewhere else;
+ *   accepting it silently would be the same "close enough" reasoning one level up.
+ */
+const eventCourtSchema = z
+  .object({
+    slot: z
+      .string()
+      .min(1)
+      .refine((slot) => slot.trim() === slot, { message: "slot must not have leading or trailing whitespace" }),
+    discipline: disciplineSchema,
+  })
+  .strict();
 
 /** Refuses a list of courts that share a slot — a duplicate would silently collapse two courts into
  * one wherever this list is consumed, most sharply in `derive.ts`'s slot ordering/lookup. Shared by
@@ -77,18 +99,23 @@ export function parseEventFormat(input: string): EventCourt[] {
     const slot = entry.slice(0, colonIndex).trim();
     const disciplineText = entry.slice(colonIndex + 1).trim();
 
-    if (slot.length === 0) {
-      throw new InvalidEventFormatError(`event format entry "${entry}" has a blank slot`);
-    }
-
-    const disciplineResult = disciplineSchema.safeParse(disciplineText);
-    if (!disciplineResult.success) {
+    // `eventCourtSchema` is the AUTHORITY on what a legal court is, here as much as in
+    // `readEventFormat` — that shared gate is what makes "the reader accepts exactly what the writer
+    // produces" a property of the code rather than a claim about it. The two branches below choose
+    // only the MESSAGE; they are not a second, parallel definition of legality. Both are reachable:
+    // `slot` is trimmed by construction, so the schema's canonical-slot refinement and its
+    // `.strict()` cannot fire on this path, leaving exactly these two failure modes.
+    const court = eventCourtSchema.safeParse({ slot, discipline: disciplineText });
+    if (!court.success) {
+      if (slot.length === 0) {
+        throw new InvalidEventFormatError(`event format entry "${entry}" has a blank slot`);
+      }
       throw new InvalidEventFormatError(
         `event format entry "${entry}" has an unknown discipline "${disciplineText}" (expected singles | doubles)`,
       );
     }
 
-    courts.push({ slot, discipline: disciplineResult.data });
+    courts.push(court.data);
   }
 
   requireDistinctSlots(courts);

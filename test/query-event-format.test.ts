@@ -155,6 +155,20 @@ describe("readEventFormat", () => {
     ["an array of wrong-shaped objects", [{ court: "S1", type: "singles" }]],
     ["an array with an unknown discipline", [{ slot: "S1", discipline: "single" }]],
     ["an array with a duplicate slot", [{ slot: "D1", discipline: "doubles" }, { slot: "D1", discipline: "doubles" }]],
+    // A reader that accepts what its own writer cannot produce is not fail-closed. `parseEventFormat`
+    // trims before validating, so none of these can ever be WRITTEN — and each does real damage if
+    // read: a slot named `" D1 "` matches no observed row, so the team's real `D1` history is
+    // silently skipped and the lineup reports a malformed court as supplied by the event; and
+    // `"D1"` beside `" D1 "` walks past duplicate detection as two different strings, giving the
+    // event two courts where it has one. (Codex adversarial review of PR #82, Finding 2 [medium].)
+    ["a slot with leading whitespace", [{ slot: " D1", discipline: "doubles" }]],
+    ["a slot with trailing whitespace", [{ slot: "D1 ", discipline: "doubles" }]],
+    ["a whitespace-only slot", [{ slot: "   ", discipline: "doubles" }]],
+    [
+      "a padded duplicate that would bypass distinct-slot detection",
+      [{ slot: "D1", discipline: "doubles" }, { slot: " D1 ", discipline: "doubles" }],
+    ],
+    ["an entry carrying an unknown extra key", [{ slot: "D1", discipline: "doubles", seed: 1 }]],
   ])("fails closed on %s", (_label, decoded) => {
     expect(() => readEventFormat(JSON.stringify(decoded))).toThrow(InvalidEventFormatError);
   });
