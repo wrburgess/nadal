@@ -17,5 +17,20 @@ APP_ROOT = File.expand_path("..", __dir__)
 Dir.chdir(APP_ROOT) do
   puts "== Installing git hooks (protected-branch guard) =="
   ok = system("bin/install-git-hooks")
-  exit(ok ? 0 : 1)
+  exit(1) unless ok
+
+  # nadal Customization (issue #87). Every runbook opens with a bare `tn ...` and nothing else in
+  # this repo puts it on PATH, so a fresh clone failed at the first command an HC ran. This step is
+  # PRINTED, not run: `npm link` writes into a global npm prefix this script does not own, and it
+  # must never run from a git worktree, where it would bind the global `tn` to a throwaway checkout.
+  # ASCII only, per rules/scripting.md.
+  puts
+  puts "== Next: put `tn` on your PATH (not done for you) =="
+  puts "  npm install"
+  puts "  npm link      # from THIS repo root -- never from a git worktree"
+  puts "  tn --help     # expect the command banner"
+  puts
+  puts "Prefer not to install? Run ./bin/tn from the repo root instead, and read every"
+  puts "runbook's `tn ...` line as `./bin/tn ...`."
+  exit(0)
 end

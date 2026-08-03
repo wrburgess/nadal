@@ -3,6 +3,25 @@
 One runbook per operational flow; each SOW's manual-test segment cites the runbook it
 exercises, and runbooks double as HC post-merge checklists.
 
+## Before the first runbook: get `tn` on your PATH
+
+Every runbook below opens with a bare `tn ...`. On a fresh clone there is no such command — nothing
+installs one for you (issue #87):
+
+```sh
+npm install
+npm link      # from the repo root -- NEVER from a git worktree, which would bind the
+              # global `tn` to a throwaway checkout
+tn --help     # expect: tn <noun> <verb> <target> [payload] [flags]
+```
+
+`npm link` writes a symlink into your global npm prefix, outside this repo, which is why `bin/setup`
+prints this step rather than running it. If you would rather install nothing, run `./bin/tn` from the
+repo root and read every `tn ...` line below as `./bin/tn ...`.
+
+Verify with `tn --help` before starting anything else — a runbook is not the place to discover the
+command is missing.
+
 - [login-assisted-scrape.md](login-assisted-scrape.md) — USTA/WTN pull with HC standing by to log in
 - [capture-fixtures.md](capture-fixtures.md) — turn a live page into a committed test fixture; the
   HC-driven variant for login-gated pages, and the refusal loop that is most of the work

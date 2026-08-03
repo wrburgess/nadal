@@ -1,3 +1,22 @@
 #!/bin/sh
-DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+# Resolve $0 through its symlink chain BEFORE deriving the repo root. `npm link` (and any global
+# install) puts this launcher in a bin directory as a symlink, where an unresolved
+# `dirname "$0"` names that bin directory rather than this repo — so $DIR pointed at the Node
+# installation and the tsx exec below failed with "No such file or directory" (issue #87).
+#
+# POSIX sh only, per rules/scripting.md: `readlink -f` would do this in one line but is not POSIX
+# (BSD only gained -f in macOS 12.3), and a bundled script may not add a dependency.
+#
+# The loop terminates: the kernel already walked this same chain to exec us, so it is acyclic and
+# shorter than the OS symlink limit. A circular chain fails at exec (ELOOP) and never reaches here.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  TARGET="$(readlink "$SELF")"
+  case "$TARGET" in
+    /*) SELF="$TARGET" ;;
+    # A relative target resolves against the LINK's own directory, never the working directory.
+    *) SELF="$(dirname -- "$SELF")/$TARGET" ;;
+  esac
+done
+DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
 exec "$DIR/node_modules/.bin/tsx" "$DIR/src/cli/main.ts" "$@"
