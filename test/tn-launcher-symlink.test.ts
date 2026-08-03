@@ -78,15 +78,50 @@ describe("bin/tn resolves its repo root through symlinks (the `npm link` install
   });
 
   it("runs when the symlink's target is relative", () => {
-    // `ln -s ../../bin/tn` — a relative target must resolve against the LINK's own directory, not
-    // against the process's working directory. Both cases above use absolute targets and so cannot
+    // `ln -s ../real/tn` — a relative target must resolve against the LINK's own directory, not
+    // against the process's working directory. The cases above use absolute targets and cannot
     // distinguish the two; `runLauncher` runs from an unrelated cwd to make the difference visible.
+    //
+    // The target is deliberately SHORT and does not climb past its own root. A long
+    // `relative(here, TN_BIN)` chain would be a false green: `..` at `/` is a no-op, so once a
+    // target climbs to the filesystem root the working directory stops mattering and a launcher
+    // resolving against `$PWD` reaches the same file anyway. Verified by mutation — with the long
+    // form, breaking the fix in exactly this way left this test GREEN.
     const root = makeTempDir("tn-rel-");
-    const nested = join(root, "level1", "level2");
-    mkdirSync(nested, { recursive: true });
-    const linked = join(nested, "tn");
-    symlinkSync(relative(nested, TN_BIN), linked);
+    const realDir = join(root, "real");
+    const linkDir = join(root, "links");
+    mkdirSync(realDir, { recursive: true });
+    mkdirSync(linkDir, { recursive: true });
+    const middle = join(realDir, "tn");
+    const linked = join(linkDir, "tn");
+    symlinkSync(TN_BIN, middle);
+    symlinkSync(relative(linkDir, middle), linked);
 
     expectBanner(runLauncher(linked));
+  });
+
+  it("runs when a relative target passes through a directory whose name contains spaces", () => {
+    // Every path the resolution touches — $0, the link target, the derived root — has to survive
+    // word splitting. A space in a macOS path is ordinary, not exotic, and an unquoted expansion
+    // anywhere in the loop would split it into arguments and fail here while passing every case
+    // above. Combined with a relative target so both hazards apply to the same path at once.
+    const root = makeTempDir("tn-space-");
+    const spaced = join(root, "with space", "bin");
+    const linkDir = join(root, "another dir");
+    mkdirSync(spaced, { recursive: true });
+    mkdirSync(linkDir, { recursive: true });
+    const middle = join(spaced, "tn");
+    const linked = join(linkDir, "tn");
+    symlinkSync(TN_BIN, middle);
+    symlinkSync(relative(linkDir, middle), linked);
+
+    expectBanner(runLauncher(linked));
+  });
+
+  it("runs when invoked by a relative path from the repo root (the documented no-install route)", () => {
+    // `docs/runbooks/README.md` offers `./bin/tn` to an HC who would rather not install anything,
+    // so that invocation is a documented interface with the same standing as the linked one. `$0`
+    // is then a relative path that is NOT a symlink — the branch every other case here skips.
+    expectBanner(runLauncher("./bin/tn", REPO_ROOT));
   });
 });
