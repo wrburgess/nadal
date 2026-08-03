@@ -7,15 +7,19 @@
 # POSIX sh only, per rules/scripting.md: `readlink -f` would do this in one line but is not POSIX
 # (BSD only gained -f in macOS 12.3), and a bundled script may not add a dependency.
 #
+# EVERY path split here uses parameter expansion rather than `dirname`, so the only external
+# command this script runs is `readlink` — and its failure is checked below. An unchecked helper
+# that returns nothing does not fail loudly here: it derives a DIFFERENT root, which is a confusing
+# "tsx: No such file" where that root is bare and a different checkout's code where it is not.
+# Removing the dependency closes that class; checking one call would only have closed one instance.
+#
 # The loop terminates: the kernel already walked this same chain to exec us, so it is acyclic and
 # shorter than the OS symlink limit. A circular chain fails at exec (ELOOP) and never reaches here.
 SELF="$0"
 while [ -L "$SELF" ]; do
   # Fail CLOSED when readlink cannot answer. An empty TARGET would otherwise fall through the
-  # wildcard arm as a relative target, making SELF "<dir>/" and DIR the PARENT of the real root --
-  # which is a loud "tsx: No such file" only when that parent happens to hold no node_modules, and
-  # silently runs a DIFFERENT checkout's code when it does. Reachable by a link removed or replaced
-  # between the test above and this line.
+  # wildcard arm as a relative target, making SELF "<dir>/" and DIR the PARENT of the real root.
+  # Reachable by a link removed or replaced between the test above and this line.
   if ! TARGET="$(readlink "$SELF")" || [ -z "$TARGET" ]; then
     echo "tn: cannot resolve symlink: $SELF" >&2
     exit 1
@@ -23,8 +27,23 @@ while [ -L "$SELF" ]; do
   case "$TARGET" in
     /*) SELF="$TARGET" ;;
     # A relative target resolves against the LINK's own directory, never the working directory.
-    *) SELF="$(dirname -- "$SELF")/$TARGET" ;;
+    # "${SELF%/*}" is that directory; a $0 with no slash at all is relative to the cwd already.
+    */*) SELF="${SELF%/*}/$TARGET" ;;
+    *) SELF="./$TARGET" ;;
   esac
 done
-DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
+
+case "$SELF" in
+  */*)
+    SELF_DIR="${SELF%/*}"
+    # "/tn" strips to the empty string, and the parent of a file at the root is the root.
+    [ -n "$SELF_DIR" ] || SELF_DIR="/"
+    ;;
+  *) SELF_DIR="." ;;
+esac
+
+if ! DIR="$(CDPATH= cd -- "$SELF_DIR/.." && pwd)"; then
+  echo "tn: cannot resolve repo root from: $SELF" >&2
+  exit 1
+fi
 exec "$DIR/node_modules/.bin/tsx" "$DIR/src/cli/main.ts" "$@"

@@ -157,6 +157,28 @@ describe("bin/tn resolves its repo root through symlinks (the `npm link` install
     return stubDir;
   }
 
+  it("does not depend on `dirname`, so a broken one on PATH cannot derive a wrong root", () => {
+    // The fix-verification pass on PR #88 flagged that guarding `readlink` closed one INSTANCE of
+    // "an unchecked helper silently yields a wrong execution root" and left the class open through
+    // two unchecked `dirname` calls. The answer is not a third guard: the launcher now splits paths
+    // with parameter expansion, so `dirname` is never invoked and cannot fail. A broken `dirname`
+    // earlier on PATH is the executable form of that claim — it must change nothing.
+    const globalBin = makeTempDir("tn-dirname-");
+    const linked = join(globalBin, "tn");
+    symlinkSync(relative(globalBin, TN_BIN), linked); // relative: exercises the in-loop split too
+    const stubDir = makeTempDir("tn-dirname-stub-");
+    writeFileSync(join(stubDir, "dirname"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+
+    const result = spawnSync(linked, ["--help"], {
+      cwd: tmpdir(),
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ""}` },
+    });
+
+    expectBanner(result);
+  });
+
   it("fails closed, not silently, when readlink exits non-zero", () => {
     const globalBin = makeTempDir("tn-rl-fail-");
     const linked = join(globalBin, "tn");
