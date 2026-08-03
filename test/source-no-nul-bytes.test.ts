@@ -161,7 +161,14 @@ function parseCatFileBatch(buf: Buffer): { oid: string; type: string; bytes: Buf
       throw new Error(`git cat-file --batch: unusable size in ${JSON.stringify(header)}`);
     }
     const start = nl + 1;
-    if (start + size > buf.length) {
+    // The body must be present AND its trailing LF with it. Codex fix-verification pass on PR #89
+    // [A/Low]: the bound used to be `start + size > buf.length`, which accepts a response whose
+    // final byte is the last content byte — `"abc blob 1\nX"` framed cleanly and returned one
+    // object, though git had not finished writing it. An off-by-one at the END of a stream is the
+    // easy one to miss, because every complete response also satisfies the loose check. Verifying
+    // the delimiter is what makes this framing rather than arithmetic: the length says where the
+    // body ends, the LF confirms git agrees.
+    if (start + size >= buf.length || buf[start + size] !== 0x0a) {
       throw new Error(`git cat-file --batch: truncated body for ${parts[0]}`);
     }
     objects.push({ oid: parts[0]!, type: parts[1]!, bytes: buf.subarray(start, start + size) });
@@ -206,22 +213,65 @@ function indexBlobs(): { path: string; bytes: Buffer }[] {
   });
 }
 
-function trackedPaths(): string[] {
-  const out = execFileSync("git", ["ls-files", "-z"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    maxBuffer: MAX_BUFFER,
-  });
-  return out.split(NUL_CHAR).filter((p) => p !== "");
+/**
+ * PURE. Splits raw `-z` output on the NUL byte, staying in BYTES throughout.
+ *
+ * Codex fix-verification pass on PR #89 [A/Medium]: this used to decode with `encoding: "utf8"` and
+ * split the string. A git pathname is a byte string, not necessarily valid UTF-8 — a name
+ * containing `0x80` decodes to U+FFFD, which re-encodes to `EF BF BD` and no longer names the file
+ * on disk. `existsSync` then reported a present file as absent, the working-tree pass skipped it,
+ * and a NUL written into that file (but not staged) was seen by neither pass. Verified: the raw
+ * bytes and the decode-then-re-encode round trip are not equal.
+ *
+ * The byte-level split is safe because NUL cannot appear inside a UTF-8 sequence or a pathname —
+ * it is the one byte a filename may not contain, which is exactly why `-z` uses it.
+ *
+ * WHERE THIS DEFECT IS REACHABLE, measured rather than assumed. macOS/APFS **refuses** a non-UTF-8
+ * filename at the syscall level — `errno 92 EILSEQ`, reproduced from the shell, from Python and
+ * from Node — so the trace cannot be built on a Mac at all. Linux filesystems accept any byte but
+ * NUL and `/`, and this repo's CI is `ubuntu-latest`, so it is live exactly where the guard runs
+ * unattended. That asymmetry is why the assertion below is on the BYTE-PRESERVATION INVARIANT
+ * rather than on creating such a file: a test that tried to demonstrate the end-to-end trace would
+ * pass on macOS by being skipped, which is the "assert the environment's outcome" failure this file
+ * already avoids elsewhere.
+ */
+function splitNulBuffer(buf: Buffer): Buffer[] {
+  const parts: Buffer[] = [];
+  let pos = 0;
+  while (pos < buf.length) {
+    const end = buf.indexOf(0x00, pos);
+    if (end === -1) {
+      // `-z` terminates every record, so trailing bytes with no NUL mean a truncated read.
+      throw new Error("git ls-files -z: trailing bytes with no NUL terminator");
+    }
+    if (end > pos) parts.push(buf.subarray(pos, end));
+    pos = end + 1;
+  }
+  return parts;
 }
 
-/** What a `grep` run right now would actually read. Missing paths are the index pass's job. */
-function worktreeFiles(paths: string[]): { path: string; bytes: Buffer }[] {
+function trackedPathBytes(): Buffer[] {
+  // No `encoding`, so this returns a Buffer and the pathname bytes survive intact.
+  const out = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, maxBuffer: MAX_BUFFER });
+  return splitNulBuffer(out);
+}
+
+/**
+ * What a `grep` run right now would actually read. Missing paths are the index pass's job.
+ *
+ * Paths are kept as Buffers all the way to the filesystem — Node's `fs` accepts Buffer paths, and
+ * that is what preserves a non-UTF-8 filename. `path.join` cannot be used here (it is string-only),
+ * so the separator is concatenated at the byte level; `git ls-files` always emits POSIX-separated
+ * relative paths, and Node accepts `/` on every platform. The decoded string is carried ONLY as a
+ * display label for the failure message, never used to open anything.
+ */
+function worktreeFiles(paths: Buffer[]): { path: string; bytes: Buffer }[] {
+  const root = Buffer.from(`${REPO_ROOT}/`);
   const files: { path: string; bytes: Buffer }[] = [];
   for (const path of paths) {
-    const absolute = join(REPO_ROOT, path);
+    const absolute = Buffer.concat([root, path]);
     if (!existsSync(absolute)) continue;
-    files.push({ path, bytes: readFileSync(absolute) });
+    files.push({ path: path.toString("utf8"), bytes: readFileSync(absolute) });
   }
   return files;
 }
@@ -322,6 +372,28 @@ describe("no tracked file contains a raw NUL byte", () => {
       expect(() => parseIndexEntries(`100644 abc\tsrc/a.ts${NUL_CHAR}`)).toThrow(/unexpected metadata/);
     });
 
+    it("keeps a non-UTF-8 pathname byte instead of replacing it", () => {
+      // Codex fix-verification pass on PR #89 [A/Medium]. A git pathname is a BYTE string. The
+      // earlier version decoded `-z` output as UTF-8, and `0x80` became U+FFFD — a path that names
+      // nothing on disk, so `existsSync` reported a real file absent and the working-tree pass
+      // skipped it silently. Asserted at the byte level, because a string comparison here would
+      // itself go through the decode that caused the defect.
+      const name = Buffer.concat([Buffer.from("src/we"), Buffer.from([0x80]), Buffer.from("ird.ts")]);
+      const parts = splitNulBuffer(Buffer.concat([name, Buffer.from([0x00])]));
+      expect(parts).toHaveLength(1);
+      expect(parts[0]!.equals(name)).toBe(true);
+      expect([...parts[0]!]).toContain(0x80);
+
+      // ...and the round trip that USED to happen does not preserve it — this is the defect, pinned
+      // so the fix cannot be quietly reverted to a string pipeline.
+      expect(Buffer.from(name.toString("utf8"), "utf8").equals(name)).toBe(false);
+    });
+
+    it("throws on -z output whose last record has no NUL terminator", () => {
+      expect(() => splitNulBuffer(Buffer.from("src/a.ts"))).toThrow(/no NUL terminator/);
+      expect(splitNulBuffer(Buffer.alloc(0))).toEqual([]);
+    });
+
     it("parses a cat-file batch response", () => {
       const buf = Buffer.from("abc123 blob 5\nhello\n");
       const objects = parseCatFileBatch(buf);
@@ -366,6 +438,20 @@ describe("no tracked file contains a raw NUL byte", () => {
       expect(() => parseCatFileBatch(Buffer.from("abc blob 5"))).toThrow(/truncated header/);
       expect(() => parseCatFileBatch(Buffer.from("abc blob notanumber\nx\n"))).toThrow(/unusable size/);
     });
+
+    it("throws when only the trailing LF is missing, not just when the body is short", () => {
+      // Codex fix-verification pass on PR #89 [A/Low], as the exact one-byte trace it reported.
+      // The old bound was `start + size > buf.length`, which this input satisfies exactly — the
+      // body is present, only git's delimiter is not — so a response cut off mid-write framed
+      // cleanly and returned one object. Every COMPLETE response also passes the loose check, which
+      // is what made the off-by-one invisible: only a truncated one distinguishes them.
+      expect(() => parseCatFileBatch(Buffer.from("abc blob 1\nX"))).toThrow(/truncated body/);
+      // The complete form of the same response still parses, so the stricter bound did not simply
+      // break the happy path — the pair is the assertion.
+      expect(parseCatFileBatch(Buffer.from("abc blob 1\nX\n"))[0]!.bytes.toString()).toBe("X");
+      // Zero-length body, missing delimiter — the boundary at the other end.
+      expect(() => parseCatFileBatch(Buffer.from("abc blob 0\n"))).toThrow(/truncated body/);
+    });
   });
 
   it("scans every tracked blob in the INDEX and finds no raw NUL byte", () => {
@@ -385,18 +471,32 @@ describe("no tracked file contains a raw NUL byte", () => {
     expect(offenders, describeOffenders(offenders)).toEqual([]);
   });
 
-  it("scans the WORKING TREE copy of every tracked file and finds no raw NUL byte", () => {
+  it("scans the on-disk copy of every tracked file that exists and finds no raw NUL byte", () => {
     // The companion pass: what a grep you run right now actually reads. A NUL that is written but
     // not staged is invisible to the index pass, and this is the pass that catches it.
-    const paths = trackedPaths();
+    //
+    // The title says "every tracked file THAT EXISTS", not "every tracked file" — Codex flagged the
+    // stronger wording as false, and it was. Paths absent from disk are skipped by design, and the
+    // index pass is what makes that safe by covering every tracked path unconditionally. Naming the
+    // narrower claim is the point: a test title is a claim like any other.
+    const paths = trackedPathBytes();
     expect(paths.length).toBeGreaterThan(0);
-    expect(paths).toContain("src/ingest/upsert.ts");
+    expect(paths.map((p) => p.toString("utf8"))).toContain("src/ingest/upsert.ts");
 
     const files = worktreeFiles(paths);
-    // Deleted-but-not-yet-staged paths are skipped by design, so this is a bound rather than an
-    // equality — the index pass is what guarantees every tracked path is examined.
     expect(files.length).toBeGreaterThan(0);
     expect(files.length).toBeLessThanOrEqual(paths.length);
+    // This repo has no absent tracked path in a clean checkout, so the companion pass should in
+    // fact cover all of them here. Asserted as an equality on the CLEAN case specifically, because
+    // it is the assertion that would catch a skip silently swallowing files — the failure mode the
+    // non-UTF-8 defect actually produced.
+    if (files.length !== paths.length) {
+      throw new Error(
+        `${paths.length - files.length} tracked path(s) were skipped by the working-tree pass; in a ` +
+          `clean checkout every tracked path exists on disk, so a skip here means the path bytes ` +
+          `did not survive to the filesystem (see issue #66 / PR #89 finding on non-UTF-8 names)`,
+      );
+    }
 
     const offenders = findNulBytes(files, "working tree");
     expect(offenders, describeOffenders(offenders)).toEqual([]);
