@@ -18,6 +18,10 @@ import { availability, events } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { type EventCourt, encodeEventFormat, parseEventFormat, readEventFormat } from "./event-format.js";
 import { isIsoDay } from "./iso-day.js";
+// Reused, not redeclared: `report build` already surfaces THIS class when an event name does not
+// resolve, and a second identically-named error on the same command path would be indistinguishable
+// to a caller while being a different type to a `catch`.
+import { UnknownEventError } from "./lineup.js";
 
 export class MissingEventNameError extends Error {}
 export class InvalidEventKindError extends Error {}
@@ -199,4 +203,28 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
       created: existing === undefined,
     };
   }, { behavior: "immediate" });
+}
+
+/**
+ * The season anchor for a report: the event's own start date when it has one, otherwise the
+ * caller's clock (issue #90).
+ *
+ * `anchoredTo` is RETURNED, not inferred by the caller, because the two cases must not look alike
+ * in the output. A dossier built against an event with no `starts_on` that silently fell back to
+ * today is the exact failure this issue is about — a boundary that reads as anchored to the event
+ * and is not — so the command prints which one it used and a reader can tell them apart.
+ *
+ * An unknown event name is NOT a fallback but a refusal, so a typo cannot quietly produce a whole
+ * binder filtered to the wrong season.
+ */
+export function resolveSeasonAnchor(
+  db: Db,
+  eventName: string | undefined,
+  now: Date = new Date(),
+): { value: Date | string; anchoredTo: "event" | "today" } {
+  if (eventName === undefined) return { value: now, anchoredTo: "today" };
+  const row = db.select().from(events).where(eq(events.name, eventName)).all()[0];
+  if (row === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
+  if (row.startsOn === null) return { value: now, anchoredTo: "today" };
+  return { value: row.startsOn, anchoredTo: "event" };
 }

@@ -20,7 +20,7 @@ import * as fetchModule from "../src/ingest/fetch.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
-import { sixMonthsAgo } from "../src/cli/window.js";
+import { seasonStart } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { removeRosterRow } from "./helpers/roster-html.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -89,7 +89,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const { db: db2, sqlite: sqlite2 } = openDb();
     let expected: unknown;
     try {
-      expected = getTeamProfile(db2, team.id, { since: sixMonthsAgo() });
+      expected = getTeamProfile(db2, team.id, { since: seasonStart() });
     } finally {
       sqlite2.close();
     }
@@ -893,7 +893,18 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const result = await client.callTool({ name: "report_build", arguments: { target: team.name } });
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(textOf(result)) as { target: string; teams: number; files: number; root: string };
-    expect(payload).toEqual({ target: team.name, teams: 1, files: 2, root: payload.root });
+    // Issue #90 added `season` + `anchoredTo` to this payload so an MCP caller can tell an
+    // event-anchored binder from one that fell back to the clock. Asserted exactly (`toEqual`, not
+    // `toMatchObject`) — this pin is what caught the two fields arriving, which is its whole job.
+    // No event was named here, so the honest answer is the current season, anchored to today.
+    expect(payload).toEqual({
+      target: team.name,
+      teams: 1,
+      files: 2,
+      root: payload.root,
+      season: String(new Date().getUTCFullYear()),
+      anchoredTo: "today",
+    });
   });
 
   it("an ambiguous target returns a structured error result listing candidates", async () => {

@@ -18,13 +18,13 @@ import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
-import { addEvent } from "../query/events.js";
+import { addEvent, resolveSeasonAnchor } from "../query/events.js";
 import { NoCourtMatchHistoryError, getLineupPlan } from "../query/lineup.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../report/write.js";
-import { sixMonthsAgo } from "../cli/window.js";
+import { seasonStart, seasonWindow } from "../cli/window.js";
 
 /** A tool-level refusal, mapped to `CallToolResult.isError` by `src/mcp/server.ts` — never a crash.
  * Every "unknown target" / "ambiguous target" / domain-service refusal below throws this (or lets
@@ -134,7 +134,7 @@ export const MCP_TOOLS: McpToolDef[] = [
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-        return getTeamProfile(db, resolution.teamId, { since: sixMonthsAgo() });
+        return getTeamProfile(db, resolution.teamId, { since: seasonStart() });
       } finally {
         sqlite.close();
       }
@@ -217,7 +217,7 @@ export const MCP_TOOLS: McpToolDef[] = [
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
-        return getPlayerProfile(db, resolution.playerId, { since: sixMonthsAgo() });
+        return getPlayerProfile(db, resolution.playerId, { since: seasonStart() });
       } finally {
         sqlite.close();
       }
@@ -416,20 +416,37 @@ export const MCP_TOOLS: McpToolDef[] = [
     },
     handler: async (rawArgs) => {
       const { target, event } = rawArgs as { target?: string; event?: string };
-      const since = sixMonthsAgo();
       const { db, sqlite } = openDb();
       try {
+        // Issue #90: the same anchor resolution as `tn report build`, from the same helpers. Three
+        // of this issue's six call sites are in this file, and a binder that disagreed with the
+        // agent chat about which season it covered would have nothing to surface the difference.
+        const anchor = resolveSeasonAnchor(db, event);
+        const season = seasonWindow(anchor.value);
         let written: string[];
         let teamsCount: number;
         if (target === undefined || target === "sectionals") {
-          written = writeSectionalsDossiers(db, { since, eventName: event });
+          written = writeSectionalsDossiers(db, { season, eventName: event });
           teamsCount = countTeams(db);
         } else {
           const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-          written = writeTeamDossier(db, resolution.teamId, { since, eventName: event });
+          written = writeTeamDossier(db, resolution.teamId, { season, eventName: event });
           teamsCount = 1;
         }
-        return { target: target ?? "sectionals", teams: teamsCount, files: written.length, root: resolvedReportsRoot() };
+        // `season` and `anchoredTo` are returned for the same reason `tn report build` prints them
+        // (issue #90): an event with no `starts_on` falls back to the clock, and a caller that
+        // cannot tell that from a real event anchor has no way to know its binder covers a
+        // different season than it asked for. Omitting them here left the CLI honest and this
+        // surface silent — the drift this issue's own parity test was meant to prevent, one field
+        // over. (Codex adversarial review of PR #91, Finding 1 [high].)
+        return {
+          target: target ?? "sectionals",
+          teams: teamsCount,
+          files: written.length,
+          root: resolvedReportsRoot(),
+          season: season.year,
+          anchoredTo: anchor.anchoredTo,
+        };
       } finally {
         sqlite.close();
       }

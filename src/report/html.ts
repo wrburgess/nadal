@@ -132,16 +132,16 @@ function renderPriorMeetingsSectionHtml(dossier: TeamDossier): string {
 
 /** One player's full detail block — everything about a single player stays together on the page
  * (`page-break-inside: avoid`, in the inlined stylesheet), so a printed binder never splits one
- * player's record across a page break. Content order follows spec § Deliverables #1: 6-month
+ * player's record across a page break. Content order follows spec § Deliverables #1: season
  * singles/doubles records, then court-slot tendencies, then partner frequency. Prior meetings is
  * NOT repeated here — it renders once for the whole dossier, in its own section
  * (`renderPriorMeetingsSectionHtml`). */
-function renderPlayerBlockHtml(player: PlayerProfile): string {
+function renderPlayerBlockHtml(player: PlayerProfile, season: string): string {
   return (
     '<div class="player-block">' +
     `<h3>${escapeHtml(player.identity.canonicalName)}</h3>` +
-    `<p><strong>6-month record:</strong> singles ${escapeHtml(formatRecord(player.singlesRecord.sixMonth))},` +
-    ` doubles ${escapeHtml(formatRecord(player.doublesRecord.sixMonth))}</p>` +
+    `<p><strong>${escapeHtml(season)} record:</strong> singles ${escapeHtml(formatRecord(player.singlesRecord.season))},` +
+    ` doubles ${escapeHtml(formatRecord(player.doublesRecord.season))}</p>` +
     `<p><strong>Court-slot tendencies:</strong> ${escapeHtml(formatSlotTendencies(player.slotTendencies))}</p>` +
     `<p><strong>Partner frequency:</strong> ${escapeHtml(formatPartnerFrequency(player.partnerFrequency))}</p>` +
     "</div>"
@@ -149,7 +149,7 @@ function renderPlayerBlockHtml(player: PlayerProfile): string {
 }
 
 function renderPlayersSectionHtml(dossier: TeamDossier): string {
-  return dossier.players.map((p) => renderPlayerBlockHtml(p)).join("");
+  return dossier.players.map((p) => renderPlayerBlockHtml(p, dossier.season)).join("");
 }
 
 // Labels for the three `dataGaps` sections — same ones `src/cli/format-profile.ts` uses for the

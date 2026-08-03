@@ -1,3 +1,4 @@
+import { seasonWindow } from "../src/cli/window.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -50,7 +51,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team A", ["Zed Zephyr", "Alice Anders"]);
       const { db, sqlite } = openDb();
       try {
-        const dossier = buildTeamDossier(db, team.id, { since: "2026-01-01" });
+        const dossier = buildTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         expect(dossier.team.teamName).toBe("Team A");
         expect(dossier.players.map((p) => p.identity.canonicalName)).toEqual(
           dossier.team.roster.map((r) => r.canonicalName),
@@ -68,7 +69,7 @@ describe("src/report/write.ts", () => {
       const { db, sqlite } = openDb();
       try {
         setHomeTeam(db, home.id);
-        const dossier = buildTeamDossier(db, opponent.id, { since: "2026-01-01" });
+        const dossier = buildTeamDossier(db, opponent.id, { season: seasonWindow("2026-01-01") });
         // Not null — "not requested" must become distinguishable from "requested, nothing found"
         // now that a home team IS designated (src/query/team-profile.ts's own doc comment on this).
         expect(dossier.team.headToHead).not.toBeNull();
@@ -81,7 +82,7 @@ describe("src/report/write.ts", () => {
       const opponent = seedTeamWithRoster("Opponent Team", ["Opponent Player"]);
       const { db, sqlite } = openDb();
       try {
-        const dossier = buildTeamDossier(db, opponent.id, { since: "2026-01-01" });
+        const dossier = buildTeamDossier(db, opponent.id, { season: seasonWindow("2026-01-01") });
         expect(dossier.team.headToHead).toBeNull();
       } finally {
         sqlite.close();
@@ -93,7 +94,7 @@ describe("src/report/write.ts", () => {
       const { db, sqlite } = openDb();
       try {
         setHomeTeam(db, home.id);
-        const dossier = buildTeamDossier(db, home.id, { since: "2026-01-01" });
+        const dossier = buildTeamDossier(db, home.id, { season: seasonWindow("2026-01-01") });
         expect(dossier.team.headToHead).toBeNull();
       } finally {
         sqlite.close();
@@ -106,7 +107,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team B", ["Player One"]);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         expect(written.length).toBe(2);
         for (const path of written) {
           expect(existsSync(path)).toBe(true);
@@ -122,9 +123,9 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team C", ["Player One"]);
       const { db, sqlite } = openDb();
       try {
-        const firstRun = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        const firstRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         const firstContents = firstRun.map((p) => readFileSync(p, "utf8"));
-        const secondRun = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        const secondRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         const secondContents = secondRun.map((p) => readFileSync(p, "utf8"));
         expect(secondContents).toEqual(firstContents);
       } finally {
@@ -137,7 +138,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team D", []);
       const { db, sqlite } = openDb();
       try {
-        expect(() => writeTeamDossier(db, team.id, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(() => writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") })).toThrow(OutputPathError);
       } finally {
         sqlite.close();
       }
@@ -147,7 +148,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("IA/Versteeg/40&Over3.5M", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         expect(written.every((p) => p.includes(join(reportsDir, "ia-versteeg-40-over3-5m")))).toBe(true);
         expect(written.some((p) => p.includes(`team-${team.id}`))).toBe(false);
       } finally {
@@ -159,7 +160,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("!!!", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         expect(written.every((p) => p.includes(join(reportsDir, `team-${team.id}`)))).toBe(true);
       } finally {
         sqlite.close();
@@ -170,7 +171,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("../../etc/passwd", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         for (const p of written) {
           expect(p.startsWith(reportsDir)).toBe(true);
           expect(p).not.toContain("..");
@@ -199,7 +200,7 @@ describe("src/report/write.ts", () => {
       symlinkSync(linkTarget, join(dir, "index.html"));
       const { db, sqlite } = openDb();
       try {
-        expect(() => writeTeamDossier(db, team.id, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(() => writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") })).toThrow(OutputPathError);
         // The write must never have followed the symlink through to its target.
         expect(existsSync(linkTarget)).toBe(false);
       } finally {
@@ -225,7 +226,7 @@ describe("src/report/write.ts", () => {
       symlinkSync(linkTarget, join(dir, "index.md"));
       const { db, sqlite } = openDb();
       try {
-        expect(() => writeTeamDossier(db, team.id, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(() => writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") })).toThrow(OutputPathError);
         // The bug this guards against: index.html landing on disk before the index.md symlink is
         // ever inspected.
         expect(existsSync(join(dir, "index.html"))).toBe(false);
@@ -240,10 +241,10 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team Rerun", []);
       const { db, sqlite } = openDb();
       try {
-        const first = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+        const first = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         let second: string[] = [];
         expect(() => {
-          second = writeTeamDossier(db, team.id, { since: "2026-01-01" });
+          second = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
         }).not.toThrow();
         expect(second).toEqual(first);
         for (const p of second) {
@@ -333,7 +334,7 @@ describe("src/report/write.ts", () => {
         }) as typeof db;
 
         const written = writeSectionalsDossiers(racingDb, {
-          since: "2026-01-01",
+          season: seasonWindow("2026-01-01"),
           eventName: "Springfield Sectionals 2026",
         });
 
@@ -352,7 +353,7 @@ describe("src/report/write.ts", () => {
       const { db, sqlite } = openDb();
       try {
         runMigrations();
-        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01", eventName: "No Such Event" })).toThrow(
+        expect(() => writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01"), eventName: "No Such Event" })).toThrow(
           UnknownEventError,
         );
         expect(existsSync(join(reportsDir, "index.html")), "a refusal must leave nothing written").toBe(false);
@@ -366,7 +367,7 @@ describe("src/report/write.ts", () => {
       seedTeamWithRoster("Team F", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { since: "2026-01-01" });
+        const written = writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") });
         // 2 teams * 2 files each (index.html + index.md) + 2 top-level index files.
         expect(written.length).toBe(6);
         for (const path of written) {
@@ -393,7 +394,7 @@ describe("src/report/write.ts", () => {
       const teamTwo = seedTeamWithRoster("Team A???", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { since: "2026-01-01" });
+        const written = writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") });
         expect(written).toContain(join(reportsDir, "team-a", "index.html"));
         expect(written).toContain(join(reportsDir, `team-a-${teamTwo.id}`, "index.html"));
         // Every written path actually exists, and the two dossiers are genuinely distinct files —
@@ -421,7 +422,7 @@ describe("src/report/write.ts", () => {
       seedTeamWithRoster("<script>alert(1)</script>", []);
       const { db, sqlite } = openDb();
       try {
-        writeSectionalsDossiers(db, { since: "2026-01-01" });
+        writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") });
         const indexMd = readFileSync(join(reportsDir, "index.md"), "utf8");
         // Unescaped, "X](javascript:alert(1))" closes the link label early, turning the rest into a
         // live `(javascript:alert(1))` href — the escaped form has a backslash before the `]` so this
@@ -447,7 +448,7 @@ describe("src/report/write.ts", () => {
       expect([t1.id, t2.id, t3.id]).toEqual([1, 2, 3]);
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { since: "2026-01-01" });
+        const written = writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") });
         const teamIndexHtmlPaths = written.filter(
           (p) => p.endsWith("index.html") && p !== join(reportsDir, "index.html"),
         );
@@ -473,7 +474,7 @@ describe("src/report/write.ts", () => {
       symlinkSync(linkTarget, join(reportsDir, "index.md"));
       const { db, sqlite } = openDb();
       try {
-        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(() => writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") })).toThrow(OutputPathError);
         expect(existsSync(join(reportsDir, "index.html"))).toBe(false);
         expect(existsSync(linkTarget)).toBe(false);
         // Codex adversarial review, PR #38 round 2, Finding 3 [medium]: this test passed even before
@@ -508,7 +509,7 @@ describe("src/report/write.ts", () => {
       symlinkSync(linkTarget, join(dirTwo, "index.md"));
       const { db, sqlite } = openDb();
       try {
-        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(() => writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") })).toThrow(OutputPathError);
         // The bug this guards against: Team First's dossier — which has no symlink of its own and
         // would build+write without issue on its own — must not have been written just because it
         // happened to be processed (by id order) before Team Second's symlink was discovered.
@@ -540,7 +541,7 @@ describe("src/report/write.ts", () => {
       symlinkSync(linkTarget, join(dirTwo, "index.md"));
       const { db, sqlite } = openDb();
       try {
-        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(() => writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") })).toThrow(OutputPathError);
         const dirOne = join(reportsDir, teamSlug(teamOne.id, "Team Third"));
         // The stronger assertion round 2 was missing: not just "no files inside dirOne", but "dirOne
         // itself was never created" — prepare must not mutate the filesystem at all.
@@ -563,7 +564,7 @@ describe("src/report/write.ts", () => {
       symlinkSync(linkTarget, join(reportsDir, "index.md"));
       const { db, sqlite } = openDb();
       try {
-        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01" })).toThrow(OutputPathError);
+        expect(() => writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") })).toThrow(OutputPathError);
         expect(existsSync(join(reportsDir, "team-fifth"))).toBe(false);
       } finally {
         sqlite.close();
@@ -591,7 +592,7 @@ describe("src/report/write.ts", () => {
       const batch = openDb();
       let batchWritten: string[];
       try {
-        batchWritten = writeSectionalsDossiers(batch.db, { since: "2026-01-01" });
+        batchWritten = writeSectionalsDossiers(batch.db, { season: seasonWindow("2026-01-01") });
       } finally {
         batch.sqlite.close();
       }
@@ -610,7 +611,7 @@ describe("src/report/write.ts", () => {
       single.sqlite.pragma("reverse_unordered_selects = ON");
       let singleWritten: string[];
       try {
-        singleWritten = writeTeamDossier(single.db, teamTwo.id, { since: "2026-01-01" });
+        singleWritten = writeTeamDossier(single.db, teamTwo.id, { season: seasonWindow("2026-01-01") });
       } finally {
         single.sqlite.close();
       }
@@ -624,7 +625,7 @@ describe("src/report/write.ts", () => {
       runMigrations();
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { since: "2026-01-01" });
+        const written = writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01") });
         expect(written.length).toBe(2);
       } finally {
         sqlite.close();

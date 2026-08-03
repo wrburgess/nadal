@@ -27,11 +27,11 @@ export function buildPlayerProfile(overrides: Partial<PlayerProfile> = {}): Play
       { source: "tr_dynamic", latest: { id: 2, value: 4.1, ratingType: null, observedOn: "2026-06-01" }, series: [] },
     ],
     singlesRecord: overrides.singlesRecord ?? {
-      sixMonth: { wins: 3, losses: 1, undecided: 0, excludedUndated: 0 },
+      season: { wins: 3, losses: 1, undecided: 0, excludedUndated: 0 },
       allTime: { wins: 10, losses: 4, undecided: 0, excludedUndated: 0 },
     },
     doublesRecord: overrides.doublesRecord ?? {
-      sixMonth: { wins: 1, losses: 2, undecided: 0, excludedUndated: 0 },
+      season: { wins: 1, losses: 2, undecided: 0, excludedUndated: 0 },
       allTime: { wins: 5, losses: 6, undecided: 0, excludedUndated: 0 },
     },
     slotTendencies: overrides.slotTendencies ?? [{ slot: "S1", count: 4 }],
@@ -132,6 +132,9 @@ export function buildLineupPlan(
 
 export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier {
   return {
+    // A fixed season, so a renderer test never depends on the year the suite is run in — the very
+    // print-date coupling issue #90 removed from the product.
+    season: overrides.season ?? "2026",
     team: overrides.team ?? buildTeamProfile(),
     players: overrides.players ?? [buildPlayerProfile()],
     lineup: overrides.lineup === undefined ? buildLineupPlan() : overrides.lineup,
@@ -143,6 +146,7 @@ export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier 
  * results, which must still render a valid document rather than crash. */
 export function buildEmptyDossier(): TeamDossier {
   return {
+    season: "2026",
     team: buildTeamProfile({
       roster: [],
       teamRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },

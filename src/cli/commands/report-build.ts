@@ -4,10 +4,11 @@ import { InvalidEventFormatError } from "../../query/event-format.js";
 import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
+import { resolveSeasonAnchor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
-import { sixMonthsAgo } from "../window.js";
+import { seasonWindow } from "../window.js";
 
 const SECTIONALS_TARGET = "sectionals";
 
@@ -45,14 +46,20 @@ export const reportBuild: Command = {
     // equivalent to sectionals") — anything else names a single team.
     const target = parsed.target;
     const [eventName] = parsed.payload;
-    const since = sixMonthsAgo();
 
     const { db, sqlite } = openDb();
     try {
+      // Issue #90: the binder is anchored to the EVENT'S season, not to the day it is printed, so
+      // the same database renders the same records in August as in December. `anchoredTo` is
+      // reported in the summary below because an event with no `starts_on` falls back to today,
+      // and a fallback that looked identical to a real anchor would reproduce the defect this
+      // fixes — a boundary that reads as anchored and is not.
+      const anchor = resolveSeasonAnchor(db, eventName);
+      const season = seasonWindow(anchor.value);
       let written: string[];
       let teamsCount: number;
       if (target === undefined || target === SECTIONALS_TARGET) {
-        written = writeSectionalsDossiers(db, { since, eventName });
+        written = writeSectionalsDossiers(db, { season, eventName });
         teamsCount = countTeams(db);
       } else {
         const resolution = resolveTeamTarget(db, target);
@@ -69,7 +76,7 @@ export const reportBuild: Command = {
           );
           return 1;
         }
-        written = writeTeamDossier(db, resolution.teamId, { since, eventName });
+        written = writeTeamDossier(db, resolution.teamId, { season, eventName });
         teamsCount = 1;
       }
 
@@ -84,6 +91,12 @@ export const reportBuild: Command = {
           ["teams", teamsCount],
           ["files", written.length],
           ["root", resolvedReportsRoot()],
+          // Issue #90. `season` says what the binder actually covers, and `anchoredTo` says where
+          // that came from: `event` means the event's own `starts_on`, `today` means it had none
+          // (or none was named) and the clock was used. Printing only `season` would make those
+          // two indistinguishable, which is the defect this change exists to remove.
+          ["season", season.year],
+          ["anchoredTo", anchor.anchoredTo],
         ],
         opts,
       );

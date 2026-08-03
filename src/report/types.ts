@@ -13,6 +13,11 @@ import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamProfile } from "../query/team-profile.js";
 
 export type TeamDossier = {
+  /** The season every windowed record in this dossier was filtered to, as a display label
+   * ("2026") — issue #90. It rides on the VIEW rather than being recomputed per renderer, so the
+   * HTML and the markdown can never label the same numbers with different seasons, and so
+   * `src/report/*` stays clock-free (the anchor is chosen once, by `report build`). */
+  season: string;
   team: TeamProfile;
   /** One full profile per `team.roster` member, in the SAME order — a renderer that zips the two
    * arrays by index relies on this, so `write.ts` must preserve `team.roster`'s order when building
