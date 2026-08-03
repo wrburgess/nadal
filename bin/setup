@@ -30,6 +30,10 @@ Dir.chdir(APP_ROOT) do
   puts "  npm link      # from THIS repo root -- never from a git worktree"
   puts "  tn --help     # expect the command banner"
   puts
+  puts "`npm link` creates the symlink but does NOT change your PATH. If `tn --help` then says"
+  puts "`command not found`, npm's global bin directory is not on your PATH -- print it with"
+  puts "`npm prefix -g` and add its `bin` subdirectory to your shell profile."
+  puts
   puts "Prefer not to install? Run ./bin/tn from the repo root instead, and read every"
   puts "runbook's `tn ...` line as `./bin/tn ...`."
   exit(0)

@@ -19,6 +19,19 @@ tn --help     # expect: tn <noun> <verb> <target> [payload] [flags]
 prints this step rather than running it. If you would rather install nothing, run `./bin/tn` from the
 repo root and read every `tn ...` line below as `./bin/tn ...`.
 
+**`npm link` does not touch your `PATH`.** It only creates the symlink; whether your shell finds it
+depends on whether npm's global bin directory is already on `PATH`. With a version manager (mise,
+nvm, fnm, volta) it normally is. With a custom prefix it may not be, and `npm link` still reports
+success — so the next command fails with `command not found: tn` and nothing has told you why:
+
+```sh
+tn --help || {
+  echo "npm's global bin is not on your PATH; it is: $(npm prefix -g)/bin"
+  export PATH="$(npm prefix -g)/bin:$PATH"   # this shell only -- add it to your shell profile to persist
+  tn --help
+}
+```
+
 Verify with `tn --help` before starting anything else — a runbook is not the place to discover the
 command is missing.
 

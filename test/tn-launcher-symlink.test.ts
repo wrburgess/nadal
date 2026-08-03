@@ -11,7 +11,7 @@
 // node_modules/.bin/tsx and src/cli/main.ts from the resolved root — not merely that it exited 0.
 
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,6 +116,85 @@ describe("bin/tn resolves its repo root through symlinks (the `npm link` install
     symlinkSync(relative(linkDir, middle), linked);
 
     expectBanner(runLauncher(linked));
+  });
+
+  it("runs through npm link's actual on-disk layout", () => {
+    // Not a synthesized shape — this is what `npm link` really produced on the machine that filed
+    // #87, read back off disk:
+    //
+    //   <prefix>/bin/tn -> ../lib/node_modules/nadal/bin/tn      (RELATIVE target)
+    //   <prefix>/lib/node_modules/nadal -> <the repo>            (a symlinked DIRECTORY mid-path)
+    //
+    // Both hazards in one path, and the directory link is the one every other case here misses:
+    // resolution walks the final component only, so `$DIR` keeps the LOGICAL path through the
+    // package link, and POSIX `cd` (logical by default) is what makes that land on the real root.
+    // The case above marked this layout a known limitation; measuring it showed it works, so it is
+    // pinned here rather than left as a claim in a PR body.
+    const prefix = makeTempDir("tn-npmlink-");
+    const nodeModules = join(prefix, "lib", "node_modules");
+    const binDir = join(prefix, "bin");
+    mkdirSync(nodeModules, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    symlinkSync(REPO_ROOT, join(nodeModules, "nadal"));
+    symlinkSync("../lib/node_modules/nadal/bin/tn", join(binDir, "tn"));
+
+    expectBanner(runLauncher(join(binDir, "tn")));
+  });
+
+  // The two cases below cover the error path an adversarial review surfaced on PR #88: if
+  // `readlink` cannot answer for a path that IS a symlink, an unguarded loop treats the empty
+  // answer as a relative target, `SELF` becomes "<dir>/", and `$DIR` lands on the PARENT of the
+  // real root — a misleading "tsx not found" where that parent is bare, and a DIFFERENT checkout's
+  // code executed where it is not.
+  //
+  // In production that state is reached by a link removed or replaced between `[ -L ]` and
+  // `readlink`, which no test can hit deterministically. Stubbing `readlink` earlier on `PATH`
+  // reaches the identical branch on purpose rather than by race — the launcher calls it unqualified.
+  function withStubbedReadlink(body: string): string {
+    const stubDir = makeTempDir("tn-stub-");
+    const stub = join(stubDir, "readlink");
+    writeFileSync(stub, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return stubDir;
+  }
+
+  it("fails closed, not silently, when readlink exits non-zero", () => {
+    const globalBin = makeTempDir("tn-rl-fail-");
+    const linked = join(globalBin, "tn");
+    symlinkSync(TN_BIN, linked);
+    const stubDir = withStubbedReadlink("exit 1");
+
+    const result = spawnSync(linked, ["--help"], {
+      cwd: tmpdir(),
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ""}` },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    // The diagnostic must NAME the path it could not resolve — the whole point is that the failure
+    // is legible instead of surfacing later as a confusing "tsx: No such file or directory".
+    expect(result.stderr.trim()).toBe(`tn: cannot resolve symlink: ${linked}`);
+  });
+
+  it("fails closed when readlink succeeds but returns an empty target", () => {
+    // The nastier half: exit 0 with no output. An `|| [ -z "$TARGET" ]` guard is required — a
+    // status-only check passes this straight through to the wrong-root execution above.
+    const globalBin = makeTempDir("tn-rl-empty-");
+    const linked = join(globalBin, "tn");
+    symlinkSync(TN_BIN, linked);
+    const stubDir = withStubbedReadlink("exit 0");
+
+    const result = spawnSync(linked, ["--help"], {
+      cwd: tmpdir(),
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ""}` },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe(`tn: cannot resolve symlink: ${linked}`);
   });
 
   it("runs when invoked by a relative path from the repo root (the documented no-install route)", () => {

@@ -11,7 +11,15 @@
 # shorter than the OS symlink limit. A circular chain fails at exec (ELOOP) and never reaches here.
 SELF="$0"
 while [ -L "$SELF" ]; do
-  TARGET="$(readlink "$SELF")"
+  # Fail CLOSED when readlink cannot answer. An empty TARGET would otherwise fall through the
+  # wildcard arm as a relative target, making SELF "<dir>/" and DIR the PARENT of the real root --
+  # which is a loud "tsx: No such file" only when that parent happens to hold no node_modules, and
+  # silently runs a DIFFERENT checkout's code when it does. Reachable by a link removed or replaced
+  # between the test above and this line.
+  if ! TARGET="$(readlink "$SELF")" || [ -z "$TARGET" ]; then
+    echo "tn: cannot resolve symlink: $SELF" >&2
+    exit 1
+  fi
   case "$TARGET" in
     /*) SELF="$TARGET" ;;
     # A relative target resolves against the LINK's own directory, never the working directory.
