@@ -26,28 +26,17 @@ export class InvalidEventFormatError extends Error {}
 const disciplineSchema = z.enum(["singles", "doubles"]);
 
 /**
- * The ONE definition of a legal court entry, applied to both directions — which is what makes the
- * reader's accept-set exactly the writer's output-set rather than merely similar to it.
+ * The structural shape of one court entry. `.strict()` is load-bearing: an entry carrying keys our
+ * writer never emits came from somewhere else, and zod would otherwise silently STRIP them, which
+ * would also hide them from the round-trip check below.
  *
- * Two of these rules exist because the first draft had them only on the writing side, and a reader
- * that accepts what its own writer cannot produce is not fail-closed (Codex adversarial review of
- * PR #82, Finding 2 [medium]):
- *
- * - **`slot` must be canonical — already trimmed.** `parseEventFormat` trims before validating, so
- *   `" D1 "` can never be written; a reader that took only `min(1)` accepted it anyway, and the slot
- *   then flows into `derive.ts` as a court literally named `" D1 "`. That matches no observed row,
- *   so the team's real `D1` history is silently skipped and the lineup reports a malformed court as
- *   supplied by the event. It also walks straight past `requireDistinctSlots`, since `"D1"` and
- *   `" D1 "` are different strings — two courts where the event has one.
- * - **`.strict()`.** An entry carrying keys our writer never emits came from somewhere else;
- *   accepting it silently would be the same "close enough" reasoning one level up.
+ * Note what is deliberately NOT here: any rule about which characters a slot may contain. That is
+ * `assertWriterCouldHaveProduced`'s job, and it derives the answer from the grammar rather than
+ * enumerating delimiters — see its doc comment.
  */
 const eventCourtSchema = z
   .object({
-    slot: z
-      .string()
-      .min(1)
-      .refine((slot) => slot.trim() === slot, { message: "slot must not have leading or trailing whitespace" }),
+    slot: z.string().min(1),
     discipline: disciplineSchema,
   })
   .strict();
@@ -123,6 +112,49 @@ export function parseEventFormat(input: string): EventCourt[] {
 }
 
 /**
+ * A court list -> the CLI/MCP text that would produce it. The inverse of `parseEventFormat`, and the
+ * exact string `tn event add`'s summary line prints, so the round trip an operator performs by
+ * copying that line back into a command is the same one the guard below checks.
+ */
+export function formatToText(courts: EventCourt[]): string {
+  return courts.map((c) => `${c.slot}:${c.discipline}`).join(",");
+}
+
+/**
+ * Refuses a decoded court list the WRITER could never have produced — by running it back through
+ * the writer's own grammar and requiring an exact reproduction.
+ *
+ * This is derived rather than enumerated, which is the whole point. The first attempt at this rule
+ * banned leading/trailing whitespace, and a second review round immediately found the next hole:
+ * `parseEventFormat` splits entries on `,` and takes the FIRST `:` as the separator, so a slot
+ * containing either delimiter is unwritable — yet `{"slot":"D:1"}` was still accepted and would
+ * reach `derive.ts` as a court no supported command can record or repair. Banning `,` and `:` by
+ * name would have closed that round and left the next one open; a character blacklist also gets it
+ * WRONG in the other direction, since `"D 1"` contains a space and IS producible
+ * (`parseEventFormat("D 1:doubles")` yields it), so a blanket whitespace ban would falsely reject a
+ * legal format. Round-tripping asks the only question that actually matters — *could our writer have
+ * emitted this?* — and stays correct for whatever the grammar becomes.
+ * (Codex adversarial review of PR #82: Finding 2 [medium] round 1, then Finding 1 [medium] round 2.)
+ */
+function assertWriterCouldHaveProduced(courts: EventCourt[]): void {
+  let reparsed: EventCourt[];
+  try {
+    reparsed = parseEventFormat(formatToText(courts));
+  } catch {
+    // The writer's own grammar rejects it. Re-thrown with a STORED-value message, because
+    // `parseEventFormat`'s message describes text an operator typed, and nobody typed this.
+    throw new InvalidEventFormatError(
+      `stored event format contains a court no "tn event add" format could have written: ${JSON.stringify(courts)}`,
+    );
+  }
+  if (JSON.stringify(reparsed) !== JSON.stringify(courts)) {
+    throw new InvalidEventFormatError(
+      `stored event format is not in the canonical form "tn event add" writes: ${JSON.stringify(courts)}`,
+    );
+  }
+}
+
+/**
  * A validated court list -> the exact string written to `events.format`. Paired with
  * `readEventFormat` below so ONE module owns the on-disk encoding as well as the shape: the column
  * is plain `text` rather than drizzle `{ mode: "json" }` precisely so that nothing else in the
@@ -184,5 +216,6 @@ export function readEventFormat(raw: unknown): EventCourt[] | null {
   }
 
   requireDistinctSlots(courts);
+  assertWriterCouldHaveProduced(courts);
   return courts;
 }

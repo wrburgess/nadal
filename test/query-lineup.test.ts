@@ -18,6 +18,7 @@ import {
   NoCourtMatchHistoryError,
   UnknownEventError,
   getLineupPlan,
+  resolveEventFormat,
 } from "../src/query/lineup.js";
 import { resolveTeamTarget } from "../src/query/team-profile.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -567,6 +568,51 @@ describe("getLineupPlan — an event's format overrides the derived slot set", (
       // And a plan against the healthy event still resolves, with the corrupt row sitting beside it.
       playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
       expect(getLineupPlan(db, teamId, "Healthy Event").slotSource).toBe("event-format");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Codex adversarial review of PR #82, round 2, Finding 2 [medium]. The resolved value is opaque:
+  // only `resolveEventFormat` can build one, and it carries the event's IDENTITY rather than a
+  // second, separately-constructed provenance field — so the courts predicted and the event named
+  // cannot be recombined from two different events.
+  it("a resolved format carries its own event identity — the courts and the named event cannot disagree", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 3, ourMatch);
+      addEvent(db, {
+        name: "Two Court Event",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles",
+      });
+      addEvent(db, {
+        name: "One Court Event",
+        kind: "tournament",
+        startsOn: "2026-09-01",
+        endsOn: "2026-09-02",
+        format: "S1:singles",
+      });
+
+      const two = resolveEventFormat(db, "Two Court Event");
+      const one = resolveEventFormat(db, "One Court Event");
+
+      for (const [resolved, courts, name] of [
+        [two, 2, "Two Court Event"],
+        [one, 1, "One Court Event"],
+      ] as const) {
+        const plan = getLineupPlan(db, teamId, resolved);
+        expect(plan.slots).toHaveLength(courts);
+        expect(plan.slotEvent).toEqual({ id: resolved.event.id, name });
+      }
+
+      // The value exposes no separate provenance field to swap — the presenter-facing event name is
+      // derived from the same object the slot set came from.
+      expect(Object.keys(two)).toEqual(["event", "slotSet"]);
     } finally {
       sqlite.close();
     }

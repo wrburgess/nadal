@@ -57,12 +57,31 @@ export type LineupSlotProvenance =
   | { slotSource: "observed"; slotEvent: null }
   | { slotSource: "event-format"; slotEvent: { id: number; name: string } };
 
-/** A named event's format, already looked up and validated — the slot set to predict across, paired
- * with the provenance a presenter prints. Resolved ONCE by `resolveEventFormat` and reusable across
- * many `getLineupPlan` calls. */
+/** Brands `ResolvedEventFormat` so only `resolveEventFormat` can build one. A REAL symbol, not a
+ * `declare const` phantom: a type-only brand disappears at runtime, so the object literal below
+ * would have thrown `resolvedEventFormat is not defined` on the first call — caught by the tests
+ * immediately. Not exported, so no caller outside this module can name the key, and a `const`
+ * symbol is typed `unique symbol`, so none can forge it structurally either. */
+const resolvedEventFormat = Symbol("resolvedEventFormat");
+
+/**
+ * A named event's format, already looked up and validated: the slot set to predict across, together
+ * with the identity of the event it came from. Resolved ONCE by `resolveEventFormat` and reusable
+ * across many `getLineupPlan` calls.
+ *
+ * **Opaque by construction, for a reason a plain structural type could not carry.** As two loose
+ * public fields (`slotSet` + a separately-built provenance), a caller could resolve event A and
+ * event B and hand over `{ slotSet: A.slotSet, provenance: B.provenance }` — predicting across A's
+ * courts while all three presenters state the courts came from B. That needs no `any` and no
+ * malformed data, and it defeats the provenance guarantee the batch fix exists to provide. Carrying
+ * only the event's IDENTITY, and letting `getLineupPlan` derive the provenance from it, removes the
+ * second field to disagree with; the brand removes the ability to fabricate the first.
+ * (Codex adversarial review of PR #82, round 2, Finding 2 [medium].)
+ */
 export type ResolvedEventFormat = {
-  slotSet: EventCourt[];
-  provenance: Extract<LineupSlotProvenance, { slotSource: "event-format" }>;
+  readonly event: { readonly id: number; readonly name: string };
+  readonly slotSet: readonly EventCourt[];
+  readonly [resolvedEventFormat]: true;
 };
 
 /**
@@ -100,9 +119,11 @@ export function resolveEventFormat(db: Db, eventName: string): ResolvedEventForm
         `${eventRow.endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
     );
   }
-  // Built as one value, never as two fields set independently, so the `LineupSlotProvenance` union
-  // is satisfied by construction — nothing here can produce `"event-format"` without an event.
-  return { slotSet: format, provenance: { slotSource: "event-format", slotEvent: { id: eventRow.id, name: eventRow.name } } };
+  return {
+    event: { id: eventRow.id, name: eventRow.name },
+    slotSet: format,
+    [resolvedEventFormat]: true,
+  };
 }
 
 export type LineupPlan = LineupSlotProvenance & {
@@ -165,8 +186,13 @@ export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedE
   // comment for the race that motivates it.
   const resolved: ResolvedEventFormat | undefined =
     event === undefined ? undefined : typeof event === "string" ? resolveEventFormat(db, event) : event;
-  const slotSet = resolved?.slotSet;
-  const provenance: LineupSlotProvenance = resolved?.provenance ?? { slotSource: "observed", slotEvent: null };
+  const slotSet = resolved === undefined ? undefined : [...resolved.slotSet];
+  // Derived from the resolved event's own identity, never accepted as a second field alongside the
+  // slot set — so the courts predicted and the event named can not disagree.
+  const provenance: LineupSlotProvenance =
+    resolved === undefined
+      ? { slotSource: "observed", slotEvent: null }
+      : { slotSource: "event-format", slotEvent: { id: resolved.event.id, name: resolved.event.name } };
 
   // Issue #49: a retired member must never be predicted onto a court — the headline symptom the
   // issue was filed for. Filtered here, at the roster read, rather than after the fact: the pure

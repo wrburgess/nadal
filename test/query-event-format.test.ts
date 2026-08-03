@@ -86,6 +86,20 @@ describe("parseEventFormat", () => {
     expect(() => parseEventFormat("S1:doubles:extra")).toThrow(InvalidEventFormatError);
   });
 
+  // The guard is derived from the writer's grammar, so it must be TOTAL over that grammar's output:
+  // a false rejection is exactly as bad as a false accept, and a character blacklist would have
+  // produced one here — `"D 1"` contains a space and is perfectly writable.
+  it.each([
+    ["a plain court list", "S1:singles,D1:doubles,D2:doubles,D3:doubles"],
+    ["a slot with an internal space", "Court 1:singles,Court 2:doubles"],
+    ["slots with punctuation the grammar does not use", "S-1:singles,D_1:doubles,D#2:doubles"],
+    ["a unicode slot", "Ct\u00e9:singles"],
+    ["whitespace around the separators, which the writer trims away", " S1 : singles , D1 : doubles "],
+  ])("accepts anything parseEventFormat can produce — %s", (_label, text) => {
+    const written = parseEventFormat(text);
+    expect(readEventFormat(encodeEventFormat(written))).toEqual(written);
+  });
+
   it("round-trips through encodeEventFormat/readEventFormat unchanged", () => {
     const parsed = parseEventFormat("S1:singles,D1:doubles,D2:doubles,D3:doubles");
     const roundTripped = readEventFormat(encodeEventFormat(parsed));
@@ -169,6 +183,13 @@ describe("readEventFormat", () => {
       [{ slot: "D1", discipline: "doubles" }, { slot: " D1 ", discipline: "doubles" }],
     ],
     ["an entry carrying an unknown extra key", [{ slot: "D1", discipline: "doubles", seed: 1 }]],
+    // Slots carrying the grammar's own delimiters. `parseEventFormat` splits entries on `,` and
+    // takes the FIRST `:` as the separator, so neither is writable — `"D:1:doubles"` refuses as an
+    // unknown discipline `"1:doubles"`, and `"D,1:doubles"` refuses as an entry missing
+    // `slot:discipline`. Accepting them meant a report could name a court no supported command can
+    // record or repair. (Codex adversarial review of PR #82, round 2, Finding 1 [medium].)
+    ["a slot containing the entry separator", [{ slot: "D,1", discipline: "doubles" }]],
+    ["a slot containing the field separator", [{ slot: "D:1", discipline: "doubles" }]],
   ])("fails closed on %s", (_label, decoded) => {
     expect(() => readEventFormat(JSON.stringify(decoded))).toThrow(InvalidEventFormatError);
   });
