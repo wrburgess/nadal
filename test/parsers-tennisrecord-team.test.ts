@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadFixture } from "./helpers/fixtures.js";
+import { removeAllRosterRows } from "./helpers/roster-html.js";
 import { parseTennisRecordTeam } from "../src/parsers/tennisrecord/team.js";
 import { ParseError } from "../src/parsers/types.js";
 
@@ -248,5 +249,57 @@ describe("parseTennisRecordTeam — the postseason column block (#92)", () => {
     expect(extraCell).not.toBe(postseasonFixture.html);
 
     expect(() => parseTennisRecordTeam(extraCell, postseasonFixture.source)).toThrow(/roster row has 13 cells, expected exactly 12/);
+  });
+});
+
+describe("parseTennisRecordTeam — findings from the PR #93 review", () => {
+  it("keeps every profile link when the Name column is NOT first", () => {
+    // Finding 1 [high]. Every other field moved to by-name lookup; `profilePath` stayed positional
+    // on `.first()`. A page that reordered `Name` away from the front then parsed cleanly, produced
+    // correct scalar fields, and returned profilePath: null for EVERY player — so `--players`
+    // enriched nobody and still exited 0. The by-name contract is what makes that reorder
+    // reachable, so this PR introduced the hazard it now closes.
+    //
+    // Swap Name and Location in both the header and every body row.
+    const nameTh = '<th style="text-align:left;" class="padding10">Name</th>';
+    const locTh = '<th style="text-align:left;" class="hide">Location</th>';
+    let swapped = fixture.html.replace(nameTh, "@@N@@").replace(locTh, nameTh).replace("@@N@@", locTh);
+    swapped = swapped.replace(
+      /<td style="text-align:left;" class="padding10">(<a class="link" href="[^"]*">[^<]*<\/a>)<\/td>\s*<td style="text-align:left;" class="hide">([^<]*)<\/td>/g,
+      '<td style="text-align:left;" class="hide">$2</td><td style="text-align:left;" class="padding10">$1</td>',
+    );
+    expect(swapped).not.toBe(fixture.html);
+
+    const reordered = parseTennisRecordTeam(swapped, fixture.source);
+
+    // The link must survive, and must belong to the player it is printed next to.
+    expect(reordered.roster[0]?.name).toBe(team.roster[0]?.name);
+    expect(reordered.roster[0]?.profilePath).toBe(team.roster[0]?.profilePath);
+    expect(reordered.roster.every((r) => r.profilePath !== null)).toBe(true);
+  });
+
+  it("refuses a body cell that SPANS columns, which keeps the row length identical", () => {
+    // Finding 2 [high]. The width guard counted <td> ELEMENTS, so `<td colspan="2">` kept the count
+    // at 12 while moving every later value one column right in the rendered grid: the check passed
+    // and the values were silently wrong. Indexing is only meaningful when one cell is one column.
+    const spanned = postseasonFixture.html.replace(
+      '<td style="text-align:left;" class="hide">Fairbrook, KS</td>',
+      '<td colspan="2" style="text-align:left;" class="hide">Fairbrook, KS</td>',
+    );
+    expect(spanned).not.toBe(postseasonFixture.html);
+
+    expect(() => parseTennisRecordTeam(spanned, postseasonFixture.source)).toThrow(/spanning cell/i);
+  });
+
+  it("refuses a roster table with a valid header and no player rows", () => {
+    // Finding 3 [medium], pre-existing and folded in. An empty roster parsed to `roster: []`, so
+    // the CLI reported `status=ok ... roster=0` — a scouting pull that found nobody, reading as
+    // success, with the snapshot watermark advancing behind it.
+    // Reuses the same helper test/ingest-team-pull.test.ts drives this case with, rather than a
+    // second hand-rolled regex that could silently match nothing.
+    const headerOnly = removeAllRosterRows(fixture.html, team.roster.map((r) => r.name));
+    expect(headerOnly).not.toBe(fixture.html);
+
+    expect(() => parseTennisRecordTeam(headerOnly, fixture.source)).toThrow(/no player rows/i);
   });
 });

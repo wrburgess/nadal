@@ -180,10 +180,25 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
     .find("tr")
     .filter((_, tr) => $(tr).find("td").length > 0)
     .map((_, tr) => {
-      const cells = $(tr)
-        .find("td")
-        .map((_i, td) => collapse($(td).text()))
-        .get();
+      const cellNodes = $(tr).find("td");
+      // A body cell that SPANS is not a cell this contract can index. Counting elements alone let
+      // `<td colspan="2">` keep the row length identical while moving every later value one column
+      // right in the rendered grid — the width check passed and the values were silently wrong.
+      // Indexing is only meaningful when one cell means one column.
+      // (Codex adversarial review of PR #93, Finding 2 [high].)
+      const spanning = cellNodes.filter((_i, td) => {
+        const colspan = Number($(td).attr("colspan") ?? "1");
+        const rowspan = Number($(td).attr("rowspan") ?? "1");
+        return !(colspan === 1 && rowspan === 1);
+      });
+      if (spanning.length > 0) {
+        throw new ParseError(
+          `roster row has ${spanning.length} spanning cell(s); a spanned body cell cannot be indexed by column`,
+          `${ROSTER_SCOPE} tr td[colspan], ${ROSTER_SCOPE} tr td[rowspan]`,
+          source.url,
+        );
+      }
+      const cells = cellNodes.map((_i, td) => collapse($(td).text())).get();
       // EXACT, and against the ROW width rather than the header count — the two differ here
       // because the `Rating` header carries `colspan="2"`, so eight headers describe nine cells.
       // The earlier `>= headers.length` form accepted a body row with an extra cell inserted
@@ -198,6 +213,7 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
         );
       }
       const at = (field: RosterField): string => cells[columns.index[field]] ?? "";
+      const nameCell = $(tr).find("td").eq(columns.index.name);
       const name = at("name");
       // A structurally valid row with no name is a page change, not an empty roster slot.
       // Filtering it away produced a plausible roster with a player quietly missing.
@@ -216,10 +232,30 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
         dynamicRating: parseNumber(at("dynamicRating")),
         // The roster row's own href, unmodified — Phase 3's re-pull handle. A row with no link
         // (no `<a>` around the name) yields null, which the pipeline reports rather than skips.
-        profilePath: $(tr).find("td").first().find("a").attr("href") ?? null,
+        //
+        // Read from the cell the NAME maps to, not from the first cell. While every other field
+        // moved to by-name lookup, this one stayed positional: a page that reordered `Name` away
+        // from the front then parsed cleanly, produced correct scalar fields, and returned
+        // `profilePath: null` for every player — so `--players` silently enriched nobody, with a
+        // `status=ok` on the way out. The by-name contract this PR introduces is exactly what makes
+        // that reorder reachable. (Codex adversarial review of PR #93, Finding 1 [high].)
+        profilePath: nameCell.find("a").attr("href") ?? null,
       } satisfies TeamRosterEntry;
     })
     .get();
+
+  // A roster table with a complete, recognized header and NO body rows is a page change, not a
+  // team with no players: every TennisRecord team page lists its roster. Parsing it to an empty
+  // array reported `status=ok ... roster=0` — a scouting pull that silently found nobody, while the
+  // snapshot watermark advanced as though it had succeeded. Refuse instead, so the HC sees it.
+  // (Codex adversarial review of PR #93, Finding 3 [medium]. Pre-existing, folded in here.)
+  if (roster.length === 0) {
+    throw new ParseError(
+      "team roster table has a header but no player rows",
+      `${ROSTER_SCOPE} tr td`,
+      source.url,
+    );
+  }
 
   const schedule = parseSchedule($, source);
 

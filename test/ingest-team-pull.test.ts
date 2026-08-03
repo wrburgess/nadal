@@ -346,7 +346,7 @@ describe("pullTeam roster retirement (issue #49)", () => {
     }
   });
 
-  it("a pull whose parse yields a zero-length roster retires nobody (the empty-observed-set guard, at the integration level)", async () => {
+  it("a pull whose page has NO roster rows refuses, and still retires nobody (#92 supersedes the #49 shape)", async () => {
     runMigrations();
     const { db, sqlite } = openDb();
     try {
@@ -365,13 +365,22 @@ describe("pullTeam roster retirement (issue #49)", () => {
         target: team.source.url,
       });
 
-      expect(result.kind).toBe("ok");
-      if (result.kind !== "ok") throw new Error("expected ok");
-      expect(result.rosterCount).toBe(0);
-      expect(result.retiredCount, "an empty observed roster must not read as 'everyone left'").toBe(0);
+      // #49 established this path and asserted `kind: "ok"` with `rosterCount: 0` — the safety
+      // property being that an empty observed roster must never read as "everyone left".
+      //
+      // #92 keeps that property and STRENGTHENS the outcome: a roster table with a complete header
+      // and no player rows is now a parse refusal, because `status=ok ... roster=0` was a scouting
+      // pull that silently found nobody while the snapshot watermark advanced as if it had
+      // succeeded. Nothing is written on this path at all now, rather than nothing being written
+      // by a guard inside a committed transaction.
+      //
+      // The empty-observed-set guard itself is NOT left uncovered by this change: it is asserted
+      // directly in test/ingest-upsert-membership-retirement.test.ts ("an empty observedPlayerIds
+      // writes NOTHING"), which is where that primitive's sad path belongs.
+      expect(result.kind).toBe("error");
 
       const after = db.select().from(teamMemberships).all();
-      expect(after).toEqual(before);
+      expect(after, "a refused pull must leave every membership untouched").toEqual(before);
     } finally {
       sqlite.close();
     }
