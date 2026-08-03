@@ -22,6 +22,7 @@ import {
   overwriteOutputFile,
   OutputPathError,
   writeNewOutputFile,
+  writeNewOutputFileSet,
 } from "../src/fs/output-root.js";
 
 // `spawnSync`/`writeFileSync`/`renameSync` are all named ESM exports, and Node's built-in module
@@ -47,6 +48,8 @@ vi.mock("node:fs", async (importOriginal) => {
     writeSync: vi.fn(actual.writeSync),
     closeSync: vi.fn(actual.closeSync),
     unlinkSync: vi.fn(actual.unlinkSync),
+    fstatSync: vi.fn(actual.fstatSync),
+    fsyncSync: vi.fn(actual.fsyncSync),
   };
 });
 
@@ -429,11 +432,17 @@ describe("assertOutputPathSafe", () => {
 describe("overwriteOutputFile never has a window where the destination is missing (round 3, Finding 2 [high])", () => {
   let dir: string;
 
+  // `mockReset`, not `mockClear`, for the reason spelled out on the `#33 fd-anchored write` block
+  // below (#65). Every `mockImplementationOnce` in THIS block does happen to be consumed today — each
+  // one is the trigger for its own test's failure — but that is precisely the reasoning the leak
+  // defeats: an unconsumed once-mock is invisible in its own test's result, so "I checked and they
+  // are all consumed" is a statement about today's control flow, not a property the teardown holds.
+  // Reset here too, so a future test added to this block cannot reintroduce the class.
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
-    vi.mocked(fsModule.writeFileSync).mockClear();
-    vi.mocked(fsModule.renameSync).mockClear();
-    vi.mocked(fsModule.lstatSync).mockClear();
+    vi.mocked(fsModule.writeFileSync).mockReset();
+    vi.mocked(fsModule.renameSync).mockReset();
+    vi.mocked(fsModule.lstatSync).mockReset();
   });
 
   it("REGRESSION: a failure while writing the replacement content must not delete the existing good file", () => {
@@ -613,11 +622,22 @@ describe("overwriteOutputFile never has a window where the destination is missin
 // is sufficient. Each branch below is killed by its OWN test, not asserted to cover several, per
 // `rules/testing.md`.
 describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)", () => {
+  // `mockReset`, not `mockClear` (#65). `mockClear` erases recorded CALLS and leaves both the
+  // persistent implementation AND the queue of `mockImplementationOnce` entries in place — so a
+  // once-implementation that its own test never CONSUMED stays armed and fires in a later, unrelated
+  // test. That is not hypothetical: the "openNewOutputFileSafely surfaces the ORIGINAL verification
+  // error…" test below arms `unlinkSync` to throw, but in that scenario `unlinkIfStillOurs` never
+  // reaches `unlinkSync` at all — its `lstatSync` throws ENOENT first, resolving through the swapped
+  // symlink into the decoy directory — so the armed throw leaked forward and silently suppressed a
+  // real cleanup in the first later test that performed one. `mockReset` restores the implementation
+  // originally handed to `vi.fn(actual.fn)` (the call-through) and drains the once-queue with it.
   afterEach(() => {
-    vi.mocked(fsModule.openSync).mockClear();
-    vi.mocked(fsModule.writeSync).mockClear();
-    vi.mocked(fsModule.closeSync).mockClear();
-    vi.mocked(fsModule.unlinkSync).mockClear();
+    vi.mocked(fsModule.openSync).mockReset();
+    vi.mocked(fsModule.writeSync).mockReset();
+    vi.mocked(fsModule.closeSync).mockReset();
+    vi.mocked(fsModule.unlinkSync).mockReset();
+    vi.mocked(fsModule.fstatSync).mockReset();
+    vi.mocked(fsModule.fsyncSync).mockReset();
   });
 
   // Isolates the COMPONENT-WALK check from the root-containment check (`isWithin(realRootNow,
@@ -827,9 +847,9 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
       );
       expect(existsSync(candidate)).toBe(false);
     } finally {
-      // Restore CALL-THROUGH, not a bare `vi.fn()` — this is a persistent `mockImplementation`, and
-      // the block's `afterEach` uses `mockClear` (which leaves implementations in place), so a stub
-      // returning `undefined` would leak into every later test that writes through this fd path.
+      // Restore CALL-THROUGH within the test itself rather than relying on the block's `afterEach`:
+      // this is a persistent `mockImplementation`, and a stub returning `undefined` left in place for
+      // even one more statement would leak into anything else this test does through the fd path.
       vi.mocked(fsModule.writeSync).mockImplementation(realWriteSync);
       rmSync(root, { recursive: true, force: true });
     }
@@ -879,6 +899,103 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
       );
       expect(existsSync(candidate)).toBe(false);
       expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #83 fix-verification pass 1, [high]. The FOURTH failure domain, and
+  // the earliest: `fstatSync` captures the fd's identity, and it ran BEFORE the cleanup `try` began.
+  // A throw there leaked the descriptor entirely and left the empty file `wx` had just created — and
+  // because the throw escaped before any value was returned, a multi-leaf caller never recorded the
+  // leaf either, so rollback could not reach it.
+  //
+  // The fix close-attempts the fd and DELIBERATELY LEAVES THE FILE. That asymmetry is the point, not an
+  // oversight: `unlinkIfStillOurs` needs the `{dev, ino}` this very call failed to obtain, so there
+  // is no identity to check against, and the one thing this module must never do is unlink a path it
+  // cannot prove it owns — that bare unlink is the PR #48 [critical] data-loss bug. An empty file
+  // inside the validated root is the strictly safer failure than deleting an unknown one.
+  it("REGRESSION: a failure of the identity-capturing fstat close-attempts the fd rather than leaking it, and unlinks nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-fstat-fails");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.fstatSync).mockImplementationOnce(() => {
+        throw new Error("simulated fstat failure (EIO)");
+      });
+
+      expect(() => openNewOutputFileSafely(root, candidate, "reports")).toThrow("simulated fstat failure");
+
+      // A close is ATTEMPTED, not skipped — the assertion that fails if the fix is reverted to a
+      // bare rethrow. It pins the attempt rather than the outcome, deliberately: `closeQuietly`
+      // swallows a failing close, so "the descriptor is definitely released" is not a property this
+      // module can assert (Codex, PR #83 fix-verification pass 2). Asserting it here would be the
+      // test making the same overclaim the comment was corrected for.
+      expect(vi.mocked(fsModule.closeSync)).toHaveBeenCalledTimes(1);
+      // And nothing is deleted, because nothing proved ownership. The empty leaf is the documented,
+      // deliberate residue.
+      expect(vi.mocked(fsModule.unlinkSync)).not.toHaveBeenCalled();
+      expect(existsSync(candidate)).toBe(true);
+      expect(readFileSync(candidate, "utf8")).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The SINGLE-leaf half of the close-failure gap (Codex adversarial review, PR #83, [high]). The
+  // reported instance was the multi-leaf set writer, but the missing cleanup lived in the shared
+  // primitive, so `writeNewOutputFile` had the identical hole — the largest recurring class in this
+  // repo is "fixed the named instance, not the class", and one test per caller is what keeps it
+  // fixed. Removing the close's `try`/`catch` fails this test and the set-writer one together.
+  it("REGRESSION: an FSYNC that fails (deferred writeback error) leaves no file behind", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-fsync-fails");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.fsyncSync).mockImplementationOnce(() => {
+        throw new Error("simulated fsync failure (deferred writeback error)");
+      });
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "CONTENT THAT MUST NOT SURVIVE")).toThrow(
+        "simulated fsync failure",
+      );
+      expect(existsSync(candidate)).toBe(false);
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The other side of that boundary, and it is deliberately the OPPOSITE outcome. Once `fsync` has
+  // returned successfully the bytes are durable, so a later `close` failure is a descriptor problem
+  // rather than a data one — and by then the descriptor is gone, so `unlinkIfStillOurs` can no longer
+  // prove the path names our inode (the number may already have been recycled into someone else's
+  // file). Deleting by that path would be the round-7 [critical] data loss. So the file STAYS, and
+  // this test pins that as intended behavior rather than leaving it to be "fixed" later by someone
+  // reading the earlier close-failure test and assuming symmetry.
+  it("a CLOSE that fails AFTER a durable fsync leaves the completed file in place", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-close-after-fsync");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.closeSync).mockImplementationOnce(((fd: number) => {
+        realCloseSync(fd);
+        throw new Error("simulated close failure (EBADF)");
+      }) as unknown as typeof fsModule.closeSync);
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "DURABLE CONTENT")).toThrow(
+        "simulated close failure",
+      );
+      // Durable and complete — kept, not destroyed by a path this module can no longer prove it owns.
+      expect(existsSync(candidate)).toBe(true);
+      expect(readFileSync(candidate, "utf8")).toBe("DURABLE CONTENT");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -993,6 +1110,436 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
 
       expect(readFileSync(candidate, "utf8")).toBe(content);
       expect(vi.mocked(fsModule.writeSync).mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// REGRESSION (#65). `writeNewOutputFile` above is all-or-nothing for ONE leaf; it cannot speak for a
+// SIBLING written by a separate call. A caller writing a pair in sequence (`src/ingest/archive.ts`:
+// a raw capture plus its `.provenance.json` record) therefore orphaned the first leaf whenever the
+// second was refused at WRITE time — after the pre-checks both passed. `writeNewOutputFileSet` closes
+// that by undoing the already-written leaves, and each of its properties is killed by its own test.
+describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
+  // `mockReset` for the reason spelled out on the sibling block above: a `mockImplementationOnce` a
+  // test does not consume must not survive into the next one.
+  afterEach(() => {
+    vi.mocked(fsModule.openSync).mockReset();
+    vi.mocked(fsModule.writeSync).mockReset();
+    vi.mocked(fsModule.closeSync).mockReset();
+    vi.mocked(fsModule.unlinkSync).mockReset();
+    vi.mocked(fsModule.fstatSync).mockReset();
+    vi.mocked(fsModule.fsyncSync).mockReset();
+  });
+
+  // Codex adversarial review, PR #83 round 7, [critical], and the case the `linkSync`-pinned test
+  // above deliberately EXCLUDES. That test pins our inode so the replacement is guaranteed a
+  // different one — which proves the guard behaves when identity differs, and says nothing about the
+  // case where the allocator hands the replacement OUR recycled number. This is that case, and it is
+  // the one that used to delete someone else's file.
+  //
+  // The closure is ordering, not a better identity check: cleanup now unlinks WHILE THE FD IS STILL
+  // OPEN. An inode with a live descriptor can never be freed, so it can never be reallocated, so
+  // nothing else can be wearing its number at the moment of the check. No pin, no mock of the
+  // allocator — the property holds by construction on every filesystem, which is why this test does
+  // not need the `linkSync` its sibling does.
+  //
+  // **This test is only MEANINGFUL on a filesystem that actually recycles inode numbers**, and that
+  // is stated rather than glossed: on macOS/APFS it passes vacuously, and reverting the ordering to
+  // close-then-unlink does NOT turn it red there. Its authority comes from Linux/ext4 in CI — where
+  // this exact construction (unlink, immediately recreate, same directory) has already been OBSERVED
+  // deleting the replacement, which is what made it a CI failure on this PR rather than a
+  // hypothesis. So: green here proves little, green in CI proves the fix. Do not "simplify" it by
+  // mocking `lstatSync` to fake a recycled identity — the fix relies on the kernel's allocation
+  // guarantee, not on a code check, so a faked allocator would defeat the real fix too and the test
+  // would then pass against a broken implementation.
+  it("REGRESSION: a replacement that RECYCLES our inode number is still not deleted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-recycled");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith(".provenance.json")) {
+          throw new Error("simulated provenance open failure");
+        }
+        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+
+      // The replacement is created INSIDE THE CLOSE — after the descriptor is genuinely released and
+      // before anything else runs. That timing is the entire point (Codex adversarial review, PR #83
+      // round 8): an earlier version of this test created it while the set writer still held the
+      // leaf's fd, so the inode could not be recycled and the identity check skipped it under BOTH
+      // orderings — the test could not fail, on any filesystem, and its "verified on Linux CI" claim
+      // was empty. Releasing the descriptor first is what makes the number available to be recycled,
+      // which is the state the guard has to survive.
+      vi.mocked(fsModule.closeSync).mockImplementation(((fd: number) => {
+        realCloseSync(fd);
+        // Under the FIX the leaf is already unlinked by now, so there is nothing to displace and this
+        // simply creates the replacement. Under close-then-unlink the leaf is still present, its
+        // inode has just been freed, and the recreate can inherit that number — at which point the
+        // identity check that follows matches a file this module never created.
+        if (existsSync(leaf)) unlinkSync(leaf);
+        writeFileSync(leaf, "SOMEONE ELSE'S DATA", "utf8");
+      }) as unknown as typeof fsModule.closeSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "OURS" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated provenance open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+        vi.mocked(fsModule.closeSync).mockImplementation(realCloseSync);
+      }
+
+      // Survives even if the allocator recycled our number into it.
+      expect(existsSync(leaf)).toBe(true);
+      expect(readFileSync(leaf, "utf8")).toBe("SOMEONE ELSE'S DATA");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The ORDERING itself, asserted directly — and this is the test that actually guards the round-7
+  // [critical] fix, because it is the only one that is deterministic on every filesystem.
+  //
+  // The behavioral test above depends on the kernel actually recycling the inode number, which ext4
+  // does and APFS does not, so on a developer machine it can pass against a broken implementation.
+  // Rather than leave the critical guarantee resting on "CI will catch it", the invariant the fix
+  // rests on — unlink strictly before close — is observed directly. Reverse the two statements in
+  // `unlinkOwnedLeafThenClose` and this fails everywhere, immediately, with a legible diff.
+  it("REGRESSION: rollback unlinks the leaf BEFORE releasing its descriptor", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-order");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      // Only the FIRST leaf is written, and only the rollback closes or unlinks anything — so the
+      // recorded sequence is exactly this leaf's cleanup, with nothing else to filter out.
+      const calls: string[] = [];
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith(".provenance.json")) {
+          throw new Error("simulated provenance open failure");
+        }
+        return (actual.openSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+      vi.mocked(fsModule.unlinkSync).mockImplementation(((p: string) => {
+        calls.push("unlink");
+        return actual.unlinkSync(p);
+      }) as unknown as typeof fsModule.unlinkSync);
+      vi.mocked(fsModule.closeSync).mockImplementation(((fd: number) => {
+        calls.push("close");
+        return actual.closeSync(fd);
+      }) as unknown as typeof fsModule.closeSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "OURS" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated provenance open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(actual.openSync);
+        vi.mocked(fsModule.unlinkSync).mockImplementation(actual.unlinkSync);
+        vi.mocked(fsModule.closeSync).mockImplementation(actual.closeSync);
+      }
+
+      // Exactly one unlink and one close, unlink first. Asserted as the whole sequence rather than
+      // with an index comparison, so an extra close (a double-close) or a missing unlink fails too.
+      expect(calls).toEqual(["unlink", "close"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes every leaf and returns their real paths in the order given", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    try {
+      const subDir = join(root, "team-set-ok");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      const written = writeNewOutputFileSet(root, "reports", [
+        { candidatePath: leaf, content: "<html>page</html>" },
+        { candidatePath: sidecar, content: '{"redacted":false}' },
+      ]);
+
+      expect(written).toHaveLength(2);
+      expect(basename(written[0] ?? "")).toBe(basename(leaf));
+      expect(basename(written[1] ?? "")).toBe(basename(sidecar));
+      expect(readFileSync(leaf, "utf8")).toBe("<html>page</html>");
+      expect(readFileSync(sidecar, "utf8")).toBe('{"redacted":false}');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The defect itself, at the primitive. Failure is injected in the WRITE step (not the open, which
+  // `test/ingest-archive.test.ts` uses for the same property at the `archivePage` level) so the two
+  // regressions cover two genuinely different refusal paths into the same rollback rather than one
+  // path twice.
+  it("REGRESSION: a refusal on the SECOND leaf removes the FIRST, and the ORIGINAL error propagates", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { writeSync: realWriteSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-rollback");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      // The first leaf's write is untouched; only the second one's fails.
+      let writes = 0;
+      vi.mocked(fsModule.writeSync).mockImplementation(((...args: unknown[]) => {
+        writes += 1;
+        if (writes > 1) throw new Error("simulated write failure (disk full)");
+        return (realWriteSync as unknown as (...a: unknown[]) => number)(...args);
+      }) as unknown as typeof fsModule.writeSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "UN-REDACTED CAPTURE" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated write failure (disk full)");
+      } finally {
+        // Restored here, not left to `afterEach`: the assertions below this block write nothing, but
+        // a persistent `mockImplementation` that throws must not be live while they run.
+        vi.mocked(fsModule.writeSync).mockImplementation(realWriteSync);
+      }
+
+      // Neither half of the pair survives — asserted on the DIRECTORY, so a stray file under any
+      // name (a partial, a temp artifact) fails this too.
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The loop's ITERATION, which the two-leaf cases above cannot check: with only one leaf ever
+  // written before the failure, a rollback that undoes just the first, or just the most recent, is
+  // indistinguishable from one that undoes them all. Verified by mutation rather than asserted —
+  // `written.slice(-1)` in place of the full reverse walk passes every other test in this PR and
+  // fails only this one. Three leaves is the smallest set that can tell them apart.
+  it("REGRESSION: rolls back EVERY leaf already written, not just one of them", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-three");
+      mkdirSync(subDir, { recursive: true });
+      const first = join(subDir, "a.html");
+      const second = join(subDir, "b.html");
+      const third = join(subDir, "c.html");
+
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith("c.html")) {
+          throw new Error("simulated third-leaf open failure");
+        }
+        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: first, content: "A" },
+            { candidatePath: second, content: "B" },
+            { candidatePath: third, content: "C" },
+          ]),
+        ).toThrow("simulated third-leaf open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+      }
+
+      // BOTH earlier leaves gone — not just the most recent one, and not just the first.
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The other end of the same loop: when the FIRST leaf is the one refused, `written` is empty and
+  // the rollback walk must be a no-op rather than throwing on an empty set. The per-leaf writer has
+  // already cleaned up after itself by then, so nothing may be left behind either.
+  it("a refusal on the FIRST leaf leaves nothing behind and rolls back nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    try {
+      const subDir = join(root, "team-set-first-fails");
+      mkdirSync(subDir, { recursive: true });
+      const first = join(subDir, "a.html");
+      const second = join(subDir, "b.html");
+
+      vi.mocked(fsModule.openSync).mockImplementationOnce(() => {
+        throw new Error("simulated first-leaf open failure");
+      });
+
+      expect(() =>
+        writeNewOutputFileSet(root, "reports", [
+          { candidatePath: first, content: "A" },
+          { candidatePath: second, content: "B" },
+        ]),
+      ).toThrow("simulated first-leaf open failure");
+
+      // The second leaf was never attempted, and the first never existed. `mockImplementationOnce`
+      // covers exactly one open, so a second one would have called through and created `b.html` —
+      // its absence is what proves the set stopped at the refusal rather than carrying on.
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #83, [high]. `close(2)` is a THIRD failure domain, distinct from the
+  // open and the write: on NFS/FUSE and some local filesystems it is where deferred writeback errors
+  // (ENOSPC, EIO) are finally reported, so a leaf can open cleanly, accept every byte, and still fail
+  // at close with its content never durably stored. The `closeSync` that ends a successful write used
+  // to sit OUTSIDE the failure-protected block, so such a leaf was cleaned up by nothing: its own
+  // handler never ran, and — because the function threw before returning — it was never recorded in
+  // the set writer's `written` list either, so the reverse walk could not reach it. The result was the
+  // orphan this whole PR exists to remove, one leaf further along.
+  it("REGRESSION: a leaf whose FSYNC fails is rolled back too, along with the leaves before it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { fsyncSync: realFsyncSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-fsync-fails");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      // The first leaf syncs normally; the second reports a deferred writeback error. This is the
+      // domain that used to arrive at `close` — too late for sound cleanup, since the descriptor was
+      // already gone by then. Reaching it at `fsync` is what lets BOTH leaves be rolled back with the
+      // first leaf's descriptor still held, which is what makes its identity check trustworthy.
+      let syncs = 0;
+      vi.mocked(fsModule.fsyncSync).mockImplementation(((fd: number) => {
+        syncs += 1;
+        if (syncs > 1) throw new Error("simulated fsync failure (deferred writeback error)");
+        realFsyncSync(fd);
+      }) as unknown as typeof fsModule.fsyncSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "UN-REDACTED CAPTURE" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated fsync failure");
+      } finally {
+        vi.mocked(fsModule.fsyncSync).mockImplementation(realFsyncSync);
+      }
+
+      // NEITHER leaf survives: not the one whose sync failed, and not the one written before it.
+      expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The PR #48 [critical] class, one level up. Rollback removes files, so it is itself capable of the
+  // bug it cleans up after: a bare `unlinkSync` follows directory components and deletes whatever the
+  // path currently resolves to. `unlinkIfStillOurs` compares `{dev, ino}` first and SKIPS anything
+  // that is not the inode this call created — deliberately leaving an orphan rather than destroying a
+  // file it does not own. Deleting the inode check makes this test fail, which is the point.
+  it("REGRESSION: rollback must NOT delete a file that replaced the leaf it wrote", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const inodePin = mkdtempSync(join(tmpdir(), "tn-set-pin-"));
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-bystander");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+      const pinnedName = join(inodePin, "pinned");
+
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith(".provenance.json")) {
+          // The first leaf is already written and closed. Replace it with a DIFFERENT inode at the
+          // same path — the state rollback must refuse to act on — and only then fail the second.
+          //
+          // The `linkSync` is LOAD-BEARING, not tidying (CI, Linux, 2026-08-02). Without it this
+          // test passed on macOS/APFS and FAILED on Linux/ext4: unlinking a file and immediately
+          // recreating one in the same directory routinely REUSES the same inode number, so
+          // `unlinkIfStillOurs` compared `{dev, ino}`, found a match, and deleted the replacement —
+          // the exact data loss the guard exists to prevent. Pinning the original inode under a
+          // second name makes reuse impossible on ANY filesystem (an inode with a surviving link is
+          // never reallocated), so the replacement is guaranteed a different one and the test
+          // asserts the guard's behavior rather than the allocator's.
+          //
+          // That the unpinned version passed locally is the finding, not the fix: see the residual
+          // this uncovered on `unlinkIfStillOurs` itself.
+          linkSync(leaf, pinnedName);
+          unlinkSync(leaf);
+          writeFileSync(leaf, "SOMEONE ELSE'S DATA", "utf8");
+          throw new Error("simulated provenance open failure");
+        }
+        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "OURS" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated provenance open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+      }
+
+      // Left alone, not deleted. This is the safe failure direction: an orphan the caller can see
+      // beats destroying a file this module never owned.
+      expect(existsSync(leaf)).toBe(true);
+      expect(readFileSync(leaf, "utf8")).toBe("SOMEONE ELSE'S DATA");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(inodePin, { recursive: true, force: true });
+    }
+  });
+
+  // Same promise the two single-leaf cleanup tests above pin, now for the cross-leaf rollback: a
+  // cleanup failure must never mask the error the caller actually needs to see.
+  it("REGRESSION: surfaces the ORIGINAL error even when the rollback unlink ALSO fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-cleanup-fails");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith(".provenance.json")) {
+          throw new Error("simulated provenance open failure");
+        }
+        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+      vi.mocked(fsModule.unlinkSync).mockImplementationOnce(() => {
+        throw new Error("simulated rollback unlink failure");
+      });
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "OURS" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated provenance open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
