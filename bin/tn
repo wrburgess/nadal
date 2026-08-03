@@ -15,6 +15,23 @@
 #
 # The loop terminates: the kernel already walked this same chain to exec us, so it is acyclic and
 # shorter than the OS symlink limit. A circular chain fails at exec (ELOOP) and never reaches here.
+
+# Sets $dir to the directory component of $1, by parameter expansion only. ONE implementation, used
+# at both split sites: when they were written separately, one of them dispatched on the link TARGET's
+# shape while splitting SELF, so a slashless target ("ln -s tn launcher") resolved from the caller's
+# working directory — the very defect this file exists to prevent, one branch over.
+# Assigns rather than echoes: a command substitution would fork, and would strip a trailing newline
+# from a path that legally contains one.
+dir_of() {
+  case "$1" in
+    */*)
+      dir="${1%/*}"
+      [ -n "$dir" ] || dir="/" # a file directly at the root: "/tn" -> "/"
+      ;;
+    *) dir="." ;; # no slash at all: already relative to the working directory
+  esac
+}
+
 SELF="$0"
 while [ -L "$SELF" ]; do
   # Fail CLOSED when readlink cannot answer. An empty TARGET would otherwise fall through the
@@ -25,24 +42,18 @@ while [ -L "$SELF" ]; do
     exit 1
   fi
   case "$TARGET" in
+    # Only an ABSOLUTE target bypasses the link's directory. Every other shape — with a slash or
+    # without — is relative to where the LINK lives, never to the working directory.
     /*) SELF="$TARGET" ;;
-    # A relative target resolves against the LINK's own directory, never the working directory.
-    # "${SELF%/*}" is that directory; a $0 with no slash at all is relative to the cwd already.
-    */*) SELF="${SELF%/*}/$TARGET" ;;
-    *) SELF="./$TARGET" ;;
+    *)
+      dir_of "$SELF"
+      SELF="$dir/$TARGET"
+      ;;
   esac
 done
 
-case "$SELF" in
-  */*)
-    SELF_DIR="${SELF%/*}"
-    # "/tn" strips to the empty string, and the parent of a file at the root is the root.
-    [ -n "$SELF_DIR" ] || SELF_DIR="/"
-    ;;
-  *) SELF_DIR="." ;;
-esac
-
-if ! DIR="$(CDPATH= cd -- "$SELF_DIR/.." && pwd)"; then
+dir_of "$SELF"
+if ! DIR="$(CDPATH= cd -- "$dir/.." && pwd)"; then
   echo "tn: cannot resolve repo root from: $SELF" >&2
   exit 1
 fi

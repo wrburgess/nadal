@@ -157,6 +157,44 @@ describe("bin/tn resolves its repo root through symlinks (the `npm link` install
     return stubDir;
   }
 
+  // Both cases below are traces the fix-verification pass found IN AN EARLIER FIX on this PR: the
+  // `case` dispatched on $TARGET's shape while splitting $SELF, so the two disagreed whenever one
+  // had a slash and the other did not. That reintroduced the exact defect this file exists to
+  // pin — a link resolved against the caller's working directory — one arm over from the original.
+  it("resolves a slashless relative target against the link's directory, not the cwd", () => {
+    // `ln -s tn launcher` — a bare name, no slash. Reached whenever a link sits beside its target.
+    const linkDir = makeTempDir("tn-slashless-");
+    const inner = join(linkDir, "tn");
+    const outer = join(linkDir, "launcher");
+    symlinkSync(TN_BIN, inner);
+    symlinkSync("tn", outer); // slashless
+
+    expectBanner(runLauncher(outer));
+  });
+
+  it("resolves a slash-containing target when $0 itself has no slash", () => {
+    // The mirror image: `$0` is a bare "tn" with no slash while the target has one. Splitting $0
+    // then yields "tn" rather than ".", and the launcher walks into a path that does not exist.
+    //
+    // Reached with `sh tn --help` from the link's directory. A PATH-based invocation deliberately
+    // is NOT used here: `execvp` resolves a bare name to a full path before the kernel sees it, so
+    // `$0` always arrives with slashes and the case cannot discriminate — it passed against the
+    // defect. Running the interpreter directly is the only form that puts a slashless path in `$0`.
+    const root = makeTempDir("tn-bare-argv0-");
+    const realDir = join(root, "real", "bin");
+    mkdirSync(realDir, { recursive: true });
+    symlinkSync(TN_BIN, join(realDir, "tn"));
+    symlinkSync("real/bin/tn", join(root, "tn"));
+
+    const result = spawnSync("/bin/sh", ["tn", "--help"], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+
+    expectBanner(result);
+  });
+
   it("does not depend on `dirname`, so a broken one on PATH cannot derive a wrong root", () => {
     // The fix-verification pass on PR #88 flagged that guarding `readlink` closed one INSTANCE of
     // "an unchecked helper silently yields a wrong execution root" and left the class open through
