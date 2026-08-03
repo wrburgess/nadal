@@ -81,3 +81,21 @@ export function emitSummary(command: string, status: string, fields: SummaryFiel
   );
   write([`${command} status=${status}`, ...rendered].join(" "));
 }
+
+/**
+ * The one-line description of an ambiguous identity, for a command's `message=` field.
+ *
+ * "ambiguous target: Justin DuBois" was the whole message before #94, and it named only what the
+ * incoming value was NEAR — never the value itself, nor where it came from. On a cascade that made
+ * it actively misleading: the target it printed had resolved fine, and the real ambiguity was a
+ * name inside that player's match history. All three facts are reported, or a human cannot act.
+ */
+export function ambiguousMessage(result: {
+  candidates: string[];
+  incoming?: string;
+  context?: string;
+}): string {
+  const near = result.candidates.join(", ");
+  if (result.incoming === undefined) return `ambiguous target: ${near}`;
+  return `ambiguous identity "${result.incoming}" (${result.context ?? "unknown"}) near: ${near}`;
+}

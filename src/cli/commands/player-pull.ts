@@ -4,7 +4,7 @@ import { pullArchivedUstaProfile } from "../../ingest/archived.js";
 import { fetchPage } from "../../ingest/fetch.js";
 import { pullPlayer } from "../../ingest/player-pull.js";
 import { globalFlags, parseArgs } from "../args.js";
-import { emitSummary, type EmitOpts } from "../emit.js";
+import { ambiguousMessage, emitSummary, type EmitOpts } from "../emit.js";
 
 type ReportableResult =
   | { kind: "ok"; player: { canonicalName: string }; archivedPath: string; courtMatchCount?: number }
@@ -27,7 +27,7 @@ function report(result: ReportableResult, opts: EmitOpts): number {
     return 0;
   }
   const message =
-    result.kind === "ambiguous" ? `ambiguous target: ${result.candidates.join(", ")}` : result.message;
+    result.kind === "ambiguous" ? ambiguousMessage(result) : result.message;
   emitSummary("player pull", "error", [["message", message]], opts);
   return 1;
 }

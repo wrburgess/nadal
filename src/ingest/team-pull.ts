@@ -43,7 +43,7 @@ export type TeamPullResult =
       retiredCount: number;
     }
   | { kind: "unknown-target"; message: string }
-  | { kind: "ambiguous"; candidates: string[] }
+  | { kind: "ambiguous"; candidates: string[]; incoming?: string; context?: string }
   | { kind: "error"; message: string };
 
 function resolveTargetUrl(
@@ -212,7 +212,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       for (const entry of parsed.roster) {
         const resolved = resolvePlayer(tx, { name: entry.name });
         if (resolved.kind === "ambiguous") {
-          throw new AmbiguousIdentityError(resolved.candidates.map((p) => p.canonicalName));
+          throw new AmbiguousIdentityError(entry.name, resolved.candidates.map((p) => p.canonicalName), "team roster row");
         }
         upsertMembership(
           tx,
@@ -295,7 +295,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       for (const row of parsed.schedule) {
         const opponent = resolveTeam(tx, { name: row.opponentTeamName });
         if (opponent.kind === "ambiguous") {
-          throw new AmbiguousIdentityError(opponent.candidates.map((t) => t.name));
+          throw new AmbiguousIdentityError(row.opponentTeamName, opponent.candidates.map((t) => t.name), "schedule opponent team");
         }
         const [homeCourtsWon, visitingCourtsWon] = parseResultCounts(row.result);
         upsertTeamMatch(tx, {
@@ -316,7 +316,8 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     team = txResult.team;
     retiredCount = txResult.retiredCount;
   } catch (err) {
-    if (err instanceof AmbiguousIdentityError) return { kind: "ambiguous", candidates: err.candidates };
+    if (err instanceof AmbiguousIdentityError)
+      return { kind: "ambiguous", candidates: err.candidates, incoming: err.incoming, context: err.context };
     return { kind: "error", message: errorMessage(err) };
   }
 
@@ -337,7 +338,17 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       const result = await pullPlayer({ db, fetchPage, url: playerUrl });
       if (result.kind !== "ok") {
         skippedRosterEntries.push(entry.name);
-        console.warn(`team pull: cascading "${sanitizeValue(entry.name)}" failed (${result.kind}) — skipped`);
+        // Name the identity that actually failed, not the player we happened to be cascading.
+        // A real report read `cascading "John Jennings" failed (ambiguous) — skipped` when John
+        // resolved exactly and the ambiguity was a name inside HIS match history — so it pointed
+        // at the wrong person, and omitted both the incoming name and what it was near (#94).
+        const detail =
+          result.kind === "ambiguous"
+            ? ` — "${sanitizeValue(result.incoming ?? "")}" (${sanitizeValue(result.context ?? "unknown")}) is near: ${sanitizeValue(result.candidates.join(", "))}`
+            : "";
+        console.warn(
+          `team pull: cascading "${sanitizeValue(entry.name)}" failed (${result.kind})${detail} — skipped`,
+        );
       }
     }
   }

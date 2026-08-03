@@ -49,7 +49,7 @@ export type PlayerPullResult =
       archivedPath: string;
     }
   | { kind: "unknown-target"; message: string }
-  | { kind: "ambiguous"; candidates: string[] }
+  | { kind: "ambiguous"; candidates: string[]; incoming?: string; context?: string }
   | { kind: "error"; message: string };
 
 function resolveTargetUrl(
@@ -143,7 +143,7 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
     const player = db.transaction((tx) => {
       const resolved = resolvePlayer(tx, { tennisrecordUrl: url, name: header.name });
       if (resolved.kind === "ambiguous") {
-        throw new AmbiguousIdentityError(resolved.candidates.map((p) => p.canonicalName));
+        throw new AmbiguousIdentityError(header.name, resolved.candidates.map((p) => p.canonicalName), "player profile name");
       }
       const updated = upsertPlayer(tx, {
         id: resolved.row.id,
@@ -203,14 +203,14 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
         if (record.partner !== null) {
           const partner = resolvePlayer(tx, { name: record.partner.name });
           if (partner.kind === "ambiguous") {
-            throw new AmbiguousIdentityError(partner.candidates.map((p) => p.canonicalName));
+            throw new AmbiguousIdentityError(record.partner.name, partner.candidates.map((p) => p.canonicalName), "match partner");
           }
           upsertCourtMatchPlayers(tx, { courtMatchId: courtMatch.id, playerId: partner.row.id, side: "home" });
         }
         for (const opponent of record.opponents) {
           const resolvedOpponent = resolvePlayer(tx, { name: opponent.name });
           if (resolvedOpponent.kind === "ambiguous") {
-            throw new AmbiguousIdentityError(resolvedOpponent.candidates.map((p) => p.canonicalName));
+            throw new AmbiguousIdentityError(opponent.name, resolvedOpponent.candidates.map((p) => p.canonicalName), "match opponent");
           }
           upsertCourtMatchPlayers(tx, {
             courtMatchId: courtMatch.id,
@@ -225,7 +225,8 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
 
     return { kind: "ok", player, courtMatchCount: matches.length, archivedPath };
   } catch (err) {
-    if (err instanceof AmbiguousIdentityError) return { kind: "ambiguous", candidates: err.candidates };
+    if (err instanceof AmbiguousIdentityError)
+      return { kind: "ambiguous", candidates: err.candidates, incoming: err.incoming, context: err.context };
     return { kind: "error", message: errorMessage(err) };
   }
 }

@@ -21,7 +21,7 @@ export type ArchivedUstaPullOptions = {
 
 export type ArchivedUstaPullResult =
   | { kind: "ok"; player: PlayerRow; archivedPath: string }
-  | { kind: "ambiguous"; candidates: string[] }
+  | { kind: "ambiguous"; candidates: string[]; incoming?: string; context?: string }
   | { kind: "error"; message: string };
 
 /**
@@ -65,7 +65,7 @@ export async function pullArchivedUstaProfile(
       const wtnTennisId = usta.wtnTennisId ?? wtn?.tennisId ?? null;
       const resolved = resolvePlayer(tx, { ustaUaid: usta.uaid, wtnTennisId, name: usta.name });
       if (resolved.kind === "ambiguous") {
-        throw new AmbiguousIdentityError(resolved.candidates.map((p) => p.canonicalName));
+        throw new AmbiguousIdentityError(usta.name, resolved.candidates.map((p) => p.canonicalName), "archived scorecard");
       }
       const updated = upsertPlayer(tx, {
         id: resolved.row.id,
@@ -110,7 +110,8 @@ export async function pullArchivedUstaProfile(
 
     return { kind: "ok", player, archivedPath };
   } catch (err) {
-    if (err instanceof AmbiguousIdentityError) return { kind: "ambiguous", candidates: err.candidates };
+    if (err instanceof AmbiguousIdentityError)
+      return { kind: "ambiguous", candidates: err.candidates, incoming: err.incoming, context: err.context };
     return { kind: "error", message: errorMessage(err) };
   }
 }
