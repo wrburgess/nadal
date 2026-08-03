@@ -727,6 +727,27 @@ describe("assertNoSessionCredentials", () => {
     expect(() => redact(html, [], { vocabulary: new Set() })).toThrow(RedactionError);
   });
 
+  // The depth bound must FAIL CLOSED. Its first version returned quietly, which restored the whole
+  // raw-text bypass at four levels of nesting — a bound that fails open is worse than no bound,
+  // because it reads as a limit rather than a hole. Sweeping the depths guards both directions at
+  // once: below the bound the field is identified, at and past it the document is refused wholesale.
+  it.each([1, 2, 3, 4, 5, 6, 12])(
+    "refuses a credential hidden under %i levels of raw-text nesting",
+    (levels) => {
+      const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+      const html = `<html><body>${"<textarea>".repeat(levels)}${field}</body></html>`;
+
+      expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+    },
+  );
+
+  it("says it stopped looking rather than implying the document was clean", () => {
+    const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+    const html = `<html><body>${"<textarea>".repeat(6)}${field}</body></html>`;
+
+    expect(() => assertNoSessionCredentials(html)).toThrow("was not swept");
+  });
+
   it("refuses a credential nested two containers deep", () => {
     const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
     const html = credentialPage(`<noscript><textarea>${field}</textarea></noscript>`);

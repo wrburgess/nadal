@@ -583,7 +583,20 @@ const SHAPE_EXEMPT_HTTP_EQUIV = "origin-trial";
  */
 const IN_SCOPE_ELEMENT_IN_TEXT = /<\s*(?:input|meta)[\s/>]/i;
 
-/** Bound on the raw-text re-parse recursion — nesting past this is pathological, not real markup. */
+/**
+ * Bound on the raw-text re-parse recursion.
+ *
+ * A bound is genuinely required, not merely prudent: an unterminated `<input` at EOF can re-parse to
+ * a text node whose content still matches `IN_SCOPE_ELEMENT_IN_TEXT`, which would recurse forever.
+ *
+ * **Reaching it REFUSES; it never silently stops.** The first version of this sweep just returned at
+ * the bound, which restored the whole bypass at four levels of nesting — the guard read as bounded
+ * and behaved as defeatable, and a bound that fails open is worse than no bound because it looks
+ * like a limit rather than a hole. Depth past this is pathological markup, so refusing costs a real
+ * capture nothing and the failure direction is the safe one.
+ * (Provenance: Codex adversarial review, fix-verification pass on PR #86, rated high — a defect in
+ * the fix for its own previous finding.)
+ */
 const RAW_TEXT_SWEEP_MAX_DEPTH = 3;
 
 /**
@@ -644,8 +657,13 @@ const RAW_TEXT_SWEEP_MAX_DEPTH = 3;
  *   raw-text container *hid* from the selector — an `<input>` inside `<noscript>`, `<textarea>`,
  *   `<title>`, `<iframe>`, `<noframes>`, `<noembed>` or `<xmp>` — **is** caught, by the raw-text
  *   sweep in `collectInScopeElements`. The distinction is whether the credential is an attribute of
- *   a real `<input>`/`<meta>` (caught, wherever it is nested) or merely text that happens to sit
- *   inside some other element (not caught).
+ *   a real `<input>`/`<meta>` (caught) or merely text that happens to sit inside some other element
+ *   (not caught).
+ *
+ *   Precisely, since "wherever it is nested" was written here once and was **false**: such an
+ *   element is *identified by field* up to `RAW_TEXT_SWEEP_MAX_DEPTH` levels of raw-text nesting,
+ *   and past that depth the document is *refused wholesale* without naming the field. Either way it
+ *   does not ship — but only the first names what it found, and the two should not be conflated.
  * - **Attribute scope: `value` on an `<input>`, `content` on a `<meta>`, and nothing else.**
  *   `<input type="hidden" id="x" data-token="…">` passes: the element is in scope, the attribute
  *   is not.
@@ -689,9 +707,15 @@ const RAW_TEXT_SWEEP_MAX_DEPTH = 3;
 function collectInScopeElements(
   html: string,
   depth: number,
-  found: { elements: Element[]; parseErrorCodes: string[] },
+  found: { elements: Element[]; parseErrorCodes: string[]; unsweptAtDepthBound: boolean },
 ): void {
-  if (depth > RAW_TEXT_SWEEP_MAX_DEPTH) return;
+  // FAIL CLOSED at the bound. Returning quietly here is what re-opened the raw-text bypass at four
+  // levels of nesting: the caller saw an empty survivor list and could not tell "nothing hidden" from
+  // "stopped looking". Record it instead, and let the caller refuse.
+  if (depth > RAW_TEXT_SWEEP_MAX_DEPTH) {
+    found.unsweptAtDepthBound = true;
+    return;
+  }
 
   const $ = cheerio.load(html, {
     sourceCodeLocationInfo: true,
@@ -719,11 +743,18 @@ function collectInScopeElements(
 
 export function assertNoSessionCredentials(html: string): void {
   const survivors: string[] = [];
-  const found: { elements: Element[]; parseErrorCodes: string[] } = {
+  const found: { elements: Element[]; parseErrorCodes: string[]; unsweptAtDepthBound: boolean } = {
     elements: [],
     parseErrorCodes: [],
+    unsweptAtDepthBound: false,
   };
   collectInScopeElements(html, 0, found);
+
+  if (found.unsweptAtDepthBound) {
+    survivors.push(
+      `markup nested more than ${RAW_TEXT_SWEEP_MAX_DEPTH} raw-text containers deep still looks like an <input>/<meta>, and was not swept — refusing rather than assuming it is clean`,
+    );
+  }
 
   if (found.parseErrorCodes.includes("duplicate-attribute")) {
     survivors.push(
