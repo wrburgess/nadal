@@ -112,4 +112,32 @@ describe("request telemetry", () => {
       errorSpy.mockRestore();
     }
   });
+
+  it("survives a write failure whose Error carries a non-string message (#64, Codex round-2 on PR #20)", async () => {
+    // The module's own contract is "telemetry must never break the request/tool call itself", and
+    // the guard implementing it read `err instanceof Error ? err.message : String(err)` — which puts
+    // the String() coercion on the WRONG branch. TypeScript types `Error.prototype.message` as
+    // `string`, but it is an ordinary writable own property, so a subclassed, mutated, or
+    // cross-realm error can carry anything. `sanitizeValue()` then called `.replace()` on a
+    // non-string and threw a TypeError FROM INSIDE THE CATCH, propagating out of `logRequest` and
+    // breaking the very request the catch existed to protect.
+    //
+    // Asserted on the side effects, not on "it ran": the wrapped fn's exit code must survive
+    // untouched, and the diagnostic must still reach stderr exactly once.
+    const err = new Error();
+    Object.defineProperty(err, "message", { value: { hostile: true }, writable: true, configurable: true });
+    const openDbSpy = vi.spyOn(client, "openDb").mockImplementation(() => {
+      throw err;
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await logRequest("cli", "db migrate", [], async () => 0);
+      expect(code).toBe(0);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith("telemetry: request_log write failed: [object Object]");
+    } finally {
+      openDbSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
 });

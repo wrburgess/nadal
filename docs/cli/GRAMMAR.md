@@ -27,8 +27,18 @@ the command runs.
 table does — it used to take no `args` at all and silently accept anything after `tn db migrate`
 (#44), unlike `mcp serve` above, which deliberately rejects *every* argument rather than parsing any.
 
-Every value field in that summary line is double-quoted (e.g. `status=ok path="..."`), so a value
-can safely contain spaces or `=` without being mistaken for a field boundary. Within a quoted
+Every **string** value field in that summary line is double-quoted (e.g. `path="..."`), so a value
+can safely contain spaces or `=` without being mistaken for a field boundary. Two kinds of field are
+rendered **bare**, and deliberately: `status`, which is always the first field and always one of a
+small code-controlled set (`ok`, `error`, `partial`, …), and numeric counts (`roster=18`). Neither
+can contain a space, an `=`, or a control character, so quoting them would buy nothing and would
+change the shape of every line every command has ever printed. (This paragraph previously claimed
+*every* value field was quoted while its own example showed `status=ok` unquoted — issue #64.) The
+rendering is pinned by an executable test rather than by this sentence: `test/cli-emit.test.ts`'s
+*"status=ok prints a deterministic key=value line to stdout: status bare, strings quoted, numbers
+bare"* asserts the literal line
+`team pull status=ok team="Norbury" roster=18 matches=10 archived="raw/tennisrecord/x.html"`.
+Within a quoted
 value: backslashes are escaped first (`\` becomes `\\`), then double quotes (`"` becomes `\"`) —
 backslashes before quotes so an escape-aware parser can't misread an escaped backslash as also
 escaping the quote after it. Before quoting, every value is sanitized: control characters

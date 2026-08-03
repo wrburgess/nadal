@@ -11,6 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logMcpTool } from "../telemetry/request-log.js";
 import { MCP_TOOLS } from "./tools.js";
+import { errorMessage } from "../error-message.js";
 import { sanitizeJson, sanitizeValue } from "../sanitize.js";
 
 const SERVER_NAME = "tn";
@@ -38,7 +39,7 @@ export function createMcpServer(): McpServer {
         // original error's real class name before the message is touched.
         // (Found by the independent Codex review of PR #47, rated medium.)
         const result = await logMcpTool(tool.name, args, () => tool.handler(args)).catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           throw new Error(sanitizeValue(message));
         });
         // Sanitized on the way out, exactly as the CLI's `--json` path is (src/cli/emit.ts):

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../../ingest/match-add.js";
+import { errorMessage } from "../../error-message.js";
 import { scorecardPayloadSchema } from "../../ingest/scorecard.js";
 import type { ScorecardPayload } from "../../ingest/scorecard.js";
 import { globalFlags, parseArgs } from "../args.js";
@@ -25,7 +26,9 @@ function readScorecardPayloadFile(path: string): ScorecardPayload {
     raw = readFileSync(path, "utf8");
   } catch (err) {
     throw new InvalidScorecardPayloadFileError(
-      `could not read "${path}": ${err instanceof Error ? err.message : String(err)}`,
+      // `errorMessage`, not the template literal's own coercion: `${sym}` throws on a Symbol
+      // where `String(sym)` does not, so an interpolating site is NOT already safe (#64).
+      `could not read "${path}": ${errorMessage(err)}`,
     );
   }
 

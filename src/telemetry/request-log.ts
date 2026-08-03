@@ -1,5 +1,6 @@
 import { openDb } from "../db/client.js";
 import { requestLog } from "../db/schema.js";
+import { errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
 
 type RequestLogRow = {
@@ -30,8 +31,11 @@ function writeRequestLogRow(row: RequestLogRow): void {
       sqlite.close();
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`telemetry: request_log write failed: ${sanitizeValue(message)}`);
+    // `errorMessage`, not `err instanceof Error ? err.message : String(err)`: the latter puts the
+    // coercion on the wrong branch, so an Error whose `message` is not a string made
+    // `sanitizeValue()` call `.replace()` on a non-string and throw a TypeError from inside THIS
+    // catch — breaking the request this whole function exists not to break (#64).
+    console.error(`telemetry: request_log write failed: ${sanitizeValue(errorMessage(err))}`);
   }
 }
 
