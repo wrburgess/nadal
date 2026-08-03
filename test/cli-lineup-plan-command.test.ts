@@ -394,7 +394,7 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
       expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unknown target"));
     });
 
-    it("refuses an ambiguous target by listing the candidates rather than guessing", async () => {
+    it("refuses an ambiguous target by naming the incoming target, where it came from, and the candidates", async () => {
       runMigrations();
       const { db, sqlite } = openDb();
       db.insert(teams).values({ name: "Versteeg A" }).run();
@@ -406,7 +406,14 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
       const code = await dispatch(["lineup", "plan", "Versteeg"]);
 
       expect(code).toBe(1);
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("ambiguous target"));
+      // The whole line, not a fragment (#94): this was `ambiguous target: Versteeg A, Versteeg B`,
+      // which names only what the target was NEAR and never the target itself. A
+      // `stringContaining("ambiguous target")` assertion is satisfied by that message and by every
+      // other message beginning those two words, which is how the entire reporting shape came to be
+      // pinned by nothing — this file's was the ONLY assertion in 1529 tests that touched it at all.
+      expect(errSpy).toHaveBeenCalledWith(
+        'lineup plan status=error message="ambiguous identity \\"Versteeg\\" (team name target) — near: Versteeg A, Versteeg B"',
+      );
     });
 
     it("refuses a missing target", async () => {

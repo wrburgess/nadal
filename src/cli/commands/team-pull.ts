@@ -2,8 +2,9 @@ import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import { fetchPage } from "../../ingest/fetch.js";
 import { pullTeam } from "../../ingest/team-pull.js";
+import { ambiguousMessage } from "../../ingest/errors.js";
 import { globalFlags, parseArgs } from "../args.js";
-import { ambiguousMessage, emitSummary, type SummaryField } from "../emit.js";
+import { emitSummary, type SummaryField } from "../emit.js";
 
 export const teamPull: Command = {
   noun: "team",

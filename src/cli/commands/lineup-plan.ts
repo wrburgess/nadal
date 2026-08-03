@@ -1,5 +1,6 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
+import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
 import {
   EventHasNoFormatError,
@@ -54,7 +55,7 @@ export const lineupPlan: Command = {
         emitSummary(
           "lineup plan",
           "error",
-          [["message", `ambiguous target: ${resolution.candidates.join(", ")}`]],
+          [["message", ambiguousMessage({ incoming: parsed.target, candidates: resolution.candidates, context: "team name target" })]],
           opts,
         );
         return 1;

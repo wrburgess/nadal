@@ -10,6 +10,7 @@ import { openDb, runMigrations } from "../db/client.js";
 import { teams } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { pullArchivedUstaProfile } from "../ingest/archived.js";
+import { ambiguousMessage } from "../ingest/errors.js";
 import { fetchPage } from "../ingest/fetch.js";
 import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../ingest/match-add.js";
 import { pullPlayer } from "../ingest/player-pull.js";
@@ -46,8 +47,15 @@ export type McpToolDef = {
   handler: (args: Record<string, unknown>) => Promise<unknown>;
 };
 
-/** Every "unknown target" / "ambiguous target" resolution outcome, mapped to the same message shape
- * every CLI command already uses — shared here so all eight target-resolving tools stay consistent. */
+/** Every "unknown target" / ambiguous-target resolution outcome, mapped to the same message shape
+ * every CLI command already uses — shared here so all eight target-resolving tools stay consistent.
+ *
+ * The ambiguous branch renders through `ambiguousMessage` (src/ingest/errors.ts), the ONE formatter
+ * every surface uses, so the three facts #94 requires are reported here too: a target-tier
+ * ambiguity has an incoming name (the target the caller supplied) exactly like a deep one does, and
+ * printing only the candidates was how the pre-#94 message managed to name nobody who was actually
+ * in question. `label` names which argument was ambiguous (`target`, `pairTarget`), which is the
+ * context a caller passing two names needs to tell them apart. */
 function requireResolved<T extends { kind: string }>(
   resolution: T,
   label: string,
@@ -58,7 +66,7 @@ function requireResolved<T extends { kind: string }>(
   }
   if (resolution.kind === "ambiguous") {
     const candidates = (resolution as unknown as { candidates: string[] }).candidates;
-    throw new McpToolError(`ambiguous ${label}: ${candidates.join(", ")}`);
+    throw new McpToolError(ambiguousMessage({ incoming: target, candidates, context: `${label} name` }));
   }
   return resolution as Exclude<T, { kind: "not-found" } | { kind: "ambiguous" }>;
 }
@@ -100,9 +108,13 @@ export const MCP_TOOLS: McpToolDef[] = [
           from: args.from !== undefined && args.sourceUrl !== undefined ? { path: args.from, sourceUrl: args.sourceUrl } : undefined,
         });
         if (result.kind !== "ok") {
-          throw new McpToolError(
-            result.kind === "ambiguous" ? `ambiguous target: ${result.candidates.join(", ")}` : result.message,
-          );
+          // The SAME formatter the CLI and the cascade warning use (src/ingest/errors.ts). This
+          // read `ambiguous target: <candidates>` — the pre-#94 message — for the whole of #94's
+          // first pass, because the formatter then lived in `src/cli/emit.ts` and this surface had
+          // no reason to reach into the CLI for it. So the fix landed on two of the three reporters
+          // and an agent driving nadal over MCP still got the wrong person's name with no incoming
+          // value, which is the entire defect #94 exists to close.
+          throw new McpToolError(result.kind === "ambiguous" ? ambiguousMessage(result) : result.message);
         }
         return {
           team: result.team.name,
@@ -192,9 +204,13 @@ export const MCP_TOOLS: McpToolDef[] = [
               from: args.from !== undefined && args.sourceUrl !== undefined ? { path: args.from, sourceUrl: args.sourceUrl } : undefined,
             });
         if (result.kind !== "ok") {
-          throw new McpToolError(
-            result.kind === "ambiguous" ? `ambiguous target: ${result.candidates.join(", ")}` : result.message,
-          );
+          // The SAME formatter the CLI and the cascade warning use (src/ingest/errors.ts). This
+          // read `ambiguous target: <candidates>` — the pre-#94 message — for the whole of #94's
+          // first pass, because the formatter then lived in `src/cli/emit.ts` and this surface had
+          // no reason to reach into the CLI for it. So the fix landed on two of the three reporters
+          // and an agent driving nadal over MCP still got the wrong person's name with no incoming
+          // value, which is the entire defect #94 exists to close.
+          throw new McpToolError(result.kind === "ambiguous" ? ambiguousMessage(result) : result.message);
         }
         return {
           player: result.player.canonicalName,

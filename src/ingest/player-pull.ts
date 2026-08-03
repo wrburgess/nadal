@@ -4,7 +4,7 @@ import type { openDb } from "../db/client.js";
 import { errorMessage } from "../error-message.js";
 import { players, teamMatches } from "../db/schema.js";
 import { archivePage } from "./archive.js";
-import { AmbiguousIdentityError } from "./errors.js";
+import { AmbiguousIdentityError, type AmbiguousIdentity } from "./errors.js";
 import type { PageFetcher } from "./fetch.js";
 import { findPlayerByName, resolvePlayer } from "./identity.js";
 import { ParseError, parseMatchHistory, parseTennisRecordHeader, type CourtMatchRecord } from "../parsers/index.js";
@@ -49,13 +49,13 @@ export type PlayerPullResult =
       archivedPath: string;
     }
   | { kind: "unknown-target"; message: string }
-  | { kind: "ambiguous"; candidates: string[]; incoming?: string; context?: string }
+  | ({ kind: "ambiguous" } & AmbiguousIdentity)
   | { kind: "error"; message: string };
 
 function resolveTargetUrl(
   db: Db,
   target: string,
-): { kind: "url"; url: string } | { kind: "unknown-target" } | { kind: "ambiguous"; candidates: string[] } {
+): { kind: "url"; url: string } | { kind: "unknown-target" } | ({ kind: "ambiguous" } & AmbiguousIdentity) {
   if (/^https?:\/\//i.test(target)) return { kind: "url", url: target };
   if (target.startsWith("tr:")) return { kind: "url", url: target.slice(3) };
 
@@ -65,7 +65,15 @@ function resolveTargetUrl(
     return { kind: "url", url: found.row.tennisrecordUrl };
   }
   if (found.kind === "ambiguous") {
-    return { kind: "ambiguous", candidates: found.candidates.map((p) => p.canonicalName) };
+    // The target the caller typed IS the incoming name here — this tier reports the same three
+    // facts as every deeper one rather than the candidates alone, so a reader never has to know
+    // which layer refused to know what they were being asked about.
+    return {
+      kind: "ambiguous",
+      incoming: target,
+      candidates: found.candidates.map((p) => p.canonicalName),
+      context: "player name target",
+    };
   }
   return { kind: "unknown-target" };
 }
@@ -105,7 +113,7 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
       if (resolved.kind === "unknown-target") {
         return { kind: "unknown-target", message: `unknown player target "${options.target}"` };
       }
-      if (resolved.kind === "ambiguous") return { kind: "ambiguous", candidates: resolved.candidates };
+      if (resolved.kind === "ambiguous") return resolved;
       resolvedUrl = resolved.url;
     } else {
       return { kind: "error", message: "pullPlayer: one of target, url, or from is required" };

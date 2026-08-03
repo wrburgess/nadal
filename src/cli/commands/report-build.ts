@@ -1,5 +1,6 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
+import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
 import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
@@ -71,7 +72,7 @@ export const reportBuild: Command = {
           emitSummary(
             "report build",
             "error",
-            [["message", `ambiguous target: ${resolution.candidates.join(", ")}`]],
+            [["message", ambiguousMessage({ incoming: target, candidates: resolution.candidates, context: "team name target" })]],
             opts,
           );
           return 1;

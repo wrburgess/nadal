@@ -1,5 +1,6 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
+import { ambiguousMessage } from "../../ingest/errors.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../../query/player-profile.js";
 import type { PlayerProfile } from "../../query/player-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
@@ -68,7 +69,7 @@ export const playerShow: Command = {
         emitSummary(
           "player show",
           "error",
-          [["message", `ambiguous target: ${resolution.candidates.join(", ")}`]],
+          [["message", ambiguousMessage({ incoming: parsed.target, candidates: resolution.candidates, context: "player name target" })]],
           opts,
         );
         return 1;

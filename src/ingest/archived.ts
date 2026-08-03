@@ -4,7 +4,7 @@ import { errorMessage } from "../error-message.js";
 import { ParseError, parseUstaProfile, parseWtnWidget } from "../parsers/index.js";
 import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
-import { AmbiguousIdentityError } from "./errors.js";
+import { AmbiguousIdentityError, type AmbiguousIdentity } from "./errors.js";
 import { resolvePlayer } from "./identity.js";
 import { slugFromUrl } from "./player-pull.js";
 import { upsertPlayer, upsertRatingObservation } from "./upsert.js";
@@ -21,7 +21,7 @@ export type ArchivedUstaPullOptions = {
 
 export type ArchivedUstaPullResult =
   | { kind: "ok"; player: PlayerRow; archivedPath: string }
-  | { kind: "ambiguous"; candidates: string[]; incoming?: string; context?: string }
+  | ({ kind: "ambiguous" } & AmbiguousIdentity)
   | { kind: "error"; message: string };
 
 /**
@@ -65,7 +65,7 @@ export async function pullArchivedUstaProfile(
       const wtnTennisId = usta.wtnTennisId ?? wtn?.tennisId ?? null;
       const resolved = resolvePlayer(tx, { ustaUaid: usta.uaid, wtnTennisId, name: usta.name });
       if (resolved.kind === "ambiguous") {
-        throw new AmbiguousIdentityError(usta.name, resolved.candidates.map((p) => p.canonicalName), "archived scorecard");
+        throw new AmbiguousIdentityError(usta.name, resolved.candidates.map((p) => p.canonicalName), "archived USTA profile name");
       }
       const updated = upsertPlayer(tx, {
         id: resolved.row.id,

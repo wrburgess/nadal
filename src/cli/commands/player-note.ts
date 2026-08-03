@@ -1,5 +1,6 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
+import { ambiguousMessage } from "../../ingest/errors.js";
 import { resolvePlayerTarget } from "../../query/player-profile.js";
 import {
   EmptyCaptainNoteError,
@@ -62,7 +63,7 @@ export const playerNote: Command = {
         emitSummary(
           "player note",
           "error",
-          [["message", `ambiguous target: ${resolution.candidates.join(", ")}`]],
+          [["message", ambiguousMessage({ incoming: parsed.target, candidates: resolution.candidates, context: "player name target" })]],
           opts,
         );
         return 1;

@@ -5,7 +5,7 @@ import { teams } from "../db/schema.js";
 import { hrefParam } from "../parsers/dom.js";
 import { ParseError, parseTennisRecordTeam } from "../parsers/index.js";
 import { archivePage } from "./archive.js";
-import { AmbiguousIdentityError } from "./errors.js";
+import { AmbiguousIdentityError, ambiguousMessage, type AmbiguousIdentity } from "./errors.js";
 import type { PageFetcher } from "./fetch.js";
 import { findTeamByName, resolvePlayer, resolveTeam } from "./identity.js";
 import { matchHistoryUrlFor, pullPlayer, slugFromUrl } from "./player-pull.js";
@@ -43,13 +43,13 @@ export type TeamPullResult =
       retiredCount: number;
     }
   | { kind: "unknown-target"; message: string }
-  | { kind: "ambiguous"; candidates: string[]; incoming?: string; context?: string }
+  | ({ kind: "ambiguous" } & AmbiguousIdentity)
   | { kind: "error"; message: string };
 
 function resolveTargetUrl(
   db: Db,
   target: string,
-): { kind: "url"; url: string } | { kind: "unknown-target" } | { kind: "ambiguous"; candidates: string[] } {
+): { kind: "url"; url: string } | { kind: "unknown-target" } | ({ kind: "ambiguous" } & AmbiguousIdentity) {
   if (/^https?:\/\//i.test(target)) return { kind: "url", url: target };
   if (target.startsWith("tr:")) return { kind: "url", url: target.slice(3) };
 
@@ -59,7 +59,14 @@ function resolveTargetUrl(
     return { kind: "url", url: found.row.tennisrecordUrl };
   }
   if (found.kind === "ambiguous") {
-    return { kind: "ambiguous", candidates: found.candidates.map((t) => t.name) };
+    // Same as `player pull`'s own target tier: the typed target IS the incoming name, reported
+    // alongside the candidates rather than left for the reader to infer.
+    return {
+      kind: "ambiguous",
+      incoming: target,
+      candidates: found.candidates.map((t) => t.name),
+      context: "team name target",
+    };
   }
   return { kind: "unknown-target" };
 }
@@ -110,7 +117,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     if (resolved.kind === "unknown-target") {
       return { kind: "unknown-target", message: `unknown team target "${options.target}"` };
     }
-    if (resolved.kind === "ambiguous") return { kind: "ambiguous", candidates: resolved.candidates };
+    if (resolved.kind === "ambiguous") return resolved;
     url = resolved.url;
     try {
       const page = await fetchPage(url);
@@ -342,10 +349,12 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
         // A real report read `cascading "John Jennings" failed (ambiguous) — skipped` when John
         // resolved exactly and the ambiguity was a name inside HIS match history — so it pointed
         // at the wrong person, and omitted both the incoming name and what it was near (#94).
-        const detail =
-          result.kind === "ambiguous"
-            ? ` — "${sanitizeValue(result.incoming ?? "")}" (${sanitizeValue(result.context ?? "unknown")}) is near: ${sanitizeValue(result.candidates.join(", "))}`
-            : "";
+        //
+        // Rendered by the shared `ambiguousMessage`, then sanitized as ONE string. Sanitizing the
+        // rendered line rather than each field separately is what keeps a hostile scraped name from
+        // forging the punctuation this format uses to separate the three facts — and it is the same
+        // formatter the CLI summary and the MCP tools use, so a reader sees one shape everywhere.
+        const detail = result.kind === "ambiguous" ? ` — ${sanitizeValue(ambiguousMessage(result))}` : "";
         console.warn(
           `team pull: cascading "${sanitizeValue(entry.name)}" failed (${result.kind})${detail} — skipped`,
         );
