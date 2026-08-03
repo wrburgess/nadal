@@ -12,9 +12,187 @@ import type { Db } from "../ingest/db-types.js";
  * `""` (from an empty or whitespace-only name) is a legitimate key, deliberately distinct from SQL
  * `NULL` — `NULL` means "not yet backfilled" (see `backfillNameKeys` in `src/db/client.ts` and the
  * fail-closed probe in `src/ingest/identity.ts`). No non-null input may ever produce that sentinel.
+ * A name of nothing but invisible characters folds to `""` by the same rule, not to anything nullish.
+ *
+ * ## The fold has three steps, and each one is here for a defect on the record (#62)
+ *
+ * 1. **Strip every character a reader cannot see** — the `INVISIBLE` class defined below. Without it,
+ *    `Versteeg` and `Versteeg<U+202E>` render identically to a human and produce two keys, so a
+ *    scraped page carrying an invisible character forks one person into two rows.
+ *
+ *    The class is deliberately **wider than the issue that prompted it**. #62 named category Cf, and
+ *    the first fix stripped exactly that — after which an adversarial pass measured nine *other*
+ *    invisible classes forking an identity in precisely the same way (NUL, ESC, DEL, the C1 block,
+ *    variation selectors). `\p{Cf}` is one Unicode category; the DEFECT is "a character a human
+ *    cannot see", and a control character is every bit as invisible on the page and every bit as easy
+ *    for an upstream template to emit.
+ *
+ *    Worth knowing how it actually failed, because it was not a single failure: one or two invisible
+ *    characters left an `editDistance` of 1-2, inside `FUZZY_MAX_DISTANCE`, so tier 3 caught them
+ *    and returned `ambiguous` — wrong, but loud, and it halted a pull to ask about a player already
+ *    on file. THREE pushed the distance past the band, so the ladder fell through every tier and
+ *    created a second row silently. An upstream page picks that count for free.
+ *
+ * 2. **`.trim()` — and it MUST run after the strip, never before.** A leading format character holds
+ *    the leading whitespace against the trim (`" <RLO> Name "` trims to `"<RLO> Name"`), and
+ *    stripping afterwards leaves `" name"` — a third key for the same visible name, i.e. the same
+ *    defect wearing the fix's clothes. The ordering is asserted in `test/name-key.test.ts`.
+ *
+ * 3. **`.normalize("NFKC")`, not NFC.** NFC is CANONICAL normalization: it composes combining marks
+ *    but does not fold compatibility variants, so `Norbury` and `Ｎｏｒｂｕｒｙ` (full-width) were also
+ *    two identities — the sibling defect logged at `docs/findings.md:319`, found while proving out
+ *    scorecard ingestion, where a vision model transcribing a photo has no particular reason to
+ *    prefer ASCII. NFKC still folds everything NFC did, so the composed/decomposed guarantee above
+ *    is unchanged.
+ *
+ *    **NFKC does not subsume step 1** — `NFKC("Vers<U+202E>teeg") !== "Versteeg"`, verified in the
+ *    test suite rather than assumed. Neither half is redundant.
+ *
+ * ## The accepted limits, stated where the next reader stands
+ *
+ * `\p{Cf}` includes ZERO WIDTH JOINER, ZERO WIDTH NON-JOINER and SOFT HYPHEN, which are
+ * **semantically meaningful** in Indic, Persian and Arabic orthography — stripping them can fold two
+ * genuinely different spellings together. For a Springfield USTA league roster that is the right
+ * trade (the bidi-spoof and transcription risks are real and these are not), but it is a real limit
+ * and not a hypothetical one. It would be the wrong fold for a general-purpose name index.
+ *
+ * ## The accepted residuals — the honest list, decided on the record
+ *
+ * **This fold is not complete, and the limit is not a property boundary — it is a reachability
+ * argument.** Five independent review rounds each found a real defect in the predicate the previous
+ * round had just fixed, alternating between too-narrow and too-wide, which is what an *undecidable*
+ * predicate looks like rather than an unfinished one. There is no Unicode property equal to
+ * "deleting this cannot change what a reader sees". The HC's decision was to ship the fold with its
+ * residuals **named**, on the argument that every one of them lives in a script a Springfield,
+ * Illinois USTA league roster does not contain.
+ *
+ * **Still SPLIT (two identities for one visible name).** Do not read this as the harmless column —
+ * an earlier draft of this very block called it "the safe failure, because it is loud" and that was
+ * FALSE, caught at the merge gate. A split is loud only while the fuzzy tier can still see it: one
+ * or two invisible characters leave an `editDistance` inside `FUZZY_MAX_DISTANCE`, so the ladder
+ * reports `ambiguous` and a human is asked — but **three or more push it past the band and the row
+ * is created silently**, which is the same silent-duplicate threshold this whole change exists to
+ * close. `test/identity-format-characters.test.ts` pins exactly that: three Hangul fillers produce a
+ * second player row and nothing says so. These are accepted on **reachability**, and on nothing else.
+ *
+ * - **LINE SEPARATOR U+2028** — `Zl` with `White_Space`; it renders as a break.
+ * - **The Hangul fillers U+115F/U+1160/U+3164/U+FFA0**, **the Mongolian controls U+180B–U+180F**,
+ *   and every other complex-script invisible — exempted by the script scope, because deleting them
+ *   re-groups or re-shapes the text around them.
+ *
+ * **Still MERGED (one identity for two visible names) — the SILENT failure, and the real cost:**
+ *
+ * - **`U+06DD` ARABIC END OF AYAH and `U+08E2` ARABIC DISPUTED END OF AYAH.** Both are `Cf` *and*
+ *   `Script=Common`, so neither the category test nor the script scope exempts them, and both render
+ *   as a sign enclosing the following digits. `namesEqual("علي" + U+06DD + "١", "علي" + "١")` is
+ *   `true`. **This is not a cost of widening the class** — U+06DD is `\p{Cf}`, so the original
+ *   one-line fix for #62 merged them too, and retreating to it would not have helped.
+ *   `\p{Script_Extensions}` is not a fix either; `scx=Common` is likewise true for both (checked).
+ * - **ZWJ / ZWNJ / SOFT HYPHEN** — meaningful in Indic, Persian and Arabic orthography.
+ *
+ * Closing the merged set means changing the *mechanism* — refusing a name that carries an invisible
+ * character rather than folding it — which removes the class instead of bounding it, and is its own
+ * design rather than a sixth predicate. Recorded in `docs/findings.md` for triage.
+ *
+ * The widening is paired with its own refutation in `test/name-key.test.ts`, because widening a
+ * strip class is the move most likely to cause a silent OVER-merge: combining accents, letters in
+ * several scripts, CJK and emoji are all asserted to survive, and the NFD composed/decomposed
+ * guarantee at the top of this doc is re-asserted after the widening. Strip U+0301 by accident and
+ * `Élodie` folds to `elodie` while every other test here still passes.
+ *
+ * Deliberately NOT folded, because each is a different class rather than an invisible-character one:
+ * curly vs straight apostrophe (`O’Brien` / `O'Brien`), a real hyphen vs a soft hyphen once the
+ * latter is stripped, and homoglyphs (Cyrillic `А` for Latin `A`) — the last would want a confusables
+ * skeleton, which changes the false-merge risk profile substantially and has no instance on record.
+ * `test/name-key.test.ts` asserts these stay distinct, because an over-merge is the silent failure
+ * here and spec § Ingestion forbids it outright.
+ *
+ * ## Changing this function invalidates every stored key
+ *
+ * `backfillNameKeys` below only fills keys that are `NULL`, and the fail-closed probe in
+ * `src/ingest/identity.ts` likewise only detects `NULL` — a key written under an OLDER fold is
+ * non-null and wrong, so nothing detects it and tier 2 simply misses, creating the very duplicate
+ * this function exists to prevent. There is no fold-version stamp. Any future edit here therefore
+ * needs a migration that NULLs `name_key` on `players`, `player_aliases` and `teams` so the backfill
+ * re-derives them — `drizzle/0010_moaning_sasquatch.sql` is the worked example.
  */
+/**
+ * Every character a reader cannot see, expressed as an algebra over Unicode properties rather than
+ * as a list — so a character nobody here thought to name is still covered.
+ *
+ * - `\p{Cf}` — format: RIGHT-TO-LEFT OVERRIDE, zero-width space/joiner/non-joiner, soft hyphen, BOM.
+ * - `\p{Cc}` — control: NUL, ESC, DEL, and the C1 block. Every bit as invisible on a scraped page as
+ *   a bidi override, and every bit as easy for an upstream template to emit.
+ * - `\p{Variation_Selector}` — selects a glyph variant and renders as nothing on its own.
+ * - `\p{Default_Ignorable_Code_Point}` — **the property that actually means "render this as
+ *   nothing"**, and the one the three general categories above were only approximating. It reaches
+ *   U+034F COMBINING GRAPHEME JOINER (category `Mn`) and the Hangul fillers U+115F/U+1160/U+3164
+ *   (category `Lo`) — invisible characters that no general category can pick out without also
+ *   picking out every real combining mark or every real letter.
+ *
+ *   This one arrived from the independent Reviewer, and it corrected a mistake worth recording: an
+ *   earlier revision NAMED U+3164 as an accepted residual, arguing no derived class could reach a
+ *   category-`Lo` character without reaching every letter. That was false — `Default_Ignorable` does
+ *   exactly that. "No property reaches this" is a claim about the properties you happened to think
+ *   of, and it was wrong here.
+ *
+ * **Two qualifiers, and between them they are the whole boundary.** The question is not "is this
+ * character invisible in isolation" but "can deleting it change what a reader sees":
+ *
+ * - **NOT `\p{White_Space}`** — TAB and NEL are `Cc` yet render as a space or a break, so
+ *   `Jane<TAB>Doe` reads as two words and `JaneDoe` reads as one. This is also what leaves the
+ *   long-standing "interior whitespace is NOT collapsed" behavior exactly as it was.
+ * - **ONLY `Script=Common | Inherited | Latin`** — i.e. strip an invisible character only when it
+ *   belongs to no complex script. This is the qualifier that took four revisions to find, and the
+ *   history is recorded below because the wrong versions all looked right.
+ *
+ * ### Why a script scope, and why PER CHARACTER
+ *
+ * The class was revised four times in one change, each time because a review pass found a real
+ * defect in the previous version: `\p{Cf}` alone was too narrow (nine other invisible classes still
+ * forked); adding `\p{Cc}`+`\p{Variation_Selector}` was still too narrow (U+034F); adding
+ * `\p{Default_Ignorable_Code_Point}` was too WIDE — it swept in the Hangul fillers, and deleting one
+ * re-groups the surrounding jamo, so `<L,Vf><L,V>` and `<L><L,V>` both folded to `U+1100 U+B098`,
+ * silently merging two names a Korean renderer draws differently. Subtracting `Script=Hangul` then
+ * over-merged Mongolian, where U+180E VOWEL SEPARATOR is a lexical break and U+180B FVS1 selects a
+ * required glyph form. Five scripts had characters in the class.
+ *
+ * **The premise was wrong, not the list.** There is no Unicode property equal to "safe to delete
+ * from a name", because **invisibility is contextual** — every widening eventually reaches a script
+ * whose invisible characters are load-bearing. So the guard asks a different question entirely, and
+ * the answer generalizes instead of enumerating: a character is strippable only if it belongs to no
+ * complex script. Mongolian, Hangul, Khmer, Kaithi and Egyptian controls are all exempted by the
+ * same clause, and so is the next script nobody here has thought of.
+ *
+ * **Per character, not per name.** Scoping per name — "if the name touches a complex script, strip
+ * nothing" — reads simpler and hands an attacker a one-character bypass: append an invisible
+ * Mongolian separator to a Latin name and the bidi override in the rest of it survives untouched,
+ * reopening this very defect. Per character, the override is stripped (its script is `Common`) while
+ * the Mongolian character is kept (its script is not). Pinned by an ANTI-BYPASS test.
+ *
+ * Both qualifiers exist for the same reason: a false merge is **never** recoverable and **never**
+ * announced, whereas a split is *sometimes* announced — the ladder reports `ambiguous` while the
+ * difference stays inside `FUZZY_MAX_DISTANCE`, and creates a second row silently past it. So the
+ * asymmetry is real but weaker than "split is safe": it is that a merge is silent ALWAYS and a split
+ * is silent only SOMETIMES. That is why every revision of this class ships with assertions that
+ * specific things still fold APART.
+ *
+ * Checked rather than assumed, and asserted in `test/name-key.test.ts` over the whole code-point
+ * space: **no `\p{Cf}` character carries `White_Space`**, so the subtraction takes nothing away from
+ * the format-character strip. Were that untrue, this line would quietly reopen the bidi-override
+ * hole it exists to close.
+ *
+ * The subtraction is written as a **negative lookahead** rather than the `v` flag's set-difference
+ * syntax (`[[...]--\p{White_Space}]`), which reads better and does not compile: `v` requires
+ * `target: es2024` and this project targets ES2023, so `tsc` rejects it while Vitest's transform
+ * happily runs it — green tests, red typecheck. The two forms were verified character-for-character
+ * identical across all 1.1M code points before choosing this one; it strips 489 characters.
+ */
+const INVISIBLE =
+  /(?![\p{White_Space}])(?=[\p{Script=Common}\p{Script=Inherited}\p{Script=Latin}])[\p{Cc}\p{Cf}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}]/gu;
+
 export function nameKey(s: string): string {
-  return s.trim().normalize("NFC").toLowerCase();
+  return s.replace(INVISIBLE, "").trim().normalize("NFKC").toLowerCase();
 }
 
 /** Case-insensitive, Unicode-aware, whitespace-trimmed name comparison — by construction the same
@@ -26,7 +204,7 @@ export function namesEqual(a: string, b: string): boolean {
 /**
  * The length of a key **in the same unit the stored `name_key_length` column counts** — SQLite's
  * `length()` on TEXT counts CODE POINTS, while JavaScript's `.length` counts UTF-16 CODE UNITS.
- * The two diverge by one per astral-plane character (verified: `length()` of `𝕁𝕠𝕙𝕟` is 4, its JS
+ * The two diverge by one per astral-plane character (verified: `length()` of `𠀀𠀁𠀂𠀃` is 4, its JS
  * `.length` is 8), so feeding a JS `.length` into the tier-3 band would compare a target measured
  * in one unit against candidates measured in another — and a name carrying enough astral
  * characters would shift the band clean past its own true candidates, dropping them. That failure
@@ -36,6 +214,14 @@ export function namesEqual(a: string, b: string): boolean {
  * Counting code points keeps the band's necessary condition valid even though `editDistance` below
  * still operates on UTF-16 units: a single unit-edit changes the code-point count by at most one,
  * so a code-point gap wider than `FUZZY_MAX_DISTANCE` still forces a distance wider than it.
+ *
+ * **`nameKey`'s NFKC step decides which names are still astral by the time this is called** (#62),
+ * and the example above was changed for exactly that reason. It used to read `𝕁𝕠𝕙𝕟`
+ * (MATHEMATICAL DOUBLE-STRUCK), which NFKC compatibility-decomposes to ASCII `john` — a BMP key,
+ * whose units do not diverge at all. CJK Extension B is NFKC-stable and does diverge. Anything
+ * choosing an astral fixture to exercise this divergence — `test/helpers/players.ts`'s shared corpus
+ * among them — has to pick an NFKC-stable one, or it silently tests the BMP path while reading as
+ * though it covers this one.
  */
 export function nameKeyLength(key: string): number {
   return [...key].length;

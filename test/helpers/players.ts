@@ -35,7 +35,14 @@ export function buildNamePool(): string[] {
   // without them cannot observe a band measured in the wrong unit — the equivalence assertion would
   // pass over a corpus where the two units happen to coincide, which is a false green rather than a
   // proof. See `nameKeyLength` in src/db/name-key.ts.
-  const astralNames = ["𝕁𝕠𝕙", "𝕁𝕠𝕙n", "𝕁𝕠𝕙𝕟 Smith", "Ann𝕒"];
+  //
+  // These MUST be characters NFKC leaves alone, and that is not a free choice (#62). The pool used
+  // to be MATHEMATICAL DOUBLE-STRUCK letters (`𝕁𝕠𝕙`), which NFKC compatibility-decomposes straight
+  // down to ASCII `joh` — so once `nameKey` moved from NFC to NFKC, every "astral" name in this
+  // corpus reached the band as plain BMP text and the whole class stopped being exercised, while
+  // every assertion built on it stayed green. CJK Extension B ideographs are NFKC-stable, so they
+  // survive the fold as astral characters and the divergence is real at the point it is measured.
+  const astralNames = ["𠀀𠀁𠀂", "𠀀𠀁𠀂n", "𠀀𠀁𠀂𠀃 Smith", "Ann𠀄"];
   const shortNames = ["Al", "Bo", "Cy", "Ann", "Ben", "Coe", "Élo", ...astralNames];
   const longNames = [
     "Alexandria Montgomery Fitzgerald",
