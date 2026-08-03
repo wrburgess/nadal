@@ -511,6 +511,177 @@ const NEVER_PUBLISH: { name: string; pattern: RegExp }[] = [
 ];
 
 /**
+ * Naming conventions for a CSRF/anti-forgery/view-state field, lowercased. Matched against a
+ * lowercased `name`/`id`, never against markup — see `assertNoSessionCredentials` below.
+ *
+ * NOT EXHAUSTIVE. This is the set of conventions this project has met (ASP.NET WebForms, Rails,
+ * Django, Laravel, Express, generic `_token`); a framework this project has not yet captured a
+ * page from can use a name outside this list. Signal 3 (shape) exists precisely because this list
+ * cannot be complete.
+ */
+const SESSION_CREDENTIAL_NAME_MARKERS = [
+  "csrf",
+  "xsrf",
+  "viewstate",
+  "eventvalidation",
+  "authenticity_token",
+  "_token",
+  "requestverification",
+];
+
+/** `type` values whose `value` is a visible button label, never a credential. */
+const EXEMPT_INPUT_TYPES = new Set(["submit", "button", "reset", "image"]);
+
+/**
+ * An opaque-token shape: only base64/URL-safe-base64 characters, 64 or more of them, anchored so
+ * the WHOLE value must match. A URL, a JSON blob, or prose all fail this — punctuation, spaces and
+ * short values pass through untouched. THIS IS A THRESHOLD, not a certainty: a short unnamed
+ * opaque token (under 64 characters) passes signal 3 and is caught only if signal 2's name list
+ * happens to match it.
+ */
+const OPAQUE_TOKEN_SHAPE = /^[A-Za-z0-9+/=._-]{64,}$/;
+
+/**
+ * The only `http-equiv` value exempt from the shape signal (signal 3), lowercased.
+ *
+ * A Chrome origin-trial token is long, base64, and therefore shape-positive — but it is signed and
+ * **origin-bound, not session-bound**: it is served to every visitor of the domain, so it is public
+ * by construction and carries none of the capturing operator's state.
+ *
+ * **Enumerated deliberately, and kept to what was measured.** Every other `http-equiv` value gets
+ * the shape check, `set-cookie` explicitly included — that one is deprecated but, where it appears,
+ * carries literal session state, so exempting the whole `http-equiv` vocabulary would fail open on
+ * exactly the case this module exists to catch. Measured over the committed corpus (the same method
+ * that settled signal 1): all 10 shape-positive `<meta>` elements in `test/fixtures/` are
+ * `http-equiv="origin-trial"`, so this one-value exemption removes every false refusal the corpus
+ * actually produces without widening the rule past the evidence for it.
+ */
+const SHAPE_EXEMPT_HTTP_EQUIV = "origin-trial";
+
+/**
+ * Refuse a capture that still carries what looks like the CAPTURING OPERATOR's own session state
+ * — a CSRF/anti-forgery token, an ASP.NET WebForms `__VIEWSTATE` blob, or an unnamed opaque
+ * credential of the same shape — rather than a scouting subject's identity.
+ *
+ * **This layer DETECTS AND REFUSES. It does not remove, empty, or rewrite anything, and it never
+ * will** — see the module docstring on why this module edits text only and never re-serialises
+ * markup. On a refusal, the operator scrubs the SAVED page (outside the repo) by hand; see
+ * `docs/runbooks/capture-fixtures.md` step 4.
+ *
+ * Parses the document exactly ONCE with `sourceCodeLocationInfo`/`onParseError`, then applies
+ * three independent signals — any one of which refuses the whole document:
+ *
+ * 1. **Lossy parse** — the document contains a `duplicate-attribute` parse error ANYWHERE. A
+ *    second `value=` or `type=` on one tag means the parsed attribute map and the source bytes
+ *    disagree about what the page says, which is exactly the class of gap that made a REWRITING
+ *    control unsafe (see #80). Every other parse-error code is ignored: real captured pages in
+ *    this repo routinely emit `missing-whitespace-between-attributes` and
+ *    `unexpected-character-in-attribute-name` and must still pass.
+ * 2. **Convention** — an `<input>` or `<meta>` whose lowercased `name`+`id` contains one of
+ *    `SESSION_CREDENTIAL_NAME_MARKERS` above, and whose value (`value` for `<input>`, `content`
+ *    for `<meta>`) is non-empty.
+ * 3. **Shape** — ANY non-exempt `<input>`, and ANY `<meta>` other than
+ *    `http-equiv="origin-trial"`, whose value matches `OPAQUE_TOKEN_SHAPE` above. This is the
+ *    STRUCTURAL signal: it catches an unnamed framework's token without depending on signal 2's
+ *    list being complete.
+ *
+ *    **Its scope is deliberately wide, because every narrowing tried here failed open.** Two were
+ *    caught by an orchestrator verification pass on this very change, and both had the same shape
+ *    — a narrowing that reads as precision and behaves as a bypass:
+ *
+ *    - Restricting the input side to `type="hidden"` meant a **bare boolean `type`** (`<input type
+ *      name="q7" value="{token}">`, which parses to `type=""`) silently skipped the signal. That is
+ *      the same malformed-attribute-weakens-a-guard move review round 4 used against the withdrawn
+ *      stripper, so it is a known-live technique, not a hypothetical.
+ *    - Restricting the meta side to `name`-keyed metas let a **nameless** `<meta content="{token}">`
+ *      through entirely, and `http-equiv="set-cookie"` with it.
+ *
+ *    Both narrowings were removed after measuring what they actually bought on the committed
+ *    corpus: **zero**. No non-exempt `<input>` in `test/fixtures/` carries a shape-positive value,
+ *    and every shape-positive `<meta>` there is an `origin-trial` one. So the wide rule costs no
+ *    false refusals that the narrow rules were avoiding — see `SHAPE_EXEMPT_HTTP_EQUIV` above for
+ *    the one exemption that measurement did justify.
+ *
+ * **Neither signal is a complete detector.** The convention list is a fixed set of known
+ * frameworks, not a catalogue of every possible name; the shape signal has a 64-character
+ * threshold, under which a short unnamed opaque value passes both signals. Both gaps are the
+ * manual scrub's job, not this function's.
+ *
+ * **Two exemptions, and they are scoped differently — stated precisely, because an exemption
+ * described more broadly than it is written is how a control comes to be trusted for something it
+ * does not do:**
+ *
+ * - An `<input>` whose `type` (trimmed, lowercased) is `submit`, `button`, `reset` or `image` is
+ *   exempt from **every** signal — its `value` is a visible button label. A MISSING or EMPTY `type`
+ *   is NOT exempt (fails closed). A duplicate `type` attribute is caught by signal 1 before this
+ *   exemption is ever consulted, so a hijacked `type="submit" type="hidden"` cannot borrow it.
+ * - A `<meta http-equiv="origin-trial">` is exempt from **signal 3 only**. Signal 1 and signal 2
+ *   still apply to it: an `origin-trial` meta on a document with a duplicate attribute still
+ *   refuses, and one whose `name`/`id` matched a credential convention would still refuse.
+ *
+ * Nothing else is exempt from anything.
+ */
+export function assertNoSessionCredentials(html: string): void {
+  const survivors: string[] = [];
+  const parseErrorCodes: string[] = [];
+  const $ = cheerio.load(html, {
+    sourceCodeLocationInfo: true,
+    onParseError: (err) => {
+      parseErrorCodes.push(err.code);
+    },
+  });
+
+  if (parseErrorCodes.includes("duplicate-attribute")) {
+    survivors.push(
+      "document contains a duplicate HTML attribute (e.g. two `value=` or `type=` on one tag) — the parsed attribute map cannot be trusted to match the source bytes",
+    );
+  }
+
+  $("input, meta").each((_, el) => {
+    if (el.type !== "tag") return;
+    const tag = el.tagName.toLowerCase();
+    const rawName = el.attribs.name ?? "";
+    const rawId = el.attribs.id ?? "";
+    const key = `${rawName} ${rawId}`.toLowerCase();
+    const value = tag === "meta" ? (el.attribs.content ?? "") : (el.attribs.value ?? "");
+    const type = el.attribs.type?.trim().toLowerCase() ?? "";
+    const exempt = tag === "input" && EXEMPT_INPUT_TYPES.has(type);
+
+    if (exempt || value === "") return;
+
+    const label = rawName || rawId || "(unnamed)";
+
+    if (SESSION_CREDENTIAL_NAME_MARKERS.some((marker) => key.includes(marker))) {
+      survivors.push(
+        `<${tag}> "${label}" — name/id matches a known CSRF/anti-forgery/view-state convention`,
+      );
+      return;
+    }
+
+    // The shape signal applies to EVERY remaining element — every non-exempt `<input>` (the
+    // `EXEMPT_INPUT_TYPES` return above already removed the visible-label cases, which is all that
+    // a narrower `type === "hidden"` test was buying) and every `<meta>` but an `origin-trial` one.
+    // Both narrowings that once stood here failed open; the docstring above records what each let
+    // through and the corpus measurement that showed neither was preventing a real refusal.
+    const shapeApplies =
+      tag === "input" || el.attribs["http-equiv"]?.trim().toLowerCase() !== SHAPE_EXEMPT_HTTP_EQUIV;
+    if (shapeApplies && OPAQUE_TOKEN_SHAPE.test(value)) {
+      survivors.push(`<${tag}> "${label}" — value is a long opaque token (shape signal)`);
+    }
+  });
+
+  if (survivors.length > 0) {
+    throw new RedactionError(
+      `output contains what looks like a session credential — the CAPTURING OPERATOR's own session ` +
+        `state, never a scouting subject's identity. Never add it to the vocabulary. Scrub it on the ` +
+        `saved page instead, per docs/runbooks/capture-fixtures.md step 4. ${survivors.length} ` +
+        `survivor(s):\n${survivors.map((s) => `  ${s}`).join("\n")}`,
+      survivors,
+    );
+  }
+}
+
+/**
  * Fail the capture if any never-publish class appears anywhere in the output — raw, decoded,
  * rendered or percent-decoded.
  */
@@ -565,6 +736,18 @@ export function redact(
   },
 ): string {
   const out = redactHtml(html, substitutions);
+  // LAYER OWNERSHIP — this call must stay BEFORE assertAllowListed. Do not reorder it, even though
+  // the allow-list below would ALSO eventually refuse a long credential-shaped value: `value`/
+  // `content` are not in `CLOSED_VALUE_GRAMMARS`, so the allow-list atomises the token as ordinary
+  // unclassified content and refuses it for being *unrecognised*, not for being a *credential*.
+  // That incidental, misleading refusal is the exact harm #80 is about: the operator is told
+  // "unknown atom", and the documented remedy for an unknown atom is to add it to the vocabulary —
+  // which for a session credential is the one thing that must never happen. Refusing HERE first
+  // means the operator instead sees "this is a session credential, scrub it, never add it to the
+  // vocabulary." Moving or deleting this call silently restores that defect; `redact() refuses a
+  // session credential before the vocabulary loop` (test/tools-redact-fixture.test.ts) pins it by
+  // asserting the thrown type is RedactionError, never PolicyError.
+  assertNoSessionCredentials(out);
   if (options?.vocabulary !== undefined) {
     assertAllowListed(out, {
       standIns: options.standIns ?? substitutions.map((s) => s.to),
