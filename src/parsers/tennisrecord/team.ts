@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
-import type { CheerioAPI } from "cheerio";
+import type { Cheerio, CheerioAPI } from "cheerio";
+import type { AnyNode } from "domhandler";
 import {
   assertColumns,
   collapse,
@@ -23,33 +24,60 @@ const ROSTER_COLUMN = "NTRP";
 const SCHEDULE_COLUMN = "Local Schedule";
 
 /**
- * The roster's column contract, in order. Cells are decoded positionally, so the *order* is the
- * contract — anchoring on a single `NTRP` header proves the right table was found and nothing
- * about where anything is inside it. Drop the Location column and every field after it shifts by
- * one: locations become ratings, ratings become win/loss records, and the nullable parsers absorb
- * the mismatch into plausible-looking nulls without a single error.
- * (Provenance: Codex adversarial review round 3 on PR #26.)
+ * The roster's column contract, keyed by header NAME rather than by position (issue #92).
+ *
+ * Position was the original contract, and it was fragile in the direction that matters: cells were
+ * decoded by index, so a column inserted before `Rating` shifted every field after it — locations
+ * became ratings and ratings became win/loss strings, absorbed into plausible-looking nulls without
+ * an error. The exact-count assertion existed to make that loud (PR #26 round 3), and it did its
+ * job: a real Sectionals opponent that had played postseason returned ELEVEN columns and the pull
+ * was refused rather than misread.
+ *
+ * Refusing every such team is not a fix, though — every team that qualifies for Sectionals has by
+ * definition played postseason. Reading by name removes the shift hazard itself, so the optional
+ * block below can be tolerated without reopening the defect the count was guarding.
  *
  * Matched on whitespace-stripped, lower-cased header text, because the page writes these with
  * `<br>` inside them (`Local<br>Singles`) and the season column carries a year (`2026<br>Record`).
  */
-const ROSTER_COLUMNS: RegExp[] = [
-  /^name$/,
-  /^location$/,
-  /^ntrp$/,
-  /record$/,
-  /^localsingles$/,
-  /^localdoubles$/,
-  /^localrecord$/,
-  /^rating$/,
+type RosterField =
+  | "name"
+  | "location"
+  | "ntrp"
+  | "seasonRecord"
+  | "localSingles"
+  | "localDoubles"
+  | "localRecord"
+  | "dynamicRating";
+
+/** Header text -> the field it carries. Every REQUIRED field appears exactly once. */
+const ROSTER_FIELD_BY_HEADER: { pattern: RegExp; field: RosterField }[] = [
+  { pattern: /^name$/, field: "name" },
+  { pattern: /^location$/, field: "location" },
+  { pattern: /^ntrp$/, field: "ntrp" },
+  // The season column carries the year: `2026Record`. Anchored to digits so it cannot also match
+  // `localrecord` or `postseasonrecord`, which are different columns entirely.
+  { pattern: /^\d{4}record$/, field: "seasonRecord" },
+  { pattern: /^localsingles$/, field: "localSingles" },
+  { pattern: /^localdoubles$/, field: "localDoubles" },
+  { pattern: /^localrecord$/, field: "localRecord" },
+  { pattern: /^rating$/, field: "dynamicRating" },
 ];
 
 /**
- * The physical width of a roster BODY row, which is not the header count: the `Rating` header
- * spans two columns, so eight headers describe nine cells. Header count and row width have to be
- * tracked separately or "exact cell count" quietly means "at least as many as there are headers".
+ * Columns that may be present and carry no field we read.
+ *
+ * A team page grows these once its postseason is on record. They are RECOGNIZED rather than
+ * ignored: an unknown header still refuses (below), because an open vocabulary would silently
+ * accept a page that had *renamed* or *dropped* a column we do rely on. The postseason MATCHES
+ * themselves arrive through the `--players` cascade as ordinary court matches carrying their own
+ * league context (measured: `Adult 40+ 3.5 Districts`), so nothing here needs to read them.
  */
-const ROSTER_ROW_CELLS = 9;
+const OPTIONAL_ROSTER_HEADERS: RegExp[] = [
+  /^postseasonsingles$/,
+  /^postseasondoubles$/,
+  /^postseasonrecord$/,
+];
 
 /**
  * The local schedule's ordered column contract — team_matches candidates, not court_matches: date,
@@ -71,6 +99,68 @@ const SCHEDULE_COLUMNS: RegExp[] = [
  * moved behind an OAuth login (see `docs/findings.md`), so until a login-assisted capture exists
  * this is how a `Team` and its `TeamMembership` rows get populated.
  */
+/**
+ * Read the roster header row into a field -> cell-index map, and derive how wide a body row must be.
+ *
+ * Three separate guards, each replacing something the positional contract used to provide:
+ *
+ * 1. **Every header must be recognized.** An unknown column refuses. An open vocabulary that merely
+ *    skipped what it did not know would silently accept a page that RENAMED or DROPPED a column we
+ *    rely on — failing in the invisible direction, which is worse than the refusal being fixed here.
+ * 2. **Every required field must be present, exactly once.** A duplicate header is a page change,
+ *    not a preference, and picking either one would be a guess.
+ * 3. **The body-row width is derived from the header's own colspans**, never a constant: the
+ *    `Rating` header carries `colspan="2"`, so 8 headers describe 9 cells and 11 describe 12. A
+ *    constant would have been wrong for the second shape in exactly the way the first constant was.
+ */
+function mapRosterColumns(
+  $: CheerioAPI,
+  table: Cheerio<AnyNode>,
+  source: SourceRef,
+): { index: Record<RosterField, number>; rowCells: number } {
+  const headerCells = table.find("tr").first().find("th, td");
+  const index = {} as Record<RosterField, number>;
+  const seen = new Set<RosterField>();
+  let cellCursor = 0;
+  let rowCells = 0;
+
+  headerCells.each((_, cell) => {
+    const text = collapse($(cell).text()).replace(/\s+/g, "").toLowerCase();
+    const span = Number($(cell).attr("colspan") ?? "1");
+    const width = Number.isFinite(span) && span > 0 ? span : 1;
+    const known = ROSTER_FIELD_BY_HEADER.find((c) => c.pattern.test(text));
+    if (known !== undefined) {
+      if (seen.has(known.field)) {
+        throw new ParseError(
+          `team roster has two "${text}" columns`,
+          `${ROSTER_SCOPE} tr th`,
+          source.url,
+        );
+      }
+      seen.add(known.field);
+      index[known.field] = cellCursor;
+    } else if (!OPTIONAL_ROSTER_HEADERS.some((p) => p.test(text))) {
+      throw new ParseError(
+        `team roster has an unrecognized column "${text}"`,
+        `${ROSTER_SCOPE} tr th`,
+        source.url,
+      );
+    }
+    cellCursor += width;
+    rowCells += width;
+  });
+
+  const missing = ROSTER_FIELD_BY_HEADER.filter((c) => !seen.has(c.field)).map((c) => c.field);
+  if (missing.length > 0) {
+    throw new ParseError(
+      `team roster is missing required column(s): ${missing.join(", ")}`,
+      `${ROSTER_SCOPE} tr th`,
+      source.url,
+    );
+  }
+  return { index, rowCells };
+}
+
 export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRecordTeam {
   const $ = cheerio.load(html);
   // The desktop container holds two tables — the roster and the local schedule — so scoping to
@@ -84,7 +174,7 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
     );
   }
   const header = parseHeader($, source);
-  assertColumns($, table, ROSTER_COLUMNS, "team roster", source);
+  const columns = mapRosterColumns($, table, source);
 
   const roster = table
     .find("tr")
@@ -100,14 +190,15 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
       // before the rating and silently read a different column as the rating, while the
       // header-mutation tests never reached this guard because `assertColumns` threw first.
       // (Provenance: Codex adversarial review round 6 on PR #26.)
-      if (cells.length !== ROSTER_ROW_CELLS) {
+      if (cells.length !== columns.rowCells) {
         throw new ParseError(
-          `roster row has ${cells.length} cells, expected exactly ${ROSTER_ROW_CELLS}`,
+          `roster row has ${cells.length} cells, expected exactly ${columns.rowCells}`,
           `${ROSTER_SCOPE} tr td`,
           source.url,
         );
       }
-      const name = cells[0] ?? "";
+      const at = (field: RosterField): string => cells[columns.index[field]] ?? "";
+      const name = at("name");
       // A structurally valid row with no name is a page change, not an empty roster slot.
       // Filtering it away produced a plausible roster with a player quietly missing.
       // (Provenance: Codex adversarial review round 7 on PR #26.)
@@ -116,13 +207,13 @@ export function parseTennisRecordTeam(html: string, source: SourceRef): TennisRe
       }
       return {
         name,
-        location: cells[1] ?? null,
-        ntrp: parseNumber(cells[2]),
-        seasonRecord: parseWinLoss(cells[3]),
-        localSingles: parseWinLoss(cells[4]),
-        localDoubles: parseWinLoss(cells[5]),
-        localRecord: parseWinLoss(cells[6]),
-        dynamicRating: parseNumber(cells[7]),
+        location: at("location") || null,
+        ntrp: parseNumber(at("ntrp")),
+        seasonRecord: parseWinLoss(at("seasonRecord")),
+        localSingles: parseWinLoss(at("localSingles")),
+        localDoubles: parseWinLoss(at("localDoubles")),
+        localRecord: parseWinLoss(at("localRecord")),
+        dynamicRating: parseNumber(at("dynamicRating")),
         // The roster row's own href, unmodified — Phase 3's re-pull handle. A row with no link
         // (no `<a>` around the name) yields null, which the pipeline reports rather than skips.
         profilePath: $(tr).find("td").first().find("a").attr("href") ?? null,

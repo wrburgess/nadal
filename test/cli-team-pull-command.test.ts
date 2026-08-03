@@ -145,6 +145,33 @@ describe("tn team pull (end-to-end via dispatch)", () => {
     expect(logSpy.mock.calls[0]?.[0]).toMatch(/^team pull status=ok/);
   });
 
+  it("--from ingests a POSTSEASON team page end to end (#92)", async () => {
+    // The reported failure was at the command, not only in the parser: `tn team pull` refused the
+    // OK/Dickason page outright, so the HC could not scout a qualified opponent at all. Parser
+    // unit tests would not have caught a fix that stopped short of the dispatch path.
+    runMigrations();
+    const postseason = loadFixture("tennisrecord/team-postseason");
+    const raw = process.env.TN_RAW_PATH ?? "raw";
+    const savedPath = join(raw, "saved-postseason-team.html");
+    writeFileSync(savedPath, postseason.html, "utf8");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch([
+      "team",
+      "pull",
+      "tr:ignored",
+      "--from",
+      savedPath,
+      "--source-url",
+      postseason.source.url,
+    ]);
+
+    expect(code).toBe(0);
+    // The roster count is asserted, not just the status: a "success" that stored zero players
+    // would satisfy `status=ok` and still leave the opponent unscouted.
+    expect(logSpy.mock.calls[0]?.[0]).toMatch(/^team pull status=ok .*roster=18/);
+  });
+
   it("an unknown target exits 1 with a message on stderr and writes no team row", async () => {
     runMigrations();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);

@@ -1,0 +1,10 @@
+{
+  "sourceUrl": "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Norbury%2c%20Nova&year=2026&s=4",
+  "fetchedAt": "2026-07-30T16:39:50.647Z",
+  "httpStatus": 200,
+  "redacted": true,
+  "bytesBefore": 71933,
+  "bytesAfter": 73674,
+  "derivedFrom": "team.html",
+  "note": "DERIVED, not separately captured (issue #92). Built from the already-redacted team.html by inserting the three Postseason* roster columns in the position and with the header text MEASURED off the live OK/Dickason 2026 team page on 2026-08-03. No new identity enters the repo, so this file needs no redaction pass of its own -- every name in it is the stand-in vocabulary team.html already ships. Faithfulness was checked before the fix landed: this fixture reproduced the live page's ParseError verbatim, including its full 11-column list."
+}
