@@ -49,6 +49,7 @@ vi.mock("node:fs", async (importOriginal) => {
     closeSync: vi.fn(actual.closeSync),
     unlinkSync: vi.fn(actual.unlinkSync),
     fstatSync: vi.fn(actual.fstatSync),
+    fsyncSync: vi.fn(actual.fsyncSync),
   };
 });
 
@@ -635,6 +636,8 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
     vi.mocked(fsModule.writeSync).mockReset();
     vi.mocked(fsModule.closeSync).mockReset();
     vi.mocked(fsModule.unlinkSync).mockReset();
+    vi.mocked(fsModule.fstatSync).mockReset();
+    vi.mocked(fsModule.fsyncSync).mockReset();
   });
 
   // Isolates the COMPONENT-WALK check from the root-containment check (`isWithin(realRootNow,
@@ -787,6 +790,68 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #83 round 7, [critical], and the case the `linkSync`-pinned test
+  // above deliberately EXCLUDES. That test pins our inode so the replacement is guaranteed a
+  // different one — which proves the guard behaves when identity differs, and says nothing about the
+  // case where the allocator hands the replacement OUR recycled number. This is that case, and it is
+  // the one that used to delete someone else's file.
+  //
+  // The closure is ordering, not a better identity check: cleanup now unlinks WHILE THE FD IS STILL
+  // OPEN. An inode with a live descriptor can never be freed, so it can never be reallocated, so
+  // nothing else can be wearing its number at the moment of the check. No pin, no mock of the
+  // allocator — the property holds by construction on every filesystem, which is why this test does
+  // not need the `linkSync` its sibling does.
+  //
+  // **This test is only MEANINGFUL on a filesystem that actually recycles inode numbers**, and that
+  // is stated rather than glossed: on macOS/APFS it passes vacuously, and reverting the ordering to
+  // close-then-unlink does NOT turn it red there. Its authority comes from Linux/ext4 in CI — where
+  // this exact construction (unlink, immediately recreate, same directory) has already been OBSERVED
+  // deleting the replacement, which is what made it a CI failure on this PR rather than a
+  // hypothesis. So: green here proves little, green in CI proves the fix. Do not "simplify" it by
+  // mocking `lstatSync` to fake a recycled identity — the fix relies on the kernel's allocation
+  // guarantee, not on a code check, so a faked allocator would defeat the real fix too and the test
+  // would then pass against a broken implementation.
+  it("REGRESSION: a replacement that RECYCLES our inode number is still not deleted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-set-recycled");
+      mkdirSync(subDir, { recursive: true });
+      const leaf = join(subDir, "index.html");
+      const sidecar = `${leaf}.provenance.json`;
+
+      vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (typeof target === "string" && target.endsWith(".provenance.json")) {
+          // Deliberately NOT pinned: unlink and immediately recreate in the same directory, which is
+          // the allocation pattern that hands back the same inode number on ext4. Whether it does so
+          // on the machine running this test is not the point — the fix must make the outcome
+          // identical either way, which is what the assertions below check.
+          unlinkSync(leaf);
+          writeFileSync(leaf, "SOMEONE ELSE'S DATA", "utf8");
+          throw new Error("simulated provenance open failure");
+        }
+        return (realOpenSync as unknown as (...a: unknown[]) => number)(target, ...rest);
+      }) as unknown as typeof fsModule.openSync);
+
+      try {
+        expect(() =>
+          writeNewOutputFileSet(root, "reports", [
+            { candidatePath: leaf, content: "OURS" },
+            { candidatePath: sidecar, content: '{"redacted":false}' },
+          ]),
+        ).toThrow("simulated provenance open failure");
+      } finally {
+        vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+      }
+
+      // Survives even if the allocator recycled our number into it.
+      expect(existsSync(leaf)).toBe(true);
+      expect(readFileSync(leaf, "utf8")).toBe("SOMEONE ELSE'S DATA");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -946,26 +1011,53 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
   // primitive, so `writeNewOutputFile` had the identical hole — the largest recurring class in this
   // repo is "fixed the named instance, not the class", and one test per caller is what keeps it
   // fixed. Removing the close's `try`/`catch` fails this test and the set-writer one together.
-  it("REGRESSION: a CLOSE that fails after a successful write leaves no file behind", async () => {
+  it("REGRESSION: an FSYNC that fails (deferred writeback error) leaves no file behind", () => {
     const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
-    const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
     try {
-      const subDir = join(root, "team-close-fails");
+      const subDir = join(root, "team-fsync-fails");
       mkdirSync(subDir, { recursive: true });
       const candidate = join(subDir, "index.html");
 
-      // Closes for real, THEN reports failure — a deferred writeback error releases the descriptor
-      // and is still a real error. That ordering is what makes a re-close a double-close.
-      vi.mocked(fsModule.closeSync).mockImplementationOnce(((fd: number) => {
-        realCloseSync(fd);
-        throw new Error("simulated close failure (deferred writeback error)");
-      }) as unknown as typeof fsModule.closeSync);
+      vi.mocked(fsModule.fsyncSync).mockImplementationOnce(() => {
+        throw new Error("simulated fsync failure (deferred writeback error)");
+      });
 
       expect(() => writeNewOutputFile(root, candidate, "reports", "CONTENT THAT MUST NOT SURVIVE")).toThrow(
-        "simulated close failure",
+        "simulated fsync failure",
       );
       expect(existsSync(candidate)).toBe(false);
       expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The other side of that boundary, and it is deliberately the OPPOSITE outcome. Once `fsync` has
+  // returned successfully the bytes are durable, so a later `close` failure is a descriptor problem
+  // rather than a data one — and by then the descriptor is gone, so `unlinkIfStillOurs` can no longer
+  // prove the path names our inode (the number may already have been recycled into someone else's
+  // file). Deleting by that path would be the round-7 [critical] data loss. So the file STAYS, and
+  // this test pins that as intended behavior rather than leaving it to be "fixed" later by someone
+  // reading the earlier close-failure test and assuming symmetry.
+  it("a CLOSE that fails AFTER a durable fsync leaves the completed file in place", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    try {
+      const subDir = join(root, "team-close-after-fsync");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.closeSync).mockImplementationOnce(((fd: number) => {
+        realCloseSync(fd);
+        throw new Error("simulated close failure (EBADF)");
+      }) as unknown as typeof fsModule.closeSync);
+
+      expect(() => writeNewOutputFile(root, candidate, "reports", "DURABLE CONTENT")).toThrow(
+        "simulated close failure",
+      );
+      // Durable and complete — kept, not destroyed by a path this module can no longer prove it owns.
+      expect(existsSync(candidate)).toBe(true);
+      expect(readFileSync(candidate, "utf8")).toBe("DURABLE CONTENT");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1099,6 +1191,8 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
     vi.mocked(fsModule.writeSync).mockReset();
     vi.mocked(fsModule.closeSync).mockReset();
     vi.mocked(fsModule.unlinkSync).mockReset();
+    vi.mocked(fsModule.fstatSync).mockReset();
+    vi.mocked(fsModule.fsyncSync).mockReset();
   });
 
   it("writes every leaf and returns their real paths in the order given", () => {
@@ -1246,25 +1340,25 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
   // handler never ran, and — because the function threw before returning — it was never recorded in
   // the set writer's `written` list either, so the reverse walk could not reach it. The result was the
   // orphan this whole PR exists to remove, one leaf further along.
-  it("REGRESSION: a leaf whose CLOSE fails is rolled back too, along with the leaves before it", async () => {
+  it("REGRESSION: a leaf whose FSYNC fails is rolled back too, along with the leaves before it", async () => {
     const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
-    const { closeSync: realCloseSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const { fsyncSync: realFsyncSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
     try {
-      const subDir = join(root, "team-set-close-fails");
+      const subDir = join(root, "team-set-fsync-fails");
       mkdirSync(subDir, { recursive: true });
       const leaf = join(subDir, "index.html");
       const sidecar = `${leaf}.provenance.json`;
 
-      // The first leaf closes normally; the second closes AND THEN reports failure — the real shape
-      // of a deferred writeback error, where the descriptor is genuinely released and the error is
-      // still real. Closing for real matters: it is what makes a second close a double-close, which
-      // is why the fix must not simply re-close.
-      let closes = 0;
-      vi.mocked(fsModule.closeSync).mockImplementation(((fd: number) => {
-        closes += 1;
-        realCloseSync(fd);
-        if (closes > 1) throw new Error("simulated close failure (deferred writeback error)");
-      }) as unknown as typeof fsModule.closeSync);
+      // The first leaf syncs normally; the second reports a deferred writeback error. This is the
+      // domain that used to arrive at `close` — too late for sound cleanup, since the descriptor was
+      // already gone by then. Reaching it at `fsync` is what lets BOTH leaves be rolled back with the
+      // first leaf's descriptor still held, which is what makes its identity check trustworthy.
+      let syncs = 0;
+      vi.mocked(fsModule.fsyncSync).mockImplementation(((fd: number) => {
+        syncs += 1;
+        if (syncs > 1) throw new Error("simulated fsync failure (deferred writeback error)");
+        realFsyncSync(fd);
+      }) as unknown as typeof fsModule.fsyncSync);
 
       try {
         expect(() =>
@@ -1272,12 +1366,12 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
             { candidatePath: leaf, content: "UN-REDACTED CAPTURE" },
             { candidatePath: sidecar, content: '{"redacted":false}' },
           ]),
-        ).toThrow("simulated close failure");
+        ).toThrow("simulated fsync failure");
       } finally {
-        vi.mocked(fsModule.closeSync).mockImplementation(realCloseSync);
+        vi.mocked(fsModule.fsyncSync).mockImplementation(realFsyncSync);
       }
 
-      // NEITHER leaf survives: not the one whose close failed, and not the one written before it.
+      // NEITHER leaf survives: not the one whose sync failed, and not the one written before it.
       expect(readdirSync(subDir)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
