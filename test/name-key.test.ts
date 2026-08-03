@@ -265,9 +265,12 @@ describe("nameKey", () => {
   });
 
   it("is NOT over-greedy: distinct names stay distinct under the wider fold", () => {
-    // The dangerous direction. A fold that splits one person is loud — the ladder reports
-    // `ambiguous`. A fold that MERGES two people is silent, and spec § Ingestion forbids it
-    // outright. Nothing else in this suite would catch an over-merge, so it is asserted directly.
+    // The dangerous direction. A fold that MERGES two people is silent ALWAYS and unrecoverable; a
+    // fold that splits one person is silent only SOMETIMES — the ladder reports `ambiguous` while
+    // the difference stays inside FUZZY_MAX_DISTANCE, and creates a second row without a word past
+    // it. (Stated carefully because an earlier draft claimed splits are simply "loud", which the
+    // merge-gate review disproved against this suite's own Hangul residual test.) Nothing else here
+    // would catch an over-merge, so it is asserted directly.
     expect(namesEqual("Ｏ’Brien", "O'Brien")).toBe(false); // curly vs straight apostrophe: a different class, deliberately not folded
     expect(namesEqual("Anne-Marie", "Anne" + SHY + "Marie")).toBe(false); // real hyphen vs soft hyphen
     expect(namesEqual("Alex Stone", "Alex Stove")).toBe(false);

@@ -66,7 +66,14 @@ import type { Db } from "../ingest/db-types.js";
  * residuals **named**, on the argument that every one of them lives in a script a Springfield,
  * Illinois USTA league roster does not contain.
  *
- * **Still SPLIT (two identities for one visible name) — the safe failure, because it is loud:**
+ * **Still SPLIT (two identities for one visible name).** Do not read this as the harmless column —
+ * an earlier draft of this very block called it "the safe failure, because it is loud" and that was
+ * FALSE, caught at the merge gate. A split is loud only while the fuzzy tier can still see it: one
+ * or two invisible characters leave an `editDistance` inside `FUZZY_MAX_DISTANCE`, so the ladder
+ * reports `ambiguous` and a human is asked — but **three or more push it past the band and the row
+ * is created silently**, which is the same silent-duplicate threshold this whole change exists to
+ * close. `test/identity-format-characters.test.ts` pins exactly that: three Hangul fillers produce a
+ * second player row and nothing says so. These are accepted on **reachability**, and on nothing else.
  *
  * - **LINE SEPARATOR U+2028** — `Zl` with `White_Space`; it renders as a break.
  * - **The Hangul fillers U+115F/U+1160/U+3164/U+FFA0**, **the Mongolian controls U+180B–U+180F**,
@@ -163,10 +170,12 @@ import type { Db } from "../ingest/db-types.js";
  * reopening this very defect. Per character, the override is stripped (its script is `Common`) while
  * the Mongolian character is kept (its script is not). Pinned by an ANTI-BYPASS test.
  *
- * Both qualifiers exist for the same reason: a FALSE MERGE is the silent direction. A fold that
- * splits one person is loud — the ladder reports `ambiguous` — while a fold that merges two people
- * says nothing at all, which is why every revision of this class ships with assertions that specific
- * things still fold APART.
+ * Both qualifiers exist for the same reason: a false merge is **never** recoverable and **never**
+ * announced, whereas a split is *sometimes* announced — the ladder reports `ambiguous` while the
+ * difference stays inside `FUZZY_MAX_DISTANCE`, and creates a second row silently past it. So the
+ * asymmetry is real but weaker than "split is safe": it is that a merge is silent ALWAYS and a split
+ * is silent only SOMETIMES. That is why every revision of this class ships with assertions that
+ * specific things still fold APART.
  *
  * Checked rather than assumed, and asserted in `test/name-key.test.ts` over the whole code-point
  * space: **no `\p{Cf}` character carries `White_Space`**, so the subtraction takes nothing away from
