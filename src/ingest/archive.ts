@@ -86,11 +86,18 @@ function nextTimestamp(): string {
  *    orphaned. Both leaves now go through `writeNewOutputFileSet`, which removes the already-written
  *    ones (via the inode-verified unlink, never a bare `unlinkSync`) and rethrows the original error.
  * 3. **The pair is still NOT atomic, and this comment does not claim it is.** Rollback is
- *    best-effort, and the exact set of things that can still be left on disk is stated **once**, in
- *    `writeNewOutputFileSet`'s doc comment — deliberately not restated here. Two review rounds on
- *    PR #83 each falsified a *re-enumeration* of those residuals that had drifted from the code, so
- *    the list lives in one place and every caller points at it rather than keeping a copy that can
- *    go stale. Read it there before relying on what a refusal leaves behind.
+ *    best-effort. What the *write set* can leave behind is stated **once**, in
+ *    `writeNewOutputFileSet`'s doc comment — deliberately not restated here, because four review
+ *    rounds on PR #83 each falsified a *re-enumeration* of it. Read it there.
+ * 4. **This function's own residue, which that list does not cover and by design cannot.**
+ *    `mkdirSync(dir)` below runs BEFORE the write set and is never undone, so a refusal — including
+ *    one on the very first leaf — leaves an empty `{rawRoot}/{sourceSet}/` directory that was not
+ *    there before. It is deliberately not cleaned up: it is empty, it sits inside the already
+ *    validated root, the next successful archive to the same source set reuses it, and removing a
+ *    directory another process may be concurrently writing into is a worse failure than leaving an
+ *    empty one. Documented here rather than in the writer because the writer never learns this
+ *    directory exists — the residual contract there is bounded by ownership, and this is ours
+ *    (Codex adversarial review, PR #83, final merge-gate pass).
  */
 export function archivePage(input: ArchivePageInput): string {
   const fetchedAt = nextTimestamp();

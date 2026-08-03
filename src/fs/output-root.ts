@@ -429,9 +429,15 @@ function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): vo
  * pedantry: a hard link created after the `nlink` sample below gives the SAME inode a second name,
  * which may be outside the root. Redirection is closed; exclusivity is sampled, not held.
  *
- * On ANY verification failure the newly-opened fd is closed and the (very likely empty, since the
- * caller has not written anything through it yet) file it created is best-effort unlinked, so a
- * refused open leaves no half-open resource and no stray empty file where a symlink pointed.
+ * On ANY verification failure the newly-opened fd is **close-attempted** and the (very likely empty,
+ * since the caller has not written anything through it yet) file it created is best-effort unlinked.
+ * Both qualifiers are load-bearing and neither may be dropped: cleanup closes through
+ * `closeQuietly`, which swallows a failing close, and unlinks through `unlinkIfStillOurs`, which
+ * skips an inode that is no longer ours. So a refused open leaves no stray content — not "no
+ * resource at all", which is what this sentence used to say (Codex adversarial review, PR #83, final
+ * merge-gate pass: the earlier round's precision sweep corrected six sites and missed this one,
+ * because the grep looked for "the fd is closed" and this reads "the newly-opened fd is closed").
+ * `writeNewOutputFileSet`'s residual list is the canonical statement of what survives.
  */
 export function openNewOutputFileSafely(
   root: string,
@@ -708,11 +714,19 @@ function writeThroughVerifiedFd(
  *   and it is listed here because a residual list that covered only files read as complete while
  *   omitting a whole KIND of residue (Codex adversarial review, PR #83 fix-verification pass 2).
  *
- * **This list is the canonical statement of what is left behind** — callers reference it rather than
- * restating it. Three rounds of review on this PR each falsified a *re-enumeration* of these
- * residuals: two that had drifted from the code, and one that enumerated only on-disk residue. So the
- * residuals are recorded in exactly one place on purpose, and the list is over *kinds* of residue
- * (files, descriptors) rather than over the failures that produce them.
+ * **This list is canonical for what THIS FUNCTION leaves behind** — the leaves it wrote and the
+ * descriptors it opened — and callers reference it rather than restating it. Its scope is bounded by
+ * OWNERSHIP, not by kind: anything a caller created before calling (a parent directory it `mkdir`ed,
+ * a lock file, a temp area) is that caller's residue and belongs in the caller's own comment, because
+ * this function never learns it exists and cannot speak for it. `src/ingest/archive.ts` documents its
+ * own `mkdirSync` that way.
+ *
+ * That ownership bound is deliberate and replaced a by-kind list. Four review rounds on this PR each
+ * falsified a *re-enumeration* of these residuals — two had drifted from the code, one covered only
+ * files and omitted descriptors, and one omitted directories a caller had created — which is the
+ * signature of a list that cannot be finished by adding another entry. "Everything this function
+ * created and did not remove" is answerable from the code; "every kind of thing that can be left
+ * anywhere" is not.
  *
  * It also does NOT re-run `assertOutputPathSafe` on the leaves, exactly as `writeNewOutputFile` does
  * not: pre-validating the candidate paths stays CALLER policy (the layering is unchanged, not

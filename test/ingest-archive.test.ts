@@ -446,4 +446,42 @@ describe("archivePage pair integrity: a refusal on the SECOND leaf must not orph
     // file under ANY name — including a partial or a temp artifact — fails this.
     expect(readdirSync(join(resolve(rawRoot()), "tennisrecord"))).toEqual([]);
   });
+
+  // Codex adversarial review, PR #83 final merge-gate pass, [medium]. `archivePage` runs
+  // `mkdirSync(dir)` BEFORE the write set, and nothing undoes it — so a refusal leaves an empty
+  // source-set directory that did not exist before. That is documented as this function's own
+  // residue (the write set's residual contract is bounded by ownership and cannot cover it), and a
+  // documented behavior nothing checks is exactly the prose claim this PR has spent four rounds
+  // correcting. So it is pinned here: the assertion is that the directory REMAINS and is EMPTY —
+  // if a future change starts cleaning it up, this test must be updated deliberately rather than
+  // the comment silently going stale.
+  it("leaves the source-set directory it created — empty — when the FIRST leaf is refused", async () => {
+    const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const sourceSetDir = join(resolve(rawRoot()), "usta");
+
+    // It genuinely does not exist yet: `archivePage` is what creates it, which is what makes it
+    // residue rather than something that was already there.
+    expect(existsSync(sourceSetDir)).toBe(false);
+
+    vi.mocked(fsModule.openSync).mockImplementationOnce(() => {
+      throw new Error("simulated first-leaf open failure");
+    });
+
+    try {
+      expect(() =>
+        archivePage({
+          sourceSet: "usta",
+          slug: "first-leaf-refused",
+          url: "https://example.test/profile",
+          body: "UN-REDACTED CAPTURE",
+          httpStatus: 200,
+        }),
+      ).toThrow("simulated first-leaf open failure");
+    } finally {
+      vi.mocked(fsModule.openSync).mockImplementation(realOpenSync);
+    }
+
+    expect(existsSync(sourceSetDir)).toBe(true);
+    expect(readdirSync(sourceSetDir)).toEqual([]);
+  });
 });
