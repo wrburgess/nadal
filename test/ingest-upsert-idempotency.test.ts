@@ -944,6 +944,85 @@ describe("id-less key domains are disjoint", () => {
     expect(normalizeTimeKey("9:00 AM").startsWith("clock:")).toBe(true);
   });
 
+  // Issue #66. Every assertion above is RELATIONAL (`not.toBe`), so none of them pins the sentinel's
+  // actual value — `NULL_KEY = ""` passes all of them. That mattered when #66 rewrote the literal
+  // from a raw 0x00 byte to the `\u0000` escape: the change is byte-identical at runtime, and
+  // these are the assertions that turn "byte-identical" from a claim into a measurement. They were
+  // written BEFORE that edit and run green at both commits, which is the evidence, not a weakness.
+  //
+  // Escape, never a literal byte — a raw 0x00 here would make THIS file binary and drop it out of
+  // every recursive grep, which is the exact defect #66 is about.
+  const NULL_SENTINEL = "\u0000null";
+
+  it("pins the null sentinel's exact value, in both normalizers", () => {
+    expect(normalizeTimeKey(null)).toBe(NULL_SENTINEL);
+    expect(normalizeSiteKey(null)).toBe(NULL_SENTINEL);
+    expect(normalizeTimeKey(undefined)).toBe(NULL_SENTINEL);
+    expect(normalizeSiteKey(undefined)).toBe(NULL_SENTINEL);
+    // One sentinel shared by both, not two values that happen to be spelled the same.
+    expect(normalizeTimeKey(null)).toBe(normalizeSiteKey(null));
+  });
+
+  it("REGRESSION: no non-null input can produce the null sentinel", () => {
+    // The disjointness the doc comment above `NULL_KEY` argues for, asserted rather than trusted.
+    // `"\u0000null"` AS AN INPUT is the adversarial case: a hostile page rendering the sentinel
+    // itself must not be able to claim the null identity.
+    const inputs = ["—", "---", "", " ", "TBD", "null", "NULL", NULL_SENTINEL, "9:00 AM", "0"];
+    for (const input of inputs) {
+      expect(normalizeTimeKey(input), `normalizeTimeKey(${JSON.stringify(input)})`).not.toBe(
+        NULL_SENTINEL,
+      );
+      expect(normalizeSiteKey(input), `normalizeSiteKey(${JSON.stringify(input)})`).not.toBe(
+        NULL_SENTINEL,
+      );
+    }
+  });
+
+  it("REGRESSION: every non-null key is prefix-tagged, which is WHY the sentinel is unreachable", () => {
+    // The structural reason the test above holds for inputs nobody thought to list: the sentinel
+    // carries no `raw:`/`lit:`/`clock:` tag, and every other return path does. Asserting the
+    // property beats extending the input list, which can only ever enumerate what is already known.
+    const inputs = ["—", "---", "", " ", "TBD", "null", NULL_SENTINEL, "9:00 AM", "12:00 pm", "0"];
+    const tags = ["raw:", "lit:", "clock:"];
+    for (const input of inputs) {
+      for (const [name, key] of [
+        ["normalizeTimeKey", normalizeTimeKey(input)],
+        ["normalizeSiteKey", normalizeSiteKey(input)],
+      ] as const) {
+        expect(
+          tags.some((t) => key.startsWith(t)),
+          `${name}(${JSON.stringify(input)}) returned ${JSON.stringify(key)}, which carries no key-domain tag`,
+        ).toBe(true);
+      }
+    }
+    // ...and the sentinel itself carries none of them, which is what makes the domains disjoint.
+    expect(tags.some((t) => NULL_SENTINEL.startsWith(t))).toBe(false);
+
+    // A SWEEP, not another list. The comment above claims this holds "for inputs nobody thought to
+    // list" — a fixed array cannot support that claim, and a comment asserting coverage the code
+    // does not enforce is its own defect class (rules/testing.md -> Anti-Patterns). Every code point
+    // through U+02FF, which includes U+0000 ITSELF (the sentinel's own character), built with
+    // `String.fromCharCode` so no escape has to survive to disk — the trap #66 is about.
+    for (let cp = 0; cp <= 0x2ff; cp += 1) {
+      const c = String.fromCharCode(cp);
+      // The bare character, and both ways it can be glued to the sentinel's tail. `c + "null"` at
+      // cp 0 IS the sentinel, so this sweep re-enters the adversarial case from every direction.
+      for (const input of [c, `${c}null`, `null${c}`]) {
+        const where = `U+${cp.toString(16).padStart(4, "0")} as ${JSON.stringify(input)}`;
+        for (const [name, key] of [
+          ["normalizeTimeKey", normalizeTimeKey(input)],
+          ["normalizeSiteKey", normalizeSiteKey(input)],
+        ] as const) {
+          expect(key, `${name}(${where}) collided with the null sentinel`).not.toBe(NULL_SENTINEL);
+          expect(
+            tags.some((t) => key.startsWith(t)),
+            `${name}(${where}) returned ${JSON.stringify(key)}, which carries no key-domain tag`,
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
   it("REGRESSION: a dash-timed fixture and a null-timed fixture stay two rows", () => {
     runMigrations();
     const { db, sqlite } = openDb();
