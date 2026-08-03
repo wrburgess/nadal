@@ -451,7 +451,26 @@ export function openNewOutputFileSafely(
   // to prove that whatever `realPath` names at cleanup time is still the file this call created,
   // rather than an unrelated file an attacker has since arranged to sit there. `dev`/`ino` are fixed
   // for the life of an fd, so this snapshot stays valid however verification goes.
-  const openedStat = fstatSync(fd);
+  //
+  // This capture is itself a failure domain, and it used to be the only post-open one with no
+  // handler: a throw here escaped before the cleanup `try` below began, leaking the descriptor
+  // outright and leaving the empty file `wx` had just created — and, for a multi-leaf caller,
+  // escaping before any value was returned, so the leaf was never recorded and rollback could not
+  // reach it (Codex adversarial review, PR #83 fix-verification pass 1, [high]).
+  //
+  // The handler closes the fd and DELIBERATELY LEAVES THE FILE. The asymmetry with every other
+  // cleanup path in this module is load-bearing, not an omission: `unlinkIfStillOurs` needs exactly
+  // the `{dev, ino}` this call just failed to obtain, so there is no identity to check the path
+  // against — and unlinking a path this module cannot prove it owns is the PR #48 [critical]
+  // data-loss bug, where cleanup followed a swapped component and destroyed an unrelated file. An
+  // empty file inside the already-validated root is the strictly safer of the two failures.
+  let openedStat: ReturnType<typeof fstatSync>;
+  try {
+    openedStat = fstatSync(fd);
+  } catch (err) {
+    closeQuietly(fd);
+    throw err;
+  }
 
   try {
     // Containment is checked BEFORE the component walk (Codex adversarial review, PR #48, [low]).
@@ -532,16 +551,25 @@ export function openNewOutputFileSafely(
  * every path check, the `O_CREAT|O_EXCL` open, and the post-open verification above are unchanged
  * either way; only the bytes handed to the write loop differ.
  *
- * **Any** throw past the open best-effort unlinks `realPath` so no partial file survives, then
- * rethrows the ORIGINAL error (mirrors `overwriteOutputFile`'s existing cleanup shape below: a
- * cleanup failure must never mask the real one). Stated as "any throw" rather than as a list of the
- * three failure domains, deliberately: the previous wording enumerated the verification and the
- * `writeSync` failure and thereby described `closeSync` — the third domain, and the one where
- * deferred writeback errors actually surface — as covered when it was not (Codex adversarial review,
- * PR #83, [high]). An enumeration that reads as complete is exactly how that gap stayed invisible;
- * see `writeThroughVerifiedFd`'s comment on why the close's cleanup nonetheless differs in shape.
- * `openNewOutputFileSafely` already cleans up after itself on a verification failure, so this has its
- * own cleanup to do only for the write and close steps.
+ * **The cleanup guarantee is bounded by where the file's IDENTITY is captured**, and is stated that
+ * way rather than as a count of failure domains or as a universal over "any throw" — two earlier
+ * wordings of this paragraph were each falsified by the next review round, the first by enumerating
+ * two of three domains and the second by asserting a quantifier one path did not satisfy (Codex
+ * adversarial review, PR #83, [high] both times). Deriving the bound from the structure is what stops
+ * a third:
+ *
+ * - **Before** `openNewOutputFileSafely` captures `{dev, ino}` — i.e. a throw from the open itself or
+ *   from the `fstatSync` that captures it — the fd is closed and the (empty) file is **left**, since
+ *   nothing can prove which inode `realPath` names. This module never unlinks a path it cannot prove
+ *   it owns; see that function's own comment.
+ * - **After** the capture — every verification, the write loop, and the close — the fd is closed and
+ *   `realPath` is best-effort unlinked (best-effort in `unlinkIfStillOurs`'s precise sense), then the
+ *   ORIGINAL error is rethrown. Mirrors `overwriteOutputFile`'s cleanup shape below: a cleanup
+ *   failure must never mask the real one.
+ *
+ * So the honest one-liner is *"once we know what we created, we clean it up"* — not *"nothing is ever
+ * left behind"*. See `writeThroughVerifiedFd` for why the close's cleanup, though on the covered side
+ * of that line, still differs in shape from the write's.
  */
 export function writeNewOutputFile(
   root: string,
@@ -658,6 +686,14 @@ function writeThroughVerifiedFd(
  *   this one — so an actor who has already replaced a written leaf keeps it.
  * - A crash, a `SIGKILL`, or a power loss between two leaves rolls back nothing at all. No
  *   userspace-only writer can promise otherwise.
+ * - A leaf that fails **before its identity is captured** (the open, or the `fstatSync` that captures
+ *   it) is never recorded here at all, so the walk cannot reach it — and by design nothing else
+ *   removes it either, because no identity exists to check a path against. `writeNewOutputFile`'s doc
+ *   comment above states that boundary once; this is the same line, seen from the set.
+ *
+ * **This list is the canonical statement of what is left behind** — callers reference it rather than
+ * restating it. Two rounds of review on this PR each falsified a *re-enumeration* of these residuals
+ * that had drifted from the code, so the residuals are recorded in exactly one place on purpose.
  *
  * It also does NOT re-run `assertOutputPathSafe` on the leaves, exactly as `writeNewOutputFile` does
  * not: pre-validating the candidate paths stays CALLER policy (the layering is unchanged, not

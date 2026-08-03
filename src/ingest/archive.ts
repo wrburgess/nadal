@@ -86,9 +86,11 @@ function nextTimestamp(): string {
  *    orphaned. Both leaves now go through `writeNewOutputFileSet`, which removes the already-written
  *    ones (via the inode-verified unlink, never a bare `unlinkSync`) and rethrows the original error.
  * 3. **The pair is still NOT atomic, and this comment does not claim it is.** Rollback is
- *    best-effort: a leaf whose inode no longer matches the one this call created is deliberately
- *    skipped (PR #48's fix, not a gap here), and a crash or `SIGKILL` between the two leaves rolls
- *    back nothing. See `writeNewOutputFileSet`'s doc comment for the precise statement.
+ *    best-effort, and the exact set of things that can still be left on disk is stated **once**, in
+ *    `writeNewOutputFileSet`'s doc comment — deliberately not restated here. Two review rounds on
+ *    PR #83 each falsified a *re-enumeration* of those residuals that had drifted from the code, so
+ *    the list lives in one place and every caller points at it rather than keeping a copy that can
+ *    go stale. Read it there before relying on what a refusal leaves behind.
  */
 export function archivePage(input: ArchivePageInput): string {
   const fetchedAt = nextTimestamp();

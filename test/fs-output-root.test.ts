@@ -48,6 +48,7 @@ vi.mock("node:fs", async (importOriginal) => {
     writeSync: vi.fn(actual.writeSync),
     closeSync: vi.fn(actual.closeSync),
     unlinkSync: vi.fn(actual.unlinkSync),
+    fstatSync: vi.fn(actual.fstatSync),
   };
 });
 
@@ -895,6 +896,43 @@ describe("openNewOutputFileSafely / writeNewOutputFile (#33 fd-anchored write)",
       );
       expect(existsSync(candidate)).toBe(false);
       expect(readdirSync(subDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Codex adversarial review, PR #83 fix-verification pass 1, [high]. The FOURTH failure domain, and
+  // the earliest: `fstatSync` captures the fd's identity, and it ran BEFORE the cleanup `try` began.
+  // A throw there leaked the descriptor entirely and left the empty file `wx` had just created — and
+  // because the throw escaped before any value was returned, a multi-leaf caller never recorded the
+  // leaf either, so rollback could not reach it.
+  //
+  // The fix closes the fd and DELIBERATELY LEAVES THE FILE. That asymmetry is the point, not an
+  // oversight: `unlinkIfStillOurs` needs the `{dev, ino}` this very call failed to obtain, so there
+  // is no identity to check against, and the one thing this module must never do is unlink a path it
+  // cannot prove it owns — that bare unlink is the PR #48 [critical] data-loss bug. An empty file
+  // inside the validated root is the strictly safer failure than deleting an unknown one.
+  it("REGRESSION: a failure of the identity-capturing fstat closes the fd rather than leaking it, and unlinks nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "tn-fd-root-"));
+    try {
+      const subDir = join(root, "team-fstat-fails");
+      mkdirSync(subDir, { recursive: true });
+      const candidate = join(subDir, "index.html");
+
+      vi.mocked(fsModule.fstatSync).mockImplementationOnce(() => {
+        throw new Error("simulated fstat failure (EIO)");
+      });
+
+      expect(() => openNewOutputFileSafely(root, candidate, "reports")).toThrow("simulated fstat failure");
+
+      // The descriptor is released, not leaked — the assertion that would fail if the fix were
+      // reverted to a bare rethrow.
+      expect(vi.mocked(fsModule.closeSync)).toHaveBeenCalledTimes(1);
+      // And nothing is deleted, because nothing proved ownership. The empty leaf is the documented,
+      // deliberate residue.
+      expect(vi.mocked(fsModule.unlinkSync)).not.toHaveBeenCalled();
+      expect(existsSync(candidate)).toBe(true);
+      expect(readFileSync(candidate, "utf8")).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
