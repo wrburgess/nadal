@@ -122,12 +122,16 @@ navigate.
 
 Second, and this one is a **safety** obstacle rather than a mechanical one: its WebForms pages embed
 **session credentials** — a real league page carries a 172-character `hdnCSRFToken` and a
-14,420-character `__VIEWSTATE` — and **nothing in this pipeline removes them.** Neither the
-substitution map (built from scouting subjects, not from the operator), nor `NEVER_PUBLISH` (email,
-phone, address), nor the per-source detectors model that class. Removal is **manual**: see the runbook's
-step 4 for the scrub to run **before** the capture, and [#80](https://github.com/wrburgess/nadal/issues/80)
-for why an automated control was attempted and withdrawn. Do **not** clear an allow-list refusal by
-adding a long opaque string to a vocabulary file — that is how a live token would get committed.
+14,420-character `__VIEWSTATE`. Neither the substitution map (built from scouting subjects, not from
+the operator), nor `NEVER_PUBLISH` (email, phone, address), nor the per-source detectors model that
+class — those are unrelated controls. `assertNoSessionCredentials` (`tools/redact-fixture.ts`) now
+**refuses** a capture whose output still carries one, run first inside `redact()`, before the
+allow-list ever sees it — see [#80](https://github.com/wrburgess/nadal/issues/80). It is a refusal,
+not a removal: **nothing in this pipeline removes a session credential**, its naming-convention list
+is not exhaustive, and its opaque-token shape check has a 64-character threshold. Removal is still
+**manual**: see the runbook's step 4 for the scrub to run **before** the capture. Do **not** clear a
+session-credential refusal by adding the named token to a vocabulary file — that is how a live token
+would get committed, and it is the specific failure mode #80 closes.
 
 What remains open beyond that is the parser work itself
 ([#27](https://github.com/wrburgess/nadal/issues/27)), which is corroborative — TennisRecord already

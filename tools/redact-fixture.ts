@@ -15,7 +15,7 @@
  */
 
 import * as cheerio from "cheerio";
-import type { AnyNode } from "domhandler";
+import type { AnyNode, ChildNode, Element } from "domhandler";
 // Deliberately circular with tools/fixture-policy.ts, which imports normalisation helpers back
 // from this module. Both references are used only inside function BODIES (never at module-scope
 // evaluation), which is the shape Node's ESM loader resolves without a "before initialization"
@@ -511,6 +511,305 @@ const NEVER_PUBLISH: { name: string; pattern: RegExp }[] = [
 ];
 
 /**
+ * Naming conventions for a CSRF/anti-forgery/view-state field, lowercased. Matched against a
+ * lowercased `name`/`id`, never against markup — see `assertNoSessionCredentials` below.
+ *
+ * NOT EXHAUSTIVE. This is the set of conventions this project has met (ASP.NET WebForms, Rails,
+ * Django, Laravel, Express, generic `_token`); a framework this project has not yet captured a
+ * page from can use a name outside this list. Signal 3 (shape) exists precisely because this list
+ * cannot be complete.
+ */
+const SESSION_CREDENTIAL_NAME_MARKERS = [
+  "csrf",
+  "xsrf",
+  "viewstate",
+  "eventvalidation",
+  "authenticity_token",
+  "_token",
+  "requestverification",
+];
+
+/** `type` values whose `value` is a visible button label, never a credential. */
+const EXEMPT_INPUT_TYPES = new Set(["submit", "button", "reset", "image"]);
+
+/**
+ * An opaque-token shape: only base64/URL-safe-base64 characters, 64 or more of them, anchored so
+ * the WHOLE value must match. A URL, a JSON blob, or prose all fail this — punctuation, spaces and
+ * short values pass through untouched. THIS IS A THRESHOLD, not a certainty: a short unnamed
+ * opaque token (under 64 characters) passes signal 3 and is caught only if signal 2's name list
+ * happens to match it.
+ */
+const OPAQUE_TOKEN_SHAPE = /^[A-Za-z0-9+/=._-]{64,}$/;
+
+/**
+ * The only `http-equiv` value exempt from the shape signal (signal 3), lowercased.
+ *
+ * A Chrome origin-trial token is long, base64, and therefore shape-positive — but it is signed and
+ * **origin-bound, not session-bound**: it is served to every visitor of the domain, so it is public
+ * by construction and carries none of the capturing operator's state.
+ *
+ * **Enumerated deliberately, and kept to what was measured.** Every other `http-equiv` value gets
+ * the shape check, `set-cookie` explicitly included — that one is deprecated but, where it appears,
+ * carries literal session state, so exempting the whole `http-equiv` vocabulary would fail open on
+ * exactly the case this module exists to catch. Measured over the committed corpus (the same method
+ * that settled signal 1): all 10 shape-positive `<meta>` elements in `test/fixtures/` are
+ * `http-equiv="origin-trial"`, so this one-value exemption removes every false refusal the corpus
+ * actually produces without widening the rule past the evidence for it.
+ */
+const SHAPE_EXEMPT_HTTP_EQUIV = "origin-trial";
+
+/**
+ * Text that still looks like an in-scope element, and so must be re-parsed rather than trusted as
+ * text — the trigger for the raw-text sweep in `assertNoSessionCredentials`.
+ *
+ * **Why this exists.** An element selector only sees *elements*, and HTML has containers whose
+ * contents the parser produces as **text** no matter what they look like: `<noscript>` (RAWTEXT
+ * while scripting is enabled, which is cheerio's default), `<textarea>` and `<title>` (RCDATA in
+ * every mode), `<iframe>`, `<noframes>`, `<noembed>`, `<xmp>`. A real
+ * `<input type="hidden" name="__VIEWSTATE" value="…">` inside any of them is invisible to
+ * `$("input, meta")`, and — measured — five of those seven then carried the token all the way
+ * through `redact()` into the returned bytes.
+ *
+ * **Why a trigger on the text rather than a list of container names.** The container list is the
+ * enumeration, and enumerations fail at their edges — the recurring shape this project has logged
+ * repeatedly. Asking instead *"is there text here that would be an in-scope element if it were
+ * parsed?"* derives the guard from the structure of the problem: whatever container hid it, and
+ * however deeply nested, the hidden markup still has to look like markup to matter.
+ *
+ * Over-matching is safe and deliberate: a false trigger costs one extra fragment parse that finds
+ * nothing. Under-matching is the only dangerous direction, so this pattern is loose on purpose.
+ * (Provenance: Codex adversarial review on PR #86 found the `<noscript>` instance; measuring it
+ * showed six containers affected, so the fix is written against the class.)
+ */
+const IN_SCOPE_ELEMENT_IN_TEXT = /<\s*(?:input|meta)[\s/>]/i;
+
+/**
+ * Bound on the raw-text re-parse recursion.
+ *
+ * A bound is genuinely required, not merely prudent: an unterminated `<input` at EOF can re-parse to
+ * a text node whose content still matches `IN_SCOPE_ELEMENT_IN_TEXT`, which would recurse forever.
+ *
+ * **Reaching it REFUSES; it never silently stops.** The first version of this sweep just returned at
+ * the bound, which restored the whole bypass at four levels of nesting — the guard read as bounded
+ * and behaved as defeatable, and a bound that fails open is worse than no bound because it looks
+ * like a limit rather than a hole. Depth past this is pathological markup, so refusing costs a real
+ * capture nothing and the failure direction is the safe one.
+ * (Provenance: Codex adversarial review, fix-verification pass on PR #86, rated high — a defect in
+ * the fix for its own previous finding.)
+ */
+const RAW_TEXT_SWEEP_MAX_DEPTH = 3;
+
+/**
+ * Refuse a capture that still carries what looks like the CAPTURING OPERATOR's own session state
+ * — a CSRF/anti-forgery token, an ASP.NET WebForms `__VIEWSTATE` blob, or an unnamed opaque
+ * credential of the same shape — rather than a scouting subject's identity.
+ *
+ * **This layer DETECTS AND REFUSES. It does not remove, empty, or rewrite anything, and it never
+ * will** — see the module docstring on why this module edits text only and never re-serialises
+ * markup. On a refusal, the operator scrubs the SAVED page (outside the repo) by hand; see
+ * `docs/runbooks/capture-fixtures.md` step 4.
+ *
+ * Parses the document exactly ONCE with `sourceCodeLocationInfo`/`onParseError`, then applies
+ * three independent signals — any one of which refuses the whole document:
+ *
+ * 1. **Lossy parse** — the document contains a `duplicate-attribute` parse error ANYWHERE. A
+ *    second `value=` or `type=` on one tag means the parsed attribute map and the source bytes
+ *    disagree about what the page says, which is exactly the class of gap that made a REWRITING
+ *    control unsafe (see #80). Every other parse-error code is ignored: real captured pages in
+ *    this repo routinely emit `missing-whitespace-between-attributes` and
+ *    `unexpected-character-in-attribute-name` and must still pass.
+ * 2. **Convention** — an `<input>` or `<meta>` whose lowercased `name`+`id` contains one of
+ *    `SESSION_CREDENTIAL_NAME_MARKERS` above, and whose value (`value` for `<input>`, `content`
+ *    for `<meta>`) is non-empty.
+ * 3. **Shape** — ANY non-exempt `<input>`, and ANY `<meta>` other than
+ *    `http-equiv="origin-trial"`, whose value matches `OPAQUE_TOKEN_SHAPE` above. This is the
+ *    STRUCTURAL signal: it catches an unnamed framework's token without depending on signal 2's
+ *    list being complete.
+ *
+ *    **Its scope is deliberately wide, because every narrowing tried here failed open.** Two were
+ *    caught by an orchestrator verification pass on this very change, and both had the same shape
+ *    — a narrowing that reads as precision and behaves as a bypass:
+ *
+ *    - Restricting the input side to `type="hidden"` meant a **bare boolean `type`** (`<input type
+ *      name="q7" value="{token}">`, which parses to `type=""`) silently skipped the signal. That is
+ *      the same malformed-attribute-weakens-a-guard move review round 4 used against the withdrawn
+ *      stripper, so it is a known-live technique, not a hypothetical.
+ *    - Restricting the meta side to `name`-keyed metas let a **nameless** `<meta content="{token}">`
+ *      through entirely, and `http-equiv="set-cookie"` with it.
+ *
+ *    Both narrowings were removed after measuring what they actually bought on the committed
+ *    corpus: **zero**. No non-exempt `<input>` in `test/fixtures/` carries a shape-positive value,
+ *    and every shape-positive `<meta>` there is an `origin-trial` one. So the wide rule costs no
+ *    false refusals that the narrow rules were avoiding — see `SHAPE_EXEMPT_HTTP_EQUIV` above for
+ *    the one exemption that measurement did justify.
+ *
+ * **What this does NOT cover — the complete list, verified by executing each case rather than
+ * reasoning about it.** Stated exhaustively on purpose: a limits paragraph that enumerates only
+ * some of its gaps is read as enumerating all of them, and that is how a control comes to be
+ * trusted past its edge. Every line below was confirmed to pass this function unrefused:
+ *
+ * - **Element scope: `<input>` and `<meta>` only.** A credential carried by any *other* element is
+ *   invisible here — `<div data-csrf-token="…">` passes, and so does a bare token sitting as the
+ *   text of `<textarea name="__VIEWSTATE">…</textarea>`, because that token is text rather than an
+ *   attribute of an in-scope element.
+ *
+ *   **Not a limit, and worth stating so the two are not confused:** an in-scope element that a
+ *   raw-text container *hid* from the selector — an `<input>` inside `<noscript>`, `<textarea>`,
+ *   `<title>`, `<iframe>`, `<noframes>`, `<noembed>` or `<xmp>` — **is** caught, by the raw-text
+ *   sweep in `collectInScopeElements`. The distinction is whether the credential is an attribute of
+ *   a real `<input>`/`<meta>` (caught) or merely text that happens to sit inside some other element
+ *   (not caught).
+ *
+ *   Precisely, since "wherever it is nested" was written here once and was **false**: such an
+ *   element is *identified by field* up to `RAW_TEXT_SWEEP_MAX_DEPTH` levels of raw-text nesting,
+ *   and past that depth the document is *refused wholesale* without naming the field. Either way it
+ *   does not ship — but only the first names what it found, and the two should not be conflated.
+ * - **Attribute scope: `value` on an `<input>`, `content` on a `<meta>`, and nothing else.**
+ *   `<input type="hidden" id="x" data-token="…">` passes: the element is in scope, the attribute
+ *   is not.
+ * - **The convention list is a fixed set of known frameworks**, not a catalogue of every possible
+ *   name.
+ * - **The shape signal has a 64-character threshold**, under which a short unnamed opaque value
+ *   passes both signals.
+ * - **The `submit`/`button`/`reset`/`image` exemption is unconditional**, so
+ *   `<input type="submit" name="__VIEWSTATE" value="…">` passes. That is the deliberate price of
+ *   the recorded false positive this exemption exists for (`btnCsrfRefreshPage`, whose `value` is
+ *   the words on a button); the exemption cannot be narrowed to signal 3 alone without
+ *   re-breaking it, because that false positive is a signal-2 match.
+ *
+ * Every one of these is the **manual scrub's** job (`docs/runbooks/capture-fixtures.md` step 4),
+ * whose `grep` runs over raw bytes and therefore reaches all of them. That grep is a real backstop,
+ * not a formality — this function does not supersede it.
+ *
+ * **Two exemptions, and they are scoped differently — stated precisely, because an exemption
+ * described more broadly than it is written is how a control comes to be trusted for something it
+ * does not do:**
+ *
+ * - An `<input>` whose `type` (trimmed, lowercased) is `submit`, `button`, `reset` or `image` is
+ *   exempt from **every** signal — its `value` is a visible button label. A MISSING or EMPTY `type`
+ *   is NOT exempt (fails closed). A duplicate `type` attribute is caught by signal 1 before this
+ *   exemption is ever consulted, so a hijacked `type="submit" type="hidden"` cannot borrow it.
+ * - A `<meta http-equiv="origin-trial">` is exempt from **signal 3 only**. Signal 1 and signal 2
+ *   still apply to it: an `origin-trial` meta on a document with a duplicate attribute still
+ *   refuses, and one whose `name`/`id` matched a credential convention would still refuse.
+ *
+ * Nothing else is exempt from anything.
+ */
+/**
+ * Every `<input>`/`<meta>` in `html`, INCLUDING ones a raw-text container hid from the selector by
+ * making them text — plus every parse-error code seen across all parses.
+ *
+ * Each text node that still looks like in-scope markup (`IN_SCOPE_ELEMENT_IN_TEXT`) is re-parsed as
+ * a fragment and swept the same way, to `RAW_TEXT_SWEEP_MAX_DEPTH`. The elements come back for the
+ * caller's ordinary signal checks, so the hidden ones get the identical treatment — same signals,
+ * same exemptions — rather than a parallel rule set that could drift from them.
+ */
+function collectInScopeElements(
+  html: string,
+  depth: number,
+  found: { elements: Element[]; parseErrorCodes: string[]; unsweptAtDepthBound: boolean },
+): void {
+  // FAIL CLOSED at the bound. Returning quietly here is what re-opened the raw-text bypass at four
+  // levels of nesting: the caller saw an empty survivor list and could not tell "nothing hidden" from
+  // "stopped looking". Record it instead, and let the caller refuse.
+  if (depth > RAW_TEXT_SWEEP_MAX_DEPTH) {
+    found.unsweptAtDepthBound = true;
+    return;
+  }
+
+  const $ = cheerio.load(html, {
+    sourceCodeLocationInfo: true,
+    onParseError: (err) => {
+      found.parseErrorCodes.push(err.code);
+    },
+  });
+
+  $("input, meta").each((_, el) => {
+    if (el.type === "tag") found.elements.push(el);
+  });
+
+  const hidden: string[] = [];
+  const walk = (nodes: ChildNode[]): void => {
+    for (const node of nodes) {
+      if (node.type === "text" && IN_SCOPE_ELEMENT_IN_TEXT.test(node.data)) hidden.push(node.data);
+      const children = (node as { children?: ChildNode[] }).children;
+      if (children !== undefined) walk(children);
+    }
+  };
+  walk($.root().toArray() as unknown as ChildNode[]);
+
+  for (const text of hidden) collectInScopeElements(text, depth + 1, found);
+}
+
+export function assertNoSessionCredentials(html: string): void {
+  const survivors: string[] = [];
+  const found: { elements: Element[]; parseErrorCodes: string[]; unsweptAtDepthBound: boolean } = {
+    elements: [],
+    parseErrorCodes: [],
+    unsweptAtDepthBound: false,
+  };
+  collectInScopeElements(html, 0, found);
+
+  if (found.unsweptAtDepthBound) {
+    survivors.push(
+      `markup nested more than ${RAW_TEXT_SWEEP_MAX_DEPTH} raw-text containers deep still looks like an <input>/<meta>, and was not swept — refusing rather than assuming it is clean`,
+    );
+  }
+
+  if (found.parseErrorCodes.includes("duplicate-attribute")) {
+    survivors.push(
+      "document contains a duplicate HTML attribute (e.g. two `value=` or `type=` on one tag) — the parsed attribute map cannot be trusted to match the source bytes",
+    );
+  }
+
+  // NOTE: `continue`, not `return`. This loop replaced a cheerio `.each()` callback, where `return`
+  // meant "skip this element"; in a `for` loop the same keyword would exit the WHOLE function and
+  // silently stop checking every element after the first exempt or empty one — a fail-open that no
+  // existing test would have caught, since they all use single-element fixtures.
+  for (const el of found.elements) {
+    const tag = el.tagName.toLowerCase();
+    const rawName = el.attribs.name ?? "";
+    const rawId = el.attribs.id ?? "";
+    const key = `${rawName} ${rawId}`.toLowerCase();
+    const value = tag === "meta" ? (el.attribs.content ?? "") : (el.attribs.value ?? "");
+    const type = el.attribs.type?.trim().toLowerCase() ?? "";
+    const exempt = tag === "input" && EXEMPT_INPUT_TYPES.has(type);
+
+    if (exempt || value === "") continue;
+
+    const label = rawName || rawId || "(unnamed)";
+
+    if (SESSION_CREDENTIAL_NAME_MARKERS.some((marker) => key.includes(marker))) {
+      survivors.push(
+        `<${tag}> "${label}" — name/id matches a known CSRF/anti-forgery/view-state convention`,
+      );
+      continue;
+    }
+
+    // The shape signal applies to EVERY remaining element — every non-exempt `<input>` (the
+    // `EXEMPT_INPUT_TYPES` skip above already removed the visible-label cases, which is all that
+    // a narrower `type === "hidden"` test was buying) and every `<meta>` but an `origin-trial` one.
+    // Both narrowings that once stood here failed open; the docstring above records what each let
+    // through and the corpus measurement that showed neither was preventing a real refusal.
+    const shapeApplies =
+      tag === "input" || el.attribs["http-equiv"]?.trim().toLowerCase() !== SHAPE_EXEMPT_HTTP_EQUIV;
+    if (shapeApplies && OPAQUE_TOKEN_SHAPE.test(value)) {
+      survivors.push(`<${tag}> "${label}" — value is a long opaque token (shape signal)`);
+    }
+  }
+
+  if (survivors.length > 0) {
+    throw new RedactionError(
+      `output contains what looks like a session credential — the CAPTURING OPERATOR's own session ` +
+        `state, never a scouting subject's identity. Never add it to the vocabulary. Scrub it on the ` +
+        `saved page instead, per docs/runbooks/capture-fixtures.md step 4. ${survivors.length} ` +
+        `survivor(s):\n${survivors.map((s) => `  ${s}`).join("\n")}`,
+      survivors,
+    );
+  }
+}
+
+/**
  * Fail the capture if any never-publish class appears anywhere in the output — raw, decoded,
  * rendered or percent-decoded.
  */
@@ -565,6 +864,18 @@ export function redact(
   },
 ): string {
   const out = redactHtml(html, substitutions);
+  // LAYER OWNERSHIP — this call must stay BEFORE assertAllowListed. Do not reorder it, even though
+  // the allow-list below would ALSO eventually refuse a long credential-shaped value: `value`/
+  // `content` are not in `CLOSED_VALUE_GRAMMARS`, so the allow-list atomises the token as ordinary
+  // unclassified content and refuses it for being *unrecognised*, not for being a *credential*.
+  // That incidental, misleading refusal is the exact harm #80 is about: the operator is told
+  // "unknown atom", and the documented remedy for an unknown atom is to add it to the vocabulary —
+  // which for a session credential is the one thing that must never happen. Refusing HERE first
+  // means the operator instead sees "this is a session credential, scrub it, never add it to the
+  // vocabulary." Moving or deleting this call silently restores that defect; `redact() refuses a
+  // session credential before the vocabulary loop` (test/tools-redact-fixture.test.ts) pins it by
+  // asserting the thrown type is RedactionError, never PolicyError.
+  assertNoSessionCredentials(out);
   if (options?.vocabulary !== undefined) {
     assertAllowListed(out, {
       standIns: options.standIns ?? substitutions.map((s) => s.to),

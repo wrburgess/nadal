@@ -78,50 +78,72 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 
 4. **Agent: scrub session credentials from the SAVED PAGE — before any capture runs.**
 
-   > ### ⚠️ Session credentials are NOT stripped for you
+   > ### ⚠️ Session credentials are refused, not stripped for you
    >
-   > **This is manual, it happens HERE and not later, and on a login-gated page it is the step that
-   > matters most.**
+   > **The scrub below is still manual, it still happens HERE and not later, and on a login-gated
+   > page it is still the step that matters most.**
    >
-   > **Nothing in this repository removes a session credential from a captured page.** A control to do
-   > it was attempted and withdrawn — see [#80](https://github.com/wrburgess/nadal/issues/80) for why,
-   > and do not assume a later reader has landed it. Check `tools/redact-fixture.ts` yourself before
-   > relying on any automation here.
+   > **An automated layer now REFUSES a capture whose output still carries a session credential —
+   > it does not remove one.** `assertNoSessionCredentials` in `tools/redact-fixture.ts` runs first
+   > inside `redact()`, before the allow-list, so a capture over a credential-bearing page throws
+   > instead of shipping. A control that tried to go further — rewriting the tag to empty the
+   > credential's value — was attempted and withdrawn; see
+   > [#80](https://github.com/wrburgess/nadal/issues/80) for why. Read that function's own
+   > docstring before relying on it: its naming-convention list is **not exhaustive**, and its
+   > opaque-token shape check has a **64-character threshold**, so a short unnamed credential can
+   > still pass silently.
    >
    > This is not theoretical. A real signed-in TennisLink league page carries a **172-character
    > `hdnCSRFToken`** and a **14,420-character `__VIEWSTATE`** inline in the markup, both live session
    > state belonging to _you_, the capturing operator — not to the page's subject, and therefore in no
    > substitution map built from scouting targets.
    >
-   > **Why here and not after the capture.** The allow-list runs _before_ either output file is
-   > written, and it will refuse a 172-character token — so on a credential-bearing page **no fixture
-   > is produced at all**. There is nothing downstream to edit. An operator who waits until step 8 to
-   > deal with credentials is stranded, and the only way forward from that refusal is the one thing
-   > this runbook forbids: adding the token to the vocabulary. So the scrub operates on the **saved
+   > **Why here and not after the capture.** `redact()` refuses a session-credential-shaped value
+   > BEFORE the allow-list ever sees it — so on a credential-bearing page **no fixture is produced at
+   > all**, and the thrown message names the field and says explicitly not to add it to the
+   > vocabulary. There is nothing downstream to edit. An operator who waits until step 8 to deal with
+   > credentials is stranded, and the only way forward from that refusal is the one thing this
+   > runbook forbids: adding the token to the vocabulary anyway. So the scrub operates on the **saved
    > page**, which is your disposable copy outside the repo.
    >
    > **Work on a copy, and never on the original capture:**
    >
    > ```sh
    > cp <the saved page> <the saved page>.scrubbed
+   >
+   > # The automated check — the same one redact() runs during the real capture, run early here so a
+   > # refusal costs you nothing:
+   > npx tsx --eval "
+   > import { readFileSync } from 'node:fs';
+   > import { assertNoSessionCredentials } from './tools/redact-fixture.ts';
+   > assertNoSessionCredentials(readFileSync('<the saved page>.scrubbed', 'utf8'));
+   > console.log('no automated refusal — that is NOT a clean bill of health, run the grep below too');
+   > "
+   >
+   > # The manual backstop — this grep is still load-bearing, not a formality. It runs over RAW
+   > # BYTES, so it reaches things the automated check structurally cannot: that check looks only at
+   > # `<input>`/`<meta>` elements and only at their `value`/`content` attributes, so a credential in
+   > # a `data-` attribute, in a `<textarea>`, or on any other element is invisible to it. Its
+   > # convention list is also not exhaustive and its shape check has a 64-character threshold.
    > grep -oiE '(__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token|_token|csrfmiddlewaretoken|csrf|xsrf)[^>]{0,40}' <the saved page>.scrubbed
    > ```
    >
-   > **A hit is a candidate, not a verdict — read each one before deleting anything.** The grep matches
-   > a _field name_, and a matching name does not prove the value is a credential. Two rules before you
-   > edit:
+   > **A hit is a candidate, not a verdict — read each one before deleting anything.** Both the
+   > automated check and the grep match a _field name or a shape_, and neither proves the value is a
+   > credential. Two rules before you edit:
    >
    > - **Skip `type=submit|button|reset|image`.** Their `value` is the control's **visible label**,
    >   never a credential. This is not hypothetical: TennisLink ships
    >   `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`, which matches on `csrf` and
    >   whose value is the words on the button. Deleting it corrupts the page for no privacy gain — the
-   >   same false positive the withdrawn automation hit before it was withdrawn (#80).
+   >   same false positive the withdrawn automation hit before it was withdrawn (#80), and the reason
+   >   `assertNoSessionCredentials` itself now exempts exactly those four types.
    > - **Empty the credential-bearing attribute only** — `value` on an `<input>`, `content` on a
    >   `<meta>` — and leave the element, its `name`/`id` and every other attribute alone.
    >
-   > Do not stop at that list: it is the conventions of frameworks this project has met, not a complete
-   > set. Then pass `--file <the saved page>.scrubbed` at step 6, and **never re-run the capture against
-   > the unscrubbed original** — that would silently undo this work.
+   > Do not stop at either list: they are the conventions of frameworks this project has met, not a
+   > complete set. Then pass `--file <the saved page>.scrubbed` at step 6, and **never re-run the
+   > capture against the unscrubbed original** — that would silently undo this work.
 
 5. **Agent: author the detector set and vocabulary from what the page actually contains** — the section
    — the section below. Skip only when capturing from a source that already has both.
@@ -158,9 +180,12 @@ one ends at `tn player pull`, this one ends at a committed file in `test/fixture
 8. **Agent: read the redacted fixture before committing it. A green pipeline is not sufficient.**
 
    > **Credentials were handled at step 4, on the saved page — not here.** If you skipped that step,
-   > go back: on a credential-bearing page the capture refuses and no fixture exists to inspect, and
-   > the only way forward from that refusal is the one thing this runbook forbids (adding the token to
-   > the vocabulary). One re-check is still worth it, since it is nearly free:
+   > go back: on a credential-bearing page the capture refuses (`assertNoSessionCredentials` fires
+   > first and names the field) and no fixture exists to inspect — the fix is to scrub the **saved**
+   > page and re-run, never to add the named token to the vocabulary just to make the refusal go
+   > away. By the time a fixture exists on disk, the automated check has already run against it once
+   > (inside the capture that produced it) — but its convention list is not exhaustive and its shape
+   > check has a threshold, so a manual re-check is still worth it, since it is nearly free:
    >
    > ```sh
    > grep -oiE '(__VIEWSTATE|__EVENTVALIDATION|__RequestVerificationToken|authenticity_token|_token|csrfmiddlewaretoken|csrf|xsrf)[^>]{0,40}' test/fixtures/<source>/<name>.html
