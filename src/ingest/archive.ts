@@ -73,9 +73,13 @@ function nextTimestamp(): string {
  *
  * The capture and its provenance record are a PAIR — a raw page with no record of where it came
  * from, when, or at what status is not a usable archive entry — so what a refusal leaves on disk is
- * stated below in three separate parts, because the single sentence that used to stand here ("a
+ * stated below as separate numbered parts, because the single sentence that used to stand here ("a
  * refusal writes NOTHING — not even the leaf file, half the pair") was true of only the first of
- * them and was read as covering all three (#65):
+ * them and was read as covering all of them (#65). **No count appears in this sentence on purpose:**
+ * it said "three" while the list said 1–4 from the moment a part was added, which is this PR's
+ * enumeration-vs-structure lesson arriving a fifth time, in a numeral (Codex adversarial review,
+ * PR #83, merge-gate round). A prose count above an enumerated list is stale-by-construction — the
+ * list is its own count:
  *
  * 1. **A pre-check refusal writes nothing.** Every path this function would touch is checked with
  *    `assertArchivePathSafe` BEFORE anything is written, so a rejected `sourceSet`/`slug`/root never
