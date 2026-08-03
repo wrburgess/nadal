@@ -18,7 +18,8 @@ import {
 } from "../fs/output-root.js";
 import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "../query/home-team.js";
-import { NoCourtMatchHistoryError, getLineupPlan } from "../query/lineup.js";
+import { NoCourtMatchHistoryError, getLineupPlan, resolveEventFormat } from "../query/lineup.js";
+import type { ResolvedEventFormat } from "../query/lineup.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
 import { teams } from "../db/schema.js";
@@ -168,7 +169,11 @@ function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): M
  * and `getTeamProfile` keeps its existing "not available" `headToHead: null` path — already tested
  * in src/query/team-profile.ts's own suite, unchanged by this.
  */
-export function buildTeamDossier(db: Db, teamId: number, options: { since: string }): TeamDossier {
+export function buildTeamDossier(
+  db: Db,
+  teamId: number,
+  options: { since: string; event?: ResolvedEventFormat },
+): TeamDossier {
   const homeTeam = resolveHomeTeam(db);
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
   const team = getTeamProfile(db, teamId, { since: options.since, versusTeamId });
@@ -180,9 +185,16 @@ export function buildTeamDossier(db: Db, teamId: number, options: { since: strin
   // than being allowed to fail the whole dossier build — a `report build` over five teams must not
   // die because one of them has no matches yet. Any OTHER error still propagates: a genuine bug in
   // the heuristic should surface, not be swallowed into a missing section.
+  //
+  // #63: `options.event` is an ALREADY-RESOLVED format, never a name. The named event applies to
+  // EVERY dossier a `report build` run writes, and this function is called once per team — so
+  // resolving here would re-read `events.format` per team and let a concurrent `tn event add`
+  // (nadal runs `tn mcp serve` beside the CLI against one WAL database) split a single batch across
+  // two format versions. The batch entry points below resolve exactly once and hand the same value
+  // to every team (Codex adversarial review of PR #82, Finding 1 [high]).
   let lineup: TeamDossier["lineup"] = null;
   try {
-    lineup = getLineupPlan(db, teamId);
+    lineup = getLineupPlan(db, teamId, options.event);
   } catch (err) {
     if (!(err instanceof NoCourtMatchHistoryError)) throw err;
   }
@@ -233,7 +245,7 @@ type PreparedDossierWrite = {
 function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
-  options: { since: string },
+  options: { since: string; event?: ResolvedEventFormat },
   dirName?: string,
 ): PreparedDossierWrite {
   const dossier = buildTeamDossier(db, teamId, options);
@@ -317,10 +329,13 @@ function commitDossierWrite(prepared: PreparedDossierWrite): string[] {
 export function writeTeamDossier(
   db: Db,
   teamId: number,
-  options: { since: string },
+  options: { since: string; eventName?: string },
   dirName?: string,
 ): string[] {
-  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, options, dirName));
+  // Resolved once, before anything is prepared — the same shape as the batch path below, so both
+  // entry points refuse a bad event name before touching the filesystem rather than partway through.
+  const event = options.eventName === undefined ? undefined : resolveEventFormat(db, options.eventName);
+  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, { since: options.since, event }, dirName));
 }
 
 type TeamIndexEntry = { teamId: number; teamName: string; dirName: string };
@@ -375,7 +390,15 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
  * what this module actually provides, not a stronger one this comment used to imply.
  */
-export function writeSectionalsDossiers(db: Db, options: { since: string }): string[] {
+export function writeSectionalsDossiers(db: Db, options: { since: string; eventName?: string }): string[] {
+  // PHASE 0 — resolve the named event's format exactly ONCE, before any team is read or any leaf is
+  // validated. Every dossier in this batch then predicts across the SAME slot set, which is what
+  // `docs/cli/GRAMMAR.md` promises; a per-team lookup could not keep that promise across a
+  // concurrent `tn event add` (Codex adversarial review of PR #82, Finding 1 [high]). It also fails
+  // fast in the same direction Phase 1 below already does: an unknown event, or one with no format,
+  // refuses with nothing written — including on a team set that is empty or wholly without history,
+  // where a per-team lookup would never have validated the name at all.
+  const event = options.eventName === undefined ? undefined : resolveEventFormat(db, options.eventName);
   // Same load-bearing `ORDER BY teams.id` as `resolveDirNameForTeam` above, and for the identical
   // reason: this function's own collision-disambiguation only agrees with a later single-team
   // refresh's disambiguation if both see teams in the same order, and SQL does not grant that for
@@ -394,7 +417,9 @@ export function writeSectionalsDossiers(db: Db, options: { since: string }): str
   // dossier sitting on disk, discovered only at write time, one team too late (Codex adversarial
   // review, PR #38 round 2, Finding 3 [medium]; round 1 fixed the html-then-md ordering WITHIN one
   // team but never widened the guarantee to the whole batch this function drives).
-  const preparedTeams = allTeams.map((team) => prepareTeamDossierWrite(db, team.id, options, dirNames.get(team.id)));
+  const preparedTeams = allTeams.map((team) =>
+    prepareTeamDossierWrite(db, team.id, { since: options.since, event }, dirNames.get(team.id)),
+  );
 
   const entries: TeamIndexEntry[] = allTeams.map((t) => ({
     teamId: t.id,

@@ -258,9 +258,16 @@ export const MCP_TOOLS: McpToolDef[] = [
     name: "lineup_plan",
     cliCommand: "lineup plan",
     description: "Predict an opponent's lineup from court-assignment history and ratings",
-    inputShape: { target: z.string().min(1) },
+    inputShape: {
+      target: z.string().min(1),
+      // #63: resolves against `events.name`; its format REPLACES the derived slot set. A bad name
+      // (unknown, or on file with no format) propagates as its own distinct error class — the SDK
+      // converts any thrown error into a structured result (src/mcp/server.ts), so no special
+      // wrapping is needed here beyond the one NoCourtMatchHistoryError already gets below.
+      event: z.string().optional(),
+    },
     handler: async (rawArgs) => {
-      const { target } = rawArgs as { target: string };
+      const { target, event } = rawArgs as { target: string; event?: string };
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
@@ -269,7 +276,7 @@ export const MCP_TOOLS: McpToolDef[] = [
           // worked (spec § Deliverables 3), and it needs the confidence/basis/support fields to
           // reason with. The "this is a guess" framing rides in the fields themselves rather than
           // in prose a model might drop.
-          return getLineupPlan(db, resolution.teamId);
+          return getLineupPlan(db, resolution.teamId, event);
         } catch (err) {
           if (!(err instanceof NoCourtMatchHistoryError)) throw err;
           throw new McpToolError(
@@ -291,26 +298,35 @@ export const MCP_TOOLS: McpToolDef[] = [
       kind: z.string().min(1),
       startsOn: z.string().min(1),
       endsOn: z.string().min(1),
+      // #63: raw `parseEventFormat` syntax (e.g. "S1:singles,D1:doubles") — omitted preserves
+      // whatever is already stored, matching the CLI's own "never clobber with an incoming null"
+      // rule (see `addEvent`'s doc comment).
+      format: z.string().optional(),
     },
     handler: async (rawArgs) => {
-      const { target, kind, startsOn, endsOn } = rawArgs as {
+      const { target, kind, startsOn, endsOn, format } = rawArgs as {
         target: string;
         kind: string;
         startsOn: string;
         endsOn: string;
+        format?: string;
       };
       const { db, sqlite } = openDb();
       try {
         // No `requireResolved` here, unlike every other target-taking tool: this is the writer that
         // CREATES events, so resolving the name against existing rows first would make it
         // impossible to add the first one.
-        const result = addEvent(db, { name: target, kind, startsOn, endsOn });
+        const result = addEvent(db, { name: target, kind, startsOn, endsOn, format });
         return {
           event: result.name,
           kind: result.kind,
           startsOn: result.startsOn,
           endsOn: result.endsOn,
           created: result.created,
+          // Only when a format is actually on file — omitted (rather than `format: null`) when
+          // none, so a call that never mentions a format gets back exactly the same shape it always
+          // has, matching the CLI summary line's identical "only when non-null" convention.
+          ...(result.format !== null ? { format: result.format } : {}),
         };
       } finally {
         sqlite.close();
@@ -392,20 +408,25 @@ export const MCP_TOOLS: McpToolDef[] = [
     name: "report_build",
     cliCommand: "report build",
     description: "Render per-opponent scouting dossiers (HTML + markdown) to disk",
-    inputShape: { target: z.string().optional() },
+    inputShape: {
+      target: z.string().optional(),
+      // #63: applies to EVERY dossier this call builds — a bad name propagates as its own error
+      // class, converted to a structured result by the SDK like any other thrown error.
+      event: z.string().optional(),
+    },
     handler: async (rawArgs) => {
-      const { target } = rawArgs as { target?: string };
+      const { target, event } = rawArgs as { target?: string; event?: string };
       const since = sixMonthsAgo();
       const { db, sqlite } = openDb();
       try {
         let written: string[];
         let teamsCount: number;
         if (target === undefined || target === "sectionals") {
-          written = writeSectionalsDossiers(db, { since });
+          written = writeSectionalsDossiers(db, { since, eventName: event });
           teamsCount = countTeams(db);
         } else {
           const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-          written = writeTeamDossier(db, resolution.teamId, { since });
+          written = writeTeamDossier(db, resolution.teamId, { since, eventName: event });
           teamsCount = 1;
         }
         return { target: target ?? "sectionals", teams: teamsCount, files: written.length, root: resolvedReportsRoot() };

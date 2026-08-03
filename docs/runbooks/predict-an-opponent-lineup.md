@@ -36,10 +36,10 @@ Three limits worth knowing before you rely on it:
   aside. If a prediction looks thinner than the roster's experience suggests, read that line: it is
   usually the explanation.
 
-- **The courts predicted are the courts this team has been seen to field**, not the courts the
-  event fields. A team with a five-court league history is predicted across five even at
-  Springfield's four, because nothing in the data links a team to an event yet. The output always
-  prints the court count and says where it came from.
+- **By default, the courts predicted are the courts this team has been seen to field**, not the
+  courts the event fields. A team with a five-court league history is predicted across five even
+  at Springfield's four — unless you name the event (below), which is exactly what fixes that. The
+  output always prints the court count and says where it came from.
 - **Ranking happens inside one rating scale**, whichever covers the most of that roster
   (TennisRecord dynamic → NTRP → WTN doubles → WTN singles). Comparing an NTRP number against a
   TennisRecord number is not meaningful, so it is not done; anyone missing that scale is listed as
@@ -54,6 +54,20 @@ Three limits worth knowing before you rely on it:
   command will refuse.
 
 ## Steps
+
+### 0. (Setup, once per event) Record the event's format
+
+Skip this if you are fine with the default: the courts this opponent has been *seen* to field.
+Do it once, before Sectionals, if you want every prediction below to use the tournament's own
+courts instead:
+
+```
+tn event add "Springfield Sectionals 2026" tournament 2026-08-28 2026-08-30 "S1:singles,D1:doubles,D2:doubles,D3:doubles"
+```
+
+The fifth argument is the format: a comma-separated `slot:discipline` list, `discipline` always
+exactly `singles` or `doubles`. `tn event add` is idempotent on the event name and never clobbers a
+stored format with a later call that omits it — a routine date correction is always safe to re-run.
 
 ### 1. Check there is something to predict from — by running the prediction
 
@@ -101,6 +115,22 @@ PREDICTED LINEUP — IA/Versteeg/40&Over3.5M
   ratings: ranked within NTRP; unrated: Kit Kestrel
   courts: 4, from this team's observed match history (not the event format)
 ```
+
+**If you recorded the event's format in step 0**, name it as a second argument and the last line
+changes to say so instead — nothing else about the shape changes:
+
+```
+tn lineup plan "IA/Versteeg/40&Over3.5M" "Springfield Sectionals 2026"
+```
+
+```
+  courts: 4, from the format of event "Springfield Sectionals 2026"
+```
+
+A court this team has played but that is not part of the named event's format is simply not
+predicted for; a format court this team has never played is filled by the same rating-based
+leftover rule described above ("Ratings fill every gap"), reading
+`placed by rating — no shared history`.
 
 ### 3. Read it critically
 
@@ -176,6 +206,12 @@ tn lineup plan "IA/Versteeg/40&Over3.5M"
    `tn event add "HOA Spring 2026" league 2026-03-01 2026-06-30` then
    `tn player avail "<a home-team player>" 2026-05-16 available` must **refuse** and list both
    events; re-running it with the event name as a fourth argument must succeed.
+9. Record a format on an event (step 0), then `tn lineup plan "<team>" "<event>"` must render the
+   event's own court count and say `from the format of event "<event>"` on its last line — the
+   sentence in step 2 must be genuinely ABSENT, not merely outnumbered by the new one.
+10. `tn lineup plan "<team>" "<an unknown event name>"` exits non-zero and names the event.
+11. Add an event with NO format, then `tn lineup plan "<team>" "<that event>"` exits non-zero and
+    tells you to run `tn event add` with a format.
 
 ## If it refuses
 
@@ -184,3 +220,5 @@ tn lineup plan "IA/Versteeg/40&Over3.5M"
 | `no court-match history on file for "<team>"` | No court matches belonging to **this team** were ingested — its players may still have plenty of history for other teams, which does not count. Re-run a `--players` pull for it (prompt form, [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2), which writes the schedule the player pulls then link against. |
 | `unknown target "<team>"` | No team by that name. `tn team show` with a partial name to find the spelling. |
 | `ambiguous target: A, B` | More than one team matches. Use the full name, or `tr:<url>`. |
+| `unknown event "<name>"` | No event by that name is on file. Check the spelling, or record it first with `tn event add`. |
+| `event "<name>" has no format on file` | The event exists but nobody has recorded its courts yet. Run `tn event add "<name>" <kind> <starts-on> <ends-on> "<format>"` (step 0) — the same call updates it in place. |

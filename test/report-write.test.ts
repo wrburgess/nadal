@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
 import { OutputPathError } from "../src/fs/output-root.js";
+import { addEvent } from "../src/query/events.js";
+import { UnknownEventError } from "../src/query/lineup.js";
 import { setHomeTeam } from "../src/query/home-team.js";
 import {
   buildTeamDossier,
@@ -284,6 +286,81 @@ describe("src/report/write.ts", () => {
   });
 
   describe("writeSectionalsDossiers", () => {
+    // Codex adversarial review of PR #82, Finding 1 [high]. nadal runs `tn mcp serve` beside a CLI
+    // invocation against one WAL database, so a `tn event add` committing PART WAY THROUGH a
+    // `report build` is an ordinary concurrent-PROCESS interleaving, not a contrived one. When the
+    // event was resolved once per TEAM, one batch could emit a two-court dossier and a four-court
+    // dossier that each name the same event — while GRAMMAR.md promises the named event's format
+    // applies to every dossier the run builds.
+    //
+    // Reproduced deterministically without a second process: the fix makes the event resolution the
+    // FIRST select the function performs, so corrupting the row immediately after that first select
+    // is a non-brittle trigger. Under the fix nothing reads `events` again and the build completes
+    // from its snapshot; under a per-team lookup the first team's own event read hits the corrupted
+    // row and the build throws. It asserts the guarantee (one format version per batch) rather than
+    // the mechanism.
+    it("resolves the named event's format ONCE per batch — a mid-build event change cannot split it", () => {
+      seedTeamWithRoster("Team G", []);
+      seedTeamWithRoster("Team H", []);
+      const { db, sqlite } = openDb();
+      try {
+        addEvent(db, {
+          name: "Springfield Sectionals 2026",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          format: "S1:singles,D1:doubles",
+        });
+
+        // Fires at the START of the SECOND select, not the end of the first: drizzle's builder is
+        // lazy, so `db.select()` returns before `.all()` has executed anything. By the time a second
+        // select begins, the first query has genuinely run and its result is already in hand.
+        let selects = 0;
+        const racingDb = new Proxy(db, {
+          get(target, prop, receiver) {
+            if (prop !== "select") return Reflect.get(target, prop, receiver) as unknown;
+            return (...args: unknown[]) => {
+              selects += 1;
+              if (selects === 2) {
+                // A concurrent writer commits between the batch's first query and every later one.
+                sqlite
+                  .prepare("UPDATE events SET format = ? WHERE name = ?")
+                  .run("not json at all", "Springfield Sectionals 2026");
+              }
+              return (target.select as (...a: unknown[]) => unknown)(...args);
+            };
+          },
+        }) as typeof db;
+
+        const written = writeSectionalsDossiers(racingDb, {
+          since: "2026-01-01",
+          eventName: "Springfield Sectionals 2026",
+        });
+
+        // Completed at all — a per-team lookup would have thrown InvalidEventFormatError here.
+        expect(written.length).toBe(6);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // The other observable consequence of resolving in Phase 0: the refusal now happens before any
+    // team is read, so it cannot be skipped by a team set that produces no lineup at all. Under a
+    // per-team lookup an unknown event name was accepted in silence here, because no `getLineupPlan`
+    // call ever ran to reject it.
+    it("refuses an unknown event name even when no team has any lineup to build", () => {
+      const { db, sqlite } = openDb();
+      try {
+        runMigrations();
+        expect(() => writeSectionalsDossiers(db, { since: "2026-01-01", eventName: "No Such Event" })).toThrow(
+          UnknownEventError,
+        );
+        expect(existsSync(join(reportsDir, "index.html")), "a refusal must leave nothing written").toBe(false);
+      } finally {
+        sqlite.close();
+      }
+    });
+
     it("writes one dossier per team in the DB, plus a top-level index.html/index.md", () => {
       seedTeamWithRoster("Team E", []);
       seedTeamWithRoster("Team F", []);

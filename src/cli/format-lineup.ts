@@ -72,9 +72,16 @@ export function formatLineupPlan(plan: LineupPlan): string {
           ? ""
           : `; unrated: ${plan.unranked.map((p) => formatName(p.canonicalName)).join(", ")}`),
   );
-  // Named on every run, because it is the standing limitation of the v1 rule: the courts predicted
-  // are the courts this team has been SEEN to field, which may not be the courts the event fields.
-  lines.push(`  courts: ${plan.slots.length}, from this team's observed match history (not the event format)`);
+  // Named on every run: which slot set the courts came from (#63). `observed` keeps the standing
+  // v1 caveat — the courts predicted are the courts this team has been SEEN to field, which may not
+  // be the courts the event fields. `event-format` names the event that supplied the courts instead;
+  // the two sentences are mutually exclusive, never both printed, so a reader cannot mistake one for
+  // the other.
+  lines.push(
+    plan.slotSource === "event-format"
+      ? `  courts: ${plan.slots.length}, from the format of event "${formatName(plan.slotEvent.name)}"`
+      : `  courts: ${plan.slots.length}, from this team's observed match history (not the event format)`,
+  );
   // Only when there is something to say. Without this line a prediction built on 7 matches, for a
   // roster whose members have played 200, reads as missing data rather than as correct scoping.
   if (plan.excludedOtherTeamMatches > 0) {
