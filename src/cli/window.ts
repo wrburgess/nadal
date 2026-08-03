@@ -72,7 +72,32 @@ export function seasonWindow(anchor: SeasonAnchor = new Date()): SeasonWindow {
   return { year: String(anchorYear(anchor)).padStart(4, "0") };
 }
 
+/** A season read ONCE and validated: the plain primitives every consumer should work from. */
+export type SeasonSnapshot = { readonly year: string; readonly since: string };
+
+/**
+ * Read a `SeasonWindow` once, validate it, and hand back plain primitives.
+ *
+ * **Reading it more than once is the defect.** `SeasonWindow` is a structural type, so a caller can
+ * supply an accessor rather than a data property: with `get year() { return ++n <= 2 ? "2025" :
+ * "2026" }`, a consumer that reads `.year` for the team boundary, again for each player boundary,
+ * and again for the label filters to one season and prints another — no cast, no clone, no Proxy.
+ * A type cannot prevent that; reading once can. (Codex fix-verification pass, PR #91.)
+ *
+ * **And an unvalidated year fails OPEN, not closed.** `{ year: "" }` derives `-01-01`, and because
+ * `played_on` is compared lexically as text, every ordinary ISO date sorts ABOVE it — so a
+ * malformed season silently includes all history and labels it with an empty string. `"abcd"`,
+ * `"99999"` and fullwidth digits silently exclude everything instead. Four ASCII digits, or refuse.
+ */
+export function seasonSnapshot(window: SeasonWindow): SeasonSnapshot {
+  const year = window.year; // read ONCE -- every value below derives from this single read
+  if (!/^\d{4}$/.test(year)) {
+    throw new Error(`unusable season year: ${JSON.stringify(year)} (expected four digits, e.g. "2026")`);
+  }
+  return Object.freeze({ year, since: `${year}-01-01` });
+}
+
 /** The inclusive lower bound to filter by: the season's January 1. */
 export function seasonWindowSince(window: SeasonWindow): string {
-  return `${window.year}-01-01`;
+  return seasonSnapshot(window).since;
 }

@@ -7,7 +7,7 @@
 // unit TennisRecord itself models (`?year=2026` on every team URL, a `2026Record` roster column).
 
 import { describe, expect, it } from "vitest";
-import { seasonLabel, seasonStart, seasonWindow, seasonWindowSince } from "../src/cli/window.js";
+import { type SeasonWindow, seasonLabel, seasonSnapshot, seasonStart, seasonWindow, seasonWindowSince } from "../src/cli/window.js";
 
 describe("seasonStart", () => {
   it("returns January 1 of the anchor's year", () => {
@@ -95,5 +95,47 @@ describe("SeasonWindow", () => {
 
     expect(round).toEqual(window);
     expect(seasonWindowSince(round)).toBe(seasonWindowSince(window));
+  });
+});
+
+describe("seasonSnapshot — the report boundary's one read", () => {
+  it("reads `year` exactly once, so an accessor cannot answer differently per consumer", () => {
+    // The fix-verification trace: a getter returning "2025" for the boundary reads and "2026" for
+    // the label produced a 2025-filtered dossier titled 2026. A type cannot stop that — one read
+    // can, and this asserts the read count rather than the outcome, because the outcome is only
+    // safe BECAUSE of the count.
+    let reads = 0;
+    const shifty: SeasonWindow = {
+      get year() {
+        reads += 1;
+        return reads <= 2 ? "2025" : "2026";
+      },
+    };
+
+    const snapshot = seasonSnapshot(shifty);
+
+    expect(reads).toBe(1);
+    expect(snapshot.year).toBe("2025");
+    expect(snapshot.since).toBe("2025-01-01");
+    // Re-reading the snapshot is stable no matter how many times a consumer asks.
+    expect([snapshot.year, snapshot.year, snapshot.since]).toEqual(["2025", "2025", "2025-01-01"]);
+  });
+
+  it.each([
+    ["", "empty — derives -01-01, which every ISO date sorts ABOVE, admitting ALL history"],
+    [" 2026 ", "whitespace-padded"],
+    ["abcd", "non-numeric"],
+    ["99999", "five digits"],
+    ["0", "single digit"],
+    ["２０２６", "fullwidth digits — not ASCII, and silently excludes everything"],
+  ])("refuses a malformed year (%s: %s) instead of failing open", (year) => {
+    // Each of these previously produced a binder rather than an error: the first ADMITS every
+    // dated match while labelling the page with nothing, the rest silently exclude everything.
+    // A wrong binder that exits 0 is the failure mode this whole issue is about.
+    expect(() => seasonSnapshot({ year })).toThrow(/unusable season year/i);
+  });
+
+  it("accepts what the factory produces", () => {
+    expect(seasonSnapshot(seasonWindow("2026-08-28"))).toEqual({ year: "2026", since: "2026-01-01" });
   });
 });
