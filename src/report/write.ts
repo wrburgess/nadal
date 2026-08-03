@@ -19,7 +19,7 @@ import {
 import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "../query/home-team.js";
 import { NoCourtMatchHistoryError, getLineupPlan, resolveEventFormat } from "../query/lineup.js";
-import type { SeasonWindow } from "../cli/window.js";
+import { type SeasonWindow, seasonWindowSince } from "../cli/window.js";
 import type { ResolvedEventFormat } from "../query/lineup.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
@@ -177,8 +177,8 @@ export function buildTeamDossier(
 ): TeamDossier {
   const homeTeam = resolveHomeTeam(db);
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
-  const team = getTeamProfile(db, teamId, { since: options.season.since, versusTeamId });
-  const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { since: options.season.since }));
+  const team = getTeamProfile(db, teamId, { since: seasonWindowSince(options.season), versusTeamId });
+  const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { since: seasonWindowSince(options.season) }));
 
   // #17 PR B: spec § Deliverables #1 puts the predicted lineup in the dossier, not only behind the
   // `tn lineup plan` command. "No history to predict from" is a normal state for a team that has
@@ -200,7 +200,7 @@ export function buildTeamDossier(
     if (!(err instanceof NoCourtMatchHistoryError)) throw err;
   }
 
-  return { season: options.season.label, team, players, lineup };
+  return { season: options.season.year, team, players, lineup };
 }
 
 /** Everything `writeTeamDossier` needs to know BEFORE it writes a single byte: the two real,

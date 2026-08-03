@@ -7,7 +7,7 @@
 // unit TennisRecord itself models (`?year=2026` on every team URL, a `2026Record` roster column).
 
 import { describe, expect, it } from "vitest";
-import { seasonLabel, seasonStart } from "../src/cli/window.js";
+import { seasonLabel, seasonStart, seasonWindow, seasonWindowSince } from "../src/cli/window.js";
 
 describe("seasonStart", () => {
   it("returns January 1 of the anchor's year", () => {
@@ -65,5 +65,35 @@ describe("seasonLabel", () => {
     for (const anchor of ["2026-01-01", "2026-06-15", "2026-12-31", "2025-03-04"]) {
       expect(seasonStart(anchor).slice(0, 4)).toBe(seasonLabel(anchor));
     }
+  });
+});
+
+describe("SeasonWindow", () => {
+  it("derives its boundary from its year, so the two cannot disagree", () => {
+    const window = seasonWindow("2026-08-28");
+    expect(window.year).toBe("2026");
+    expect(seasonWindowSince(window)).toBe("2026-01-01");
+  });
+
+  it("cannot be cloned into a state where the boundary and the label disagree", () => {
+    // The fix-verification pass on the FIRST version of this type showed its symbol brand was
+    // decoration: the key is enumerable, so `Object.assign` copied it onto a mismatched clone with
+    // no cast, and the writers would then filter to one season while printing another. The answer
+    // was not a runtime guard but removing the second field — so the clone below, hostile as it is,
+    // still cannot produce an inconsistency, because there is only one value to copy.
+    const forged = Object.assign({}, seasonWindow("2025-06-01"), { year: "2026" });
+
+    expect(seasonWindowSince(forged)).toBe("2026-01-01");
+    expect(forged.year).toBe("2026");
+  });
+
+  it("survives a JSON round trip with the same meaning", () => {
+    // MCP returns JSON, so a value that lost its meaning crossing that boundary would be a real
+    // hazard for a type carrying an invariant in a non-enumerable place.
+    const window = seasonWindow(new Date("2026-03-14T00:00:00Z"));
+    const round = JSON.parse(JSON.stringify(window)) as typeof window;
+
+    expect(round).toEqual(window);
+    expect(seasonWindowSince(round)).toBe(seasonWindowSince(window));
   });
 });

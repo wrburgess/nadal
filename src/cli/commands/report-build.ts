@@ -95,7 +95,7 @@ export const reportBuild: Command = {
           // that came from: `event` means the event's own `starts_on`, `today` means it had none
           // (or none was named) and the clock was used. Printing only `season` would make those
           // two indistinguishable, which is the defect this change exists to remove.
-          ["season", season.label],
+          ["season", season.year],
           ["anchoredTo", anchor.anchoredTo],
         ],
         opts,

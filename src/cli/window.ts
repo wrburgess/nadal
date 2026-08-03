@@ -47,33 +47,32 @@ export function seasonLabel(anchor: SeasonAnchor = new Date()): string {
   return String(anchorYear(anchor)).padStart(4, "0");
 }
 
-/** Brands `SeasonWindow` so only `seasonWindow` below can build one. A REAL symbol, matching the
- * `ResolvedEventFormat` precedent in src/query/lineup.ts: a type-only brand vanishes at runtime and
- * would not stop a hand-built literal. Not exported, so no caller outside this module can name the
- * key, and a `const` symbol is `unique symbol`, so none can forge it structurally either. */
-const seasonWindowBrand = Symbol("seasonWindow");
-
 /**
- * A season, resolved once: the inclusive lower bound to filter by, and the label to print beside
- * the resulting numbers.
+ * A season, resolved once and carrying ONE degree of freedom: the year.
  *
- * **One object rather than two parameters, for a reason a plain pair could not carry.** As loose
- * `{ since, season }` arguments, a caller could hand the report writers `since: "2025-01-01"` with
- * `season: "2026"` — the dossier would then be filtered to 2025 and titled 2026, with every number
- * on the page correct for a season the page does not name. The CLI and MCP callers happened to
- * derive both from one anchor, but nothing in the API required it, so one fact could split into two
- * disagreeing keys at the report boundary. (Codex adversarial review of PR #91, Finding 2 [medium].)
+ * **Two fields were the defect, not two callers.** The first attempt at this type stored `since`
+ * and `label` together and branded the pair, so only the factory could build one. A review showed
+ * the brand was decoration: the symbol key is enumerable, so
+ * `Object.assign({}, seasonWindow("2025-06-01"), { label: "2026" })` copies it onto a mismatched
+ * clone with no cast, and the report writers would then filter to 2025 while printing "2026" —
+ * every number correct for a season the page does not name. A runtime `WeakSet` guard would have
+ * rejected that clone; storing the year instead means **there is no second field to disagree
+ * with**, so no guard, no brand, and no forged object can express the illegal state at all.
+ * (Codex adversarial review of PR #91, then its fix-verification pass on that fix.)
+ *
+ * The boundary and the label are DERIVED below — both from this one value, so they cannot diverge.
  */
 export type SeasonWindow = {
-  /** Inclusive lower bound, `YYYY-01-01`. */
-  readonly since: string;
-  /** Display label for that season, `YYYY`. */
-  readonly label: string;
-  readonly [seasonWindowBrand]: true;
+  /** The season's calendar year, `YYYY`. */
+  readonly year: string;
 };
 
-/** Resolve an anchor into the one object that carries both the boundary and its label. */
+/** Resolve an anchor into the season it belongs to. */
 export function seasonWindow(anchor: SeasonAnchor = new Date()): SeasonWindow {
-  const year = String(anchorYear(anchor)).padStart(4, "0");
-  return Object.freeze({ since: `${year}-01-01`, label: year, [seasonWindowBrand]: true as const });
+  return { year: String(anchorYear(anchor)).padStart(4, "0") };
+}
+
+/** The inclusive lower bound to filter by: the season's January 1. */
+export function seasonWindowSince(window: SeasonWindow): string {
+  return `${window.year}-01-01`;
 }

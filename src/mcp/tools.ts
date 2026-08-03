@@ -444,7 +444,7 @@ export const MCP_TOOLS: McpToolDef[] = [
           teams: teamsCount,
           files: written.length,
           root: resolvedReportsRoot(),
-          season: season.label,
+          season: season.year,
           anchoredTo: anchor.anchoredTo,
         };
       } finally {
