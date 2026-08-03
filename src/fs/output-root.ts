@@ -380,6 +380,23 @@ function closeQuietly(fd: number): void {
  * anything that is not a confirmed inode match is skipped, so the guard errs toward leaving files
  * alone. So this is a large reduction in blast radius, NOT a guarantee that cleanup never deletes a
  * file it does not own — do not read the first line as promising that.
+ *
+ * SECOND SCOPE LIMIT, demonstrated rather than theorised (#65, PR #83 — a CI failure on Linux that
+ * passed on macOS): `{dev, ino}` does not survive as an identity across an unlink-and-recreate,
+ * because **inode numbers are REUSED**. On ext4 in particular, deleting a file and immediately
+ * creating another in the same directory routinely hands out the same inode number, so an actor who
+ * REPLACES our leaf at the same path can produce a file this check reads as "still ours" and deletes.
+ * The `nlink` sample in `openNewOutputFileSafely` does not help here — that catches a second name for
+ * OUR inode, not a different file wearing its number after we let it go.
+ *
+ * This is not closable by comparing more `Stats` fields (a recreate can coincide on those too, and a
+ * heuristic that is usually right is exactly the shape this module keeps having to retract). It needs
+ * `unlinkat` against a directory handle, which pure Node does not expose — the same wall as the
+ * residual above and as issue #74's accepted TOCTOU set. Recorded here and in
+ * `writeNewOutputFileSet`'s canonical residual list rather than papered over: the check is
+ * *best-effort against the swap it was built for* (a redirected directory component, where the target
+ * genuinely is a different inode on a possibly different device), and it is *not* a general proof of
+ * ownership.
  */
 function unlinkIfStillOurs(path: string, ours: { dev: number; ino: number }): void {
   try {
@@ -699,7 +716,11 @@ function writeThroughVerifiedFd(
  *
  * - Rollback is BEST-EFFORT by construction. `unlinkIfStillOurs` deliberately skips any leaf whose
  *   inode no longer matches the one this call created — that skip is PR #48's fix, not a gap in
- *   this one — so an actor who has already replaced a written leaf keeps it.
+ *   this one — so an actor who has already replaced a written leaf keeps it. And the converse also
+ *   holds and is worse: **inode numbers are reused**, so a leaf that was unlinked and recreated at
+ *   the same path can read as "still ours" and be deleted (demonstrated on Linux/ext4 by this PR's
+ *   own CI, where the check the test relied on passed on macOS and failed there). `unlinkIfStillOurs`
+ *   states the full limit; it is not closable without `unlinkat`.
  * - A crash, a `SIGKILL`, or a power loss between two leaves rolls back nothing at all. No
  *   userspace-only writer can promise otherwise.
  * - A leaf that fails **before its identity is captured** (the open, or the `fstatSync` that captures

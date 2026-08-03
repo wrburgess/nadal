@@ -1291,17 +1291,32 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
   // file it does not own. Deleting the inode check makes this test fail, which is the point.
   it("REGRESSION: rollback must NOT delete a file that replaced the leaf it wrote", async () => {
     const root = mkdtempSync(join(tmpdir(), "tn-set-root-"));
+    const inodePin = mkdtempSync(join(tmpdir(), "tn-set-pin-"));
     const { openSync: realOpenSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
     try {
       const subDir = join(root, "team-set-bystander");
       mkdirSync(subDir, { recursive: true });
       const leaf = join(subDir, "index.html");
       const sidecar = `${leaf}.provenance.json`;
+      const pinnedName = join(inodePin, "pinned");
 
       vi.mocked(fsModule.openSync).mockImplementation(((target: string, ...rest: unknown[]) => {
         if (typeof target === "string" && target.endsWith(".provenance.json")) {
           // The first leaf is already written and closed. Replace it with a DIFFERENT inode at the
           // same path — the state rollback must refuse to act on — and only then fail the second.
+          //
+          // The `linkSync` is LOAD-BEARING, not tidying (CI, Linux, 2026-08-02). Without it this
+          // test passed on macOS/APFS and FAILED on Linux/ext4: unlinking a file and immediately
+          // recreating one in the same directory routinely REUSES the same inode number, so
+          // `unlinkIfStillOurs` compared `{dev, ino}`, found a match, and deleted the replacement —
+          // the exact data loss the guard exists to prevent. Pinning the original inode under a
+          // second name makes reuse impossible on ANY filesystem (an inode with a surviving link is
+          // never reallocated), so the replacement is guaranteed a different one and the test
+          // asserts the guard's behavior rather than the allocator's.
+          //
+          // That the unpinned version passed locally is the finding, not the fix: see the residual
+          // this uncovered on `unlinkIfStillOurs` itself.
+          linkSync(leaf, pinnedName);
           unlinkSync(leaf);
           writeFileSync(leaf, "SOMEONE ELSE'S DATA", "utf8");
           throw new Error("simulated provenance open failure");
@@ -1326,6 +1341,7 @@ describe("writeNewOutputFileSet (#65 multi-leaf rollback)", () => {
       expect(readFileSync(leaf, "utf8")).toBe("SOMEONE ELSE'S DATA");
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(inodePin, { recursive: true, force: true });
     }
   });
 
