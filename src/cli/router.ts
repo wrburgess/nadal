@@ -3,7 +3,9 @@ import { eventAdd } from "./commands/event-add.js";
 import { lineupPlan } from "./commands/lineup-plan.js";
 import { matchAdd } from "./commands/match-add.js";
 import { mcpServe } from "./commands/mcp-serve.js";
+import { playerAlias } from "./commands/player-alias.js";
 import { playerAvail } from "./commands/player-avail.js";
+import { playerDistinct } from "./commands/player-distinct.js";
 import { playerNote } from "./commands/player-note.js";
 import { playerPull } from "./commands/player-pull.js";
 import { playerShow } from "./commands/player-show.js";
@@ -39,6 +41,8 @@ export const COMMANDS: Command[] = [
   playerShow,
   playerAvail,
   playerNote,
+  playerDistinct,
+  playerAlias,
   eventAdd,
   matchAdd,
   lineupPlan,

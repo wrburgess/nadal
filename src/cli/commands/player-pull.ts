@@ -3,13 +3,14 @@ import { openDb } from "../../db/client.js";
 import { pullArchivedUstaProfile } from "../../ingest/archived.js";
 import { fetchPage } from "../../ingest/fetch.js";
 import { pullPlayer } from "../../ingest/player-pull.js";
+import { ambiguousMessage, type AmbiguousIdentity } from "../../ingest/errors.js";
 import { globalFlags, parseArgs } from "../args.js";
 import { emitSummary, type EmitOpts } from "../emit.js";
 
 type ReportableResult =
   | { kind: "ok"; player: { canonicalName: string }; archivedPath: string; courtMatchCount?: number }
   | { kind: "unknown-target"; message: string }
-  | { kind: "ambiguous"; candidates: string[] }
+  | ({ kind: "ambiguous" } & AmbiguousIdentity)
   | { kind: "error"; message: string };
 
 function report(result: ReportableResult, opts: EmitOpts): number {
@@ -27,7 +28,7 @@ function report(result: ReportableResult, opts: EmitOpts): number {
     return 0;
   }
   const message =
-    result.kind === "ambiguous" ? `ambiguous target: ${result.candidates.join(", ")}` : result.message;
+    result.kind === "ambiguous" ? ambiguousMessage(result) : result.message;
   emitSummary("player pull", "error", [["message", message]], opts);
   return 1;
 }

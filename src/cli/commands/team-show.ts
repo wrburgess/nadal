@@ -1,5 +1,6 @@
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
+import { ambiguousMessage } from "../../ingest/errors.js";
 import { getTeamProfile, resolveTeamTarget } from "../../query/team-profile.js";
 import type { TeamProfile } from "../../query/team-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
@@ -63,7 +64,7 @@ export const teamShow: Command = {
         emitSummary(
           "team show",
           "error",
-          [["message", `ambiguous target: ${resolution.candidates.join(", ")}`]],
+          [["message", ambiguousMessage({ incoming: parsed.target, candidates: resolution.candidates, context: "team name target" })]],
           opts,
         );
         return 1;

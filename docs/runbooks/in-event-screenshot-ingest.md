@@ -121,9 +121,16 @@ To fix a flagged name, either:
 - **Correct the spelling** in the payload to match the roster exactly (or an existing alias), and
   re-run; or
 - **Supply a prefix-ID** instead of the bare name — `usta:<uaid>`, `tr:<tennisrecord-url>`, or
-  `wtn:<tennis-id>` — the same disambiguation idiom every other target in this grammar uses. A
-  prefix-ID resolves globally by source id and overrides roster scoping entirely, which is exactly
-  what you want when the card's handwriting is ambiguous but you know who it is.
+  `wtn:<tennis-id>` — the same disambiguation idiom every other target in this grammar uses. It
+  looks the identity up globally by source id, which is exactly what you want when the card's
+  handwriting is ambiguous but you know who it is. It does **not** bypass roster scoping: an id
+  naming someone who is not on this team's current roster is flagged `off-roster`, same as a bare
+  name would be (PR #54, High finding 1 — this line used to say a prefix-ID "overrides roster
+  scoping entirely", which stopped being true when that hole was closed and nothing here noticed); or
+- **Record the card's spelling as an alias** of the roster player it belongs to —
+  `tn player alias "<roster name>" "<what the card says>"` (#94) — when the same variant will keep
+  turning up. Unlike the two fixes above, this one is durable: it settles the spelling once, for
+  every future scorecard and pull, rather than for this payload.
 
 Re-running the corrected payload is safe: the ingest is idempotent on `(playedOn, the team pair,
 slot)`, so a retry after a fix does not create a second row for the courts that already resolved

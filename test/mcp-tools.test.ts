@@ -17,6 +17,7 @@ import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { courtMatchPlayers, courtMatches, events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
+import { resolvePlayer } from "../src/ingest/identity.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
@@ -1038,5 +1039,86 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("pairTarget");
+  });
+
+  // Issue #94. The two disambiguation rulings over MCP. Agent chat is nadal's primary interface
+  // (spec § Interfaces), and it is where an ambiguity is most likely to be READ — a resolution path
+  // reachable only from the CLI would leave the agent able to report the problem and unable to fix
+  // it. Both go through the same `src/ingest/disambiguate.ts` services the CLI calls.
+  it("player_distinct creates the player over MCP and names who it is now distinct from", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    db.insert(players).values({ canonicalName: "Mason Davis" }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "player_distinct", arguments: { target: "Karson Davis" } });
+
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).toEqual({
+      player: "Karson Davis",
+      created: true,
+      distinctFrom: ["Mason Davis"],
+    });
+  });
+
+  it("player_distinct refuses a name that is near nothing — the typo guard reaches this surface too", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    db.insert(players).values({ canonicalName: "Mason Davis" }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "player_distinct",
+      arguments: { target: "Wilhelmina Fotheringay" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("is not ambiguous");
+  });
+
+  it("player_alias records the second spelling, and the ladder then resolves it to the known player", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const known = db.insert(players).values({ canonicalName: "Robert Smith" }).returning().get();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "player_alias",
+      arguments: { target: "Robert Smith", alias: "Bob Smith" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).toEqual({ player: "Robert Smith", alias: "Bob Smith", recorded: true });
+
+    const { db: db2, sqlite: sqlite2 } = openDb();
+    const resolved = resolvePlayer(db2, { name: "Bob Smith" });
+    sqlite2.close();
+    expect(resolved.kind).toBe("matched");
+    if (resolved.kind !== "matched") throw new Error("expected matched");
+    expect(resolved.row.id).toBe(known.id);
+  });
+
+  it("player_alias refuses a spelling another player already answers to", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    db.insert(players).values({ canonicalName: "Robert Smith" }).run();
+    db.insert(players).values({ canonicalName: "Bob Smith" }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "player_alias",
+      arguments: { target: "Robert Smith", alias: "Bob Smith" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("already belongs to Bob Smith");
   });
 });

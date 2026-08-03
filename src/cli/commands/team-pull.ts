@@ -2,6 +2,7 @@ import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import { fetchPage } from "../../ingest/fetch.js";
 import { pullTeam } from "../../ingest/team-pull.js";
+import { ambiguousMessage } from "../../ingest/errors.js";
 import { globalFlags, parseArgs } from "../args.js";
 import { emitSummary, type SummaryField } from "../emit.js";
 
@@ -84,7 +85,7 @@ export const teamPull: Command = {
 
       const message =
         result.kind === "ambiguous"
-          ? `ambiguous target: ${result.candidates.join(", ")}`
+          ? ambiguousMessage(result)
           : result.message;
       emitSummary("team pull", "error", [["message", message]], opts);
       return 1;
