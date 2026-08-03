@@ -27,8 +27,18 @@ the command runs.
 table does — it used to take no `args` at all and silently accept anything after `tn db migrate`
 (#44), unlike `mcp serve` above, which deliberately rejects *every* argument rather than parsing any.
 
-Every value field in that summary line is double-quoted (e.g. `status=ok path="..."`), so a value
-can safely contain spaces or `=` without being mistaken for a field boundary. Within a quoted
+Every **string** value field in that summary line is double-quoted (e.g. `path="..."`), so a value
+can safely contain spaces or `=` without being mistaken for a field boundary. Two kinds of field are
+rendered **bare**, and deliberately: `status`, which is always the first field and always one of a
+small code-controlled set (`ok`, `error`, `partial`, …), and numeric counts (`roster=18`). Neither
+can contain a space, an `=`, or a control character, so quoting them would buy nothing and would
+change the shape of every line every command has ever printed. (This paragraph previously claimed
+*every* value field was quoted while its own example showed `status=ok` unquoted — issue #64.) The
+rendering is pinned by an executable test rather than by this sentence: `test/cli-emit.test.ts`'s
+*"status=ok prints a deterministic key=value line to stdout: status bare, strings quoted, numbers
+bare"* asserts the literal line
+`team pull status=ok team="Norbury" roster=18 matches=10 archived="raw/tennisrecord/x.html"`.
+Within a quoted
 value: backslashes are escaped first (`\` becomes `\\`), then double quotes (`"` becomes `\"`) —
 backslashes before quotes so an escape-aware parser can't misread an escaped backslash as also
 escaping the quote after it. Before quoting, every value is sanitized: control characters
@@ -122,9 +132,9 @@ supplied for an **unambiguous** day is still checked, not ignored: if it does no
 command refuses. Availability is stored per (player, event, day), so the same player and day can
 legitimately carry a different status for each overlapping event.
 
-`tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD>` — payload positionals, the same
-shape `tn player avail` uses, so this adds no flags. The date range is **inclusive at both ends**,
-matching the day lookup `tn player avail` resolves its event through, and a single-day event
+`tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD> [format]` — payload positionals,
+the same shape `tn player avail` uses, so this adds no flags. The date range is **inclusive at both
+ends**, matching the day lookup `tn player avail` resolves its event through, and a single-day event
 (`starts-on` equal to `ends-on`) is legal. A repeat under the same name **updates in place** rather
 than duplicating (`events.name` is unique) — except that an update whose new range no longer covers
 a day this event already has availability recorded for is **refused**, naming those days. Moving or
@@ -134,6 +144,16 @@ something the command should decide. This is the one target-taking command that 
 resolve its target against existing rows — it is the writer that creates them. It exists because
 nothing in production wrote an `events` row before it, which made `tn player avail` unreachable: the
 availability writer resolves its event from the day, and there were never any events to find.
+
+The fifth positional, `[format]` (#63), is the event's own court list: a comma-separated
+`slot:discipline` list, e.g. `"S1:singles,D1:doubles,D2:doubles,D3:doubles"` — `discipline` is
+exactly `singles` or `doubles`, never inferred from the slot's own spelling. It is what
+`tn lineup plan`/`tn report build`'s optional trailing `event` argument reads to replace their
+derived slot set (see below). **Omitted on a repeat, it PRESERVES whatever format is already
+stored** — the same "never clobber a stored value with an incoming null" rule
+`upsertTeamMatch` already runs for `scheduledTime`/`site` — so a routine date correction never
+silently deletes a format recorded earlier. Given, it REPLACES the stored value outright; there is
+no way to CLEAR a stored format back to nothing in v1.
 
 `tn match add <payload-file>` — a positional target, no new flags (like every command above except
 `team pull`/`player pull`). The payload is a JSON file matching the scorecard contract in
@@ -148,16 +168,26 @@ name is fixed, typically by supplying a `usta:`/`tr:`/`wtn:` prefix-ID in the pa
 bare name. See `docs/runbooks/in-event-screenshot-ingest.md` for the full photo-to-verified-rows
 flow, including what to do when a name is flagged.
 
-`tn lineup plan <team>` — renders that team's **predicted lineup, which is a guess** (spec §
+`tn lineup plan <team> [event]` — renders that team's **predicted lineup, which is a guess** (spec §
 Deliverables 1), from court-assignment history plus ratings. The rule is pair-first: the most
 frequent doubles partnerships are placed at the slot they most often shared, S1 goes to the player
 with the most singles court matches, and ratings break every tie and fill every gap. Each slot
 carries a confidence (`high`/`medium`/`low`, from the count of supporting observations) and a basis
 (`history` or `rating`), unplaced players are listed rather than dropped, and the output names both
-the rating source it ranked within and where the slot set came from. The slot set is derived from
-the team's **observed** court-match history, not from `events.format` — nothing links a team to an
-event today — so a team whose league history has five courts is predicted across five even at a
-four-court event; the output says so rather than hiding it.
+the rating source it ranked within and where the slot set came from.
+
+**The slot set is derived from the team's observed court-match history by default** — no `[event]`
+named, unchanged from before #63 — so a team whose league history has five courts is predicted
+across five even at a four-court event; the output says so rather than hiding it. **Naming an
+`[event]` (#63) — the optional trailing positional, the same shape `tn player avail` uses —
+REPLACES the derived set with that event's own format instead**: the event's courts, in the event's
+own order, and the output names which event supplied them. The event resolves by exact `events.name`
+(the same resolve-by-name-or-refuse mechanism `tn match add` already uses, never inferred); an
+unknown name, or one on file with no format recorded (`tn event add`'s optional fifth positional),
+**refuses** rather than silently falling back to the observed set. An observed slot absent from the
+named event's format is simply not predicted for; a format slot the team has never played is filled
+by the same rating-ranked leftover step that already reports a slot "short or empty rather than
+omitted".
 
 **Only this team's own matches count as evidence.** A roster member's history includes every league
 they play in (spec § Ingestion ingests "their other leagues (18+ etc.)"), and a partnership formed
@@ -167,10 +197,24 @@ reported as a count. A team whose roster has long individual histories but no ma
 therefore **refuses**, which is the honest answer rather than a confident guess built on borrowed
 evidence.
 
-`tn report build [sectionals|<team>] [--json]` — `<team>` renders that one team's dossier;
+`tn report build [sectionals|<team>] [event] [--json]` — `<team>` renders that one team's dossier;
 `sectionals`, and bare (no target), render one dossier per team on file plus a top-level
 `index.html`/`index.md`. Output root: `TN_REPORTS_PATH`, defaulting to repo-relative `reports/` —
 mirroring `TN_DB_PATH`/`TN_RAW_PATH` exactly, so this introduces no new flag. Every write is
 checked by the same hardened output-root guard `raw/` uses (`src/fs/output-root.ts`), with
 `"reports"` as the one permitted in-repo directory — a misconfigured `TN_REPORTS_PATH` pointed at
 any other in-repo path (e.g. `src`) is refused, exit 1.
+
+The optional trailing `[event]` (#63) is the same disambiguator `tn lineup plan` accepts, and it
+applies to **every** dossier this run builds: each team's predicted-lineup section uses the named
+event's format instead of that team's own observed history, with the same refusals (unknown event,
+or one with no format on file) as `tn lineup plan`.
+
+**The event's format is resolved exactly once, before any dossier is prepared** — not once per team.
+That is what makes "every dossier" true rather than merely intended: nadal runs `tn mcp serve`
+alongside a CLI invocation against one WAL database, so a `tn event add` committing part way through
+a build is an ordinary concurrent-process interleaving, and a per-team lookup would let one batch
+emit a two-court dossier and a four-court dossier that each name the same event. Resolving up front
+also moves the refusal earlier: a bad name aborts the whole build **with nothing written**, in the
+same fail-before-any-write direction the output-path validation already takes, and it is caught even
+when no team on file has any lineup to build.

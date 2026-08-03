@@ -1,7 +1,11 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as cheerio from "cheerio";
 import {
   RedactionError,
+  assertNoSessionCredentials,
   assertRedacted,
   decodeEntities,
   redact,
@@ -33,6 +37,22 @@ const PLAYERNAME_DETECTOR = {
   name: "playername",
   pattern: /playername=([^"&']+)/g,
 };
+
+/** Minimal document shell for a session-credential fixture, mirroring PAGE above. */
+function credentialPage(inner: string): string {
+  return `<html><head></head><body>${inner}</body></html>`;
+}
+
+/** Every committed HTML fixture under test/fixtures, walked recursively (there are 7 today). */
+function collectHtmlFixtures(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...collectHtmlFixtures(full));
+    else if (entry.name.endsWith(".html")) out.push(full);
+  }
+  return out;
+}
 
 describe("redactHtml", () => {
   it("substitutes in text nodes and in attribute values", () => {
@@ -474,6 +494,346 @@ describe("never-publish identity classes", () => {
     expect(() =>
       redact('<a href="/adult/matchresults.aspx?year=2026&mid=20336">7-6</a><path d="m4.8 7.8 0.57232-0.58292"/>', []),
     ).not.toThrow();
+  });
+});
+
+describe("assertNoSessionCredentials", () => {
+  it("refuses the measured live field: a 172-char hidden CSRF token", () => {
+    const html = credentialPage(
+      `<input type="hidden" id="hdnCSRFToken" value="${"a1B2".repeat(43)}">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses __VIEWSTATE by name alone, even with a short value", () => {
+    const html = credentialPage(`<input type="hidden" name="__VIEWSTATE" value="abcde">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses __VIEWSTATEGENERATOR (8-char value)", () => {
+    const html = credentialPage(
+      `<input type="hidden" name="__VIEWSTATEGENERATOR" value="abcdefgh">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses hdnCSRFSessionRefreshed (5-char value)", () => {
+    const html = credentialPage(
+      `<input type="hidden" id="hdnCSRFSessionRefreshed" value="abcde">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses a Rails-style csrf-token meta tag", () => {
+    const html = credentialPage(`<meta name="csrf-token" content="abc123">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it.each([
+    "csrfmiddlewaretoken",
+    "_token",
+    "_csrf",
+    "__RequestVerificationToken",
+  ])("refuses the %s naming convention", (fieldName) => {
+    const html = credentialPage(
+      `<input type="hidden" name="${fieldName}" value="secretvalue123">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses a hidden input on shape alone — its name matches no convention (an 80-char opaque value)", () => {
+    const html = credentialPage(`<input type="hidden" name="q7" value="${"A1b2C3d4".repeat(10)}">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("does not let a data-type attribute exempt the real type", () => {
+    // Round 1 repro: `data-type="submit"` is a distinct attribute-map key from `type`. Reading
+    // the wrong one would wrongly exempt a hidden CSRF field.
+    const html = credentialPage(
+      `<input data-type="submit" type="hidden" id="hdnCSRFToken" value="SECRET">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses on a duplicate value attribute (the parsed map is a lossy summary of the bytes)", () => {
+    // Round 2 repro.
+    const html = credentialPage(`<input id="hdnCSRFToken" value="public" value="SECRET">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("reads the full unquoted value, including an embedded =, off the attribute map", () => {
+    // Round 3 repro: an unquoted value containing "=" is not a duplicate attribute, and the
+    // whole "x=SECRET" must be read back as the value.
+    const html = credentialPage(`<input type=hidden id=hdnCSRFToken value=x=SECRET>`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("lets a duplicate type attribute pre-empt the submit/button/reset/image exemption", () => {
+    // Round 4a repro: the FIRST type is "submit", which would otherwise exempt this element —
+    // but it is a duplicate attribute, so the lossy-parse signal refuses before the exemption
+    // is ever consulted.
+    const html = credentialPage(
+      `<input type="submit" type="hidden" id="hdnCSRFToken" value="SECRET">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("does not exempt a bare boolean type attribute (type=\"\" is not submit/button/reset/image)", () => {
+    // Round 4b repro: `type` with no value parses as `type=""`, which fails closed.
+    const html = credentialPage(`<input type id="hdnCSRFToken" value="SECRET">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("does not exempt an element with no type attribute at all", () => {
+    // Round 4c repro: no `type` key exists, so there is nothing to match the exemption list.
+    const html = credentialPage(`<input value="type=submit" id="hdnCSRFToken">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("names the field and states the vocabulary prohibition, verbatim", () => {
+    const html = credentialPage(
+      `<input type="hidden" id="hdnCSRFToken" value="some-secret-value">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow("hdnCSRFToken");
+    expect(() => assertNoSessionCredentials(html)).toThrow("session credential");
+    expect(() => assertNoSessionCredentials(html)).toThrow(
+      "Never add it to the vocabulary.",
+    );
+  });
+
+  it("does NOT refuse the recorded false positive: a submit button whose id happens to say csrf", () => {
+    const html = credentialPage(
+      `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).not.toThrow();
+  });
+
+  it.each(["button", "reset", "image"])(
+    "does not refuse a visible-label input of type=%s",
+    (type) => {
+      const html = credentialPage(`<input type="${type}" id="btnCsrfAction" value="Some Label">`);
+
+      expect(() => assertNoSessionCredentials(html)).not.toThrow();
+    },
+  );
+
+  it("does not refuse a credential-named field whose value is empty (the scrub must be a working exit)", () => {
+    const html = credentialPage(`<input type="hidden" id="hdnCSRFToken" value="">`);
+
+    expect(() => assertNoSessionCredentials(html)).not.toThrow();
+  });
+
+  it("does not refuse a long hidden value that is not opaque-token shaped (spaces, JSON punctuation)", () => {
+    // Signal 3 is a SHAPE test, not merely a length test: a value containing characters outside
+    // [A-Za-z0-9+/=._-] fails the anchored pattern regardless of how long it is.
+    const value =
+      '{"a": 1, "b": 2, "note": "this is application state, not a session credential at all"}';
+    const html = credentialPage(`<input type="hidden" id="cartState" value='${value}'>`);
+
+    expect(value.length).toBeGreaterThan(64);
+    expect(() => assertNoSessionCredentials(html)).not.toThrow();
+  });
+
+  it("passes at 63 opaque characters and refuses at 64 — the threshold, both sides", () => {
+    const justUnder = credentialPage(`<input type="hidden" id="opaque" value="${"A".repeat(63)}">`);
+    const atThreshold = credentialPage(
+      `<input type="hidden" id="opaque" value="${"A".repeat(64)}">`,
+    );
+
+    expect(() => assertNoSessionCredentials(justUnder)).not.toThrow();
+    expect(() => assertNoSessionCredentials(atThreshold)).toThrow(RedactionError);
+  });
+
+  it("does not throw for any committed fixture under test/fixtures (the real-corpus guard)", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+    const files = collectHtmlFixtures(root);
+
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const html = readFileSync(file, "utf8");
+      expect(() => assertNoSessionCredentials(html)).not.toThrow();
+    }
+  });
+
+  it("does not refuse on a parse error other than duplicate-attribute", () => {
+    // Missing whitespace between attributes is a real parse error real captured pages emit; it
+    // must be ignored, unlike duplicate-attribute.
+    const html = credentialPage(`<input type="hidden"id="x"value="y">`);
+
+    expect(() => assertNoSessionCredentials(html)).not.toThrow();
+  });
+
+  // The four below pin the fail-open holes an orchestrator verification pass found in this
+  // change's own first implementation. Each narrowing read as precision and behaved as a bypass,
+  // so each is now a test rather than a comment.
+
+  it("refuses a nameless meta carrying an opaque token", () => {
+    // The shape signal once applied only to `name`-keyed metas, which let this through entirely.
+    const html = credentialPage(`<meta content="${"A1b2C3d4".repeat(10)}">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses http-equiv=set-cookie, which is deliberately NOT exempt", () => {
+    // `set-cookie` is deprecated, but where it appears it carries literal session state — so the
+    // shape exemption is scoped to the single measured `origin-trial` value, never to the whole
+    // `http-equiv` vocabulary.
+    const html = credentialPage(`<meta http-equiv="set-cookie" content="${"A1b2C3d4".repeat(10)}">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("refuses an opaque token behind a bare boolean type, which parses to type=''", () => {
+    // Restricting the shape signal to `type="hidden"` let this through. It is the same
+    // malformed-attribute-weakens-a-guard move review round 4 used against the withdrawn stripper.
+    const html = credentialPage(`<input type name="q7" value="${"A1b2C3d4".repeat(10)}">`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  // Raw-text containers. Codex's adversarial review on PR #86 found the `<noscript>` instance;
+  // measuring it showed six containers hid an in-scope element from the selector, and five of them
+  // carried the token all the way through redact() into the returned bytes. The fix targets the
+  // class (re-parse text that still looks like in-scope markup), so the test does too.
+  it.each(["noscript", "textarea", "title", "iframe", "noembed", "noframes", "xmp"])(
+    "refuses a credential hidden from the element selector inside <%s>",
+    (container) => {
+      const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+      const html = credentialPage(`<${container}>${field}</${container}>`);
+
+      expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+    },
+  );
+
+  it("refuses Codex's exact reported trace, end to end through redact()", () => {
+    const token = "A1b2C3d4".repeat(10);
+    const html = `<html><head></head><body><noscript><input type="hidden" name="__VIEWSTATE" value="${token}"></noscript></body></html>`;
+
+    expect(() => redact(html, [], { vocabulary: new Set() })).toThrow(RedactionError);
+  });
+
+  // The depth bound must FAIL CLOSED. Its first version returned quietly, which restored the whole
+  // raw-text bypass at four levels of nesting — a bound that fails open is worse than no bound,
+  // because it reads as a limit rather than a hole. Sweeping the depths guards both directions at
+  // once: below the bound the field is identified, at and past it the document is refused wholesale.
+  it.each([1, 2, 3, 4, 5, 6, 12])(
+    "refuses a credential hidden under %i levels of raw-text nesting",
+    (levels) => {
+      const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+      const html = `<html><body>${"<textarea>".repeat(levels)}${field}</body></html>`;
+
+      expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+    },
+  );
+
+  it("says it stopped looking rather than implying the document was clean", () => {
+    const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+    const html = `<html><body>${"<textarea>".repeat(6)}${field}</body></html>`;
+
+    expect(() => assertNoSessionCredentials(html)).toThrow("was not swept");
+  });
+
+  it("refuses a credential nested two containers deep", () => {
+    const field = `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`;
+    const html = credentialPage(`<noscript><textarea>${field}</textarea></noscript>`);
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  it("keeps checking after an exempt element — a later credential is still caught", () => {
+    // Guards the loop's `continue`. This body was once a cheerio `.each()` callback where `return`
+    // meant "skip this element"; as a `for` loop the same keyword exits the whole function, so an
+    // exempt or empty-valued element appearing FIRST would silently suppress every check after it.
+    // Every other test here uses a single-element fixture and would not see that.
+    const html = credentialPage(
+      `<input type="submit" id="btnCsrfRefreshPage" value="Refresh Page">` +
+        `<input type="hidden" id="alsoEmpty" value="">` +
+        `<input type="hidden" name="__VIEWSTATE" value="${"A1b2C3d4".repeat(10)}">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).toThrow(RedactionError);
+  });
+
+  // The documented limits, pinned executably. `assertNoSessionCredentials`'s docstring claims to
+  // list what it does NOT cover, exhaustively — and a limits list is exactly the kind of claim that
+  // rots into being wider than the code. These cases make it checkable: each one must PASS, and if
+  // a future change starts refusing one, the docstring is out of date and this test says so.
+  // (They go green against a no-op control too — that is fine, and not what they are for; 22 other
+  // tests in this file die under a no-op stub, which is what pins the control's substance.)
+  it.each([
+    ["element scope: a credential on a div", `<div data-csrf-token="TOKEN"></div>`],
+    ["element scope: a credential in a textarea", `<textarea name="__VIEWSTATE">TOKEN</textarea>`],
+    ["attribute scope: an in-scope element, an out-of-scope attribute", `<input type="hidden" id="x" data-token="TOKEN">`],
+    ["the unconditional submit exemption", `<input type="submit" name="__VIEWSTATE" value="TOKEN">`],
+  ])("documents a known limit — %s", (_label, inner) => {
+    const html = credentialPage(inner.replace("TOKEN", "A1b2C3d4".repeat(10)));
+
+    expect(() => assertNoSessionCredentials(html)).not.toThrow();
+  });
+
+  it("passes an origin-trial meta — the one measured shape exemption", () => {
+    // Chrome origin-trial tokens are signed and origin-bound, not session-bound: public by
+    // construction. Two committed USTA fixtures ship five each, and they are the ONLY
+    // shape-positive metas in the corpus.
+    const html = credentialPage(
+      `<meta http-equiv="origin-trial" content="${"A1b2C3d4".repeat(10)}">`,
+    );
+
+    expect(() => assertNoSessionCredentials(html)).not.toThrow();
+  });
+});
+
+describe("redact() refuses a session credential before the vocabulary loop", () => {
+  // Task 4+5, and the single most important test in the change: today a credential surfaces as
+  // an unknown atom in the vocabulary loop, where the tempting remedy — add it to the vocabulary
+  // — is the harmful one. Wiring the refusal in FIRST means the operator sees a RedactionError
+  // naming the credential, never a PolicyError from the allow-list.
+  it("throws RedactionError naming the credential, not PolicyError", () => {
+    const page = credentialPage(
+      `<p>Cory Hogan</p><input type="hidden" id="hdnCSRFToken" value="${"A".repeat(80)}">`,
+    );
+
+    let thrown: unknown;
+    try {
+      redact(page, [{ from: "Cory Hogan", to: "Dana Sample" }], { vocabulary: new Set<string>() });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(RedactionError);
+    expect(thrown).not.toBeInstanceOf(PolicyError);
+    expect((thrown as Error).message).toContain("hdnCSRFToken");
+  });
+
+  it("behaves exactly as before on a page with no session credential (no regression)", () => {
+    const page = "<p>Cory Hogan</p>";
+
+    expect(() =>
+      redact(page, [{ from: "Cory Hogan", to: "Dana Sample" }], {
+        vocabulary: new Set<string>(),
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not refuse a bare source URL string — capture-fixture.ts runs sourceUrl through redact() too", () => {
+    const sourceUrl = "https://tennisrecord.com/player.aspx?playername=Cory%20Hogan&uaid=2018259527";
+
+    expect(() => redact(sourceUrl, SUBS)).not.toThrow();
   });
 });
 

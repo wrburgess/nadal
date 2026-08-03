@@ -4,6 +4,8 @@ One runbook per operational flow; each SOW's manual-test segment cites the runbo
 exercises, and runbooks double as HC post-merge checklists.
 
 - [login-assisted-scrape.md](login-assisted-scrape.md) — USTA/WTN pull with HC standing by to log in
+- [capture-fixtures.md](capture-fixtures.md) — turn a live page into a committed test fixture; the
+  HC-driven variant for login-gated pages, and the refusal loop that is most of the work
 - [build-and-print-dossiers.md](build-and-print-dossiers.md) — `tn report build` → browser → courtside binder
 - [agent-chat-over-mcp.md](agent-chat-over-mcp.md) — point an agent chat at `tn mcp serve`; capture
   availability and captain notes conversationally
@@ -13,8 +15,8 @@ exercises, and runbooks double as HC post-merge checklists.
   `match_add` → verified rows → what to do when a name is flagged
 - [db-migration-recovery.md](db-migration-recovery.md) — `tn db migrate` fails on an existing
   database; the one-line recovery and why losing the database costs nothing by design
-
-Planned (spec § Testing):
-
-- pre-tournament-full-pull.md — refresh all scouted teams end to end
-- backup-restore.md — tn db backup / restore drill
+- [pre-tournament-full-pull.md](pre-tournament-full-pull.md) — refresh every scouted team end to
+  end: live TennisRecord pulls, the human-in-the-loop USTA/WTN path, and the TennisLink hole (#27)
+  none of it closes
+- [backup-restore.md](backup-restore.md) — `sqlite3 .backup`/`.restore` drill against the database
+  `tn` actually ships today (no `tn db backup`/`db restore` command exists yet)

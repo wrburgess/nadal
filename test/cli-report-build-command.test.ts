@@ -1,12 +1,14 @@
 import Database from "better-sqlite3";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatch } from "../src/cli/router.js";
 import { runMigrations, openDb } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
-import { players, teamMemberships, teams } from "../src/db/schema.js";
+import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
+import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
+import { addEvent } from "../src/query/events.js";
 import * as writeModule from "../src/report/write.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -50,6 +52,40 @@ describe("tn report build (end-to-end via dispatch)", () => {
     }
     sqlite.close();
     return team;
+  }
+
+  /** A team with real court-match history, so the predicted-lineup section actually renders
+   * (rather than the "nothing to predict from" absence a bare roster produces). */
+  function seedTeamWithHistory(name: string): { team: { id: number; name: string }; playerIds: number[] } {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name, nameKey: nameKey(name) }).returning().get();
+    const opponentName = `${name} Opponent`;
+    const opponent = db.insert(teams).values({ name: opponentName, nameKey: nameKey(opponentName) }).returning().get();
+    const p1 = db.insert(players).values({ canonicalName: "Ada Ashby" }).returning().get();
+    const p2 = db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    for (const p of [p1, p2]) {
+      db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
+    }
+    const tm = db
+      .insert(teamMatches)
+      .values({ homeTeamId: team.id, visitingTeamId: opponent.id, sourceMatchId: `${name}-match` })
+      .returning()
+      .get();
+    const cm = upsertCourtMatch(db, {
+      teamMatchId: tm.id,
+      slot: "D1",
+      discipline: "doubles",
+      winnerSide: "home",
+      score: "6-3 6-4",
+      leagueContext: "40+ 3.5",
+      playedOn: "2026-05-01",
+      sourceMatchId: `${name}-cm`,
+    });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p1.id, side: "home" });
+    upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: p2.id, side: "home" });
+    sqlite.close();
+    return { team, playerIds: [p1.id, p2.id] };
   }
 
   it("with a <team> target, builds that team's dossier and prints one summary line naming the root/teams/files, exit 0", async () => {
@@ -161,6 +197,36 @@ describe("tn report build (end-to-end via dispatch)", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --bogus"));
   });
 
+  // Issue #36 decided there is no `--pdf` in v1 — on proportion (a bounded, one-event saving against a
+  // permanent ~300 MB dependency), NOT on there being nothing to automate. See the runbook. The
+  // `--bogus` test above pins the generic unrecognized-flag MECHANISM; this one pins the OUTCOME the
+  // decision is actually about — no PDF artifact is produced — which the runbook states in prose and
+  // which nothing else enforced.
+  //
+  // Asserting the exit code and the message alone would NOT establish that (a Reviewer finding on
+  // PR #61): a future change could write a PDF on seeing `--pdf` and *then* fall through to the same
+  // parser error, and both of those assertions would still pass. So the reports root is checked too.
+  // Both argument positions are covered, so the pin does not depend on where the flag sits.
+  it("--pdf produces no PDF and is rejected in either argument position (issue #36: no --pdf in v1)", async () => {
+    seedTeamWithRoster("Team A", []);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const pdfsUnderReportsRoot = () =>
+      readdirSync(reportsDir, { recursive: true }).filter((entry) => String(entry).endsWith(".pdf"));
+
+    const bare = await dispatch(["report", "build", "--pdf"]);
+    expect(bare).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --pdf"));
+    expect(pdfsUnderReportsRoot()).toEqual([]);
+
+    errorSpy.mockClear();
+
+    const afterTarget = await dispatch(["report", "build", "sectionals", "--pdf"]);
+    expect(afterTarget).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unrecognized flag --pdf"));
+    expect(pdfsUnderReportsRoot()).toEqual([]);
+  });
+
   it("a TN_REPORTS_PATH inside the repo tree at anything other than reports/ is refused, exit 1", async () => {
     seedTeamWithRoster("Team A", []);
     process.env.TN_REPORTS_PATH = resolve("src");
@@ -247,5 +313,76 @@ describe("tn report build (end-to-end via dispatch)", () => {
     const commands = rows.map((r) => r.command);
     expect(commands.filter((c) => c === "report build")).toHaveLength(2);
     expect(rows.map((r) => r.outcome)).toEqual(expect.arrayContaining(["ok", "error:exit-1"]));
+  });
+
+  describe("an optional trailing event positional (#63)", () => {
+    it("tn report build sectionals <event> — every dossier uses the event's courts", async () => {
+      seedTeamWithHistory("Team Event");
+      const { db, sqlite } = openDb();
+      addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+      sqlite.close();
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "sectionals", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const dirName = "team-event";
+      const md = readFileSync(join(reportsDir, dirName, "index.md"), "utf8");
+      expect(md).toContain('from the format of event "Springfield Sectionals 2026"');
+      expect(md).not.toContain("taken from this team's observed match history");
+    });
+
+    it("tn report build <team> <event> also threads the event through a single-team build", async () => {
+      seedTeamWithHistory("Team Solo Event");
+      const { db, sqlite } = openDb();
+      addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+      sqlite.close();
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "Team Solo Event", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const md = readFileSync(join(reportsDir, "team-solo-event", "index.md"), "utf8");
+      expect(md).toContain('from the format of event "Springfield Sectionals 2026"');
+    });
+
+    it("an unknown event name exits 1 and writes nothing", async () => {
+      seedTeamWithHistory("Team Bad Event");
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "sectionals", "No Such Event"]);
+
+      expect(code).toBe(1);
+      // Pinned to the actual refusal text (not merely "the event name appears somewhere"), so this
+      // cannot pass on a coincidental parse error (e.g. "unexpected extra argument") that happens to
+      // quote the same string. The event name itself is checked separately from "unknown event"
+      // because the summary line backslash-escapes the inner quotes around it.
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unknown event"));
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("No Such Event"));
+      expect(existsSync(join(reportsDir, "index.html"))).toBe(false);
+    });
+
+    it("bare tn report build (no event) stays unchanged", async () => {
+      seedTeamWithHistory("Team No Event");
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "sectionals"]);
+
+      expect(code).toBe(0);
+      const md = readFileSync(join(reportsDir, "team-no-event", "index.md"), "utf8");
+      expect(md).toContain("taken from this team's observed match history — not from the event format.");
+    });
   });
 });

@@ -52,6 +52,11 @@ describe("upgrading an existing v0 database (Codex round-1 finding on PR #20)", 
     const seed = new Database(dbPath);
     seed.exec(`INSERT INTO players (canonical_name) VALUES ('Jane Doe')`);
     seed.exec(`INSERT INTO teams (name) VALUES ('Team A')`);
+    // THREE duplicates, not two (#64). With two rows, "the survivor is id 1" and "the survivor is
+    // whichever row the DELETE happened to leave" are indistinguishable half the time; with three,
+    // MIN(id)=1, MAX(id)=3 and an arbitrary pick=2 are three different answers, so the assertion
+    // below can only pass for the behavior the migration comment actually promises.
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`);
     seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`);
     seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`);
     seed.close();
@@ -60,10 +65,63 @@ describe("upgrading an existing v0 database (Codex round-1 finding on PR #20)", 
 
     const after = new Database(dbPath);
     try {
-      const rows = after.prepare("SELECT * FROM team_memberships").all();
-      // The pre-existing duplicate is reconciled (one survivor), not silently left in place —
-      // dropping to zero rows or leaving both would both be wrong.
+      const rows = after.prepare("SELECT * FROM team_memberships").all() as Array<{ id: number }>;
+      // The pre-existing duplicates are reconciled (one survivor), not silently left in place —
+      // dropping to zero rows or leaving several would both be wrong.
       expect(rows).toHaveLength(1);
+      // ...and it is specifically the LOWEST id, which is what drizzle/0001_awesome_korg.sql's
+      // comment promises ("Keeps the lowest id per duplicate pair") and what its `MIN(id)`
+      // subquery implements. Row count alone cannot see the difference between MIN and MAX, so
+      // the comment was an unenforced claim until this line existed (#64, docs/findings.md).
+      // Which row survives is not cosmetic: `id` is the foreign key any future membership-scoped
+      // row would point at, and the lowest id is the earliest-recorded membership.
+      expect(rows[0]?.id).toBe(1);
+    } finally {
+      after.close();
+    }
+  });
+
+  it("reconciles each (team, player) group independently — a wrong GROUP BY is data loss, not a no-op", () => {
+    // Reviewer finding 2 on PR #84. The survivor-id assertion above pins MIN vs MAX, and cannot see
+    // the GROUPING KEY at all: its three rows share both `player_id` and `team_id`, so they form a
+    // single group and `GROUP BY player_id` returns exactly the same survivor as
+    // `GROUP BY team_id, player_id`. That mutation is an upgrade-time DATA LOSS — it would delete a
+    // player's membership in every team but one — and the fixture could not distinguish it.
+    //
+    // This fixture is TWO players x TWO teams, which is one step past what the Reviewer proposed.
+    // Their suggested row (one player, a second team) catches `GROUP BY player_id` but NOT
+    // `GROUP BY team_id`: with a single player, grouping by team alone yields the same survivors as
+    // grouping by both. Measured before writing this, on the real DELETE:
+    //
+    //   ids (player, team):  1(1,1)  2(1,1)  3(1,2)  4(2,1)  5(2,1)
+    //   GROUP BY team_id, player_id  -> [1, 3, 4]   (correct)
+    //   GROUP BY player_id           -> [1, 4]      caught
+    //   GROUP BY team_id             -> [1, 3]      caught
+    //   MAX(id), correct grouping    -> [2, 3, 5]   caught
+    const dbPath = freshDbPath();
+    applyV0Schema(dbPath);
+
+    const seed = new Database(dbPath);
+    seed.exec(`INSERT INTO players (canonical_name) VALUES ('Jane Doe')`);
+    seed.exec(`INSERT INTO players (canonical_name) VALUES ('John Roe')`);
+    seed.exec(`INSERT INTO teams (name) VALUES ('Team A')`);
+    seed.exec(`INSERT INTO teams (name) VALUES ('Team B')`);
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`); // id 1
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 1, NULL)`); // id 2 — dup of 1
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (1, 2, NULL)`); // id 3 — same player, other team
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (2, 1, NULL)`); // id 4 — same team, other player
+    seed.exec(`INSERT INTO team_memberships (player_id, team_id, event_id) VALUES (2, 1, NULL)`); // id 5 — dup of 4
+    seed.close();
+
+    expect(() => runMigrations(dbPath)).not.toThrow();
+
+    const after = new Database(dbPath);
+    try {
+      const rows = after.prepare("SELECT id FROM team_memberships ORDER BY id").all() as Array<{ id: number }>;
+      // Exact equality on the whole surviving set, not a count: the three wrong groupings above all
+      // produce a DIFFERENT SET, and two of them produce a different LENGTH — so a length assertion
+      // would catch some and a set assertion catches all.
+      expect(rows.map((r) => r.id)).toEqual([1, 3, 4]);
     } finally {
       after.close();
     }
@@ -86,10 +144,22 @@ describe("upgrading an existing v0 database (Codex round-1 finding on PR #20)", 
 
     const after = new Database(dbPath);
     try {
-      const rows = after.prepare("SELECT * FROM team_memberships").all() as Array<{ event_id: number | null }>;
+      const rows = after.prepare("SELECT * FROM team_memberships").all() as Array<{
+        id: number;
+        event_id: number | null;
+      }>;
       expect(rows).toHaveLength(2);
-      expect(rows.filter((r) => r.event_id === null)).toHaveLength(1);
-      expect(rows.filter((r) => r.event_id === 1)).toHaveLength(1);
+      const nullEventRows = rows.filter((r) => r.event_id === null);
+      expect(nullEventRows).toHaveLength(1);
+      // Same survivor-identity assertion as the test above (#64): the NULL-event row that survives
+      // is id 1, not id 2. Asserting only the count here would leave this test unable to tell a
+      // MIN(id) dedup from a MAX(id) one either.
+      expect(nullEventRows[0]?.id).toBe(1);
+      const eventRows = rows.filter((r) => r.event_id === 1);
+      expect(eventRows).toHaveLength(1);
+      // The untouched non-NULL row keeps its own id — this test's subject is that the DELETE's
+      // `WHERE event_id IS NULL` really does exclude it, and an id check says so directly.
+      expect(eventRows[0]?.id).toBe(3);
     } finally {
       after.close();
     }

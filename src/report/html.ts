@@ -104,17 +104,28 @@ function renderPlayerPriorMeetingsRowHtml(player: PlayerProfile, headToHead: Tea
 
 /**
  * One dedicated section for the whole dossier, rendered ONCE — not once per player block. The
- * "not available in this build" line does not depend on which player it is about (there is no home
- * team configured at all), so repeating it per player only repeated the same sentence N times for
- * an N-player dossier; when head-to-head data IS available it genuinely differs per player, so this
- * section still breaks it out by player, just gathered in one place rather than scattered through
- * `renderPlayersSectionHtml`.
+ * unavailable line does not depend on which player it is about, so repeating it per player only
+ * repeated the same sentence N times for an N-player dossier; when head-to-head data IS available
+ * it genuinely differs per player, so this section still breaks it out by player, just gathered in
+ * one place rather than scattered through `renderPlayersSectionHtml`.
+ *
+ * #19: `headToHead` is null for TWO distinct reasons — `write.ts`'s `versusTeamId` is `undefined`
+ * both when no home team is designated at all AND when the team being rendered IS the home team
+ * (a dossier does not compare a roster against itself). One sentence covered both, so the home
+ * team's own dossier announced "no home team configured" moments after `tn team home` had
+ * succeeded — accurate for one case, plainly false for the other, and read courtside as evidence
+ * that the designation had not taken. `TeamProfile.isHome` (src/query/team-profile.ts) already
+ * distinguishes them, and the two conditions are exhaustive: `versusTeamId` is `undefined` iff
+ * there is no home team or this team is it.
  */
 function renderPriorMeetingsSectionHtml(dossier: TeamDossier): string {
   const headToHead = dossier.team.headToHead;
+  const unavailable = dossier.team.isHome
+    ? "<p><em>Not available on our own team&#39;s dossier — this section compares an opponent&#39;s roster against ours.</em></p>"
+    : "<p><em>Not available in this build (no home team configured).</em></p>";
   const body =
     headToHead === null
-      ? "<p><em>Not available in this build (no home team configured).</em></p>"
+      ? unavailable
       : dossier.players.map((p) => renderPlayerPriorMeetingsRowHtml(p, headToHead)).join("");
   return `<section id="prior-meetings"><h2>Prior meetings vs our players</h2>${body}</section>`;
 }
@@ -211,8 +222,10 @@ function renderPredictedLineupHtml(dossier: TeamDossier): string {
           : `; unrated: ${lineup.unranked.map((p) => escapeHtml(p.canonicalName)).join(", ")}.`),
   );
   footnotes.push(
-    `<strong>Courts:</strong> ${lineup.slots.length}, taken from this team's observed match history — ` +
-      "not from the event format.",
+    lineup.slotSource === "event-format"
+      ? `<strong>Courts:</strong> ${lineup.slots.length}, from the format of event "${escapeHtml(lineup.slotEvent.name)}".`
+      : `<strong>Courts:</strong> ${lineup.slots.length}, taken from this team's observed match history — ` +
+          "not from the event format.",
   );
   if (lineup.excludedOtherTeamMatches > 0) {
     footnotes.push(

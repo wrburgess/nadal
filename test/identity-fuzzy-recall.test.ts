@@ -118,8 +118,13 @@ describe("identity fuzzy recall — banded tier-3 matches brute force exactly", 
     runMigrations();
     const { db, sqlite } = openDb();
     try {
-      const stored = "𝕁𝕠𝕙"; // 3 code points, 6 UTF-16 units
-      const probe = "𝕁𝕠𝕙n"; // 4 code points, 7 UTF-16 units — a genuine distance-1 near-miss
+      // CJK Extension B, chosen because NFKC leaves it alone. The original fixture here was
+      // MATHEMATICAL DOUBLE-STRUCK (`𝕁𝕠𝕙`), which NFKC decomposes to ASCII `joh` — so when #62 moved
+      // `nameKey` from NFC to NFKC this test's subject stopped being an astral name at all. The
+      // premise guard below is what caught that; see test/helpers/players.ts for the same fix
+      // applied to the shared corpus.
+      const stored = "𠀀𠀁𠀂"; // 3 code points, 6 UTF-16 units
+      const probe = "𠀀𠀁𠀂n"; // 4 code points, 7 UTF-16 units — a genuine distance-1 near-miss
 
       // Guard the premise: if these ever stop disagreeing, this test is no longer exercising the
       // defect it was written for and must not keep passing as if it were.

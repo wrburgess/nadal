@@ -156,6 +156,36 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
     runMigrationsSpy.mockRestore();
     errorSpy.mockRestore();
   });
+
+  it("still prints its status=error summary when the failure's Error carries a non-string message (#64)", async () => {
+    // Sibling of the telemetry finding in test/request-log.test.ts, and the harder failure of the
+    // two: here the un-coerced message reaches `quoteSummaryValue`'s `.replace()`, so the command
+    // threw a TypeError INSTEAD of emitting its summary line. The exit code stayed 1 only because
+    // `logRequest`'s own catch absorbed the TypeError — so exit code alone cannot see this defect,
+    // and the assertion that matters is that the deterministic one-line summary was emitted at all.
+    const err = new Error();
+    Object.defineProperty(err, "message", { value: { hostile: true }, writable: true, configurable: true });
+    const runMigrationsSpy = vi.spyOn(client, "runMigrations").mockImplementation(() => {
+      throw err;
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    // try/finally, unlike the sibling cases above: this test is RED before the fix, and a failing
+    // assertion would otherwise skip `mockRestore()` and leak the `runMigrations` spy into every
+    // later test in this file — four of them went red on the first run for that reason alone,
+    // burying the one real signal. A red-first test has to restore its module spies unconditionally.
+    try {
+      const code = await dispatch(["db", "migrate"]);
+
+      expect(code).toBe(1);
+      const printed = errorSpy.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith("db migrate"));
+      expect(printed, "no db migrate summary line was emitted").toBeDefined();
+      expect(printed).toBe('db migrate status=error message="[object Object]"');
+    } finally {
+      runMigrationsSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
 });
 
 // #44 Task 5: the adjacent defect folded into this issue — `db migrate` never parsed its `args` at

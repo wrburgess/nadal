@@ -128,6 +128,23 @@ describe("renderDossier", () => {
     expect(html.toLowerCase()).toContain("prior meetings");
   });
 
+  // #19: `headToHead` is null for TWO different reasons (src/report/write.ts's `versusTeamId`
+  // is undefined when no home team exists at all, AND when the team being built IS the home
+  // team), and both used to print the same sentence — "no home team configured". On the home
+  // team's OWN dossier that sentence is simply false: `tn team home` has run and succeeded, and
+  // the binder still said nobody had configured one. `TeamProfile.isHome` already carried the
+  // distinction (src/query/team-profile.ts:169); the renderers just never read it.
+  it("on the home team's OWN dossier, the unavailable line does NOT claim no home team is configured", () => {
+    const html = renderDossier(buildDossier({ team: buildTeamProfile({ isHome: true, headToHead: null }) }));
+    expect(html.toLowerCase()).not.toContain("no home team configured");
+    expect(html.toLowerCase()).toContain("our own team");
+  });
+
+  it("with no home team designated at all, the unavailable line DOES say so", () => {
+    const html = renderDossier(buildDossier({ team: buildTeamProfile({ isHome: false, headToHead: null }) }));
+    expect(html.toLowerCase()).toContain("no home team configured");
+  });
+
   it("renders head-to-head rows when headToHead is present, naming the OPPONENT'S NAME rather than a raw id", () => {
     const dossier = buildDossier({
       team: buildTeamProfile({

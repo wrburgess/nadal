@@ -14,6 +14,8 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
+import { resolveEventFormat } from "../src/query/lineup.js";
+import { addEvent } from "../src/query/events.js";
 import { renderDossier } from "../src/report/html.js";
 import { renderDossierMarkdown } from "../src/report/markdown.js";
 import { buildTeamDossier } from "../src/report/write.js";
@@ -47,6 +49,25 @@ describe("predicted-lineup section — markdown", () => {
     // roster row reading "NTRP" is drift, so both go through `ratingSourceLabel`.
     expect(md).toContain("**Ratings:** ranked within NTRP; unrated: Ira Inglewood.");
     expect(md).toContain("**Courts:** 3, taken from this team's observed match history — not from the event format.");
+  });
+
+  // #63: the presenter must READ slotSource/slotEvent rather than hardcoding the "observed" claim —
+  // asserted by the OLD sentence's absence, not merely the new one's presence, per the plan's own
+  // "silent-lie" regression shape.
+  it("names the event when slotSource is event-format, and the old observed sentence is genuinely absent", () => {
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield Sectionals 2026" } });
+    const md = renderDossierMarkdown(buildDossier({ lineup }));
+
+    expect(md).toContain('**Courts:** 3, from the format of event "Springfield Sectionals 2026".');
+    expect(md).not.toContain("taken from this team's observed match history — not from the event format.");
+  });
+
+  it("escapes an event name with markdown metacharacters", () => {
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield | <script>alert(1)</script>" } });
+    const md = renderDossierMarkdown(buildDossier({ lineup }));
+
+    expect(md, "a raw pipe would corrupt the surrounding prose").not.toContain("| Springfield | <script>");
+    expect(md).not.toContain("<script>alert(1)</script>");
   });
 
   it("states the absence when there is no history to predict from", () => {
@@ -96,6 +117,22 @@ describe("predicted-lineup section — HTML", () => {
     expect(html).toContain("<td>S1</td><td>Ada Ashby</td><td>high</td><td>6 singles matches</td>");
     expect(html).toContain("<td>D1</td><td>Bo Bramwell / Cy Calder</td><td>high</td><td>5 matches together</td>");
     expect(html).toContain("placed by rating — no shared history");
+  });
+
+  it("names the event when slotSource is event-format, and the old observed sentence is genuinely absent", () => {
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield Sectionals 2026" } });
+    const html = renderDossier(buildDossier({ lineup }));
+
+    expect(html).toContain('<strong>Courts:</strong> 3, from the format of event "Springfield Sectionals 2026".');
+    expect(html).not.toContain("taken from this team's observed match history");
+  });
+
+  it("escapes an event name containing markup", () => {
+    const lineup = buildLineupPlan({}, { slotSource: "event-format", slotEvent: { id: 1, name: "Springfield <script>alert(1)</script>" } });
+    const html = renderDossier(buildDossier({ lineup }));
+
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
   });
 
   it("states the absence when there is no history to predict from", () => {
@@ -236,6 +273,63 @@ describe("buildTeamDossier wires the real prediction in", () => {
 
       expect(dossier.lineup).toBeNull();
       expect(renderDossierMarkdown(dossier)).toContain("nothing to predict from");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // #63: the event name threads all the way from `report build`'s CLI argument down to
+  // `getLineupPlan`, so a dossier built with an event named uses THAT event's courts.
+  it("threads an eventName through to getLineupPlan, so the dossier uses the event's courts", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const team = db.insert(teams).values({ name: "IA/Versteeg/40&Over3.5M" }).returning().get();
+      const ids: number[] = [];
+      for (const name of ["Ada Ashby", "Bo Bramwell", "Cy Calder"]) {
+        const p = db.insert(players).values({ canonicalName: name }).returning().get();
+        ids.push(p.id);
+        db.insert(teamMemberships).values({ playerId: p.id, teamId: team.id, eventId: null }).run();
+      }
+      backfillNameKeys(db);
+
+      const opponent = db.insert(teams).values({ name: "Report Opponent" }).returning().get();
+      const tm = db
+        .insert(teamMatches)
+        .values({ homeTeamId: team.id, visitingTeamId: opponent.id, sourceMatchId: "report-tm-event-1" })
+        .returning()
+        .get();
+      const cm = upsertCourtMatch(db, {
+        teamMatchId: tm.id,
+        slot: "D1",
+        discipline: "doubles",
+        winnerSide: "home",
+        score: "6-3 6-4",
+        leagueContext: "40+ 3.5",
+        playedOn: "2026-05-01",
+        sourceMatchId: "dossier-event-1",
+      });
+      upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: ids[1]!, side: "home" });
+      upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: ids[2]!, side: "home" });
+      addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+
+      // `buildTeamDossier` takes an ALREADY-RESOLVED event, never a name — the resolution belongs to
+      // the batch entry point so one build cannot straddle two format versions.
+      const dossier = buildTeamDossier(db, team.id, {
+        since: "2026-01-01",
+        event: resolveEventFormat(db, "Springfield Sectionals 2026"),
+      });
+
+      expect(dossier.lineup).not.toBeNull();
+      expect(dossier.lineup!.slotSource).toBe("event-format");
+      expect(dossier.lineup!.slotEvent).toMatchObject({ name: "Springfield Sectionals 2026" });
+      expect(renderDossierMarkdown(dossier)).toContain('from the format of event "Springfield Sectionals 2026"');
     } finally {
       sqlite.close();
     }

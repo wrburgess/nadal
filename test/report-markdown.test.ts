@@ -196,4 +196,17 @@ describe("renderDossierMarkdown", () => {
     const md = renderDossierMarkdown(buildDossier());
     expect(md).toMatch(/^## Prior meetings vs our players$/m);
   });
+
+  // #19: twin of the html.ts case — see that suite's comment. The two renderers must not drift on
+  // which sentence they print for which reason `headToHead` is null.
+  it("on the home team's OWN dossier, the unavailable line does NOT claim no home team is configured", () => {
+    const md = renderDossierMarkdown(buildDossier({ team: buildTeamProfile({ isHome: true, headToHead: null }) }));
+    expect(md.toLowerCase()).not.toContain("no home team configured");
+    expect(md.toLowerCase()).toContain("our own team");
+  });
+
+  it("with no home team designated at all, the unavailable line DOES say so", () => {
+    const md = renderDossierMarkdown(buildDossier({ team: buildTeamProfile({ isHome: false, headToHead: null }) }));
+    expect(md.toLowerCase()).toContain("no home team configured");
+  });
 });

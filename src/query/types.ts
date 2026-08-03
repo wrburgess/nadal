@@ -9,6 +9,8 @@
 // every derive.ts function that consumes one computes outcomes RELATIVE to a given player's or
 // team's own side rather than trusting "home" to mean anything absolute.
 
+import type { EventCourt } from "./event-format.js";
+
 export type Side = "home" | "visiting";
 
 // TennisRecord's slot/discipline vocabulary is not closed here on purpose — `derive.ts`'s
@@ -189,6 +191,14 @@ export type PredictedLineupInput = {
   rows: CourtMatchRow[];
   rosterPlayerIds: number[];
   ratings: { playerId: number; observations: RatingObservationRow[] }[];
+  /** An event's own court list (#63), when the caller has one. Present -> REPLACES the derived slot
+   * set: `slotOrder` becomes this list's order verbatim (not the observed-discipline ranking),
+   * each slot's discipline comes from here rather than from observed rows, and `slotSource` becomes
+   * `"event-format"`. Absent -> today's behavior, unchanged: the slot set is derived from observed
+   * history and `slotSource` stays `"observed"`. An explicit empty array throws rather than silently
+   * falling back to the derived set — unreachable through `event-format.ts`'s own writer, which
+   * refuses an empty format, but guarded here too since this function is pure and callable directly. */
+  slotSet?: EventCourt[];
 };
 
 export type PredictedLineupResult = {
@@ -202,9 +212,11 @@ export type PredictedLineupResult = {
   /** Roster players with no observation in `ratingSource` — ranked last, and named so the gap is
    * visible rather than implicit in the ordering. */
   unrankedPlayerIds: number[];
-  /** Where the slot set came from. `observed` is the only v1 value: nothing links a team to an
-   * event, so `events.format` cannot be reached from a team. See `predictedLineup`'s doc comment. */
-  slotSource: "observed";
+  /** Where the slot set came from (#63). `"observed"` — derived from this team's own court-match
+   * history, same as before this field gained a second member. `"event-format"` — supplied by a
+   * named event's format (`PredictedLineupInput.slotSet`), which replaces the derived set outright.
+   * See `predictedLineup`'s doc comment. */
+  slotSource: "observed" | "event-format";
   /** How many court matches the whole guess rests on. */
   observedCourtMatches: number;
 };

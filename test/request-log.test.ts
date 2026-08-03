@@ -112,4 +112,93 @@ describe("request telemetry", () => {
       errorSpy.mockRestore();
     }
   });
+
+  it("survives a write failure whose Error carries a non-string message (#64, Codex round-2 on PR #20)", async () => {
+    // The module's own contract is "telemetry must never break the request/tool call itself", and
+    // the guard implementing it read `err instanceof Error ? err.message : String(err)` — which puts
+    // the String() coercion on the WRONG branch. TypeScript types `Error.prototype.message` as
+    // `string`, but it is an ordinary writable own property, so a subclassed, mutated, or
+    // cross-realm error can carry anything. `sanitizeValue()` then called `.replace()` on a
+    // non-string and threw a TypeError FROM INSIDE THE CATCH, propagating out of `logRequest` and
+    // breaking the very request the catch existed to protect.
+    //
+    // Asserted on the side effects, not on "it ran": the wrapped fn's exit code must survive
+    // untouched, and the diagnostic must still reach stderr exactly once.
+    const err = new Error();
+    Object.defineProperty(err, "message", { value: { hostile: true }, writable: true, configurable: true });
+    const openDbSpy = vi.spyOn(client, "openDb").mockImplementation(() => {
+      throw err;
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await logRequest("cli", "db migrate", [], async () => 0);
+      expect(code).toBe(0);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith("telemetry: request_log write failed: [object Object]");
+    } finally {
+      openDbSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("classifies a hostile thrown value without throwing — Reviewer finding 3 on PR #84", async () => {
+    // The Reviewer's trace, verbatim. `outcome` was built with
+    // `err instanceof Error ? err.constructor.name : "unknown"`, and `instanceof` invokes this
+    // Proxy's getPrototypeOf trap — so the CLASSIFIER threw, `logRequest` rejected, and the
+    // wrapped call's exit code never came back. The first pass of #64 hardened the message read
+    // and left the class read standing: a partial class fix, which is the shape this whole PR is
+    // about.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf(): never {
+          throw new Error("trap");
+        },
+      },
+    );
+    const code = await logRequest("cli", "x", [], async () => {
+      throw hostile;
+    });
+    expect(code).toBe(1);
+    expect(rows()[0]?.outcome).toBe("error:unknown");
+  });
+
+  it("survives a constructor whose name is a length-bearing non-string (Reviewer, PR #84 @ 5e6dad8)", async () => {
+    // The end-to-end half of the errorClass unit test of the same shape. The Reviewer's point was
+    // that under a weakened guard this value is RETURNED rather than rejected, and `logRequest`
+    // then interpolates it into `error:${...}`, invoking its throwing `toString` inside the catch.
+    // Asserted here at the level that actually matters: the wrapped call still returns its exit
+    // code, and the persisted outcome is a real string.
+    const err = new Error("boom");
+    Object.defineProperty(err, "constructor", {
+      value: {
+        name: {
+          length: 1,
+          toString(): string {
+            throw new Error("boom");
+          },
+        },
+      },
+      configurable: true,
+    });
+    const code = await logRequest("cli", "x", [], async () => {
+      throw err;
+    });
+    expect(code).toBe(1);
+    expect(rows()[0]?.outcome).toBe("error:unknown");
+  });
+
+  it("classifies an Error whose constructor was removed — no Proxy required", async () => {
+    // The weaker variant, found while verifying the Reviewer's trace rather than taken from it:
+    // `.constructor` is a writable property like `.message`, so `err.constructor.name` throws a
+    // plain TypeError with no exotic object involved at all. Worth its own case because it shows
+    // the finding is not confined to Proxies, which is how it would otherwise be remembered.
+    const err = new Error("boom");
+    Object.defineProperty(err, "constructor", { value: undefined, configurable: true });
+    const code = await logRequest("cli", "x", [], async () => {
+      throw err;
+    });
+    expect(code).toBe(1);
+    expect(rows()[0]?.outcome).toBe("error:unknown");
+  });
 });
