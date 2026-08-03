@@ -87,8 +87,13 @@ function assertTeamsKeyed(db: Db): void {
  * by at most 1), so narrowing on it can never drop a true fuzzy candidate. This is what makes
  * "recall provably unchanged" a checked claim (test/identity-fuzzy-recall.test.ts) rather than an
  * argument: the caller still runs the exact Levenshtein over this band, unabridged.
+ *
+ * Exported (#94) so `src/ingest/disambiguate.ts` can ask "is this name ambiguous?" with the SAME
+ * band and the same index the ladder itself uses. A second, hand-rolled notion of nearness there
+ * would answer that question differently from the pull it exists to unblock — the operation would
+ * report a ruling applied while the next pull still refused.
  */
-function fuzzyPlayerBand(db: Db, targetLength: number): PlayerRow[] {
+export function fuzzyPlayerBand(db: Db, targetLength: number): PlayerRow[] {
   return db
     .select()
     .from(players)

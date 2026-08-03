@@ -219,6 +219,6 @@ tn lineup plan "IA/Versteeg/40&Over3.5M"
 |---|---|
 | `no court-match history on file for "<team>"` | No court matches belonging to **this team** were ingested — its players may still have plenty of history for other teams, which does not count. Re-run a `--players` pull for it (prompt form, [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2), which writes the schedule the player pulls then link against. |
 | `unknown target "<team>"` | No team by that name. `tn team show` with a partial name to find the spelling. |
-| `ambiguous target: A, B` | More than one team matches. Use the full name, or `tr:<url>`. |
+| `ambiguous identity "<target>" (team name target) — near: A, B` | More than one team matches what you typed. Use the full name, or `tr:<url>`. |
 | `unknown event "<name>"` | No event by that name is on file. Check the spelling, or record it first with `tn event add`. |
 | `event "<name>" has no format on file` | The event exists but nobody has recorded its courts yet. Run `tn event add "<name>" <kind> <starts-on> <ends-on> "<format>"` (step 0) — the same call updates it in place. |

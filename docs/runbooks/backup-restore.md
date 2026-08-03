@@ -236,7 +236,7 @@ an ad hoc leftover file is the unreliable one.
 ## Known limitations
 
 - **`tn db backup`/`tn db restore` do not exist.** Both are listed in `docs/cli/GRAMMAR.md`'s
-  *Planned* section only; the 13 commands actually in `src/cli/router.ts`'s `COMMANDS` registry
+  *Planned* section only; the 15 commands actually in `src/cli/router.ts`'s `COMMANDS` registry
   include neither. This whole runbook is the manual substitute, and it stays that way until that
   work is scoped and shipped.
 - **No automated check verifies this runbook's prose.** `test/cli-grammar-parity.test.ts`

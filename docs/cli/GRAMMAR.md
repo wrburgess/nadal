@@ -2,7 +2,9 @@
 
 `tn <noun> <verb> <target> [payload] [flags]` — one spelling per operation; the entire surface
 fits this table. Targets: bare text = name lookup; `usta:`, `wtn:`, `tr:` prefixes select an ID
-namespace. Ambiguous names error with candidates listed — never guess. Global flags only:
+namespace. Ambiguous names error, naming the **incoming** value, **where** it came from, and the
+candidates it is **near** — never guess; settle it with `player distinct` / `player alias` below.
+Global flags only:
 `--quiet/-q`, `--json`, `--help`. GNU flag style, max one short alias per flag. Every command
 prints one deterministic `key=value` summary line; non-zero exit on failure.
 
@@ -112,6 +114,8 @@ looks for `--help` then depends on whether that resolved:
 | `tn player show` | Show a player's full profile: ratings trajectory, history, records |
 | `tn player avail` | Record a home-team player's availability for an event day |
 | `tn player note` | Append a captain note about a home-team player or pairing |
+| `tn player distinct` | Declare a name a different person from its near-matches, creating that player |
+| `tn player alias` | Record a second spelling as the same person as a known player |
 | `tn event add` | Create or update an event and its inclusive date range |
 | `tn match add` | Record a scorecard's results from an agent-extracted payload |
 | `tn lineup plan` | Predict an opponent's lineup from court-assignment history and ratings |
@@ -154,6 +158,34 @@ stored** — the same "never clobber a stored value with an incoming null" rule
 `upsertTeamMatch` already runs for `scheduledTime`/`site` — so a routine date correction never
 silently deletes a format recorded earlier. Given, it REPLACES the stored value outright; there is
 no way to CLEAR a stored format back to nothing in v1.
+
+`tn player distinct <name>` and `tn player alias <known> <other>` (#94) — the two rulings a human can
+make about an ambiguous identity, and the **only** commands that write `players` / `player_aliases`
+outside a scrape. Every other write path routes through the identity ladder, whose tier-3 contract is
+"report the candidates and create nothing" (spec § Ingestion forbids a silent merge) — the right
+refusal, and a dead end until these existed: a team with one colliding roster name could not be
+pulled at all.
+
+Both take positionals only, no flags. `distinct` says the incoming name is a **different person** and
+creates it as its own player (recorded as its own first alias, exactly as a pull's own creation path
+does), so the ladder's exact tier matches it from then on and the fuzzy tier is never consulted for it
+again; the summary names who it is now `distinctFrom=`. `alias` says the two spellings are the **same
+person** and records `<other>` against `<known>` — `<known>` accepts the `usta:`/`wtn:`/`tr:`
+prefix-IDs as well as a bare name, and argument order is load-bearing: only `<known>` has to already
+exist. Both are **idempotent** and exit 0 on a repeat, reporting `created=false` / `recorded=false`.
+
+Neither merges two existing players. A merge would have to reassign court matches, memberships and
+ratings, and is deliberately out of scope — `distinct` on a name already held by two rows refuses and
+says so rather than adding a third.
+
+They refuse in opposite directions, and the asymmetry is deliberate. `distinct` **requires the name to
+actually be ambiguous**: a name near nothing was never refused by anything, so it is a typo (`Karsen`
+for `Karson`) or a job for `player pull`, and accepting it would mint a person nobody meant to create
+one letter from a real one. `alias` requires no such thing, because a spelling further away than the
+fuzzy radius ("Bob" for "Robert") is never *reported* ambiguous — it silently creates a duplicate on
+the next pull, which is exactly the case worth recording ahead of time. What `alias` does refuse is
+an `<other>` another player already answers to: both rows would then share one comparison key, so the
+name would resolve to two players **permanently**, and nothing removes an alias.
 
 `tn match add <payload-file>` — a positional target, no new flags (like every command above except
 `team pull`/`player pull`). The payload is a JSON file matching the scorecard contract in

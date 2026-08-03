@@ -66,6 +66,8 @@ the USTA login form itself.
 
 - This tool never automates the USTA login. If the session expires mid-capture, sign in again and
   re-save.
-- An ambiguous player name (ties `src/ingest/identity.ts`'s tier-3 fuzzy match) aborts the write
-  and lists the candidates — resolve it by re-running with a name that matches an existing player
-  exactly, or by asking an HC to fold the two records manually. Nothing is ever silently merged.
+- An ambiguous player name (ties `src/ingest/identity.ts`'s tier-3 fuzzy match) aborts the write and
+  reports three facts: the **incoming** name, **where** it came from, and the candidates it is
+  **near** (#94). Rule on it with `tn player distinct "<incoming>"` (different people) or
+  `tn player alias "<candidate>" "<incoming>"` (same person, two spellings), then re-run. Nothing is
+  ever silently merged, and neither command merges two existing rows — that is still an HC job.

@@ -10,6 +10,7 @@ import { openDb, runMigrations } from "../db/client.js";
 import { teams } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { pullArchivedUstaProfile } from "../ingest/archived.js";
+import { declareDistinctPlayer, recordPlayerAlias } from "../ingest/disambiguate.js";
 import { ambiguousMessage } from "../ingest/errors.js";
 import { fetchPage } from "../ingest/fetch.js";
 import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../ingest/match-add.js";
@@ -414,6 +415,70 @@ export const MCP_TOOLS: McpToolDef[] = [
             : requireResolved(resolvePlayerTarget(db, pairTarget), "pairTarget", pairTarget).playerId;
         const note = addCaptainNote(db, { playerId: resolution.playerId, pairPlayerId, text });
         return { player: target, note: note.note, pairPlayerId: note.pairPlayerId, createdAt: note.createdAt };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "player_distinct",
+    cliCommand: "player distinct",
+    description: "Declare a name a different person from its near-matches, creating that player",
+    inputShape: { target: z.string().min(1) },
+    handler: async (rawArgs) => {
+      const { target } = rawArgs as { target: string };
+      const { db, sqlite } = openDb();
+      try {
+        // No `requireResolved`, matching `event_add`/`match_add`: this is a WRITER that creates the
+        // identity, so resolving the name against existing rows first is precisely the refusal it
+        // exists to settle.
+        const result = declareDistinctPlayer(db, { name: target });
+        if (result.kind === "created") {
+          return { player: result.player.canonicalName, created: true, distinctFrom: result.distinctFrom };
+        }
+        if (result.kind === "already-on-file") {
+          return { player: result.player.canonicalName, created: false, distinctFrom: [] };
+        }
+        throw new McpToolError(
+          result.kind === "empty-name"
+            ? "a player name cannot be blank"
+            : result.kind === "not-ambiguous"
+              ? `"${target}" is not ambiguous — it matches no player on file and is near none, so nothing refused it. Check the spelling against the reported name, or use the player_pull tool to create it.`
+              : `"${target}" is already on file more than once (${result.candidates.join(", ")}) — those rows need merging, which this tool cannot do`,
+        );
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "player_alias",
+    cliCommand: "player alias",
+    description: "Record a second spelling as the same person as a known player",
+    inputShape: { target: z.string().min(1), alias: z.string().min(1) },
+    handler: async (rawArgs) => {
+      const { target, alias } = rawArgs as { target: string; alias: string };
+      const { db, sqlite } = openDb();
+      try {
+        const result = recordPlayerAlias(db, { knownTarget: target, alias });
+        if (result.kind === "recorded" || result.kind === "already-recorded") {
+          return {
+            player: result.player.canonicalName,
+            alias: result.alias,
+            recorded: result.kind === "recorded",
+          };
+        }
+        throw new McpToolError(
+          result.kind === "empty-alias"
+            ? "an alias cannot be blank"
+            : result.kind === "unknown-target"
+              ? `unknown target "${target}"`
+              : result.kind === "ambiguous-target"
+                ? ambiguousMessage(result)
+                : `"${alias}" already belongs to ${result.holder.canonicalName} — recording it here would leave the name resolving to two players, permanently`,
+        );
       } finally {
         sqlite.close();
       }

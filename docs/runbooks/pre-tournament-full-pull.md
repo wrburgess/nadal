@@ -178,10 +178,28 @@ pulls, worth a second look if `R` is large and unexpected.
 
 **If a cascade partly fails**, the line reads
 `team pull status=partial team="<team>" roster=N matches=M archived="…" retired=R skipped=K skippedEntries="<names>"`
-and exits 1. The team write already landed — only the named player pulls did not. Re-run those
-individually (step 3) rather than re-running the whole `team pull`, which would just re-attempt (and
-may re-skip) the same entries for whatever reason skipped them the first time (commonly: a roster
-row with no profile link on the page at all, which cascades can never reach).
+and exits 1. The team write already landed — only the named player pulls did not.
+
+**`skippedEntries` names the players it was CASCADING, which is not always who the problem is.** Read
+the `team pull: cascading …` warnings on stderr before doing anything; each one names the identity
+that actually failed. There are two common causes and they want opposite responses:
+
+- *A roster row with no profile link on the page at all* — cascades can never reach it. Pull that
+  player individually (step 3).
+- *An ambiguous identity* — the warning reads
+  `cascading "<roster player>" failed (ambiguous) — ambiguous identity "<incoming>" (<where>) — near: <candidates>`.
+  Here `<roster player>` usually resolves fine; `<incoming>` is a partner or opponent met while
+  ingesting their history, and it is the name needing a decision. Re-running the pull (whole or
+  individual) refuses identically until someone rules on it:
+
+  ```sh
+  tn player distinct "<incoming>"          # different people who happen to look alike
+  tn player alias "<candidate>" "<incoming>"  # the same person, spelled two ways
+  ```
+
+  Then re-run the cascade. Observed live on `OK/Dickason` (#94): three skipped entries, whose real
+  ambiguities were `Karson Davis` near `Mason Davis`, `Austin DuBois` near `Justin DuBois`, and
+  `Steve Coon` near `Steve Boos` — none of them the three players `skippedEntries` named.
 
 ### 3. Pull any player individually who needs it
 
