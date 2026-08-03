@@ -2,6 +2,7 @@ import type { Command } from "../router.js";
 import { dbPath, runMigrations } from "../../db/client.js";
 import { globalFlags, parseArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
+import { errorMessage } from "../../error-message.js";
 
 // #44 Task 5: folded-in adjacent defect. `run` used to take no `args` at all, so `tn db migrate
 // --jsno bogus-extra-arg` was silently accepted — every token was discarded before `runMigrations`
@@ -31,8 +32,11 @@ export const dbMigrate: Command = {
     try {
       runMigrations();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emitSummary("db migrate", "error", [["message", message]], opts);
+      // #64: `err instanceof Error ? err.message : String(err)` let a non-string `message` reach
+      // `quoteSummaryValue`'s `.replace()`, so this command threw a TypeError INSTEAD of emitting
+      // its deterministic one-line summary — and `logRequest`'s own catch absorbed the TypeError,
+      // leaving exit 1 with no summary line at all.
+      emitSummary("db migrate", "error", [["message", errorMessage(err)]], opts);
       return 1;
     }
     emitSummary("db migrate", "ok", [["path", dbPath()]], opts);

@@ -1,5 +1,6 @@
 import { openDb } from "../db/client.js";
 import { requestLog } from "../db/schema.js";
+import { errorClass, errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
 
 type RequestLogRow = {
@@ -30,8 +31,11 @@ function writeRequestLogRow(row: RequestLogRow): void {
       sqlite.close();
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`telemetry: request_log write failed: ${sanitizeValue(message)}`);
+    // `errorMessage`, not `err instanceof Error ? err.message : String(err)`: the latter puts the
+    // coercion on the wrong branch, so an Error whose `message` is not a string made
+    // `sanitizeValue()` call `.replace()` on a non-string and throw a TypeError from inside THIS
+    // catch — breaking the request this whole function exists not to break (#64).
+    console.error(`telemetry: request_log write failed: ${sanitizeValue(errorMessage(err))}`);
   }
 }
 
@@ -48,7 +52,11 @@ export async function logRequest(
     code = await fn();
     if (code !== 0) outcome = `error:exit-${code}`;
   } catch (err) {
-    outcome = `error:${err instanceof Error ? err.constructor.name : "unknown"}`;
+    // `errorClass`, not an inline `instanceof` + `.constructor.name` (Reviewer finding 3 on
+    // PR #84): both operations throw on a hostile caught value — a Proxy trapping
+    // getPrototypeOf, or an Error with `constructor` redefined — which made THIS catch throw
+    // and `logRequest` reject instead of returning the wrapped call's exit code.
+    outcome = `error:${errorClass(err)}`;
     code = 1;
   }
   writeRequestLogRow({
@@ -111,7 +119,7 @@ export async function logMcpTool<T>(tool: string, args: unknown, fn: () => Promi
       args: sanitizedArgs,
       startedAt,
       endedAt: new Date().toISOString(),
-      outcome: `error:${err instanceof Error ? err.constructor.name : "unknown"}`,
+      outcome: `error:${errorClass(err)}`,
     });
     throw err;
   }

@@ -10,6 +10,7 @@ import type { PageFetcher } from "./fetch.js";
 import { findTeamByName, resolvePlayer, resolveTeam } from "./identity.js";
 import { matchHistoryUrlFor, pullPlayer, slugFromUrl } from "./player-pull.js";
 import { retireAbsentMemberships, upsertMembership, upsertTeam, upsertTeamMatch } from "./upsert.js";
+import { errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -120,7 +121,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       // it, which is exactly the value that cannot order two concurrent pulls.
       observedAt = page.fetchedAt;
     } catch (err) {
-      return { kind: "error", message: err instanceof Error ? err.message : String(err) };
+      return { kind: "error", message: errorMessage(err) };
     }
   }
 
@@ -316,7 +317,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     retiredCount = txResult.retiredCount;
   } catch (err) {
     if (err instanceof AmbiguousIdentityError) return { kind: "ambiguous", candidates: err.candidates };
-    return { kind: "error", message: err instanceof Error ? err.message : String(err) };
+    return { kind: "error", message: errorMessage(err) };
   }
 
   const skippedRosterEntries: string[] = [];

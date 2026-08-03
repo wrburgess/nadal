@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { players } from "../db/schema.js";
+import { errorMessage } from "../error-message.js";
 import { ParseError, parseUstaProfile, parseWtnWidget } from "../parsers/index.js";
 import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
@@ -110,6 +111,6 @@ export async function pullArchivedUstaProfile(
     return { kind: "ok", player, archivedPath };
   } catch (err) {
     if (err instanceof AmbiguousIdentityError) return { kind: "ambiguous", candidates: err.candidates };
-    return { kind: "error", message: err instanceof Error ? err.message : String(err) };
+    return { kind: "error", message: errorMessage(err) };
   }
 }

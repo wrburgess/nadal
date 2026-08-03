@@ -6,6 +6,7 @@ import { and, eq, or } from "drizzle-orm";
 import { closeSync } from "node:fs";
 import { extname } from "node:path";
 import { courtMatchPlayers, events, teamMatches, teams } from "../db/schema.js";
+import { errorMessage } from "../error-message.js";
 import { openInputFileSafely, readBoundedFromFd } from "../fs/output-root.js";
 import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
@@ -660,7 +661,9 @@ export function archiveScorecardImage(sourceImagePath: string): string {
     body = readBoundedFromFd(fd, MAX_SCORECARD_IMAGE_BYTES);
   } catch (err) {
     throw new ScorecardImageValidationError(
-      `refusing to archive "${sourceImagePath}": ${err instanceof Error ? err.message : String(err)}`,
+      // `errorMessage`, not the template literal's own coercion: `${sym}` throws on a Symbol
+      // where `String(sym)` does not, so an interpolating site is NOT already safe (#64).
+      `refusing to archive "${sourceImagePath}": ${errorMessage(err)}`,
     );
   } finally {
     closeSync(fd);
@@ -732,6 +735,6 @@ export function addMatchFromScorecardWithArchive(db: Db, payload: ScorecardPaylo
   try {
     return { serviceResult, archivedPath: archiveScorecardImage(payload.sourceImage) };
   } catch (err) {
-    return { serviceResult, archiveError: err instanceof Error ? err.message : String(err) };
+    return { serviceResult, archiveError: errorMessage(err) };
   }
 }

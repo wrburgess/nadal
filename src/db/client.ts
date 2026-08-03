@@ -4,6 +4,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { errorMessage } from "../error-message.js";
 import { backfillNameKeys } from "./name-key.js";
 
 export const DEFAULT_DB_PATH = "data/nadal.db";
@@ -124,12 +125,20 @@ export function losslessPath(value: string): string {
  * its cause, false at the end of the chain), so a mutation to it is caught. A non-`Error` throw
  * yields `""` here, which matches no pattern and so falls through to the `throw err` below — the
  * original is re-thrown untouched, which is what the discarded `String(err)` branch was for.
+ *
+ * That argument is unchanged by the `errorMessage()` call below, which answers a DIFFERENT
+ * question (#64). The walk decides what to do with a non-`Error` THROW; `errorMessage` decides what
+ * to do with a non-string `message` on an object that IS an `Error`. `Array.prototype.join` calls
+ * `ToString` on every element, so a hostile `message` made this function throw from inside
+ * `runMigrations`'s catch and replace the real migration error with an unrelated one. No unkillable
+ * branch is added here — the conditional lives in `src/error-message.ts`, where
+ * `test/error-message.test.ts` kills both of its directions.
  */
 function messageChain(err: unknown): string {
   const messages: string[] = [];
   let current: unknown = err;
   while (current instanceof Error) {
-    messages.push(current.message);
+    messages.push(errorMessage(current));
     current = current.cause;
   }
   return messages.join("\n");

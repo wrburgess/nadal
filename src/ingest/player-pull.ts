@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import type { openDb } from "../db/client.js";
+import { errorMessage } from "../error-message.js";
 import { players, teamMatches } from "../db/schema.js";
 import { archivePage } from "./archive.js";
 import { AmbiguousIdentityError } from "./errors.js";
@@ -115,7 +116,7 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
       body = page.body;
       httpStatus = page.status;
     } catch (err) {
-      return { kind: "error", message: err instanceof Error ? err.message : String(err) };
+      return { kind: "error", message: errorMessage(err) };
     }
   }
 
@@ -225,6 +226,6 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
     return { kind: "ok", player, courtMatchCount: matches.length, archivedPath };
   } catch (err) {
     if (err instanceof AmbiguousIdentityError) return { kind: "ambiguous", candidates: err.candidates };
-    return { kind: "error", message: err instanceof Error ? err.message : String(err) };
+    return { kind: "error", message: errorMessage(err) };
   }
 }
