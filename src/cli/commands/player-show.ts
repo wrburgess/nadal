@@ -5,7 +5,7 @@ import type { PlayerProfile } from "../../query/player-profile.js";
 import { globalFlags, parseArgs } from "../args.js";
 import { emitJson, emitSummary } from "../emit.js";
 import { formatDataGapsLine, formatName, formatPartnerFrequency, formatRatingTrajectory, formatRecord, formatSlotTendencies } from "../format-profile.js";
-import { sixMonthsAgo } from "../window.js";
+import { seasonLabel, seasonStart } from "../window.js";
 
 /**
  * Spec § Interfaces: `tn player show <name|usta:…> [--json]` — "full profile: ratings trajectory,
@@ -16,7 +16,7 @@ import { sixMonthsAgo } from "../window.js";
  * error paths (missing/unknown/ambiguous target, a bad flag) still go through `emitSummary` so they
  * stay consistent with every other command's error contract.
  */
-function formatPlayerProfileText(profile: PlayerProfile): string {
+function formatPlayerProfileText(profile: PlayerProfile, season: string): string {
   const id = profile.identity;
   const aliasSuffix = id.aliases.length > 0 ? ` (aka ${id.aliases.map(formatName).join(", ")})` : "";
   const gapsLine = formatDataGapsLine(profile.dataGaps);
@@ -25,8 +25,8 @@ function formatPlayerProfileText(profile: PlayerProfile): string {
     `${formatName(id.canonicalName)}${aliasSuffix}`,
     `  age: ${formatName(id.ageRange ?? "unknown")}   gender: ${formatName(id.gender ?? "unknown")}`,
     `  ratings: ${formatRatingTrajectory(profile.ratingTrajectory)}`,
-    `  singles: ${formatRecord(profile.singlesRecord.sixMonth)} (6mo) / ${formatRecord(profile.singlesRecord.allTime)} (all-time)`,
-    `  doubles: ${formatRecord(profile.doublesRecord.sixMonth)} (6mo) / ${formatRecord(profile.doublesRecord.allTime)} (all-time)`,
+    `  singles: ${formatRecord(profile.singlesRecord.season)} (${season}) / ${formatRecord(profile.singlesRecord.allTime)} (all-time)`,
+    `  doubles: ${formatRecord(profile.doublesRecord.season)} (${season}) / ${formatRecord(profile.doublesRecord.allTime)} (all-time)`,
     `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
     `  partners: ${formatPartnerFrequency(profile.partnerFrequency)}`,
     // Issue #49: a retired membership is history, not hidden (player-profile.ts never filters it) —
@@ -74,12 +74,14 @@ export const playerShow: Command = {
         return 1;
       }
 
-      const profile = getPlayerProfile(db, resolution.playerId, { since: sixMonthsAgo() });
+      // ONE anchor for both the boundary and the label below (issue #90).
+      const anchor = new Date();
+      const profile = getPlayerProfile(db, resolution.playerId, { since: seasonStart(anchor) });
 
       // `--quiet` wins over `--json` (GRAMMAR.md), same as `emitSummary` — checked here rather
       // than routed through `emitSummary` itself, since neither success form is a `key=value` line.
       if (!opts.quiet) {
-        console.log(opts.json ? emitJson(profile) : formatPlayerProfileText(profile));
+        console.log(opts.json ? emitJson(profile) : formatPlayerProfileText(profile, seasonLabel(anchor)));
       }
       return 0;
     } finally {

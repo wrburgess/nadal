@@ -250,7 +250,7 @@ describe("buildTeamDossier wires the real prediction in", () => {
         upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: ids[2]!, side: "home" });
       }
 
-      const dossier = buildTeamDossier(db, team.id, { since: "2026-01-01" });
+      const dossier = buildTeamDossier(db, team.id, { since: "2026-01-01", season: "2026" });
 
       expect(dossier.lineup).not.toBeNull();
       expect(dossier.lineup!.slots.map((s) => s.slot)).toEqual(["D1"]);
@@ -269,7 +269,7 @@ describe("buildTeamDossier wires the real prediction in", () => {
       const team = db.insert(teams).values({ name: "NE/Penland/40&Over3.5M" }).returning().get();
       backfillNameKeys(db);
 
-      const dossier = buildTeamDossier(db, team.id, { since: "2026-01-01" });
+      const dossier = buildTeamDossier(db, team.id, { since: "2026-01-01", season: "2026" });
 
       expect(dossier.lineup).toBeNull();
       expect(renderDossierMarkdown(dossier)).toContain("nothing to predict from");
@@ -322,6 +322,7 @@ describe("buildTeamDossier wires the real prediction in", () => {
       // `buildTeamDossier` takes an ALREADY-RESOLVED event, never a name — the resolution belongs to
       // the batch entry point so one build cannot straddle two format versions.
       const dossier = buildTeamDossier(db, team.id, {
+        season: "2026",
         since: "2026-01-01",
         event: resolveEventFormat(db, "Springfield Sectionals 2026"),
       });

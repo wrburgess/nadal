@@ -20,7 +20,7 @@ import * as fetchModule from "../src/ingest/fetch.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
-import { sixMonthsAgo } from "../src/cli/window.js";
+import { seasonStart } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { removeRosterRow } from "./helpers/roster-html.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -89,7 +89,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const { db: db2, sqlite: sqlite2 } = openDb();
     let expected: unknown;
     try {
-      expected = getTeamProfile(db2, team.id, { since: sixMonthsAgo() });
+      expected = getTeamProfile(db2, team.id, { since: seasonStart() });
     } finally {
       sqlite2.close();
     }

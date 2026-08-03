@@ -141,8 +141,8 @@ export type PlayerTeamMembershipSummary = {
 export type PlayerProfile = {
   identity: PlayerIdentitySummary;
   ratingTrajectory: RatingTrajectoryResult;
-  singlesRecord: { sixMonth: WindowedRecordResult; allTime: WindowedRecordResult };
-  doublesRecord: { sixMonth: WindowedRecordResult; allTime: WindowedRecordResult };
+  singlesRecord: { season: WindowedRecordResult; allTime: WindowedRecordResult };
+  doublesRecord: { season: WindowedRecordResult; allTime: WindowedRecordResult };
   slotTendencies: SlotTendency[];
   partnerFrequency: (PartnerFrequencyEntry & { canonicalName: string })[];
   teamMemberships: PlayerTeamMembershipSummary[];
@@ -241,11 +241,11 @@ export function getPlayerProfile(db: Db, playerId: number, options: { since: str
     },
     ratingTrajectory: ratingTrajectory(observationRows),
     singlesRecord: {
-      sixMonth: windowedRecord(courtRows, playerId, { since: options.since, discipline: "singles" }),
+      season: windowedRecord(courtRows, playerId, { since: options.since, discipline: "singles" }),
       allTime: windowedRecord(courtRows, playerId, { discipline: "singles" }),
     },
     doublesRecord: {
-      sixMonth: windowedRecord(courtRows, playerId, { since: options.since, discipline: "doubles" }),
+      season: windowedRecord(courtRows, playerId, { since: options.since, discipline: "doubles" }),
       allTime: windowedRecord(courtRows, playerId, { discipline: "doubles" }),
     },
     slotTendencies: slotTendencies(courtRows, playerId),

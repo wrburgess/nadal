@@ -86,8 +86,8 @@ describe("getPlayerProfile", () => {
       expect(bySource.get("ntrp")!.latest.ratingType).toBe("C");
       expect(bySource.get("tr_dynamic")!.latest.value).toBe(4.1);
 
-      expect(profile.singlesRecord.sixMonth).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
-      expect(profile.doublesRecord.sixMonth).toEqual({ wins: 0, losses: 1, undecided: 0, excludedUndated: 0 });
+      expect(profile.singlesRecord.season).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
+      expect(profile.doublesRecord.season).toEqual({ wins: 0, losses: 1, undecided: 0, excludedUndated: 0 });
       expect(profile.slotTendencies).toEqual(
         expect.arrayContaining([{ slot: "S1", count: 1 }, { slot: "D1", count: 1 }]),
       );

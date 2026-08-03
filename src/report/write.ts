@@ -172,7 +172,7 @@ function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): M
 export function buildTeamDossier(
   db: Db,
   teamId: number,
-  options: { since: string; event?: ResolvedEventFormat },
+  options: { since: string; season: string; event?: ResolvedEventFormat },
 ): TeamDossier {
   const homeTeam = resolveHomeTeam(db);
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
@@ -199,7 +199,7 @@ export function buildTeamDossier(
     if (!(err instanceof NoCourtMatchHistoryError)) throw err;
   }
 
-  return { team, players, lineup };
+  return { season: options.season, team, players, lineup };
 }
 
 /** Everything `writeTeamDossier` needs to know BEFORE it writes a single byte: the two real,
@@ -245,7 +245,7 @@ type PreparedDossierWrite = {
 function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
-  options: { since: string; event?: ResolvedEventFormat },
+  options: { since: string; season: string; event?: ResolvedEventFormat },
   dirName?: string,
 ): PreparedDossierWrite {
   const dossier = buildTeamDossier(db, teamId, options);
@@ -329,13 +329,13 @@ function commitDossierWrite(prepared: PreparedDossierWrite): string[] {
 export function writeTeamDossier(
   db: Db,
   teamId: number,
-  options: { since: string; eventName?: string },
+  options: { since: string; season: string; eventName?: string },
   dirName?: string,
 ): string[] {
   // Resolved once, before anything is prepared — the same shape as the batch path below, so both
   // entry points refuse a bad event name before touching the filesystem rather than partway through.
   const event = options.eventName === undefined ? undefined : resolveEventFormat(db, options.eventName);
-  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, { since: options.since, event }, dirName));
+  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, { since: options.since, season: options.season, event }, dirName));
 }
 
 type TeamIndexEntry = { teamId: number; teamName: string; dirName: string };
@@ -390,7 +390,7 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
  * what this module actually provides, not a stronger one this comment used to imply.
  */
-export function writeSectionalsDossiers(db: Db, options: { since: string; eventName?: string }): string[] {
+export function writeSectionalsDossiers(db: Db, options: { since: string; season: string; eventName?: string }): string[] {
   // PHASE 0 — resolve the named event's format exactly ONCE, before any team is read or any leaf is
   // validated. Every dossier in this batch then predicts across the SAME slot set, which is what
   // `docs/cli/GRAMMAR.md` promises; a per-team lookup could not keep that promise across a
@@ -418,7 +418,7 @@ export function writeSectionalsDossiers(db: Db, options: { since: string; eventN
   // review, PR #38 round 2, Finding 3 [medium]; round 1 fixed the html-then-md ordering WITHIN one
   // team but never widened the guarantee to the whole batch this function drives).
   const preparedTeams = allTeams.map((team) =>
-    prepareTeamDossierWrite(db, team.id, { since: options.since, event }, dirNames.get(team.id)),
+    prepareTeamDossierWrite(db, team.id, { since: options.since, season: options.season, event }, dirNames.get(team.id)),
   );
 
   const entries: TeamIndexEntry[] = allTeams.map((t) => ({

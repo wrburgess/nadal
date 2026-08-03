@@ -181,11 +181,11 @@ function renderPredictedLineupMarkdown(dossier: TeamDossier): string {
   ].join("\n");
 }
 
-function renderPlayerBlockMarkdown(player: PlayerProfile): string {
+function renderPlayerBlockMarkdown(player: PlayerProfile, season: string): string {
   return [
     `### ${escapeMarkdownCell(player.identity.canonicalName)}`,
     "",
-    `**6-month record:** singles ${formatRecord(player.singlesRecord.sixMonth)}, doubles ${formatRecord(player.doublesRecord.sixMonth)}`,
+    `**${season} record:** singles ${formatRecord(player.singlesRecord.season)}, doubles ${formatRecord(player.doublesRecord.season)}`,
     "",
     `**Court-slot tendencies:** ${formatSlotTendencies(player.slotTendencies)}`,
     "",
@@ -194,7 +194,7 @@ function renderPlayerBlockMarkdown(player: PlayerProfile): string {
 }
 
 function renderPlayersSectionMarkdown(dossier: TeamDossier): string {
-  return dossier.players.map((p) => renderPlayerBlockMarkdown(p)).join("\n\n");
+  return dossier.players.map((p) => renderPlayerBlockMarkdown(p, dossier.season)).join("\n\n");
 }
 
 const DATA_GAP_LABELS: Record<string, string> = {

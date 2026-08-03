@@ -1,24 +1,69 @@
+// Issue #90. The boundary these helpers produce used to be "six months back from whenever you
+// ran the command", which made every printed record depend on the print date: measured on the real
+// HOA/Burgess-Zingg team, 5 of 8 matches were visible on 2026-08-03 and only 2 of 8 would be
+// visible on the day of Sectionals. The binder was thinnest on the day it is used.
+//
+// It is now the start of the anchor's SEASON, which for a USTA league is its calendar year — the
+// unit TennisRecord itself models (`?year=2026` on every team URL, a `2026Record` roster column).
+
 import { describe, expect, it } from "vitest";
-import { sixMonthsAgo } from "../src/cli/window.js";
+import { seasonLabel, seasonStart } from "../src/cli/window.js";
 
-describe("sixMonthsAgo", () => {
-  it("subtracts six calendar months in UTC", () => {
-    expect(sixMonthsAgo(new Date("2026-07-30T12:00:00Z"))).toBe("2026-01-30");
+describe("seasonStart", () => {
+  it("returns January 1 of the anchor's year", () => {
+    expect(seasonStart(new Date("2026-07-30T12:00:00Z"))).toBe("2026-01-01");
   });
 
-  it("rolls over a year boundary", () => {
-    expect(sixMonthsAgo(new Date("2026-03-01T00:00:00Z"))).toBe("2025-09-01");
+  it("includes the first instant of the season", () => {
+    // A match played ON Jan 1 is in the season. `since` is compared inclusively downstream, so the
+    // boundary itself is the value most likely to be off by one.
+    expect(seasonStart(new Date("2026-01-01T00:00:00Z"))).toBe("2026-01-01");
   });
 
-  it("clamps a month-end date the way JS Date normalization does (Aug 31 - 6mo -> Mar 3, not Mar 31)", () => {
-    // Feb 2026 has 28 days, so Date.UTC(2026, 1, 31) overflows into March — documenting the exact
-    // behavior rather than asserting a value that would silently start passing/failing on a
-    // different implementation of the subtraction.
-    expect(sixMonthsAgo(new Date("2026-08-31T00:00:00Z"))).toBe("2026-03-03");
+  it("includes the last instant of the season", () => {
+    // Dec 31 must still resolve to THIS season's January, not next season's — the other end of the
+    // same off-by-one.
+    expect(seasonStart(new Date("2026-12-31T23:59:59Z"))).toBe("2026-01-01");
+  });
+
+  it("is UTC-stable across a timezone that would shift the calendar day", () => {
+    // The predecessor's docstring called out local-time arithmetic as the nondeterminism to avoid,
+    // because report rendering must be deterministic given a profile. An instant that is Jan 1 in
+    // UTC but Dec 31 in a western zone must still resolve by UTC.
+    expect(seasonStart(new Date("2026-01-01T00:30:00Z"))).toBe("2026-01-01");
+    expect(seasonStart(new Date("2025-12-31T23:30:00Z"))).toBe("2025-01-01");
+  });
+
+  it("accepts an ISO date string, which is the shape events.starts_on carries", () => {
+    // `report build` anchors to an event, and `events.starts_on` is a plain `YYYY-MM-DD` text
+    // column — not a Date. Taking both shapes is what keeps the call site from doing its own
+    // parsing, which is where a second, divergent clock would creep in.
+    expect(seasonStart("2026-08-28")).toBe("2026-01-01");
+  });
+
+  it("refuses an unparseable anchor rather than silently falling back to today", () => {
+    // A malformed `events.starts_on` must not quietly produce the current season: that is the
+    // failure this whole issue is about — a boundary that looks anchored and is not.
+    expect(() => seasonStart("not-a-date")).toThrow(/season anchor/i);
   });
 
   it("defaults to the current time when no argument is given", () => {
-    const result = sixMonthsAgo();
-    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(seasonStart()).toMatch(/^\d{4}-01-01$/);
+  });
+});
+
+describe("seasonLabel", () => {
+  it("names the season the boundary selects", () => {
+    expect(seasonLabel(new Date("2026-07-30T12:00:00Z"))).toBe("2026");
+    expect(seasonLabel("2026-08-28")).toBe("2026");
+  });
+
+  it("agrees with seasonStart for the same anchor", () => {
+    // The label is what a reader sees next to the number; if the two ever disagreed, the binder
+    // would state a season it did not actually filter to — the exact claim-vs-code failure this
+    // repo keeps recording.
+    for (const anchor of ["2026-01-01", "2026-06-15", "2026-12-31", "2025-03-04"]) {
+      expect(seasonStart(anchor).slice(0, 4)).toBe(seasonLabel(anchor));
+    }
   });
 });
