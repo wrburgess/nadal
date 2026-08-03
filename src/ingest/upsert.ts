@@ -287,9 +287,12 @@ export function retireAbsentMemberships(
  *
  * WRITTEN AS AN ESCAPE, NEVER A LITERAL BYTE (issue #66). The sentinel's VALUE is a NUL and must stay
  * one — that is what makes it unproducible. Its SPELLING in this file must not be: a raw 0x00 byte
- * here classified the whole file as binary, so `rg`, `grep` and every recursive search reported ZERO
- * matches in it, silently. An audit that grepped this file for a symbol it does contain got a clean
- * empty result — twice, on record. Prefer `\u0000` over `\0`: both are NUL today, but `\0` followed
+ * here classified the whole file as binary, so `rg` and `grep` omitted its matches by default and
+ * reported nothing, silently. An audit that grepped this file for a symbol it does contain got a
+ * clean empty result — twice, on record. NOT every tool: `git grep` still found it, because git's
+ * binary sniff reads only the first 8000 bytes and this NUL sat at 15316. That disagreement is a
+ * second hazard rather than a reassurance — checking one search tool against another can return an
+ * agreement neither of them earned. Prefer `\u0000` over `\0`: both are NUL today, but `\0` followed
  * by a digit is a legacy octal escape and a SyntaxError in a module, one edit away.
  * `test/source-no-nul-bytes.test.ts` enforces the byte; `test/ingest-upsert-idempotency.test.ts`
  * pins the value, so neither half can drift without a red test.
