@@ -56,20 +56,36 @@ import type { Db } from "../ingest/db-types.js";
  * trade (the bidi-spoof and transcription risks are real and these are not), but it is a real limit
  * and not a hypothetical one. It would be the wrong fold for a general-purpose name index.
  *
- * **Two invisible characters are still NOT folded, named rather than left to be rediscovered.** Both
- * still fork an identity, and both are accepted on the record:
+ * ## The accepted residuals — the honest list, decided on the record
  *
- * - **LINE SEPARATOR (U+2028)** — `Zl` with `White_Space`. It renders as a break; folding it is the
- *   whitespace-semantics decision this codebase has pinned the other way.
- * - **The Hangul fillers (U+115F/U+1160/U+3164/U+FFA0)** — exempted above, because stripping them
- *   over-merges. A fork here is the *safe* failure: it is loud (`ambiguous` or a visible second row)
- *   where the merge was silent.
+ * **This fold is not complete, and the limit is not a property boundary — it is a reachability
+ * argument.** Five independent review rounds each found a real defect in the predicate the previous
+ * round had just fixed, alternating between too-narrow and too-wide, which is what an *undecidable*
+ * predicate looks like rather than an unfinished one. There is no Unicode property equal to
+ * "deleting this cannot change what a reader sees". The HC's decision was to ship the fold with its
+ * residuals **named**, on the argument that every one of them lives in a script a Springfield,
+ * Illinois USTA league roster does not contain.
  *
- * This boundary has moved three times in one change — `\p{Cf}` alone was too narrow, adding
- * `\p{Cc}`+`\p{Variation_Selector}` was still too narrow, adding `\p{Default_Ignorable}` was too
- * wide — so it is worth stating what finally settled it: **"invisible" is not a property of a
- * character, it is a property of a character IN CONTEXT.** Every remaining exemption is a character
- * that is invisible alone and load-bearing beside something else.
+ * **Still SPLIT (two identities for one visible name) — the safe failure, because it is loud:**
+ *
+ * - **LINE SEPARATOR U+2028** — `Zl` with `White_Space`; it renders as a break.
+ * - **The Hangul fillers U+115F/U+1160/U+3164/U+FFA0**, **the Mongolian controls U+180B–U+180F**,
+ *   and every other complex-script invisible — exempted by the script scope, because deleting them
+ *   re-groups or re-shapes the text around them.
+ *
+ * **Still MERGED (one identity for two visible names) — the SILENT failure, and the real cost:**
+ *
+ * - **`U+06DD` ARABIC END OF AYAH and `U+08E2` ARABIC DISPUTED END OF AYAH.** Both are `Cf` *and*
+ *   `Script=Common`, so neither the category test nor the script scope exempts them, and both render
+ *   as a sign enclosing the following digits. `namesEqual("علي" + U+06DD + "١", "علي" + "١")` is
+ *   `true`. **This is not a cost of widening the class** — U+06DD is `\p{Cf}`, so the original
+ *   one-line fix for #62 merged them too, and retreating to it would not have helped.
+ *   `\p{Script_Extensions}` is not a fix either; `scx=Common` is likewise true for both (checked).
+ * - **ZWJ / ZWNJ / SOFT HYPHEN** — meaningful in Indic, Persian and Arabic orthography.
+ *
+ * Closing the merged set means changing the *mechanism* — refusing a name that carries an invisible
+ * character rather than folding it — which removes the class instead of bounding it, and is its own
+ * design rather than a sixth predicate. Recorded in `docs/findings.md` for triage.
  *
  * The widening is paired with its own refutation in `test/name-key.test.ts`, because widening a
  * strip class is the move most likely to cause a silent OVER-merge: combining accents, letters in

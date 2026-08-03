@@ -32,6 +32,12 @@ const HANGUL_FILLER = "\u3164";
 const CHOSEONG_FILLER = "\u115F";
 const WORD_JOINER = "\u2060";
 
+// Still MERGED, on the record: `Cf` AND `Script=Common`, so neither the category test nor the script
+// scope exempts them, yet both render as a sign enclosing the following digits. Accepted by the HC on
+// a reachability argument, and pinned here so the residual is a TEST rather than a sentence.
+const AYAH = "\u06DD"; // ARABIC END OF AYAH
+const AYAH_DISPUTED = "\u08E2"; // ARABIC DISPUTED END OF AYAH
+
 describe("nameKey", () => {
   it("folds a composed accented name and its NFD-decomposed spelling to the same key", () => {
     const composed = "Élodie"; // U+00C9 (precomposed)
@@ -118,6 +124,18 @@ describe("nameKey", () => {
       expect(nameKey("Vers" + invisible + "teeg")).toBe(nameKey("Versteeg"));
       expect(nameKey("V" + invisible + "e" + invisible + "r" + invisible + "steeg")).toBe(nameKey("Versteeg"));
     }
+  });
+
+  it("RESIDUAL: the Arabic ayah signs still OVER-MERGE — accepted, and pinned so it cannot drift", () => {
+    // The one residual on the SILENT side of the fold, and the reason it is written as an assertion
+    // rather than a comment: a documented limitation nothing executes is indistinguishable from one
+    // that has quietly changed. If a future revision closes this, THIS TEST FAILS and tells whoever
+    // did it that they closed a known hole — which is the outcome worth having.
+    //
+    // Not a cost of widening the class: U+06DD is `\p{Cf}`, so the original one-line #62 fix merged
+    // these too. `\p{Script_Extensions}` does not separate them either (`scx=Common` is true).
+    expect(namesEqual("Ali" + AYAH + "1", "Ali1")).toBe(true);
+    expect(namesEqual("Ali" + AYAH_DISPUTED + "1", "Ali1")).toBe(true);
   });
 
   it("EXEMPTS every COMPLEX-SCRIPT invisible, not just Hangul — the boundary's final form", () => {
