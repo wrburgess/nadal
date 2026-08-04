@@ -100,9 +100,10 @@ export function ambiguousMessage(reported: AmbiguousIdentity | AmbiguousIdentiti
  *
  * `incoming` / `candidates` / `context` MIRROR `identities[0]`, derived here so they cannot drift.
  * They stay because three kinds of reader depend on them: the `catch` blocks in `archived.ts` and
- * `team-pull.ts` build their single-identity results from them, `test/ingest-upsert-idempotency.ts`
- * reads `candidates` off a caught error, and every `{ kind: "ambiguous" }` result keeps the flat
- * shape #94 gave it so the CLI and MCP surfaces need no edit to keep reporting a true fact.
+ * `team-pull.ts` build their single-identity results from them,
+ * `test/ingest-upsert-idempotency.test.ts` reads `candidates` off a caught error, and every
+ * `{ kind: "ambiguous" }` result keeps the flat shape #94 gave it so the CLI and MCP surfaces need
+ * no edit to keep reporting a true fact.
  */
 export class AmbiguousIdentityError extends Error implements AmbiguousIdentity {
   readonly incoming: string;
