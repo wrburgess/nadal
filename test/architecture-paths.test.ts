@@ -7,11 +7,12 @@ import { describe, expect, it } from "vitest";
 // glob, so vendoring never reddens a host's own docs), and every nadal-authored doc sits outside it.
 //
 // WHAT THIS CHECK HOLDS FOR, STATED NARROWLY (rules/testing.md: never let a check's comment claim
-// coverage the code does not enforce). It asserts that each repo path the document names — in an
-// inline code span, or as a Markdown link target — RESOLVES ON DISK. It does NOT verify that any
-// claim made ABOUT that path is true, that the map is complete, that a newly added src/ directory was
-// given a row, or that the prose matches the code. Those stay unenforced, and ARCHITECTURE.md says so
-// itself rather than letting this green imply otherwise.
+// coverage the code does not enforce). It asserts that each repo path the document names IN AN INLINE
+// CODE SPAN resolves on disk, and separately that the document contains no Markdown link targets for
+// it to have missed. It does NOT verify that any claim made ABOUT that path is true, that the map is
+// complete, that a newly added src/ directory was given a row, or that the prose matches the code.
+// Those stay unenforced, and ARCHITECTURE.md says so itself rather than letting this green imply
+// otherwise.
 
 // The repo-owned roots a documented path may start with. Deliberately EXCLUDES the runtime roots
 // `data/`, `raw/`, `reports/` and `scorecard-photos/` — all four are gitignored, so they are absent on
@@ -41,18 +42,22 @@ const REPO_PATH = new RegExp(`^(?:${REPO_ROOTS.join("|")})/\\S*$`);
 // (rules/testing.md: never keep a branch in new code that no test can kill).
 const INLINE_SPAN = /`[^`\n]+`/g;
 
-// Markdown link and image targets: the `](target` of `[text](target)` and `![alt](target)`. Scanned
-// because a link target is a reference to a path exactly as much as a code span is, and a document
-// that links a deleted module is wrong in precisely the way this check exists to catch. Stops at
-// whitespace so a link title (`[t](path "title")`) is not swallowed. `m[0]` is typed `string`, so
-// slicing the leading `](` off it avoids the capture-group typing problem described above.
-const LINK_TARGET = /\]\([^)\s]+/g;
-
-// Reference-style link definitions — `[label]: src/foo.ts` on its own line. A separate construct from
-// the inline form above and just as much a link target (Reviewer finding 2 on PR #103, round 2: §7
-// said "as a link target" while the code saw only the inline spelling, so a reference definition
-// naming a deleted module passed silently).
-const LINK_DEFINITION = /^ {0,3}\[[^\]]+\]:[ \t]*\S+/gm;
+// Any Markdown link target — inline `](dest)` or a reference definition `[label]: dest`. Detected,
+// NOT parsed, and the difference is the whole point.
+//
+// WHY THIS IS A PRESENCE CHECK AND NOT A SCANNER (PR #103; HC decision at the fix-verification bound).
+// An earlier revision scanned link destinations and extracted paths from them. Three review rounds
+// found a new SILENT miss in that scanner every time — inline links absent entirely, then reference
+// definitions, then percent-encoding, angle-bracket destinations, and an escaped `]` in a label — while
+// span parsing and fence parsing each converged after one correction and were confirmed sound. The
+// scanner was chasing a grammar with open-ended spellings, and each fix moved the defect one construct
+// sideways rather than closing the class.
+//
+// ARCHITECTURE.md uses no links at all: every path reference in it is a code span. So the guard drops
+// the scanner and asserts that fact instead. A presence check has exactly ONE spelling, so it cannot
+// rot sideways the way a destination parser did — and if a future edit introduces a link, this fails
+// LOUDLY and says to use a code span, rather than quietly not checking it.
+const LINK_TARGET = /\]\(|^ {0,3}\[[^\]]+\]:/gm;
 
 // A fence opens a code block; its contents are an ILLUSTRATION — a sample tree, a transcript — and
 // are not claims about this repo's layout.
@@ -87,13 +92,13 @@ const TRIM_TRAILING = /[),;:.\]}'"]+$/;
 // WHERE THIS STOPS, DELIBERATELY. This is a heuristic scanner over a document whose conventions it
 // also constrains — it is NOT a Markdown parser, and no Markdown parser is in this repo's
 // dependencies (adding one for a doc test is scope issue #101 excludes). Constructs it does not model
-// — a fence inside a block quote or after a list marker, a closing fence carrying trailing text, a
-// destination containing balanced parentheses, a `#fragment` or percent-encoding in a destination —
-// all fail in the SAME direction: the illustration leaks into the scan and the suite goes RED. That is
-// the designed direction. Every input found to fail SILENT has been closed (the fence indent bound
-// above, reference-style definitions, and punctuation-wrapped tokens); the visible residue is bounded
-// by policy rather than by chasing CommonMark, because each round of chasing it moved the defect one
-// construct sideways rather than closing the class.
+// — a fence inside a block quote or after a list marker, a closing fence carrying trailing text — fail
+// in the SAME direction: the illustration leaks into the scan and the suite goes RED. That is the
+// designed direction, and the stopping rule is the direction rather than the construct list: every
+// input found to fail SILENT is closed; visible residue is accepted.
+//
+// The one place that rule could not be satisfied by patching was link destinations, so the scanner for
+// those was WITHDRAWN rather than held open — see LINK_TARGET.
 function stripCodeBlocks(markdown: string): string {
   const kept: string[] = [];
   let openFence: string | null = null;
@@ -131,14 +136,6 @@ function extractRepoPaths(markdown: string): string[] {
       const path = token.replace(TRIM_LEADING, "").replace(TRIM_TRAILING, "");
       if (REPO_PATH.test(path)) found.add(path);
     }
-  }
-  for (const [target] of prose.matchAll(LINK_TARGET)) {
-    const path = target.slice(2);
-    if (REPO_PATH.test(path)) found.add(path);
-  }
-  for (const [definition] of prose.matchAll(LINK_DEFINITION)) {
-    const path = definition.slice(definition.indexOf("]:") + 2).trim();
-    if (REPO_PATH.test(path)) found.add(path);
   }
   // Deduped, so a path named in five sections is reported once rather than five times.
   return [...found].sort();
@@ -209,15 +206,29 @@ describe("ARCHITECTURE.md path liveness", () => {
     expect(extractRepoPaths(fixture)).toEqual(["src/cli/router.ts", "src/does-not-exist.ts"]);
   });
 
-  it("extracts a Markdown link target", () => {
-    // The other half of Reviewer finding 1: `[obsolete](src/does-not-exist.ts)` escaped entirely.
-    // ARCHITECTURE.md uses no links today, so this guards the edit that introduces the first one.
-    expect(extractRepoPaths("See [obsolete](src/does-not-exist.ts).")).toEqual([
-      "src/does-not-exist.ts",
-    ]);
-    expect(extractRepoPaths('See [g](docs/cli/GRAMMAR.md "the grammar").')).toEqual([
-      "docs/cli/GRAMMAR.md",
-    ]);
+  it("contains no Markdown link targets for the code-span scan to have missed", () => {
+    // The guard reads code spans only, so a path reached by a link would go unchecked. Rather than
+    // parse link destinations — which three review rounds showed cannot be done here without a new
+    // silent miss each time (see LINK_TARGET) — assert the document uses none.
+    const doc = readFileSync(DOC, "utf8");
+    expect(
+      doc.match(LINK_TARGET) ?? [],
+      `${DOC} must reference paths in code spans, not links — see LINK_TARGET for why`,
+    ).toEqual([]);
+  });
+
+  it("detects a link target if one is introduced", () => {
+    // The assertion above is only meaningful if it can fail. All four spellings that defeated the
+    // previous destination parser are caught here, because detection does not have to parse them.
+    const spellings = [
+      "See [x](src/foo.ts).",
+      "See [x](src%2Ffoo.ts).",
+      "[x]: src/foo.ts",
+      "[x]: <src/foo.ts>",
+    ];
+    for (const md of spellings) {
+      expect(md.match(LINK_TARGET) ?? [], `spelling: ${md}`).not.toEqual([]);
+    }
   });
 
   it("ignores code spans that are not repo paths", () => {
@@ -270,15 +281,6 @@ describe("ARCHITECTURE.md path liveness", () => {
     // not silently swallowed.
     const fixture = ["    ```", "`src/does-not-exist.ts`", "    ```"].join("\n");
     expect(extractRepoPaths(fixture)).toEqual(["src/does-not-exist.ts"]);
-  });
-
-  it("extracts a reference-style link definition", () => {
-    // Reviewer finding 2 on PR #103, round 2 — also silent. `[label]: path` is a link target that the
-    // inline `](…)` scan cannot see.
-    expect(extractRepoPaths("[obsolete]: src/does-not-exist.ts")).toEqual([
-      "src/does-not-exist.ts",
-    ]);
-    expect(extractRepoPaths("[g]: docs/cli/GRAMMAR.md")).toEqual(["docs/cli/GRAMMAR.md"]);
   });
 
   it("strips punctuation wrapping a path inside a prose-bearing span", () => {

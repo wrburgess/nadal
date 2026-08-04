@@ -231,11 +231,12 @@ reviewer is not misled by a clean table — none is a bug in itself, and several
 - **It is not the command reference.** `docs/cli/GRAMMAR.md` is, and it is test-guarded. This document
   names directories; it never lists commands.
 - **It is only weakly self-checking, and the weakness is worth stating exactly.**
-  `test/architecture-paths.test.ts` asserts that every repo path this document names **in a code span
-  or as a link target** resolves on disk — that scope, not "every path named above", because a path
-  written as bare prose is not scanned. Nothing checks that a claim *about* a path is still true, that
-  the map is complete, or that a new `src/` directory got a row here. The prose is maintained by
-  reading, not by CI.
+  `test/architecture-paths.test.ts` asserts that every repo path this document names **in a code span**
+  resolves on disk — that scope, not "every path named above", because a path written as bare prose is
+  not scanned. It separately asserts this document contains **no Markdown links**, which is why code
+  spans are the whole scope rather than most of it. Nothing checks that a claim *about* a path is still
+  true, that the map is complete, or that a new `src/` directory got a row here. The prose is maintained
+  by reading, not by CI.
 - **It supersedes an older count.** The v1 design spec
   (`docs/superpowers/specs/2026-07-29-nadal-v1-springfield-design.md`) describes "three thin
   presenters". There are **two** front doors; the dossier is a renderer, not a third door. That spec
