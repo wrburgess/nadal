@@ -70,6 +70,12 @@ function extractRepoPaths(markdown: string): string[] {
 // NOTE: a `:line` or `#anchor` suffix is deliberately NOT stripped, so `src/query/derive.ts:422` fails
 // to resolve and reddens. That is not an oversight — issue #101 constrains the document to "directory
 // and file level, not line level", and this is the only mechanical expression of that constraint.
+//
+// CASE SENSITIVITY IS THE FILESYSTEM'S, NOT THIS CHECK'S. On macOS's default case-insensitive volume
+// `existsSync("src/CLI/router.ts")` returns true, so a mis-cased path passes a local run and reddens
+// only on Linux CI (.github/workflows/ci.yml runs `npm run test:coverage`). CI is therefore the
+// authority on casing, not the developer's green — stated rather than fixed, because a case-exact walk
+// would add real code to catch what the machine that actually gates the merge already catches.
 function missingPaths(paths: string[]): string[] {
   return paths.filter((p) => !existsSync(p));
 }
