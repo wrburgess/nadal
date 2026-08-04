@@ -20,6 +20,24 @@ export type AmbiguousIdentity = {
 };
 
 /**
+ * Every ambiguity ONE pass met, in encounter order, each recorded once. Non-empty by construction:
+ * a tuple type, not an array, because "ambiguous" with nothing to rule on is not a state any
+ * producer can be in, and a runtime emptiness check inside a formatter is a decision made at the
+ * worst possible moment — while reporting a failure.
+ *
+ * It exists because a pull used to refuse at the FIRST ambiguity, which cost one slow network round
+ * trip per remaining one: live, `Dale Dixon` took four attempts and `NE/Penland` needed three full
+ * `--players` runs to surface six (#96). The refusal itself is unchanged — still one, still rolling
+ * back, still writing nothing.
+ */
+export type AmbiguousIdentities = { identities: readonly [AmbiguousIdentity, ...AmbiguousIdentity[]] };
+
+/** The three facts of ONE identity — the shared half of both renderings below. */
+function identityFacts(identity: AmbiguousIdentity): string {
+  return `"${identity.incoming}" (${identity.context}) — near: ${identity.candidates.join(", ")}`;
+}
+
+/**
  * The ONE rendering of an ambiguous identity, shared by every surface that reports one: this
  * error's own `message`, both CLI commands' `message=` field, the `--players` cascade warning, and
  * the MCP tools. It lives here — beside the error, not in `src/cli/emit.ts` where #94's first pass
@@ -31,9 +49,27 @@ export type AmbiguousIdentity = {
  * incoming value was NEAR — never the value itself, nor where it came from. On a cascade that made
  * it actively misleading: the target it printed had resolved fine, and the real ambiguity was a
  * name inside that player's match history. All three facts are reported, or a human cannot act.
+ *
+ * It takes ONE identity or a whole pass's worth (#96), and renders a pass of one identically to a
+ * bare one — a list of one is the same event, and a second spelling of one event is the drift this
+ * function was moved here to prevent. That union is also what lets `src/cli/commands/player-pull.ts`
+ * and `src/mcp/tools.ts` report every ambiguity of a pass without being edited at all: they already
+ * hand this function the whole result object, so the richer shape reaches it through the call they
+ * already make.
+ *
+ * Several render on ONE line, numbered, with the count stated FIRST. One line because every caller
+ * sanitizes the rendered string as a unit (see `sanitizeValue`) and a line break is exactly what
+ * that guard is for; the count first because it is computed from the list, so a scraped name that
+ * spells `[2]` into itself contradicts the stated total rather than corroborating it.
  */
-export function ambiguousMessage(identity: AmbiguousIdentity): string {
-  return `ambiguous identity "${identity.incoming}" (${identity.context}) — near: ${identity.candidates.join(", ")}`;
+export function ambiguousMessage(reported: AmbiguousIdentity | AmbiguousIdentities): string {
+  const identities: readonly [AmbiguousIdentity, ...AmbiguousIdentity[]] =
+    "identities" in reported ? reported.identities : [reported];
+  const [first, ...rest] = identities;
+  if (rest.length === 0) return `ambiguous identity ${identityFacts(first)}`;
+  return `${identities.length} ambiguous identities — ${identities
+    .map((identity, index) => `[${index + 1}] ${identityFacts(identity)}`)
+    .join("; ")}`;
 }
 
 /**
@@ -56,14 +92,31 @@ export function ambiguousMessage(identity: AmbiguousIdentity): string {
  * The `message` is `ambiguousMessage` itself rather than a second string saying the same thing a
  * little differently: this one is what surfaces in a stack trace or an unexpected rethrow, and a
  * debugging read of stderr should not have to reconcile two spellings of one event.
+ *
+ * It carries the whole pass's `identities` (#96), because that is what has to cross the `throw` that
+ * rolls the transaction back — the collection is built inside the transaction callback and read in
+ * the `catch` outside it, and putting it on the error rather than in a variable the catch closes
+ * over means the value the catch reports and the value the message renders cannot disagree.
+ *
+ * `incoming` / `candidates` / `context` MIRROR `identities[0]`, derived here so they cannot drift.
+ * They stay because three kinds of reader depend on them: the `catch` blocks in `archived.ts` and
+ * `team-pull.ts` build their single-identity results from them, `test/ingest-upsert-idempotency.ts`
+ * reads `candidates` off a caught error, and every `{ kind: "ambiguous" }` result keeps the flat
+ * shape #94 gave it so the CLI and MCP surfaces need no edit to keep reporting a true fact.
  */
 export class AmbiguousIdentityError extends Error implements AmbiguousIdentity {
-  constructor(
-    readonly incoming: string,
-    readonly candidates: string[],
-    readonly context: string,
-  ) {
-    super(ambiguousMessage({ incoming, candidates, context }));
+  readonly incoming: string;
+  readonly candidates: string[];
+  readonly context: string;
+  readonly identities: readonly [AmbiguousIdentity, ...AmbiguousIdentity[]];
+
+  constructor(identities: readonly [AmbiguousIdentity, ...AmbiguousIdentity[]]) {
+    super(ambiguousMessage({ identities }));
+    const [first] = identities;
+    this.incoming = first.incoming;
+    this.candidates = first.candidates;
+    this.context = first.context;
+    this.identities = identities;
     this.name = "AmbiguousIdentityError";
   }
 }

@@ -17,8 +17,8 @@ import { describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { dispatch } from "../src/cli/router.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { players } from "../src/db/schema.js";
-import { AmbiguousIdentityError, ambiguousMessage } from "../src/ingest/errors.js";
+import { courtMatchPlayers, courtMatches, players, ratingObservations } from "../src/db/schema.js";
+import { AmbiguousIdentityError, ambiguousMessage, type AmbiguousIdentity } from "../src/ingest/errors.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
 import { pullPlayer } from "../src/ingest/player-pull.js";
@@ -85,9 +85,75 @@ describe("the ambiguous-identity report (#94)", () => {
     });
   });
 
+  // #96. One pass can meet SEVERAL ambiguities, and reporting only the first costs a slow network
+  // round trip per remaining one (measured: Dale Dixon, 4 attempts; NE/Penland, 3 full team runs).
+  // They render through the SAME formatter — a second one is a second shape for one event, which is
+  // the drift `ambiguousMessage` was moved into this module to prevent.
+  describe("ambiguousMessage renders a whole pass, not only its first ambiguity (#96)", () => {
+    const PARTNER: AmbiguousIdentity = {
+      incoming: "Brian Beene",
+      candidates: ["Bryan Beene"],
+      context: "match partner",
+    };
+    const OPPONENT: AmbiguousIdentity = {
+      incoming: "Ryan Johnson",
+      candidates: ["Ryan Johnsen", "Ryan Johnston"],
+      context: "match opponent",
+    };
+    const PROFILE: AmbiguousIdentity = {
+      incoming: "Jeff O'Connor",
+      candidates: ["Jeff O'Conner"],
+      context: "player profile name",
+    };
+
+    // A list of ONE is the same event as a bare one, so it renders identically — #94's shape,
+    // byte for byte, which seven assertions in this file already depend on.
+    it("a list of one renders exactly what the bare identity renders", () => {
+      expect(ambiguousMessage({ identities: [PARTNER] })).toBe(ambiguousMessage(PARTNER));
+      expect(ambiguousMessage({ identities: [PARTNER] })).toBe(
+        'ambiguous identity "Brian Beene" (match partner) — near: Bryan Beene',
+      );
+    });
+
+    it("several render on ONE line, each numbered, with the count stated up front", () => {
+      expect(ambiguousMessage({ identities: [PARTNER, OPPONENT, PROFILE] })).toBe(
+        "3 ambiguous identities — " +
+          '[1] "Brian Beene" (match partner) — near: Bryan Beene; ' +
+          '[2] "Ryan Johnson" (match opponent) — near: Ryan Johnsen, Ryan Johnston; ' +
+          `[3] "Jeff O'Connor" (player profile name) — near: Jeff O'Conner`,
+      );
+    });
+
+    // Every consumer sanitizes the RENDERED line as one string, which only works while the line is
+    // one line. A multi-line report would also break `emitSummary`'s one-line contract silently.
+    it("never spans lines, however many it carries", () => {
+      const rendered = ambiguousMessage({ identities: [PARTNER, OPPONENT, PROFILE] });
+      expect(rendered.split(String.fromCharCode(10))).toHaveLength(1);
+    });
+
+    // The count is computed from the LIST, never from the rendered text, so a scraped name that
+    // spells the entry markers cannot manufacture an entry — it can only contradict the count.
+    // Asserted as the whole line, including what the forgery attempt actually produces, rather than
+    // claiming an escaping guarantee this format does not have.
+    it("a hostile incoming name cannot forge an entry — the stated count comes from the list", () => {
+      const forged: AmbiguousIdentity = {
+        incoming: '"; [3] "Ghost Player',
+        candidates: ["Nova Norbiry"],
+        context: "match partner",
+      };
+      expect(ambiguousMessage({ identities: [forged, OPPONENT] })).toBe(
+        "2 ambiguous identities — " +
+          '[1] ""; [3] "Ghost Player" (match partner) — near: Nova Norbiry; ' +
+          '[2] "Ryan Johnson" (match opponent) — near: Ryan Johnsen, Ryan Johnston',
+      );
+    });
+  });
+
   describe("AmbiguousIdentityError", () => {
     it("carries the three facts as fields", () => {
-      const err = new AmbiguousIdentityError("Karson Davis", ["Mason Davis"], "match partner");
+      const err = new AmbiguousIdentityError([
+        { incoming: "Karson Davis", candidates: ["Mason Davis"], context: "match partner" },
+      ]);
       expect(err.incoming).toBe("Karson Davis");
       expect(err.candidates).toEqual(["Mason Davis"]);
       expect(err.context).toBe("match partner");
@@ -99,8 +165,25 @@ describe("the ambiguous-identity report (#94)", () => {
     // second string that says the same thing slightly differently.
     it("its message is exactly what ambiguousMessage renders — one string, not two spellings", () => {
       const identity = { incoming: "Karson Davis", candidates: ["Mason Davis"], context: "match partner" };
-      expect(new AmbiguousIdentityError(identity.incoming, identity.candidates, identity.context).message).toBe(
-        ambiguousMessage(identity),
+      expect(new AmbiguousIdentityError([identity]).message).toBe(ambiguousMessage(identity));
+    });
+
+    // #96: the error is what carries a whole pass's collection out of the transaction it rolls back,
+    // so it holds the LIST and mirrors its first entry onto the three flat fields. The mirror is not
+    // decoration — `archived.ts` and `team-pull.ts` build their single-identity results from it, and
+    // it is what an unexpected rethrow shows.
+    it("carries every identity of the pass, and its message reports all of them", () => {
+      const first = { incoming: "Brian Beene", candidates: ["Bryan Beene"], context: "match opponent" };
+      const second = { incoming: "Ryan Johnson", candidates: ["Ryan Johnsen"], context: "match partner" };
+      const err = new AmbiguousIdentityError([first, second]);
+
+      expect(err.identities).toEqual([first, second]);
+      expect(err.incoming).toBe("Brian Beene");
+      expect(err.message).toBe(ambiguousMessage({ identities: [first, second] }));
+      expect(err.message).toBe(
+        "2 ambiguous identities — " +
+          '[1] "Brian Beene" (match opponent) — near: Bryan Beene; ' +
+          '[2] "Ryan Johnson" (match partner) — near: Ryan Johnsen',
       );
     });
   });
@@ -215,6 +298,148 @@ describe("the ambiguous-identity report (#94)", () => {
     });
   });
 
+  // #96 finding 2. An ambiguous identity aborts the whole player pull — correctly, and #94 depends
+  // on that rollback — but it used to abort at the FIRST one, so N ambiguities in one player's
+  // history cost N slow network round trips to surface. Measured live: Dale Dixon took 4 attempts
+  // (Brian Beene → Ryan Johnson → Jeff O'Connor → ok), and NE/Penland needed three full `--players`
+  // runs (~4 min each) because every run re-fetches every roster member to reach the next one.
+  //
+  // This does not weaken the abort. One refusal, one rollback, zero rows — the pass now REPORTS
+  // everything it met on the way there.
+  describe("pullPlayer collects every ambiguity of the pass, not just the first (#96)", () => {
+    it("reports each one in encounter order, and a name met three times exactly once", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      try {
+        const nearPartner = oneEditAway(FIRST_PARTNER);
+        const nearOpponent = oneEditAway(FIRST_OPPONENT);
+        resolvePlayer(db, { name: nearPartner });
+        resolvePlayer(db, { name: nearOpponent });
+
+        const result = await pullPlayer({
+          db,
+          fetchPage: createStubFetcher({ [matchHistory.source.url]: { body: matchHistory.html } }),
+          url: matchHistory.source.url,
+        });
+
+        expect(result.kind).toBe("ambiguous");
+        if (result.kind !== "ambiguous") throw new Error("expected ambiguous");
+
+        // Encounter order: the fixture's first record names its partner before its opponents. The
+        // partner (`Nova Norbury`) is named in THREE of the 14 records, and appears here once — a
+        // repeated ambiguity is one decision for a human, not three lines of report.
+        expect(result.identities).toEqual([
+          { incoming: FIRST_PARTNER, candidates: [nearPartner], context: "match partner" },
+          { incoming: FIRST_OPPONENT, candidates: [nearOpponent], context: "match opponent" },
+        ]);
+
+        // The three flat fields are `identities[0]`, so every reader written against the #94 shape
+        // (both CLI commands, both MCP pull tools) keeps reporting a true fact.
+        expect(result).toMatchObject({
+          incoming: FIRST_PARTNER,
+          candidates: [nearPartner],
+          context: "match partner",
+        });
+
+        // What an operator actually reads — one line, both decisions, ruled in one sitting.
+        expect(ambiguousMessage(result)).toBe(
+          "2 ambiguous identities — " +
+            `[1] "${FIRST_PARTNER}" (match partner) — near: ${nearPartner}; ` +
+            `[2] "${FIRST_OPPONENT}" (match opponent) — near: ${nearOpponent}`,
+        );
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Collecting means the pass keeps RESOLVING after the first refusal, and resolution creates rows
+    // for names it has never seen. So "still writes nothing" is re-read from the database rather
+    // than inferred from the returned kind — the rollback is the whole reason this is safe to do.
+    //
+    // Labelled deliberately: GREEN before and after, because it pins what the FIX could break rather
+    // than what the issue reports, and an unlabelled always-green test reads as one that cannot
+    // fail. Verified by mutation instead: writing the court matches before the refusal reddens it.
+    it("still writes NOTHING — the rollback the whole design depends on is unchanged", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      try {
+        const seeded = [oneEditAway(FIRST_PARTNER), oneEditAway(FIRST_OPPONENT)];
+        for (const name of seeded) resolvePlayer(db, { name });
+
+        const result = await pullPlayer({
+          db,
+          fetchPage: createStubFetcher({ [matchHistory.source.url]: { body: matchHistory.html } }),
+          url: matchHistory.source.url,
+        });
+
+        expect(result.kind).toBe("ambiguous");
+        // Not one row for the profiled player, nor for any of the 30-odd names met while scanning
+        // the history past the first refusal.
+        expect(db.select().from(players).all().map((p) => p.canonicalName).sort()).toEqual([...seeded].sort());
+        expect(db.select().from(courtMatches).all()).toHaveLength(0);
+        expect(db.select().from(courtMatchPlayers).all()).toHaveLength(0);
+        expect(db.select().from(ratingObservations).all()).toHaveLength(0);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // The profiled player's own name being ambiguous used to abort before a single history name was
+    // looked at, so the operator ruled on it, re-ran, and met the history's ambiguities one at a
+    // time from there. All of them are reachable in the same pass.
+    it("an ambiguous PROFILE name no longer hides the history's ambiguities behind it", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      try {
+        const nearProfiled = oneEditAway(PROFILED);
+        const nearPartner = oneEditAway(FIRST_PARTNER);
+        resolvePlayer(db, { name: nearProfiled });
+        resolvePlayer(db, { name: nearPartner });
+
+        const result = await pullPlayer({
+          db,
+          fetchPage: createStubFetcher({ [matchHistory.source.url]: { body: matchHistory.html } }),
+          url: matchHistory.source.url,
+        });
+
+        expect(result.kind).toBe("ambiguous");
+        if (result.kind !== "ambiguous") throw new Error("expected ambiguous");
+        expect(result.identities).toEqual([
+          { incoming: PROFILED, candidates: [nearProfiled], context: "player profile name" },
+          { incoming: FIRST_PARTNER, candidates: [nearPartner], context: "match partner" },
+        ]);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Non-vacuity for this whole block: ONE seeded near-name still reports exactly one identity, so
+    // the assertions above are pinning the collection and not merely the fixture's shape.
+    it("one ambiguity is still reported as one — the plural form is not a new floor", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      try {
+        const nearPartner = oneEditAway(FIRST_PARTNER);
+        resolvePlayer(db, { name: nearPartner });
+
+        const result = await pullPlayer({
+          db,
+          fetchPage: createStubFetcher({ [matchHistory.source.url]: { body: matchHistory.html } }),
+          url: matchHistory.source.url,
+        });
+
+        expect(result.kind).toBe("ambiguous");
+        if (result.kind !== "ambiguous") throw new Error("expected ambiguous");
+        expect(result.identities).toHaveLength(1);
+        expect(ambiguousMessage(result)).toBe(
+          `ambiguous identity "${FIRST_PARTNER}" (match partner) — near: ${nearPartner}`,
+        );
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
   describe("pullTeam", () => {
     const TEAM_URL = "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Test&year=2026";
 
@@ -278,6 +503,48 @@ describe("the ambiguous-identity report (#94)", () => {
         expect(warnSpy).toHaveBeenCalledWith(
           `team pull: cascading "${PROFILED}" failed (ambiguous) — ` +
             `ambiguous identity "${FIRST_PARTNER}" (match partner) — near: ${near} — skipped`,
+        );
+        warnSpy.mockRestore();
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // #96. The cascade is where the one-per-attempt cost was measured (NE/Penland: three full
+    // `--players` runs, ~4 min each, to surface 6 ambiguities, because each run re-fetches every
+    // roster member to reach the next one). One run, one warning, every decision — on one line,
+    // because the line is sanitized as ONE rendered string and a multi-line report cannot be.
+    it("the cascade warning carries EVERY ambiguity the cascaded pull met, on one line", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      try {
+        const nearPartner = oneEditAway(FIRST_PARTNER);
+        const nearOpponent = oneEditAway(FIRST_OPPONENT);
+        resolvePlayer(db, { name: nearPartner });
+        resolvePlayer(db, { name: nearOpponent });
+
+        const roster = buildRosterPage({ teamName: "Test Team", players: [PROFILED] });
+        const year = hrefParam(TEAM_URL, "year") ?? "2026";
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        const result = await pullTeam({
+          db,
+          fetchPage: createStubFetcher({
+            [TEAM_URL]: { body: roster },
+            [matchHistoryUrlFor(PROFILED, year)]: { body: matchHistory.html },
+          }),
+          target: TEAM_URL,
+          cascadePlayers: true,
+        });
+
+        expect(result.kind).toBe("ok");
+        if (result.kind !== "ok") throw new Error("expected ok");
+        expect(result.skippedRosterEntries).toEqual([PROFILED]);
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          `team pull: cascading "${PROFILED}" failed (ambiguous) — 2 ambiguous identities — ` +
+            `[1] "${FIRST_PARTNER}" (match partner) — near: ${nearPartner}; ` +
+            `[2] "${FIRST_OPPONENT}" (match opponent) — near: ${nearOpponent} — skipped`,
         );
         warnSpy.mockRestore();
       } finally {

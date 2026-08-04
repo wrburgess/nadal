@@ -8,7 +8,7 @@ import { archivePage } from "./archive.js";
 import { AmbiguousIdentityError, ambiguousMessage, type AmbiguousIdentity } from "./errors.js";
 import type { PageFetcher } from "./fetch.js";
 import { findTeamByName, resolvePlayer, resolveTeam } from "./identity.js";
-import { matchHistoryUrlFor, pullPlayer, slugFromUrl } from "./player-pull.js";
+import { matchHistoryUrlFor, pullPlayer, slugFromUrl, type PlayerPullResult } from "./player-pull.js";
 import { retireAbsentMemberships, upsertMembership, upsertTeam, upsertTeamMatch } from "./upsert.js";
 import { errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
@@ -69,6 +69,40 @@ function resolveTargetUrl(
     };
   }
   return { kind: "unknown-target" };
+}
+
+/**
+ * The one stderr line a failed cascade prints. `console.warn` is a RAW write with no summary
+ * formatter in front of it, so this function is the only place that line's shape exists.
+ *
+ * Every non-`ok` kind reports its reason (#96). Before, only `ambiguous` did, and the other two
+ * printed the bare kind name:
+ *
+ *   team pull: cascading "Jim Vanderveen" failed (error) — skipped
+ *
+ * `(error)` was the whole diagnosis, while `PlayerPullResult` carried a populated `message` the line
+ * discarded — so a network timeout, an HTTP 404 and a `ParseError`, which want three different
+ * responses from an operator, were indistinguishable. That is the same defect class #94 was opened
+ * for, one branch over, and it survived #94 because those two branches were pinned by no test.
+ *
+ * Exported for `test/ingest-team-pull.test.ts`, which is the only way to assert the
+ * `unknown-target` branch at all: the cascade calls `pullPlayer` with a `url` and never a name
+ * target, so that kind — produced only by `resolveTargetUrl` — is unreachable through `pullTeam`.
+ * An unreachable branch left unasserted is exactly how this one shipped reporting nothing.
+ *
+ * SANITIZED ONCE, over the WHOLE rendered line. Both interpolated values are attacker-influenced —
+ * `entryName` is parsed from a fetched roster page, and a reason can quote the document a parser
+ * choked on — and sanitizing the finished line rather than each field is what keeps either of them
+ * from forging the punctuation that separates the facts.
+ */
+export function cascadeFailureWarning(entryName: string, result: Exclude<PlayerPullResult, { kind: "ok" }>): string {
+  const reason = result.kind === "ambiguous" ? ambiguousMessage(result) : result.message;
+  // A reason that renders to nothing but spaces — an `Error("")`, or a message made entirely of
+  // control characters the sanitizer replaces — would print as ` —  — skipped`, which reads as a
+  // truncated line rather than as "this failure carried no reason", and is indistinguishable at a
+  // glance from the defect above. Say the kind and stop.
+  const detail = sanitizeValue(reason).trim() === "" ? "" : ` — ${reason}`;
+  return sanitizeValue(`team pull: cascading "${entryName}" failed (${result.kind})${detail} — skipped`);
 }
 
 /** `"3-2"` → `[3, 2]`; anything else (a bye, a blank result) → `[null, null]`. */
@@ -219,7 +253,19 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       for (const entry of parsed.roster) {
         const resolved = resolvePlayer(tx, { name: entry.name });
         if (resolved.kind === "ambiguous") {
-          throw new AmbiguousIdentityError(entry.name, resolved.candidates.map((p) => p.canonicalName), "team roster row");
+          // ONE identity, refused at the first — deliberately NOT collected the way `pullPlayer`
+          // now collects (#96). Continuing this loop past an ambiguous row would leave
+          // `observedPlayerIds` partial, and `retireAbsentMemberships` below reconciles departures
+          // against exactly that list, in this same transaction: the partial-roster hazard the
+          // comment on that call names. The measured cost of one-at-a-time was in the CASCADE
+          // (NE/Penland, three full runs), and the cascade is a `pullPlayer` concern.
+          throw new AmbiguousIdentityError([
+            {
+              incoming: entry.name,
+              candidates: resolved.candidates.map((p) => p.canonicalName),
+              context: "team roster row",
+            },
+          ]);
         }
         upsertMembership(
           tx,
@@ -302,7 +348,13 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       for (const row of parsed.schedule) {
         const opponent = resolveTeam(tx, { name: row.opponentTeamName });
         if (opponent.kind === "ambiguous") {
-          throw new AmbiguousIdentityError(row.opponentTeamName, opponent.candidates.map((t) => t.name), "schedule opponent team");
+          throw new AmbiguousIdentityError([
+            {
+              incoming: row.opponentTeamName,
+              candidates: opponent.candidates.map((t) => t.name),
+              context: "schedule opponent team",
+            },
+          ]);
         }
         const [homeCourtsWon, visitingCourtsWon] = parseResultCounts(row.result);
         upsertTeamMatch(tx, {
@@ -345,19 +397,10 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       const result = await pullPlayer({ db, fetchPage, url: playerUrl });
       if (result.kind !== "ok") {
         skippedRosterEntries.push(entry.name);
-        // Name the identity that actually failed, not the player we happened to be cascading.
-        // A real report read `cascading "John Jennings" failed (ambiguous) — skipped` when John
-        // resolved exactly and the ambiguity was a name inside HIS match history — so it pointed
-        // at the wrong person, and omitted both the incoming name and what it was near (#94).
-        //
-        // Rendered by the shared `ambiguousMessage`, then sanitized as ONE string. Sanitizing the
-        // rendered line rather than each field separately is what keeps a hostile scraped name from
-        // forging the punctuation this format uses to separate the three facts — and it is the same
-        // formatter the CLI summary and the MCP tools use, so a reader sees one shape everywhere.
-        const detail = result.kind === "ambiguous" ? ` — ${sanitizeValue(ambiguousMessage(result))}` : "";
-        console.warn(
-          `team pull: cascading "${sanitizeValue(entry.name)}" failed (${result.kind})${detail} — skipped`,
-        );
+        // Names the identity that actually failed, not the player we happened to be cascading, and
+        // says WHY for every failure kind — see `cascadeFailureWarning` for both defects and for
+        // why its shape lives in one function rather than inline here.
+        console.warn(cascadeFailureWarning(entry.name, result));
       }
     }
   }
