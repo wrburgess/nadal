@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
@@ -115,9 +115,26 @@ describe("pullPlayer", () => {
       // the runbook tells an operator to find the file by its slug instead.
       expect("archivedPath" in result).toBe(false);
 
-      const archived = readdirSync(join(raw.path(), "tennisrecord"));
-      expect(archived.filter((f) => f.endsWith(".html"))).toHaveLength(1);
-      expect(archived.filter((f) => f.endsWith(".provenance.json"))).toHaveLength(1);
+      // CONTENTS, not a file count. Counting the pair leaves the claim satisfied by an archive that
+      // captured the wrong bytes: swap `body` for `""` at the `archivePage` call while still parsing
+      // the real page, and a count-only assertion stays green with nothing useful on disk — so what
+      // the runbook offers an operator ("inspect what was fetched") would be a lie the test agreed
+      // with. Found by the fix-verification pass on this very fix, rated medium.
+      const dir = join(raw.path(), "tennisrecord");
+      const archived = readdirSync(dir);
+      const html = archived.filter((f) => f.endsWith(".html"));
+      const provenance = archived.filter((f) => f.endsWith(".provenance.json"));
+      expect(html).toHaveLength(1);
+      expect(provenance).toHaveLength(1);
+      expect(readFileSync(join(dir, html[0]!), "utf8")).toBe(matchHistory.html);
+      expect(JSON.parse(readFileSync(join(dir, provenance[0]!), "utf8"))).toMatchObject({
+        sourceUrl: matchHistory.source.url,
+        httpStatus: 200,
+        redacted: false,
+        bytes: Buffer.byteLength(matchHistory.html, "utf8"),
+      });
+      // The pair describes ONE capture: the provenance leaf is the html leaf's name plus a suffix.
+      expect(provenance[0]).toBe(`${html[0]}.provenance.json`);
     } finally {
       sqlite.close();
     }
