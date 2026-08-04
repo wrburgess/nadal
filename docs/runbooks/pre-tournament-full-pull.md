@@ -248,10 +248,7 @@ row is committed until the pull succeeds — the whole pull is one transaction a
 back. The **raw page is already archived** either way: `archivePage` runs before parsing, so the
 fetched HTML and its provenance sit under `TN_RAW_PATH` (`raw/` when unset) even for a pull that
 refused. A **refused player pull does not print that path**, because only its `ok` result carries one
-— so find the file by its URL-derived slug if you want to inspect what was fetched. (Not a rule about
-non-`ok` statuses generally: step 2's partly-failed cascade prints `status=partial` *with* `archived=`,
-because the TEAM page it names was fetched and written successfully — it is the cascaded player pulls
-that failed.)
+— so find the file by its URL-derived slug if you want to inspect what was fetched.
 
 ### 4. USTA/WTN ratings — human-in-the-loop, not this runbook's job
 
