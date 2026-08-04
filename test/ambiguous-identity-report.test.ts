@@ -556,6 +556,15 @@ describe("the ambiguous-identity report (#94)", () => {
     // a shared formatter must not reopen the hole PR #47 closed: the RENDERED line is sanitized as
     // one string, so a hostile name cannot inject the punctuation this format separates facts with,
     // nor write control codes to the terminal.
+    //
+    // REWRITTEN in #96, because the first version asserted this over an EMPTY spy. It put the
+    // hostile name on the ROSTER ROW, which makes `pullTeam` refuse inside its own transaction and
+    // return before the cascade runs at all — so no cascade warning was ever emitted, and
+    // `not.toContain(ESC)` held vacuously, for any implementation including one with no sanitizer.
+    // Found by this PR's own mutation pass: deleting `sanitizeValue` from the cascade line reddened
+    // nothing here. The hostile name is now a PARTNER inside the cascaded player's match history —
+    // the same shape as the live #94 report — and the whole line is pinned, with its emission
+    // asserted first so the next such regression cannot hide in an absence.
     it("sanitizes the rendered line, so a hostile incoming name cannot write control codes to stderr", async () => {
       const RTL_OVERRIDE = String.fromCharCode(0x202e);
       const ESC = String.fromCharCode(0x1b);
@@ -563,23 +572,43 @@ describe("the ambiguous-identity report (#94)", () => {
       const { db, sqlite } = openDb();
       try {
         const hostileIncoming = `Nova${RTL_OVERRIDE}${ESC}[2J Norbury`;
+        const hostileHistory = matchHistory.html.replaceAll(FIRST_PARTNER, hostileIncoming);
+        expect(hostileHistory).not.toBe(matchHistory.html);
         // On file one edit from the hostile name, so the hostile name is the INCOMING side.
-        resolvePlayer(db, { name: oneEditAway(hostileIncoming) });
+        const near = oneEditAway(hostileIncoming);
+        resolvePlayer(db, { name: near });
 
-        const roster = buildRosterPage({ teamName: "Test Team", players: [hostileIncoming] });
+        const roster = buildRosterPage({ teamName: "Test Team", players: [PROFILED] });
+        const year = hrefParam(TEAM_URL, "year") ?? "2026";
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
         await pullTeam({
           db,
-          fetchPage: createStubFetcher({ [TEAM_URL]: { body: roster } }),
+          fetchPage: createStubFetcher({
+            [TEAM_URL]: { body: roster },
+            [matchHistoryUrlFor(PROFILED, year)]: { body: hostileHistory },
+          }),
           target: TEAM_URL,
           cascadePlayers: true,
         });
 
-        const warned = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
-        expect(warned).not.toContain(ESC);
-        expect(warned).not.toContain(RTL_OVERRIDE);
+        const warned = warnSpy.mock.calls.map((c) => String(c[0]));
         warnSpy.mockRestore();
+
+        // Non-vacuity: the line this test is about was actually printed.
+        expect(warned).toHaveLength(1);
+        // Both control characters replaced by ONE space each, in the expected positions — written
+        // out by hand rather than through `sanitizeValue`, so a broken sanitizer cannot move both
+        // sides of the assertion together.
+        expect(warned[0]).toBe(
+          `team pull: cascading "${PROFILED}" failed (ambiguous) — ` +
+            'ambiguous identity "Nova  [2J Norbury" (match partner) — near: Novo  [2J Norbury — skipped',
+        );
+        expect(warned[0]).not.toContain(ESC);
+        expect(warned[0]).not.toContain(RTL_OVERRIDE);
+        // The seeded near-name IS the hostile name one edit away — stated so a helper that stopped
+        // producing one would fail here rather than quietly making the pull succeed.
+        expect(near).toBe(`Novo${RTL_OVERRIDE}${ESC}[2J Norbury`);
       } finally {
         sqlite.close();
       }
@@ -607,6 +636,39 @@ describe("the ambiguous-identity report (#94)", () => {
       expect(code).toBe(1);
       expect(errSpy).toHaveBeenCalledWith(
         `player pull status=error message="ambiguous identity \\"${FIRST_PARTNER}\\" (match partner) — near: ${near}"`,
+      );
+      vi.restoreAllMocks();
+    });
+
+    // #96, and the claim `docs/runbooks/pre-tournament-full-pull.md` step 3 now makes to an
+    // operator. It is also the load-bearing consequence of putting the plural rendering INSIDE the
+    // shared formatter: `src/cli/commands/player-pull.ts` hands `ambiguousMessage` the whole result
+    // object and always has, so it reports every ambiguity of the pass with no edit to that file —
+    // which a parallel change owns. Asserted end-to-end through `dispatch` rather than argued.
+    it("tn player pull prints EVERY ambiguity of the pass, through the same message= field", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const nearPartner = oneEditAway(FIRST_PARTNER);
+      const nearOpponent = oneEditAway(FIRST_OPPONENT);
+      resolvePlayer(db, { name: nearPartner });
+      resolvePlayer(db, { name: nearOpponent });
+      sqlite.close();
+
+      vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+        url,
+        status: 200,
+        body: matchHistory.html,
+        fetchedAt: new Date().toISOString(),
+      }));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      const code = await dispatch(["player", "pull", matchHistory.source.url]);
+
+      expect(code).toBe(1);
+      expect(errSpy).toHaveBeenCalledWith(
+        `player pull status=error message="2 ambiguous identities — ` +
+          `[1] \\"${FIRST_PARTNER}\\" (match partner) — near: ${nearPartner}; ` +
+          `[2] \\"${FIRST_OPPONENT}\\" (match opponent) — near: ${nearOpponent}"`,
       );
       vi.restoreAllMocks();
     });
@@ -662,6 +724,37 @@ describe("the ambiguous-identity report (#94)", () => {
       const tool = MCP_TOOLS.find((t) => t.name === "player_pull")!;
       await expect(tool.handler({ target: matchHistory.source.url })).rejects.toThrow(
         `ambiguous identity "${FIRST_PARTNER}" (match partner) — near: ${near}`,
+      );
+      vi.restoreAllMocks();
+    });
+
+    // The other surface that reports a whole pass without being edited (#96). Asserted as an
+    // equality on the thrown message rather than through `rejects.toThrow`, which matches a
+    // SUBSTRING — the assertion shape this file exists to keep out of a message claim.
+    it("player_pull reports every ambiguity of the pass, not only the first", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const nearPartner = oneEditAway(FIRST_PARTNER);
+      const nearOpponent = oneEditAway(FIRST_OPPONENT);
+      resolvePlayer(db, { name: nearPartner });
+      resolvePlayer(db, { name: nearOpponent });
+      sqlite.close();
+
+      vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+        url,
+        status: 200,
+        body: matchHistory.html,
+        fetchedAt: new Date().toISOString(),
+      }));
+
+      const tool = MCP_TOOLS.find((t) => t.name === "player_pull")!;
+      const thrown: unknown = await tool.handler({ target: matchHistory.source.url }).catch((err: unknown) => err);
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe(
+        "2 ambiguous identities — " +
+          `[1] "${FIRST_PARTNER}" (match partner) — near: ${nearPartner}; ` +
+          `[2] "${FIRST_OPPONENT}" (match opponent) — near: ${nearOpponent}`,
       );
       vi.restoreAllMocks();
     });

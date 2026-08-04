@@ -1097,6 +1097,23 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
     );
   });
 
+  // The OTHER interpolated value. `entry.name` comes off the same fetched roster page, and the
+  // integration tests above all pair a benign entry name with a hostile reason — so without this,
+  // deleting the sanitizer would still leave the entry-name half of the line unpinned. Asserted on
+  // the renderer directly because a control character inside a roster row's profile HREF is a
+  // URL-parsing question, not a reporting one, and would test `hrefParam` instead of this line.
+  it("sanitizes the cascade target's own name, not only the reason", () => {
+    const ESC = String.fromCharCode(0x1b);
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    const rendered = cascadeFailureWarning(`Ellis${RTL_OVERRIDE}${ESC}[2J Eastwick`, {
+      kind: "error",
+      message: "fetch failed with status 503",
+    });
+    expect(rendered).toBe(
+      'team pull: cascading "Ellis  [2J Eastwick" failed (error) — fetch failed with status 503 — skipped',
+    );
+  });
+
   it("an `ambiguous` renders the three facts through the shared formatter, unchanged from #94", () => {
     const identity = { incoming: "Austin DuBois", candidates: ["Justin DuBois"], context: "match opponent" };
     expect(cascadeFailureWarning("John Jennings", { kind: "ambiguous", ...identity, identities: [identity] })).toBe(

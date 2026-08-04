@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import type { openDb } from "../db/client.js";
+import type { Db as IngestDb } from "./db-types.js";
 import { errorMessage } from "../error-message.js";
 import { players, teamMatches } from "../db/schema.js";
 import { archivePage } from "./archive.js";
@@ -108,6 +109,59 @@ function setsToScore(record: CourtMatchRecord): string {
   return record.sets.map((s) => `${s.matchWinnerGames}-${s.matchLoserGames}`).join(" ");
 }
 
+/** One match record with its participants already resolved to ids — the output of pass 1 below. */
+type ResolvedMatch = { record: CourtMatchRecord; partnerId: number | null; opponentIds: number[] };
+
+/**
+ * PASS 1 of a pull: resolve every partner and opponent the match history names, handing each
+ * ambiguity to `note` instead of throwing at the first (#96). Resolution is what DISCOVERS an
+ * ambiguity, so it has to keep going to find the rest; it also CREATES rows for names not yet on
+ * file, exactly as it did before, and the caller's refusal discards them with everything else when
+ * anything was noted.
+ *
+ * Called from both of `pullPlayer`'s paths — including the one whose profile name is itself
+ * ambiguous, which used to refuse before a single history name was looked at.
+ */
+function resolveHistory(
+  tx: IngestDb,
+  matches: CourtMatchRecord[],
+  note: (identity: AmbiguousIdentity) => void,
+): ResolvedMatch[] {
+  const resolvedMatches: ResolvedMatch[] = [];
+  for (const record of matches) {
+    let partnerId: number | null = null;
+    if (record.partner !== null) {
+      const partner = resolvePlayer(tx, { name: record.partner.name });
+      if (partner.kind === "ambiguous") {
+        note({
+          incoming: record.partner.name,
+          candidates: partner.candidates.map((p) => p.canonicalName),
+          context: "match partner",
+        });
+      } else {
+        partnerId = partner.row.id;
+      }
+    }
+
+    const opponentIds: number[] = [];
+    for (const opponent of record.opponents) {
+      const resolvedOpponent = resolvePlayer(tx, { name: opponent.name });
+      if (resolvedOpponent.kind === "ambiguous") {
+        note({
+          incoming: opponent.name,
+          candidates: resolvedOpponent.candidates.map((p) => p.canonicalName),
+          context: "match opponent",
+        });
+      } else {
+        opponentIds.push(resolvedOpponent.row.id);
+      }
+    }
+
+    resolvedMatches.push({ record, partnerId, opponentIds });
+  }
+  return resolvedMatches;
+}
+
 /**
  * Pull one player: resolve the target, fetch (or read `--from`), archive the raw page BEFORE
  * parsing, then run `parseTennisRecordHeader` and `parseMatchHistory` over the SAME bytes (one
@@ -202,82 +256,55 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
       };
 
       const resolved = resolvePlayer(tx, { tennisrecordUrl: url, name: header.name });
-      // Null ONLY when the profile name itself is ambiguous — which is noted, so the refusal below
-      // is already certain. The history is still walked from here: its names resolve against the
-      // database, not against this row, so an unresolvable profile no longer hides them.
-      let profiled: PlayerRow | null = null;
       if (resolved.kind === "ambiguous") {
-        note({
+        // The pull cannot proceed without knowing whose page this is — but the history's OWN
+        // identities resolve against the database, not against this row, and they used to be hidden
+        // behind this refusal. Scan for them, then refuse once with everything.
+        const profileIdentity: AmbiguousIdentity = {
           incoming: header.name,
           candidates: resolved.candidates.map((p) => p.canonicalName),
           context: "player profile name",
-        });
-      } else {
-        profiled = upsertPlayer(tx, {
-          id: resolved.row.id,
-          canonicalName: header.name,
-          tennisrecordUrl: url,
-          gender: header.gender,
-        });
-
-        if (header.ntrp !== null) {
-          upsertRatingObservation(tx, {
-            playerId: profiled.id,
-            source: "ntrp",
-            value: header.ntrp.value,
-            ratingType: header.ntrp.ratingType,
-            observedOn: header.ntrp.observedOn,
-          });
-        }
-        if (header.dynamicRating !== null) {
-          upsertRatingObservation(tx, {
-            playerId: profiled.id,
-            source: "tr_dynamic",
-            value: header.dynamicRating.value,
-            ratingType: null,
-            observedOn: header.dynamicRating.observedOn,
-          });
-        }
+        };
+        note(profileIdentity);
+        resolveHistory(tx, matches, note);
+        // `profileIdentity` was the first thing noted, so this IS `ambiguities` — spelled as a
+        // literal tuple because that is what proves non-emptiness to the type, and refusing here
+        // (rather than falling through to a shared exit) is what keeps `profiled` below a plain
+        // non-null const with no unreachable guard standing behind it.
+        throw new AmbiguousIdentityError([profileIdentity, ...ambiguities.slice(1)]);
       }
 
-      // PASS 1 — resolve every identity the page names, noting each ambiguity. Resolution is what
-      // DISCOVERS an ambiguity, so it continues past the first; it also creates rows for names not
-      // yet on file, exactly as it did before, and the refusal below discards them with everything
-      // else. The profile upsert above stays ahead of this loop so a history name is still resolved
-      // against the same rows it was before, in the same order.
-      type ResolvedMatch = { record: CourtMatchRecord; partnerId: number | null; opponentIds: number[] };
-      const resolvedMatches: ResolvedMatch[] = [];
-      for (const record of matches) {
-        let partnerId: number | null = null;
-        if (record.partner !== null) {
-          const partner = resolvePlayer(tx, { name: record.partner.name });
-          if (partner.kind === "ambiguous") {
-            note({
-              incoming: record.partner.name,
-              candidates: partner.candidates.map((p) => p.canonicalName),
-              context: "match partner",
-            });
-          } else {
-            partnerId = partner.row.id;
-          }
-        }
+      const profiled = upsertPlayer(tx, {
+        id: resolved.row.id,
+        canonicalName: header.name,
+        tennisrecordUrl: url,
+        gender: header.gender,
+      });
 
-        const opponentIds: number[] = [];
-        for (const opponent of record.opponents) {
-          const resolvedOpponent = resolvePlayer(tx, { name: opponent.name });
-          if (resolvedOpponent.kind === "ambiguous") {
-            note({
-              incoming: opponent.name,
-              candidates: resolvedOpponent.candidates.map((p) => p.canonicalName),
-              context: "match opponent",
-            });
-          } else {
-            opponentIds.push(resolvedOpponent.row.id);
-          }
-        }
-
-        resolvedMatches.push({ record, partnerId, opponentIds });
+      if (header.ntrp !== null) {
+        upsertRatingObservation(tx, {
+          playerId: profiled.id,
+          source: "ntrp",
+          value: header.ntrp.value,
+          ratingType: header.ntrp.ratingType,
+          observedOn: header.ntrp.observedOn,
+        });
       }
+      if (header.dynamicRating !== null) {
+        upsertRatingObservation(tx, {
+          playerId: profiled.id,
+          source: "tr_dynamic",
+          value: header.dynamicRating.value,
+          ratingType: null,
+          observedOn: header.dynamicRating.observedOn,
+        });
+      }
+
+      // PASS 1 — resolve every identity the page names, noting each ambiguity. The profile upsert
+      // above stays AHEAD of this call, as it always was: a rename applies to `players` before a
+      // history name is fuzzy-matched against it, and moving the write after the scan would quietly
+      // change which row a near-name matches.
+      const resolvedMatches = resolveHistory(tx, matches, note);
 
       // ONE refusal for the whole pass, thrown inside the transaction exactly as before: better-
       // sqlite3/drizzle roll back on a thrown error, which IS the no-partial-write guarantee spec §
@@ -286,13 +313,6 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
       if (firstAmbiguity !== undefined) {
         throw new AmbiguousIdentityError([firstAmbiguity, ...furtherAmbiguities]);
       }
-
-      // Unreachable, and stated rather than asserted away with `!`. The only branch that leaves
-      // `profiled` null notes an ambiguity, and the line above has already thrown in that case;
-      // TypeScript cannot see that implication across the loop, so the choice is between naming the
-      // invariant here and a non-null assertion that would write a wrong row silently if a future
-      // edit ever broke it.
-      if (profiled === null) throw new Error("pullPlayer: profile name unresolved with no ambiguity recorded");
 
       // PASS 2 — nothing was ambiguous, so every id below exists and every write lands.
       for (const { record, partnerId, opponentIds } of resolvedMatches) {
