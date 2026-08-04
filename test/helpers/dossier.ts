@@ -7,7 +7,26 @@
 import type { LineupPlan, LineupSlotProvenance } from "../../src/query/lineup.js";
 import type { PlayerProfile } from "../../src/query/player-profile.js";
 import type { TeamProfile } from "../../src/query/team-profile.js";
+import type { EvidenceScopeSummary } from "../../src/query/types.js";
 import type { TeamDossier } from "../../src/report/types.js";
+
+/**
+ * The default evidence scope for a hand-built fixture: NONE applied (#97), which is what a dossier
+ * built without naming an event genuinely reports. A renderer must print that state explicitly — an
+ * unscoped dossier and a scoped one have to be distinguishable on the page — so this is a real
+ * default rather than a placeholder, and the scoped case is passed in per test.
+ */
+export function buildEvidenceScope(overrides: Partial<EvidenceScopeSummary> = {}): EvidenceScopeSummary {
+  return {
+    scope: null,
+    considered: 12,
+    retained: 12,
+    excluded: 0,
+    unclassified: 0,
+    retainedLeagues: [{ league: "Adult 40+ 3.5", count: 12 }],
+    ...overrides,
+  };
+}
 
 export function buildPlayerProfile(overrides: Partial<PlayerProfile> = {}): PlayerProfile {
   return {
@@ -38,6 +57,7 @@ export function buildPlayerProfile(overrides: Partial<PlayerProfile> = {}): Play
     partnerFrequency: overrides.partnerFrequency ?? [{ partnerId: 2, count: 3, canonicalName: "Kai Kestrel" }],
     teamMemberships: overrides.teamMemberships ?? [],
     dataGaps: overrides.dataGaps ?? { events: "not-collected", availability: "not-collected", captainNotes: "not-collected" },
+    evidenceScope: overrides.evidenceScope ?? buildEvidenceScope(),
   };
 }
 
@@ -59,6 +79,7 @@ export function buildTeamProfile(overrides: Partial<TeamProfile> = {}): TeamProf
     teamRecord: overrides.teamRecord ?? { wins: 5, losses: 2, undecided: 0, excludedUndated: 0 },
     slotTendencies: overrides.slotTendencies ?? [{ slot: "S1", count: 4 }],
     headToHead: overrides.headToHead ?? null,
+    evidenceScope: overrides.evidenceScope ?? buildEvidenceScope(),
     ...overrides,
   };
 }
@@ -135,6 +156,9 @@ export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier 
     // A fixed season, so a renderer test never depends on the year the suite is run in — the very
     // print-date coupling issue #90 removed from the product.
     season: overrides.season ?? "2026",
+    // No event named by default, matching the default evidence scope above — a fixture whose scope
+    // says "none applied" must not simultaneously claim an event supplied one.
+    event: overrides.event ?? null,
     team: overrides.team ?? buildTeamProfile(),
     players: overrides.players ?? [buildPlayerProfile()],
     lineup: overrides.lineup === undefined ? buildLineupPlan() : overrides.lineup,
@@ -147,7 +171,9 @@ export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier 
 export function buildEmptyDossier(): TeamDossier {
   return {
     season: "2026",
+    event: null,
     team: buildTeamProfile({
+      evidenceScope: buildEvidenceScope({ considered: 0, retained: 0, retainedLeagues: [] }),
       roster: [],
       teamRecord: { wins: 0, losses: 0, undecided: 0, excludedUndated: 0 },
       slotTendencies: [],

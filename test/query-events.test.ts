@@ -21,6 +21,7 @@ import {
   addEvent,
 } from "../src/query/events.js";
 import { InvalidEventFormatError, readEventFormat } from "../src/query/event-format.js";
+import { InvalidLeagueScopeError, readLeagueScope } from "../src/query/league-scope.js";
 import { setAvailability } from "../src/query/availability.js";
 import { availability } from "../src/db/schema.js";
 import { setHomeTeam } from "../src/query/home-team.js";
@@ -292,6 +293,170 @@ describe("addEvent's format", () => {
     const { db, sqlite } = freshDb();
     try {
       expect(() => addEvent(db, { ...SPRINGFIELD, kind: "sectionals", format: "garbage" })).toThrow();
+      expect(db.select().from(events).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// #97: `events.league_scope` is the second structured column on this table, and it gets the same
+// closing-the-loop suite the block above gives `format` — deliberately mirroring it case for case,
+// because the two share one write rule and a rule honored on one column and forgotten on the other
+// is this repo's most-recorded failure mode (docs/findings.md).
+describe("addEvent's league scope", () => {
+  useTnDbPath();
+
+  it("stores a scope, returned as the parsed value and readable back off the column", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const result = addEvent(db, { ...SPRINGFIELD, leagueScope: "exclude:Mixed" });
+      expect(result.leagueScope).toEqual({ mode: "exclude", prefixes: ["Mixed"] });
+
+      const stored = db.select().from(events).all()[0]!;
+      expect(readLeagueScope(stored.leagueScope)).toEqual(result.leagueScope);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("stores the exact inverse for a mixed-doubles event over the same rows", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const result = addEvent(db, {
+        name: "September Mixed",
+        kind: "tournament",
+        startsOn: "2026-09-12",
+        endsOn: "2026-09-13",
+        leagueScope: "only:Mixed",
+      });
+      expect(result.leagueScope).toEqual({ mode: "only", prefixes: ["Mixed"] });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("has no scope when none is ever given — the pre-#97 behavior, reported rather than assumed", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      expect(addEvent(db, SPRINGFIELD).leagueScope).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("preserves a stored scope when a repeat add OMITS it — never clobbers with null", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      addEvent(db, { ...SPRINGFIELD, leagueScope: "exclude:Mixed" });
+      // A routine date correction, scope not mentioned. Silently dropping it here would not produce
+      // a visibly wrong dossier — it would produce one that quietly went back to counting every
+      // league, which is the defect #97 closes, reintroduced by an unrelated command.
+      const second = addEvent(db, { ...SPRINGFIELD, endsOn: "2026-08-31" });
+
+      expect(second.leagueScope, "an omitted scope must not null out what was already stored").toEqual({
+        mode: "exclude",
+        prefixes: ["Mixed"],
+      });
+      expect(second.endsOn).toBe("2026-08-31");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("preserves the scope when only the FORMAT is being corrected, and vice versa", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      addEvent(db, { ...SPRINGFIELD, format: "S1:singles", leagueScope: "exclude:Mixed" });
+
+      const formatOnly = addEvent(db, { ...SPRINGFIELD, format: "S1:singles,D1:doubles" });
+      expect(formatOnly.leagueScope).toEqual({ mode: "exclude", prefixes: ["Mixed"] });
+      expect(formatOnly.format).toHaveLength(2);
+
+      const scopeOnly = addEvent(db, { ...SPRINGFIELD, leagueScope: "only:Mixed" });
+      expect(scopeOnly.format, "correcting the scope must not delete the court list").toHaveLength(2);
+      expect(scopeOnly.leagueScope).toEqual({ mode: "only", prefixes: ["Mixed"] });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("replaces a stored scope when a repeat add SUPPLIES a different one", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      addEvent(db, { ...SPRINGFIELD, leagueScope: "exclude:Mixed" });
+      const second = addEvent(db, { ...SPRINGFIELD, leagueScope: "exclude:Mixed,Combo" });
+      expect(second.leagueScope).toEqual({ mode: "exclude", prefixes: ["Mixed", "Combo"] });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses rather than copying forward a corrupted stored scope when the argument is omitted", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      // Hand-corrupt the column, the case the fail-closed reader exists for — only `addEvent` writes
+      // it in production, but SQLite enforces no shape on a text column.
+      sqlite
+        .prepare("INSERT INTO events (name, kind, starts_on, ends_on, league_scope) VALUES (?,?,?,?,?)")
+        .run(SPRINGFIELD.name, "tournament", "2026-08-28", "2026-08-30", "not json at all");
+
+      expect(() => addEvent(db, { ...SPRINGFIELD, endsOn: "2026-08-31" })).toThrow(InvalidLeagueScopeError);
+
+      const row = sqlite.prepare("SELECT ends_on, league_scope FROM events WHERE name = ?").get(SPRINGFIELD.name) as {
+        ends_on: string;
+        league_scope: string;
+      };
+      // The refusal left the row exactly as it was — the date correction did not land either.
+      expect(row.ends_on).toBe("2026-08-30");
+      expect(row.league_scope).toBe("not json at all");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses an invalid scope, and the row is left completely unchanged (created path)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      expect(() => addEvent(db, { ...SPRINGFIELD, leagueScope: "garbage" })).toThrow(InvalidLeagueScopeError);
+      expect(db.select().from(events).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("refuses an invalid scope on an update too, leaving the previously-stored row untouched", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      addEvent(db, { ...SPRINGFIELD, leagueScope: "exclude:Mixed" });
+      expect(() => addEvent(db, { ...SPRINGFIELD, endsOn: "2026-08-31", leagueScope: "drop:Mixed" })).toThrow(
+        InvalidLeagueScopeError,
+      );
+
+      const stored = db.select().from(events).all()[0]!;
+      expect(stored.endsOn).toBe("2026-08-30");
+      expect(readLeagueScope(stored.leagueScope)).toEqual({ mode: "exclude", prefixes: ["Mixed"] });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("validates the scope BEFORE the transaction, alongside every other input check", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      expect(() => addEvent(db, { ...SPRINGFIELD, kind: "sectionals", leagueScope: "garbage" })).toThrow();
+      expect(db.select().from(events).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("reports the FORMAT's refusal first when both columns are given garbage — the order they are typed in", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      expect(() => addEvent(db, { ...SPRINGFIELD, format: "garbage", leagueScope: "garbage" })).toThrow(
+        InvalidEventFormatError,
+      );
       expect(db.select().from(events).all()).toHaveLength(0);
     } finally {
       sqlite.close();

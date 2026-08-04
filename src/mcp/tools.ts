@@ -21,7 +21,7 @@ import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
 import { addEvent, resolveSeasonAnchor } from "../query/events.js";
-import { NoCourtMatchHistoryError, getLineupPlan } from "../query/lineup.js";
+import { NoCourtMatchHistoryError, getLineupPlan, resolveEvent } from "../query/lineup.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
@@ -141,13 +141,23 @@ export const MCP_TOOLS: McpToolDef[] = [
     name: "team_show",
     cliCommand: "team show",
     description: "Show a team's roster and match record",
-    inputShape: { target: z.string().min(1) },
+    inputShape: {
+      target: z.string().min(1),
+      // #97: resolves against `events.name`; its league scope restricts the court matches every
+      // roster record and slot tendency below is computed over. A bad name propagates as its own
+      // distinct error class, which the SDK converts to a structured result (src/mcp/server.ts).
+      event: z.string().optional(),
+    },
     handler: async (rawArgs) => {
-      const { target } = rawArgs as { target: string };
+      const { target, event } = rawArgs as { target: string; event?: string };
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-        return getTeamProfile(db, resolution.teamId, { since: seasonStart() });
+        const leagueScope = event === undefined ? null : resolveEvent(db, event).leagueScope;
+        // The scope summary rides inside the returned profile (`evidenceScope`), so an agent reading
+        // this over MCP is handed the same disclosure the CLI prints rather than a bare set of
+        // records it would have to take on trust — #97's whole point, one surface over.
+        return getTeamProfile(db, resolution.teamId, { since: seasonStart(), leagueScope });
       } finally {
         sqlite.close();
       }
@@ -228,13 +238,19 @@ export const MCP_TOOLS: McpToolDef[] = [
     name: "player_show",
     cliCommand: "player show",
     description: "Show a player's full profile: ratings trajectory, history, records",
-    inputShape: { target: z.string().min(1) },
+    inputShape: {
+      target: z.string().min(1),
+      // #97, same as `team_show` above — the event whose league scope this profile's records were
+      // computed under. Omitted, every league counts, and `evidenceScope` in the result says so.
+      event: z.string().optional(),
+    },
     handler: async (rawArgs) => {
-      const { target } = rawArgs as { target: string };
+      const { target, event } = rawArgs as { target: string; event?: string };
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
-        return getPlayerProfile(db, resolution.playerId, { since: seasonStart() });
+        const leagueScope = event === undefined ? null : resolveEvent(db, event).leagueScope;
+        return getPlayerProfile(db, resolution.playerId, { since: seasonStart(), leagueScope });
       } finally {
         sqlite.close();
       }
@@ -319,21 +335,27 @@ export const MCP_TOOLS: McpToolDef[] = [
       // whatever is already stored, matching the CLI's own "never clobber with an incoming null"
       // rule (see `addEvent`'s doc comment).
       format: z.string().optional(),
+      // #97: raw `parseLeagueScope` syntax ("exclude:Mixed" / "only:Mixed") — the event's evidence
+      // scope, under the identical omitted-preserves rule. Unlike the CLI's sixth positional, this
+      // is nameable WITHOUT also supplying a format, since MCP arguments are keyed rather than
+      // ordered — the one place that stated CLI limitation does not apply.
+      leagueScope: z.string().optional(),
     },
     handler: async (rawArgs) => {
-      const { target, kind, startsOn, endsOn, format } = rawArgs as {
+      const { target, kind, startsOn, endsOn, format, leagueScope } = rawArgs as {
         target: string;
         kind: string;
         startsOn: string;
         endsOn: string;
         format?: string;
+        leagueScope?: string;
       };
       const { db, sqlite } = openDb();
       try {
         // No `requireResolved` here, unlike every other target-taking tool: this is the writer that
         // CREATES events, so resolving the name against existing rows first would make it
         // impossible to add the first one.
-        const result = addEvent(db, { name: target, kind, startsOn, endsOn, format });
+        const result = addEvent(db, { name: target, kind, startsOn, endsOn, format, leagueScope });
         return {
           event: result.name,
           kind: result.kind,
@@ -344,6 +366,7 @@ export const MCP_TOOLS: McpToolDef[] = [
           // none, so a call that never mentions a format gets back exactly the same shape it always
           // has, matching the CLI summary line's identical "only when non-null" convention.
           ...(result.format !== null ? { format: result.format } : {}),
+          ...(result.leagueScope !== null ? { leagueScope: result.leagueScope } : {}),
         };
       } finally {
         sqlite.close();

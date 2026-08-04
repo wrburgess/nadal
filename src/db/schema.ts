@@ -99,6 +99,18 @@ export const events = sqliteTable("events", {
   // guard could see it. Plain text confines decoding to `query/event-format.ts`'s `readEventFormat`,
   // which is the only reader and fails closed with a named refusal.
   format: text("format"),
+  // Issue #97: which league contexts a dossier built for this event may draw evidence from — e.g.
+  // `exclude:Mixed` for Springfield Sectionals, `only:Mixed` for a mixed-doubles tournament reusing
+  // the very same court-match rows. Stored as a JSON string in a PLAIN text column for the identical
+  // reason `format` above is (drizzle's `{ mode: "json" }` would move the parse into every reader of
+  // this table); `src/query/league-scope.ts`'s `readLeagueScope` is the only decoder and fails closed.
+  //
+  // A SEPARATE column from `format`, not a widening of it. The two are read by different consumers
+  // and must fail independently: `getLineupPlan` reads `format` and — per #97, measured 89 of 89 —
+  // is already correctly scoped by its own team-linkage restriction, so it must ignore this value
+  // entirely. Sharing one column would make the one reader obliged to ignore the scope the one
+  // reader obliged to decode it, and would tie a scope's existence to a court list it does not need.
+  leagueScope: text("league_scope"),
   startsOn: text("starts_on"),
   endsOn: text("ends_on"),
 });

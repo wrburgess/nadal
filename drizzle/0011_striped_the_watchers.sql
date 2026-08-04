@@ -1,0 +1,16 @@
+-- Issue #97: which league contexts a dossier built for this event may draw evidence from. Until
+-- now `court_matches.league_context` was written by the parser and read by NOTHING, so a scouting
+-- dossier's per-player records and slot tendencies were computed over every court match that player
+-- had ever played, in every league — between 66% and 92% of what each dossier reported, measured
+-- across the five Sectionals teams, was play from a different league, age bracket, or NTRP level.
+--
+-- Nullable, and additive only. A null means "no scope recorded", which is the pre-#97 behavior
+-- exactly: every league counts. That is the right default for a column no existing row can have a
+-- value for, and it is why this needs no backfill — an event that predates this migration keeps
+-- reporting what it always reported, and now says so out loud rather than leaving it implicit
+-- (`src/query/league-scope.ts`, and the explicit "no scope applied" line every profile surface prints).
+--
+-- Plain `text`, not drizzle's `{ mode: "json" }`: the value IS JSON, and
+-- `src/query/league-scope.ts`'s `readLeagueScope` is the only decoder — the same discipline
+-- `events.format` follows, for the same reason (see that column's comment in `src/db/schema.ts`).
+ALTER TABLE `events` ADD `league_scope` text;

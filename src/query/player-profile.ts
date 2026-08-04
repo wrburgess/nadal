@@ -20,9 +20,12 @@ import { assertPlayerAliasesKeyed, assertPlayersKeyed, findPlayerByName } from "
 import type { NameLookup } from "../ingest/identity.js";
 import type { Db } from "../ingest/db-types.js";
 import { dataGaps, partnerFrequency, ratingTrajectory, slotTendencies, windowedRecord } from "./derive.js";
+import type { LeagueScope } from "./league-scope.js";
+import { leagueScopeRetains } from "./league-scope.js";
 import type {
   CourtMatchRow,
   DataGapsResult,
+  EvidenceScopeSummary,
   PartnerFrequencyEntry,
   RatingObservationRow,
   RatingTrajectoryResult,
@@ -147,7 +150,26 @@ export type PlayerProfile = {
   partnerFrequency: (PartnerFrequencyEntry & { canonicalName: string })[];
   teamMemberships: PlayerTeamMembershipSummary[];
   dataGaps: DataGapsResult;
+  /** #97: what every record, slot tendency and partner count above was actually computed over —
+   * which scope was applied (or that none was), how much it set aside, and what survived it. Not
+   * optional, and never omitted when no scope applies: a reader who cannot tell a scoped profile
+   * from an unscoped one is back where this issue started. */
+  evidenceScope: EvidenceScopeSummary;
 };
+
+/** What `courtMatchRowsForPlayers` returns: the rows to derive from, and an honest account of what
+ * it drew them from. The two travel together on purpose — a caller cannot obtain the rows without
+ * also being handed the means to disclose how they were scoped (#97 scope item 3). */
+export type CourtMatchEvidence = {
+  rows: CourtMatchRow[];
+  scope: EvidenceScopeSummary;
+};
+
+/** The scope summary for a read that fetched nothing. Kept as a function rather than a shared frozen
+ * constant so no caller can mutate the empty case out from under another. */
+function emptyEvidence(scope: LeagueScope | null): EvidenceScopeSummary {
+  return { scope, considered: 0, retained: 0, excluded: 0, unclassified: 0, retainedLeagues: [] };
+}
 
 /**
  * Every `court_matches` row at least one of `playerIds` participated in, pre-joined with EVERY
@@ -155,9 +177,31 @@ export type PlayerProfile = {
  * `derive.ts`'s functions need for partner/opponent lookups. Shared by `getPlayerProfile` (a
  * single id) and `team-profile.ts` (a whole roster plus, for `versusTeamId`, the opposing roster)
  * so both query the DB the same way rather than each inventing their own join.
+ *
+ * **`leagueScope` (#97) is where the whole issue lands.** Before it, this one function was the
+ * unscoped reader behind every dossier record and every slot tendency: a 40&Over 3.5 opponent's
+ * "usually plays D2" was up to a third driven by matches played with a woman as their partner, a
+ * partner pool that does not exist at Sectionals, and 66%–92% of what each dossier reported was play
+ * from a different league, age bracket, or NTRP level. Given a scope, rows are filtered by
+ * `leagueScopeRetains`; omitted (or `null`), every league counts — byte-identical to the pre-#97
+ * behavior, and reported as such rather than left implicit.
+ *
+ * Filtered HERE rather than in `derive.ts`, and the distinction is load-bearing: `CourtMatchRow`
+ * deliberately does not carry `leagueContext` at all, so nothing downstream of this function is even
+ * ABLE to apply a second, differently-worded league rule. One boundary, one predicate — two places
+ * that could disagree about which evidence counts is the failure mode this issue exists to close.
+ *
+ * The projection is spelled out rather than left as `select()`. It selected `league_context` all
+ * along (as part of `*`) and simply never carried it anywhere; naming the columns makes the read
+ * this function performs legible from the read itself.
  */
-export function courtMatchRowsForPlayers(db: Db, playerIds: number[]): CourtMatchRow[] {
-  if (playerIds.length === 0) return [];
+export function courtMatchRowsForPlayers(
+  db: Db,
+  playerIds: number[],
+  leagueScope?: LeagueScope | null,
+): CourtMatchEvidence {
+  const scope = leagueScope ?? null;
+  if (playerIds.length === 0) return { rows: [], scope: emptyEvidence(scope) };
 
   const ownMatchIds = Array.from(
     new Set(
@@ -169,33 +213,80 @@ export function courtMatchRowsForPlayers(db: Db, playerIds: number[]): CourtMatc
         .map((r) => r.courtMatchId),
     ),
   );
-  if (ownMatchIds.length === 0) return [];
+  if (ownMatchIds.length === 0) return { rows: [], scope: emptyEvidence(scope) };
 
-  const courtRows = db.select().from(courtMatches).where(inArray(courtMatches.id, ownMatchIds)).all();
+  const allCourtRows = db
+    .select({
+      id: courtMatches.id,
+      slot: courtMatches.slot,
+      discipline: courtMatches.discipline,
+      winnerSide: courtMatches.winnerSide,
+      playedOn: courtMatches.playedOn,
+      leagueContext: courtMatches.leagueContext,
+    })
+    .from(courtMatches)
+    .where(inArray(courtMatches.id, ownMatchIds))
+    .all();
   const participantRows = db
     .select()
     .from(courtMatchPlayers)
     .where(inArray(courtMatchPlayers.courtMatchId, ownMatchIds))
     .all();
 
-  return courtRows.map((c) => ({
-    id: c.id,
-    slot: c.slot,
-    discipline: c.discipline,
-    winnerSide: c.winnerSide as Side | null,
-    playedOn: c.playedOn,
-    participants: participantRows
-      .filter((p) => p.courtMatchId === c.id)
-      .map((p) => ({ playerId: p.playerId, side: p.side as Side })),
-  }));
+  const courtRows = scope === null ? allCourtRows : allCourtRows.filter((c) => leagueScopeRetains(c.leagueContext, scope));
+
+  // Counted over the RETAINED rows, so the breakdown answers "what is still in here" rather than
+  // "what was on file" — which is the question #97's accepted residual is about.
+  const leagueCounts = new Map<string | null, number>();
+  for (const c of courtRows) leagueCounts.set(c.leagueContext, (leagueCounts.get(c.leagueContext) ?? 0) + 1);
+  const retainedLeagues = Array.from(leagueCounts.entries())
+    .map(([league, count]) => ({ league, count }))
+    // The unclassified bucket sorts last unconditionally, ahead of the count comparison — a `null`
+    // has no name to tie-break on, and a real league placed behind it would read as the smaller
+    // category when it is not.
+    .sort((a, b) => {
+      if (a.league === null) return 1;
+      if (b.league === null) return -1;
+      return b.count - a.count || a.league.localeCompare(b.league);
+    });
+
+  return {
+    rows: courtRows.map((c) => ({
+      id: c.id,
+      slot: c.slot,
+      discipline: c.discipline,
+      winnerSide: c.winnerSide as Side | null,
+      playedOn: c.playedOn,
+      participants: participantRows
+        .filter((p) => p.courtMatchId === c.id)
+        .map((p) => ({ playerId: p.playerId, side: p.side as Side })),
+    })),
+    scope: {
+      scope,
+      considered: allCourtRows.length,
+      retained: courtRows.length,
+      excluded: allCourtRows.length - courtRows.length,
+      unclassified: courtRows.filter((c) => c.leagueContext === null).length,
+      retainedLeagues,
+    },
+  };
 }
 
 /**
  * Assemble every derived section of one player's dossier. `options.since` bounds the "six-month"
  * windowed records; the "all-time" records omit it (derive.ts's `windowedRecord` treats a missing
  * `since` as no lower bound).
+ *
+ * `options.leagueScope` (#97) scopes the EVIDENCE rather than the window: records, slot tendencies
+ * and partner counts are computed only over the court matches the scope retains, and what it set
+ * aside is reported in `evidenceScope` rather than silently dropped. Omitted, every league counts —
+ * identical to the pre-#97 behavior, and stated as such on the page instead of left implicit.
  */
-export function getPlayerProfile(db: Db, playerId: number, options: { since: string }): PlayerProfile {
+export function getPlayerProfile(
+  db: Db,
+  playerId: number,
+  options: { since: string; leagueScope?: LeagueScope | null },
+): PlayerProfile {
   const playerRow = db.select().from(players).where(eq(players.id, playerId)).all()[0];
   if (playerRow === undefined) throw new Error(`getPlayerProfile: no player with id ${playerId}`);
 
@@ -208,7 +299,8 @@ export function getPlayerProfile(db: Db, playerId: number, options: { since: str
     .all()
     .map((r) => ({ id: r.id, source: r.source, value: r.value, ratingType: r.ratingType, observedOn: r.observedOn }));
 
-  const courtRows = courtMatchRowsForPlayers(db, [playerId]);
+  const evidence = courtMatchRowsForPlayers(db, [playerId], options.leagueScope);
+  const courtRows = evidence.rows;
 
   const membershipRows: PlayerTeamMembershipSummary[] = db
     .select({
@@ -251,6 +343,10 @@ export function getPlayerProfile(db: Db, playerId: number, options: { since: str
     slotTendencies: slotTendencies(courtRows, playerId),
     partnerFrequency: partnerNames,
     teamMemberships: membershipRows,
+    // Carried straight from the read that produced `courtRows`, never rebuilt: a summary derived a
+    // second time could describe a scope the rows above were not actually filtered by, which is
+    // precisely the claim #97 forbids a filtered record from making.
+    evidenceScope: evidence.scope,
     // `hasWriter` is a fact about the CODEBASE — "can anything, anywhere, populate this section for
     // a player?" — and it has to keep tracking that fact rather than freezing at whatever was true
     // when it was written (docs/findings.md, #15/Task 3 rule 6). `availability` and `captain_notes`

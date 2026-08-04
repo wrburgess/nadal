@@ -10,6 +10,7 @@
 // team's own side rather than trusting "home" to mean anything absolute.
 
 import type { EventCourt } from "./event-format.js";
+import type { LeagueScope } from "./league-scope.js";
 
 export type Side = "home" | "visiting";
 
@@ -37,6 +38,49 @@ export type CourtMatchRow = {
   winnerSide: Side | null;
   playedOn: string | null;
   participants: CourtMatchParticipant[];
+};
+
+/** One surviving `league_context` value and how many retained court matches carry it. `league` is
+ * `null` for the unclassified bucket, which is a real category rather than a missing value — see
+ * `leagueScopeRetains`. */
+export type RetainedLeagueEntry = {
+  league: string | null;
+  count: number;
+};
+
+/**
+ * What a court-match read actually drew on (#97) — returned alongside the rows by
+ * `courtMatchRowsForPlayers`, and carried onto every profile that derives from them.
+ *
+ * This exists because #97's scope item 3 is not optional: a filtered record that does not say what
+ * it filtered, or what it still contains, is the same class of problem the issue was opened for.
+ * Every field here answers one of those two questions, and `retainedLeagues` in particular is why
+ * the counts are not enough on their own — after `exclude:Mixed`, between 37% and 69% of the
+ * REMAINING evidence is still out-of-league (Adult 18+ 3.5, Adult 55+ 7.0/8.0, Tri-Level, Combo …),
+ * an accepted residual that the dossier states concretely from this breakdown rather than as a
+ * hardcoded sentence that would rot the moment the data moved.
+ *
+ * `scope: null` is a REPORTED state, not an absence: an unscoped read must be distinguishable from a
+ * scoped one on the page, or a reader cannot tell a dossier that counts every league from one that
+ * does not.
+ */
+export type EvidenceScopeSummary = {
+  /** The scope applied, or `null` when the read was unscoped (every league counted). */
+  scope: LeagueScope | null;
+  /** Court matches fetched before the scope was applied — `retained + excluded`. */
+  considered: number;
+  retained: number;
+  /** Never inferred by subtracting elsewhere: the number this read set aside, stated by the read
+   * that did it. `0` whenever `scope` is `null`. */
+  excluded: number;
+  /** Retained rows with no `league_context` on file. A subset of `retained`, not a third bucket:
+   * a scope removes only what it can positively classify (`leagueScopeRetains`), so these survive
+   * either mode — and are counted here so "retained" never quietly means "retained, plus some we
+   * could not classify". */
+  unclassified: number;
+  /** Every distinct `league_context` among RETAINED rows, by descending count then ascending name,
+   * with the unclassified (`null`) bucket last so a real league never sorts behind it. */
+  retainedLeagues: RetainedLeagueEntry[];
 };
 
 export type WindowedRecordOptions = {

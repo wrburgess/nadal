@@ -3,10 +3,30 @@ import { openDb } from "../../db/client.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { getTeamProfile, resolveTeamTarget } from "../../query/team-profile.js";
 import type { TeamProfile } from "../../query/team-profile.js";
-import { globalFlags, parseArgs } from "../args.js";
+import { InvalidEventFormatError } from "../../query/event-format.js";
+import { InvalidLeagueScopeError } from "../../query/league-scope.js";
+import { UnknownEventError, resolveEvent } from "../../query/lineup.js";
+import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitJson, emitSummary } from "../emit.js";
-import { formatName, formatRecord, formatSlotTendencies } from "../format-profile.js";
+import {
+  formatEvidenceScopeLine,
+  formatName,
+  formatRecord,
+  formatRetainedLeaguesLine,
+  formatSlotTendencies,
+} from "../format-profile.js";
 import { seasonLabel, seasonStart } from "../window.js";
+
+/** Every error a bad `[event]` argument can throw (#97). `EventHasNoFormatError` is deliberately
+ * absent for the same reason as in `player show`: this command reads the evidence scope, never the
+ * court format. */
+function isEventRefusal(err: unknown): err is UnknownEventError | InvalidLeagueScopeError | InvalidEventFormatError {
+  return (
+    err instanceof UnknownEventError ||
+    err instanceof InvalidLeagueScopeError ||
+    err instanceof InvalidEventFormatError
+  );
+}
 
 /**
  * Spec § Interfaces: `tn team show <name> [--json]` — "roster with each player's headline ratings
@@ -17,12 +37,19 @@ import { seasonLabel, seasonStart } from "../window.js";
  * label for the very boundary `profile` was built with — passed in rather than recomputed here, so
  * the number and the label it sits beside can never come from two different anchors.
  */
-function formatTeamProfileText(profile: TeamProfile, season: string): string {
+function formatTeamProfileText(profile: TeamProfile, season: string, eventName: string | null): string {
   const lines = [
     `${formatName(profile.teamName)}`,
     `  home: ${profile.isHome ? "yes" : "no"}`,
     `  record: ${formatRecord(profile.teamRecord)}`,
     `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
+    // #97, printed unconditionally for the same reason `player show` prints it: this command renders
+    // the roster's per-member records and slot tendencies from the SAME `getTeamProfile` call the
+    // dossier uses, so leaving it silent here would keep one surface on the unfiltered path with no
+    // way to say so. `record:` above is deliberately NOT covered by it — that comes from team
+    // fixtures, which carry no league context at all.
+    `  evidence: ${formatEvidenceScopeLine(profile.evidenceScope, eventName)} (the team record above is from team fixtures, not scoped by this)`,
+    `  leagues counted: ${formatRetainedLeaguesLine(profile.evidenceScope)}`,
     "  roster:",
   ];
   for (const member of profile.roster) {
@@ -42,7 +69,9 @@ export const teamShow: Command = {
   verb: "show",
   summary: "Show a team's roster and match record",
   run: async (args) => {
-    const parsed = parseArgs(args, [], []);
+    // #97: an optional trailing `[event]` positional, the same shape every other event-taking
+    // command uses.
+    const parsed = parsePayloadArgs(args, 1);
     const opts = globalFlags(parsed.flags);
     if (parsed.error !== undefined) {
       emitSummary("team show", "error", [["message", parsed.error]], opts);
@@ -52,6 +81,7 @@ export const teamShow: Command = {
       emitSummary("team show", "error", [["message", "missing target"]], opts);
       return 1;
     }
+    const [eventName] = parsed.payload;
 
     const { db, sqlite } = openDb();
     try {
@@ -72,12 +102,19 @@ export const teamShow: Command = {
 
       // ONE anchor for both the boundary and the label below.
       const anchor = new Date();
-      const profile = getTeamProfile(db, resolution.teamId, { since: seasonStart(anchor) });
+      const leagueScope = eventName === undefined ? null : resolveEvent(db, eventName).leagueScope;
+      const profile = getTeamProfile(db, resolution.teamId, { since: seasonStart(anchor), leagueScope });
 
       if (!opts.quiet) {
-        console.log(opts.json ? emitJson(profile) : formatTeamProfileText(profile, seasonLabel(anchor)));
+        console.log(
+          opts.json ? emitJson(profile) : formatTeamProfileText(profile, seasonLabel(anchor), eventName ?? null),
+        );
       }
       return 0;
+    } catch (err) {
+      if (!isEventRefusal(err)) throw err;
+      emitSummary("team show", "error", [["message", err.message]], opts);
+      return 1;
     } finally {
       sqlite.close();
     }

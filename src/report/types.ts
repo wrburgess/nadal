@@ -18,6 +18,11 @@ export type TeamDossier = {
    * HTML and the markdown can never label the same numbers with different seasons, and so
    * `src/report/*` stays clock-free (the anchor is chosen once, by `report build`). */
   season: string;
+  /** The event this build was scoped to, or `null` when none was named (#97). Carried on the VIEW,
+   * like `season`, so both renderers name the same event beside the same evidence scope — and so a
+   * renderer never has to reach into `lineup.slotEvent` for it, which is a different field about a
+   * different thing (which event supplied the COURT SET) and is `null` whenever the lineup is. */
+  event: { id: number; name: string } | null;
   team: TeamProfile;
   /** One full profile per `team.roster` member, in the SAME order — a renderer that zips the two
    * arrays by index relies on this, so `write.ts` must preserve `team.roster`'s order when building

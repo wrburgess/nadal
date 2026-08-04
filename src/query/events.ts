@@ -18,6 +18,7 @@ import { availability, events } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { type EventCourt, encodeEventFormat, parseEventFormat, readEventFormat } from "./event-format.js";
 import { isIsoDay } from "./iso-day.js";
+import { type LeagueScope, encodeLeagueScope, parseLeagueScope, readLeagueScope } from "./league-scope.js";
 // Reused, not redeclared: `report build` already surfaces THIS class when an event name does not
 // resolve, and a second identically-named error on the same command path would be indistinguishable
 // to a caller while being a different type to a `catch`.
@@ -51,6 +52,11 @@ export type AddEventInput = {
    * preserves whatever is already stored; given, it REPLACES the stored value. There is no way to
    * CLEAR a stored format back to `null` in v1 — a stated limitation, not an oversight. */
   format?: string;
+  /** Raw text, `parseLeagueScope`'s syntax (e.g. `"exclude:Mixed"` / `"only:Mixed"`) — #97's
+   * event-scoped evidence filter, sharing the SAME validator the CLI and MCP surfaces defer to, for
+   * the same reason `format` does. Follows the identical omitted-preserves / given-replaces rule,
+   * and has the identical v1 limitation: there is no way to CLEAR a stored scope back to `null`. */
+  leagueScope?: string;
 };
 
 export type AddEventResult = {
@@ -61,6 +67,9 @@ export type AddEventResult = {
   endsOn: string;
   /** `null` when no format has ever been stored for this event. */
   format: EventCourt[] | null;
+  /** `null` when no evidence scope has ever been stored for this event — which means every league
+   * counts, the pre-#97 behavior, and is reported as such rather than left implicit. */
+  leagueScope: LeagueScope | null;
   /** False when this call updated an event that already existed under the same name. */
   created: boolean;
 };
@@ -90,6 +99,12 @@ export type AddEventResult = {
  * this, a routine `tn event add` call made only to correct a date would silently delete a format
  * recorded earlier. There is no way to CLEAR a stored format back to `null` in v1 — an accepted
  * limitation, not an oversight.
+ *
+ * `input.leagueScope` (#97) follows that rule identically, and it matters more there than it does
+ * for the format: silently dropping an evidence scope on a date correction would not produce a
+ * visibly wrong dossier, it would produce a dossier that quietly went back to counting every league
+ * — the exact defect #97 closes, reintroduced by an unrelated command. The same v1 limitation
+ * applies: there is no way to CLEAR a stored scope back to `null`.
  */
 export function addEvent(db: Db, input: AddEventInput): AddEventResult {
   const name = input.name.trim();
@@ -122,6 +137,11 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
   // refuse without ever opening a write, exactly like the kind/date checks above it.
   const incomingFormat: EventCourt[] | undefined =
     input.format === undefined ? undefined : parseEventFormat(input.format);
+  // #97, and for the identical reason: a malformed evidence scope has to refuse with the table
+  // untouched. Parsed AFTER the format so that an invocation getting both wrong reports the format
+  // first — the order the positionals are typed in, which is the order an operator fixes them in.
+  const incomingScope: LeagueScope | undefined =
+    input.leagueScope === undefined ? undefined : parseLeagueScope(input.leagueScope);
 
   // Everything below runs in ONE `BEGIN IMMEDIATE` transaction, because the range guard is a
   // read-then-write and the two halves must not be separable.
@@ -182,13 +202,38 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
     const formatToWrite: EventCourt[] | null =
       incomingFormat !== undefined ? incomingFormat : readEventFormat(existing?.format ?? null);
 
+    // #97, and the preserve branch goes through `readLeagueScope` for exactly the reason the format's
+    // does: a cast would let a corrupted stored value be copied forward AND handed back as an
+    // `AddEventResult.leagueScope` typed `LeagueScope` that it is not. For a scope the stakes are
+    // higher than a garbled summary line — the value being copied forward is the one that decides
+    // which evidence a dossier draws on, and a dossier naming a scope it did not actually apply is
+    // the precise failure #97 exists to prevent. So a date correction on an event whose scope is
+    // unreadable REFUSES, which is the same fail-closed answer `getTeamProfile` gives for the same
+    // column.
+    const scopeToWrite: LeagueScope | null =
+      incomingScope !== undefined ? incomingScope : readLeagueScope(existing?.leagueScope ?? null);
+
     const encodedFormat = formatToWrite === null ? null : encodeEventFormat(formatToWrite);
+    const encodedScope = scopeToWrite === null ? null : encodeLeagueScope(scopeToWrite);
     const row = tx
       .insert(events)
-      .values({ name, kind, startsOn: input.startsOn, endsOn: input.endsOn, format: encodedFormat })
+      .values({
+        name,
+        kind,
+        startsOn: input.startsOn,
+        endsOn: input.endsOn,
+        format: encodedFormat,
+        leagueScope: encodedScope,
+      })
       .onConflictDoUpdate({
         target: events.name,
-        set: { kind, startsOn: input.startsOn, endsOn: input.endsOn, format: encodedFormat },
+        set: {
+          kind,
+          startsOn: input.startsOn,
+          endsOn: input.endsOn,
+          format: encodedFormat,
+          leagueScope: encodedScope,
+        },
       })
       .returning()
       .get();
@@ -200,6 +245,7 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
       startsOn: input.startsOn,
       endsOn: input.endsOn,
       format: formatToWrite,
+      leagueScope: scopeToWrite,
       created: existing === undefined,
     };
   }, { behavior: "immediate" });
