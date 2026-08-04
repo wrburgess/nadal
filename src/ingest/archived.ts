@@ -65,7 +65,16 @@ export async function pullArchivedUstaProfile(
       const wtnTennisId = usta.wtnTennisId ?? wtn?.tennisId ?? null;
       const resolved = resolvePlayer(tx, { ustaUaid: usta.uaid, wtnTennisId, name: usta.name });
       if (resolved.kind === "ambiguous") {
-        throw new AmbiguousIdentityError(usta.name, resolved.candidates.map((p) => p.canonicalName), "archived USTA profile name");
+        // One identity, not a collected pass: this pull resolves exactly one name — the profile's
+        // own — so there is never a second ambiguity for it to meet (contrast `pullPlayer`, which
+        // walks a whole match history and collects, #96).
+        throw new AmbiguousIdentityError([
+          {
+            incoming: usta.name,
+            candidates: resolved.candidates.map((p) => p.canonicalName),
+            context: "archived USTA profile name",
+          },
+        ]);
       }
       const updated = upsertPlayer(tx, {
         id: resolved.row.id,

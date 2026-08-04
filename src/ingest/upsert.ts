@@ -113,7 +113,9 @@ export function upsertTeam(db: Db, values: TeamInsert): TeamRow {
         // instead of the ladder's own reportable outcome.
         const collision = db.select().from(teams).where(eq(teams.name, values.name)).all()[0];
         if (collision !== undefined) {
-          throw new AmbiguousIdentityError(values.name, [existing.name, values.name], "team rename");
+          throw new AmbiguousIdentityError([
+            { incoming: values.name, candidates: [existing.name, values.name], context: "team rename" },
+          ]);
         }
       }
       return db

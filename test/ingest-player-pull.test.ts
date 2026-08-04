@@ -1,7 +1,10 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { courtMatchPlayers, courtMatches, players, ratingObservations } from "../src/db/schema.js";
 import { parseMatchHistory } from "../src/parsers/index.js";
+import { resolvePlayer } from "../src/ingest/identity.js";
 import { pullPlayer } from "../src/ingest/player-pull.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { loadFixture } from "./helpers/fixtures.js";
@@ -14,7 +17,7 @@ const empty = loadFixture("tennisrecord/match-history-empty");
 describe("pullPlayer", () => {
   useTnDbPath();
   // Without this, a pull archives its pages into the repo own raw/ on every test run.
-  useTnRawPath();
+  const raw = useTnRawPath();
 
   it("writes court matches, court-match players, and rating observations, hand-verified against the fixture", async () => {
     runMigrations();
@@ -81,6 +84,57 @@ describe("pullPlayer", () => {
       if (result.kind !== "ok") throw new Error("expected ok");
       expect(result.courtMatchCount).toBe(0);
       expect(db.select().from(courtMatches).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The claim `docs/runbooks/pre-tournament-full-pull.md` step 3 makes to an operator: all-or-nothing
+  // is about the DATABASE, not the disk. `archivePage` runs before parsing, so a refused pull still
+  // leaves the fetched page and its provenance under TN_RAW_PATH — and the refusal does NOT report
+  // the path, because only the `ok` result carries `archivedPath`. Both halves pinned here, because
+  // the first draft of that sentence said "nothing of this player's history is on file until it
+  // succeeds", which is false about the disk (found by the independent Codex review of this PR,
+  // rated low, class A — the claim-vs-code lens).
+  it("a REFUSED pull still archives the page it fetched, and reports no path for it", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // One edit from the fixture's first partner, so that name resolves ambiguous and the pull
+      // refuses. Asserting the kind below is what fails loudly if this stops being a near-name.
+      resolvePlayer(db, { name: "Novo Norbury" });
+
+      const result = await pullPlayer({
+        db,
+        fetchPage: createStubFetcher({ [matchHistory.source.url]: { body: matchHistory.html } }),
+        url: matchHistory.source.url,
+      });
+
+      expect(result.kind).toBe("ambiguous");
+      // The path is not on the result at all, so no reporting surface can print it — which is why
+      // the runbook tells an operator to find the file by its slug instead.
+      expect("archivedPath" in result).toBe(false);
+
+      // CONTENTS, not a file count. Counting the pair leaves the claim satisfied by an archive that
+      // captured the wrong bytes: swap `body` for `""` at the `archivePage` call while still parsing
+      // the real page, and a count-only assertion stays green with nothing useful on disk — so what
+      // the runbook offers an operator ("inspect what was fetched") would be a lie the test agreed
+      // with. Found by the fix-verification pass on this very fix, rated medium.
+      const dir = join(raw.path(), "tennisrecord");
+      const archived = readdirSync(dir);
+      const html = archived.filter((f) => f.endsWith(".html"));
+      const provenance = archived.filter((f) => f.endsWith(".provenance.json"));
+      expect(html).toHaveLength(1);
+      expect(provenance).toHaveLength(1);
+      expect(readFileSync(join(dir, html[0]!), "utf8")).toBe(matchHistory.html);
+      expect(JSON.parse(readFileSync(join(dir, provenance[0]!), "utf8"))).toMatchObject({
+        sourceUrl: matchHistory.source.url,
+        httpStatus: 200,
+        redacted: false,
+        bytes: Buffer.byteLength(matchHistory.html, "utf8"),
+      });
+      // The pair describes ONE capture: the provenance leaf is the html leaf's name plus a suffix.
+      expect(provenance[0]).toBe(`${html[0]}.provenance.json`);
     } finally {
       sqlite.close();
     }

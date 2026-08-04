@@ -182,20 +182,43 @@ and exits 1. The team write already landed — only the named player pulls did n
 
 **`skippedEntries` names the players it was CASCADING, which is not always who the problem is.** Read
 the `team pull: cascading …` warnings on stderr before doing anything; each one names the identity
-that actually failed. There are two common causes and they want opposite responses:
+that actually failed **and why** (#96). Every warning ends `— skipped` and carries its reason in
+between. There are three common causes and they want different responses:
 
 - *A roster row with no profile link on the page at all* — cascades can never reach it. Pull that
   player individually (step 3).
+- *A fetch or parse failure* — the warning reads
+  `cascading "<roster player>" failed (error) — <reason>`. **The reason is the whole decision**, so
+  read it rather than the word `error`:
+  - `fetch failed with status <5xx>: <url>`, a timeout, or a socket error is usually **transient** —
+    pull that one player individually (step 3) and it typically succeeds immediately. Four of these
+    in one live session were all clean on the first retry.
+  - a `4xx` status, or a parse failure naming a missing element, is **not** transient — retrying
+    reproduces it. The page changed shape, or that player's profile is gone; nothing in this runbook
+    fixes it and the team is refreshed without them.
+
+  There is no automatic retry, deliberately (its own rate-limiting question, #96 → *Not in scope*),
+  and nothing yet classifies these two for you in `skippedEntries=` (#98) — the warning is where the
+  distinction lives today.
 - *An ambiguous identity* — the warning reads
-  `cascading "<roster player>" failed (ambiguous) — ambiguous identity "<incoming>" (<where>) — near: <candidates>`.
-  Here `<roster player>` usually resolves fine; `<incoming>` is a partner or opponent met while
-  ingesting their history, and it is the name needing a decision. Re-running the pull (whole or
-  individual) refuses identically until someone rules on it:
+  `cascading "<roster player>" failed (ambiguous) — ambiguous identity "<incoming>" (<where>) — near: <candidates>`,
+  or, when that player's pull met more than one,
+  `— <N> ambiguous identities — [1] "<incoming>" (<where>) — near: <candidates>; [2] …`.
+  Here `<roster player>` usually resolves fine; each `<incoming>` is a partner or opponent met while
+  ingesting their history, and those are the names needing a decision. Re-running the pull (whole or
+  individual) refuses identically until someone rules on them:
 
   ```sh
   tn player distinct "<incoming>"          # different people who happen to look alike
   tn player alias "<candidate>" "<incoming>"  # the same person, spelled two ways
   ```
+
+  **Rule on every identity the warning listed before re-running.** One pass reports all of them
+  (#96), so the ruling session is one sitting rather than one round trip per name — this used to
+  cost a full re-fetch of every roster member to reach each next ambiguity (`NE/Penland` took three
+  complete `--players` runs, ~4 minutes each, to surface six). Ruling on one *can* change how a later
+  name resolves, so a second run occasionally reports a new one; that is a smaller loop, not a
+  guarantee of none.
 
   Then re-run the cascade. Observed live on `OK/Dickason` (#94): three skipped entries, whose real
   ambiguities were `Karson Davis` near `Mason Davis`, `Austin DuBois` near `Justin DuBois`, and
@@ -214,6 +237,18 @@ tn player pull "$player"
 Expected: `player pull status=ok player="<name>" matches=N archived="<raw dir>/tennisrecord/….html"`,
 exit 0. Same live-network rule as step 2: no `--from`/`--source-url` means a live fetch. Use this
 for anyone step 2's cascade skipped, or any player you track outside a full team roster.
+
+A refusal exits 1 and prints its reason in `message=`, in the same words the cascade warning uses —
+including the plural form when this player's history holds several ambiguities:
+`player pull status=error message="3 ambiguous identities — [1] … ; [2] … ; [3] …"`. Rule on every
+one listed (`tn player distinct` / `tn player alias`, as in step 2) and re-run once.
+
+**All-or-nothing means the DATABASE, not the disk.** No player, rating, court-match or participant
+row is committed until the pull succeeds — the whole pull is one transaction and a refusal rolls it
+back. The **raw page is already archived** either way: `archivePage` runs before parsing, so the
+fetched HTML and its provenance sit under `TN_RAW_PATH` (`raw/` when unset) even for a pull that
+refused. A **refused player pull does not print that path**, because only its `ok` result carries one
+— so find the file by its URL-derived slug if you want to inspect what was fetched.
 
 ### 4. USTA/WTN ratings — human-in-the-loop, not this runbook's job
 

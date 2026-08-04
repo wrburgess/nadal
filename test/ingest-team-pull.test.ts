@@ -7,10 +7,11 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { hrefParam } from "../src/parsers/dom.js";
+import { FetchError, type PageFetcher } from "../src/ingest/fetch.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
-import { pullTeam } from "../src/ingest/team-pull.js";
+import { cascadeFailureWarning, pullTeam } from "../src/ingest/team-pull.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
-import { removeAllRosterRows, removeRosterRow } from "./helpers/roster-html.js";
+import { buildRosterPage, removeAllRosterRows, removeRosterRow } from "./helpers/roster-html.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
@@ -956,5 +957,168 @@ describe("a team with no established baseline is not authoritative (issue #49, C
     } finally {
       sqlite.close();
     }
+  });
+});
+
+// Issue #96, finding 1. `(error)` was the WHOLE diagnosis a cascade gave an operator:
+//
+//   team pull: cascading "Jim Vanderveen" failed (error) — skipped
+//
+// `PlayerPullResult` carries a populated `message` for both `error` and `unknown-target`, and the
+// warning rendered one for `ambiguous` only. A network timeout, an HTTP 404 and a `ParseError` want
+// three different responses and the report distinguished none of them — measured live as four
+// transient failures in one session, every one clean on an immediate individual retry, which is
+// exactly the case a message settles at a glance.
+//
+// This is the same defect class #94 was opened for, one branch over: #94's fix supplied all three
+// facts for `kind === "ambiguous"` and left the other two kinds reporting a bare kind name, because
+// those two branches were pinned by NOTHING. So each is asserted here as a whole rendered line.
+describe("the cascade warning says WHY a roster entry was skipped, for every failure kind (#96)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  const TEAM_URL = "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Cascade&year=2026";
+  const OK_PLAYER = "Avery Ashby";
+  const FAILING_PLAYER = "Nova Norbury";
+  const FAILING_URL = matchHistoryUrlFor(FAILING_PLAYER, "2026");
+
+  /**
+   * A two-member roster whose second member's match-history fetch throws `failure`. Hand-rolled
+   * rather than `createStubFetcher` because the point is a fetch that FAILS in a specific way — the
+   * stub's own "no fixture registered" throw would put the test helper's wording in the assertion
+   * instead of the failure's.
+   */
+  function fetcherFailing(failure: Error): PageFetcher {
+    const roster = buildRosterPage({ teamName: "Cascade Test", players: [OK_PLAYER, FAILING_PLAYER] });
+    const page = (url: string, body: string) => ({ url, status: 200, body, fetchedAt: new Date().toISOString() });
+    return async (url: string) => {
+      if (url === FAILING_URL) throw failure;
+      if (url === TEAM_URL) return page(url, roster);
+      if (url === matchHistoryUrlFor(OK_PLAYER, "2026")) return page(url, syntheticEmptyMatchHistory(OK_PLAYER));
+      throw new Error(`test fetcher: unexpected url "${url}"`);
+    };
+  }
+
+  it("an `error` names the failure — the branch that used to print the word `error` and nothing else", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await pullTeam({
+        db,
+        fetchPage: fetcherFailing(new FetchError(`fetch failed with status 503: ${FAILING_URL}`, 503, FAILING_URL)),
+        target: TEAM_URL,
+        cascadePlayers: true,
+      });
+
+      // The team itself committed; only the enrichment was skipped.
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.skippedRosterEntries).toEqual([FAILING_PLAYER]);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        `team pull: cascading "${FAILING_PLAYER}" failed (error) — ` +
+          `fetch failed with status 503: ${FAILING_URL} — skipped`,
+      );
+    } finally {
+      warnSpy.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  // The reason is now interpolated into a raw `console.warn`, which is a NEW attacker-influenced
+  // path: a `ParseError` quotes the page it failed on, so the message can carry whatever the scraped
+  // document did. Asserted as a whole line rather than as an absence-of-ESC search, so it also
+  // states what the operator actually reads.
+  it("sanitizes the reason too — an error message is attacker-influenced the same way a name is", async () => {
+    const ESC = String.fromCharCode(0x1b);
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await pullTeam({
+        db,
+        fetchPage: fetcherFailing(new Error(`parse failed${ESC}[2J at${RTL_OVERRIDE} row 3`)),
+        target: TEAM_URL,
+        cascadePlayers: true,
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        `team pull: cascading "${FAILING_PLAYER}" failed (error) — parse failed [2J at  row 3 — skipped`,
+      );
+    } finally {
+      warnSpy.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  // An error can carry no message at all (`new Error("")`), and a reason-shaped hole would print
+  // `failed (error) —  — skipped`: a line that reads as truncated output rather than as "this
+  // failure carried no reason", and that is indistinguishable at a glance from the defect above.
+  //
+  // Labelled deliberately: this one is GREEN both before and after the fix, because the branch it
+  // pins is the one the FIX could break, not the one the issue reports — an unlabelled always-green
+  // test reads to a reviewer as a test that cannot fail. Verified by mutation instead: appending the
+  // reason unconditionally (` — ${reason}`) reddens exactly this test.
+  it("an error carrying NO message prints no dangling separator", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await pullTeam({
+        db,
+        fetchPage: fetcherFailing(new Error("")),
+        target: TEAM_URL,
+        cascadePlayers: true,
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(`team pull: cascading "${FAILING_PLAYER}" failed (error) — skipped`);
+    } finally {
+      warnSpy.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  // `cascadeFailureWarning` is exported for THIS test. The cascade calls `pullPlayer` with a `url`,
+  // never a name target, so `unknown-target` — which only `resolveTargetUrl` produces — cannot be
+  // reached through `pullTeam` at all. That unreachability is not a reason to leave the branch
+  // unasserted; it is precisely how the branch came to print no reason in the first place. The two
+  // integration tests above go through the real pipeline and assert lines this same function built,
+  // which is what binds these direct assertions to what an operator actually sees.
+  it("an `unknown-target` names the target, even though the cascade itself cannot produce one", () => {
+    expect(
+      cascadeFailureWarning("Ellis Eastwick", {
+        kind: "unknown-target",
+        message: 'unknown player target "Ellis Eastwick"',
+      }),
+    ).toBe(
+      'team pull: cascading "Ellis Eastwick" failed (unknown-target) — unknown player target "Ellis Eastwick" — skipped',
+    );
+  });
+
+  // The OTHER interpolated value. `entry.name` comes off the same fetched roster page, and the
+  // integration tests above all pair a benign entry name with a hostile reason — so without this,
+  // deleting the sanitizer would still leave the entry-name half of the line unpinned. Asserted on
+  // the renderer directly because a control character inside a roster row's profile HREF is a
+  // URL-parsing question, not a reporting one, and would test `hrefParam` instead of this line.
+  it("sanitizes the cascade target's own name, not only the reason", () => {
+    const ESC = String.fromCharCode(0x1b);
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    const rendered = cascadeFailureWarning(`Ellis${RTL_OVERRIDE}${ESC}[2J Eastwick`, {
+      kind: "error",
+      message: "fetch failed with status 503",
+    });
+    expect(rendered).toBe(
+      'team pull: cascading "Ellis  [2J Eastwick" failed (error) — fetch failed with status 503 — skipped',
+    );
+  });
+
+  it("an `ambiguous` renders the three facts through the shared formatter, unchanged from #94", () => {
+    const identity = { incoming: "Austin DuBois", candidates: ["Justin DuBois"], context: "match opponent" };
+    expect(cascadeFailureWarning("John Jennings", { kind: "ambiguous", ...identity, identities: [identity] })).toBe(
+      'team pull: cascading "John Jennings" failed (ambiguous) — ' +
+        'ambiguous identity "Austin DuBois" (match opponent) — near: Justin DuBois — skipped',
+    );
   });
 });
