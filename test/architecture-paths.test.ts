@@ -41,16 +41,37 @@ const REPO_PATH = new RegExp(`^(?:${REPO_ROOTS.join("|")})/\\S*$`);
 // (rules/testing.md: never keep a branch in new code that no test can kill).
 const INLINE_SPAN = /`[^`\n]+`/g;
 
-// Markdown link and image targets: the `](target` of `[text](target)`. Scanned because a link target
-// is a reference to a path exactly as much as a code span is, and a document that links a deleted
-// module is wrong in precisely the way this check exists to catch. Stops at whitespace so a link
-// title (`[t](path "title")`) is not swallowed. `m[0]` is typed `string`, so slicing the leading `](`
-// off it avoids the capture-group typing problem described above.
+// Markdown link and image targets: the `](target` of `[text](target)` and `![alt](target)`. Scanned
+// because a link target is a reference to a path exactly as much as a code span is, and a document
+// that links a deleted module is wrong in precisely the way this check exists to catch. Stops at
+// whitespace so a link title (`[t](path "title")`) is not swallowed. `m[0]` is typed `string`, so
+// slicing the leading `](` off it avoids the capture-group typing problem described above.
 const LINK_TARGET = /\]\([^)\s]+/g;
+
+// Reference-style link definitions — `[label]: src/foo.ts` on its own line. A separate construct from
+// the inline form above and just as much a link target (Reviewer finding 2 on PR #103, round 2: §7
+// said "as a link target" while the code saw only the inline spelling, so a reference definition
+// naming a deleted module passed silently).
+const LINK_DEFINITION = /^ {0,3}\[[^\]]+\]:[ \t]*\S+/gm;
 
 // A fence opens a code block; its contents are an ILLUSTRATION — a sample tree, a transcript — and
 // are not claims about this repo's layout.
-const FENCE = /^[ \t]*(?:`{3,}|~{3,})/;
+//
+// ` {0,3}`, NOT `[ \t]*` (Reviewer finding 1 on PR #103, round 2 — and the same correction a Reviewer
+// made to `test/cli-grammar-parity.test.ts` on PR #84, for the same CommonMark reason). A fence may be
+// indented up to three spaces; at four it is an indented code block and not a fence at all. Accepting
+// unlimited indentation made a four-space-indented fence open a block and strip its contents — which
+// silently contradicted this file's own "indented blocks are not stripped" rule and turned a dead path
+// green. Tabs are excluded for the same reason: a leading tab is indentation, not a fence.
+const FENCE = /^ {0,3}(?:`{3,}|~{3,})/;
+
+// Punctuation a path may be wrapped in when it sits inside a prose-bearing code span. Stripped from
+// both ends before the repo-root test, which closes BOTH directions of Reviewer finding 3 on PR #103,
+// round 2: `` `(src/does-not-exist.ts)` `` used to fail the root test and pass SILENTLY, while
+// `` `src/cli/router.ts, and then…` `` used to yield `src/cli/router.ts,` and redden a legitimate span.
+// A trailing `/` is deliberately not stripped — that is how every directory in the document is written.
+const TRIM_LEADING = /^[([{'"]+/;
+const TRIM_TRAILING = /[),;:.\]}'"]+$/;
 
 // Recognises a code block by Markdown's actual fence rule rather than by one spelling: three OR MORE
 // backticks or tildes, closed by a fence of the same character and at least the same length, or by
@@ -62,6 +83,17 @@ const FENCE = /^[ \t]*(?:`{3,}|~{3,})/;
 // indentation as code would silently drop real prose from the scan — trading a VISIBLE false red (an
 // illustrative path in an indented block reddens the suite) for a SILENT false green (a real path in
 // an indented continuation goes unchecked). Between those two, the visible failure is the safe one.
+//
+// WHERE THIS STOPS, DELIBERATELY. This is a heuristic scanner over a document whose conventions it
+// also constrains — it is NOT a Markdown parser, and no Markdown parser is in this repo's
+// dependencies (adding one for a doc test is scope issue #101 excludes). Constructs it does not model
+// — a fence inside a block quote or after a list marker, a closing fence carrying trailing text, a
+// destination containing balanced parentheses, a `#fragment` or percent-encoding in a destination —
+// all fail in the SAME direction: the illustration leaks into the scan and the suite goes RED. That is
+// the designed direction. Every input found to fail SILENT has been closed (the fence indent bound
+// above, reference-style definitions, and punctuation-wrapped tokens); the visible residue is bounded
+// by policy rather than by chasing CommonMark, because each round of chasing it moved the defect one
+// construct sideways rather than closing the class.
 function stripCodeBlocks(markdown: string): string {
   const kept: string[] = [];
   let openFence: string | null = null;
@@ -96,11 +128,16 @@ function extractRepoPaths(markdown: string): string[] {
     // alongside prose, names those paths just as much as a single-path span does, and testing the
     // whole span would silently extract neither.
     for (const token of delimited.slice(1, -1).split(/\s+/)) {
-      if (REPO_PATH.test(token)) found.add(token);
+      const path = token.replace(TRIM_LEADING, "").replace(TRIM_TRAILING, "");
+      if (REPO_PATH.test(path)) found.add(path);
     }
   }
   for (const [target] of prose.matchAll(LINK_TARGET)) {
     const path = target.slice(2);
+    if (REPO_PATH.test(path)) found.add(path);
+  }
+  for (const [definition] of prose.matchAll(LINK_DEFINITION)) {
+    const path = definition.slice(definition.indexOf("]:") + 2).trim();
     if (REPO_PATH.test(path)) found.add(path);
   }
   // Deduped, so a path named in five sections is reported once rather than five times.
@@ -198,14 +235,61 @@ describe("ARCHITECTURE.md path liveness", () => {
     const cases: Record<string, string> = {
       backtick: ["Real: `src/db/schema.ts`.", "```", "`src/not-a-real-path.ts`", "```"].join("\n"),
       tilde: ["Real: `src/db/schema.ts`.", "~~~text", "`src/not-a-real-path.ts`", "~~~"].join("\n"),
-      longer: ["Real: `src/db/schema.ts`.", "````", "`src/not-a-real-path.ts`", "````"].join("\n"),
+      // A four-backtick fence whose body CONTAINS a triple-backtick line. Round 2 pointed out that a
+      // balanced ````…```` fixture does not distinguish the implementations, because the old
+      // non-greedy /```[\s\S]*?```/ happens to strip that too. An interior ``` is what actually
+      // separates "closes on a fence of the same char and >= length" from "closes on the next ```".
+      longer: [
+        "Real: `src/db/schema.ts`.",
+        "````",
+        "```",
+        "`src/not-a-real-path.ts`",
+        "```",
+        "````",
+      ].join("\n"),
       unclosed: ["Real: `src/db/schema.ts`.", "```", "`src/not-a-real-path.ts`"].join("\n"),
+      indentedThree: [
+        "Real: `src/db/schema.ts`.",
+        "   ```",
+        "`src/not-a-real-path.ts`",
+        "   ```",
+      ].join("\n"),
     };
     for (const [spelling, fixture] of Object.entries(cases)) {
       expect(extractRepoPaths(fixture), `fence spelling: ${spelling}`).toEqual([
         "src/db/schema.ts",
       ]);
     }
+  });
+
+  it("does NOT let a four-space-indented fence open a code block", () => {
+    // Reviewer finding 1 on PR #103, round 2 — the dangerous direction. `[ \t]*` before the fence let
+    // an indented fence open a block and strip its contents, so a dead path went green while this
+    // file's own policy said indented blocks are never stripped. CommonMark bounds a fence at three
+    // spaces; at four it is an indented code block. The path must therefore be SEEN here (and redden),
+    // not silently swallowed.
+    const fixture = ["    ```", "`src/does-not-exist.ts`", "    ```"].join("\n");
+    expect(extractRepoPaths(fixture)).toEqual(["src/does-not-exist.ts"]);
+  });
+
+  it("extracts a reference-style link definition", () => {
+    // Reviewer finding 2 on PR #103, round 2 — also silent. `[label]: path` is a link target that the
+    // inline `](…)` scan cannot see.
+    expect(extractRepoPaths("[obsolete]: src/does-not-exist.ts")).toEqual([
+      "src/does-not-exist.ts",
+    ]);
+    expect(extractRepoPaths("[g]: docs/cli/GRAMMAR.md")).toEqual(["docs/cli/GRAMMAR.md"]);
+  });
+
+  it("strips punctuation wrapping a path inside a prose-bearing span", () => {
+    // Reviewer finding 3 on PR #103, round 2 — both directions in one fix. The parenthesised form was
+    // the silent one: it failed the repo-root test and vanished.
+    expect(extractRepoPaths("See `(src/does-not-exist.ts)`.")).toEqual(["src/does-not-exist.ts"]);
+    expect(extractRepoPaths("See `src/cli/router.ts, and then continue`.")).toEqual([
+      "src/cli/router.ts",
+    ]);
+    // A trailing slash is a directory, not punctuation, and must survive the trim.
+    expect(extractRepoPaths("The layer is `src/query/`.")).toEqual(["src/query/"]);
   });
 
   it("does NOT treat four-space indentation as a code block", () => {
