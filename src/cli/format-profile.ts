@@ -6,8 +6,10 @@
 // couple two audiences (a terminal, a printed binder) that should stay free to diverge.
 
 import { sanitizeValue } from "../sanitize.js";
+import { leagueScopeLabel } from "../query/league-scope.js";
 import type {
   DataGapsResult,
+  EvidenceScopeSummary,
   PartnerFrequencyEntry,
   RatingTrajectoryResult,
   SlotTendency,
@@ -54,6 +56,56 @@ export function formatPartnerFrequency(
 ): string {
   if (partners.length === 0) return "none";
   return partners.map((p) => `${formatName(p.canonicalName)} ×${p.count}`).join(", ");
+}
+
+function courtMatchCount(n: number): string {
+  return `${n} court match${n === 1 ? "" : "es"}`;
+}
+
+/**
+ * The ONE sentence naming what a set of records was actually computed over (#97) — shared by
+ * `tn player show`, `tn team show` and both dossier renderers, for the same reason
+ * `ratingSourceLabel` is shared: three surfaces describing the same stored scope three different
+ * ways is drift, and here it would be drift about the honesty of the numbers beside it.
+ *
+ * Both branches are load-bearing, and neither may be omitted. #97 exists because a dossier's records
+ * were computed over every league a player had ever played in without saying so; a filtered record
+ * that does not name its filter is that same defect, and an UNFILTERED record that does not say it is
+ * unfiltered is the same defect one step further out — a reader who cannot tell the two apart has
+ * learned nothing from the page. So "no league scope applied" is printed as positively as an
+ * exclusion is.
+ *
+ * `eventName` is the event the scope was read from, or `null` when no event was named. It is stated
+ * because a captain holding a printed binder needs to know *why* these numbers are scoped, not only
+ * that they are.
+ */
+export function formatEvidenceScopeLine(summary: EvidenceScopeSummary, eventName: string | null): string {
+  const from = eventName === null ? "" : ` (event "${formatName(eventName)}")`;
+  if (summary.scope === null) {
+    return `no league scope applied${from} — every league counts, ${courtMatchCount(summary.retained)}`;
+  }
+  return (
+    `${leagueScopeLabel(summary.scope)}${from} — ` +
+    `${summary.retained} of ${courtMatchCount(summary.considered)} retained, ${summary.excluded} excluded`
+  );
+}
+
+/**
+ * What is STILL in the evidence after the scope ran — the other half of #97's disclosure, and the
+ * half a count alone cannot give. After `exclude:Mixed`, between 37% and 69% of the remaining
+ * evidence is still out-of-league (Adult 18+ 3.5, Adult 55+ 7.0/8.0, Tri-Level, Combo …): an accepted
+ * residual, but one the HC ruling requires be stated rather than left implicit. Rendering it from the
+ * actual retained rows keeps it true as the data moves, where a hardcoded sentence would quietly rot.
+ *
+ * The unclassified bucket is named in words ("no league recorded") rather than shown as a blank, so
+ * it reads as the real category it is — those rows survive either scope mode on purpose
+ * (`leagueScopeRetains`), and a blank cell would read as a rendering bug instead.
+ */
+export function formatRetainedLeaguesLine(summary: EvidenceScopeSummary): string {
+  if (summary.retainedLeagues.length === 0) return "none on file";
+  return summary.retainedLeagues
+    .map((entry) => `${entry.league === null ? "no league recorded" : formatName(entry.league)} (${entry.count})`)
+    .join(", ");
 }
 
 // Human labels for the four known rating sources (spec § Domain model: "NTRP + type, WTN S, WTN D,

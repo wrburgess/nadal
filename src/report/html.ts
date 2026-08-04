@@ -17,9 +17,11 @@
 import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamCrossHeadToHead } from "../query/team-profile.js";
 import {
+  formatEvidenceScopeLine,
   formatPartnerFrequency,
   formatRatingTrajectory,
   formatRecord,
+  formatRetainedLeaguesLine,
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
@@ -71,6 +73,25 @@ function renderTeamRecordHtml(dossier: TeamDossier): string {
   return (
     `<p><strong>Team record:</strong> ${escapeHtml(formatRecord(dossier.team.teamRecord))}` +
     ` &nbsp; <strong>Slots:</strong> ${escapeHtml(formatSlotTendencies(dossier.team.slotTendencies))}</p>`
+  );
+}
+
+/** #97's non-optional disclosure — the twin of `renderEvidenceScopeMarkdown`, and the two must stay
+ * in step or the printed and the readable dossier disagree about what their numbers cover. See that
+ * function's doc comment for why the section is always rendered (even unscoped) and why its closing
+ * sentence names what the scope does NOT govern. */
+function renderEvidenceScopeHtml(dossier: TeamDossier): string {
+  const summary = dossier.team.evidenceScope;
+  const eventName = dossier.event?.name ?? null;
+  return (
+    '<section id="evidence-scope"><h2>Evidence scope</h2>' +
+    "<p><strong>Records, court-slot tendencies and prior meetings below were computed over:</strong> " +
+    `${escapeHtml(formatEvidenceScopeLine(summary, eventName))}.</p>` +
+    `<p><strong>Leagues counted:</strong> ${escapeHtml(formatRetainedLeaguesLine(summary))}.</p>` +
+    '<p class="guess-note">The team record above is derived from team fixtures rather than court ' +
+    "matches, and the predicted lineup below is restricted to this team&#39;s own schedule instead — " +
+    "neither is filtered by this scope.</p>" +
+    "</section>"
   );
 }
 
@@ -310,6 +331,8 @@ export function renderDossier(dossier: TeamDossier): string {
     renderRosterTableHtml(dossier) +
     renderTeamRecordHtml(dossier) +
     "</section>" +
+    // Placed BEFORE everything it qualifies — see the markdown twin's comment.
+    renderEvidenceScopeHtml(dossier) +
     renderPredictedLineupHtml(dossier) +
     '<section id="players"><h2>Player detail</h2>' +
     renderPlayersSectionHtml(dossier) +

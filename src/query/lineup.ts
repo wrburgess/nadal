@@ -14,6 +14,8 @@ import type { Db } from "../ingest/db-types.js";
 import { NoCourtMatchHistoryError, predictedLineup } from "./derive.js";
 import type { EventCourt } from "./event-format.js";
 import { readEventFormat } from "./event-format.js";
+import type { LeagueScope } from "./league-scope.js";
+import { readLeagueScope } from "./league-scope.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
 import type { LineupBasis, LineupConfidence, RatingSource } from "./types.js";
 
@@ -57,39 +59,60 @@ export type LineupSlotProvenance =
   | { slotSource: "observed"; slotEvent: null }
   | { slotSource: "event-format"; slotEvent: { id: number; name: string } };
 
-/** Brands `ResolvedEventFormat` so only `resolveEventFormat` can build one. A REAL symbol, not a
+/** Brands `ResolvedEvent` so only `resolveEvent` can build one. A REAL symbol, not a
  * `declare const` phantom: a type-only brand disappears at runtime, so the object literal below
- * would have thrown `resolvedEventFormat is not defined` on the first call — caught by the tests
+ * would have thrown `resolvedEvent is not defined` on the first call — caught by the tests
  * immediately. Not exported, so no caller outside this module can name the key, and a `const`
  * symbol is typed `unique symbol`, so none can forge it structurally either. */
-const resolvedEventFormat = Symbol("resolvedEventFormat");
+const resolvedEvent = Symbol("resolvedEvent");
 
 /**
- * A named event's format, already looked up and validated: the slot set to predict across, together
- * with the identity of the event it came from. Resolved ONCE by `resolveEventFormat` and reusable
- * across many `getLineupPlan` calls.
+ * A named event, already looked up and validated in ONE read: the slot set to predict across, the
+ * evidence scope to draw records from (#97), and the identity of the event both came from. Resolved
+ * once by `resolveEvent` and reusable across many `getLineupPlan` / `buildTeamDossier` calls.
  *
- * **Opaque by construction, for a reason a plain structural type could not carry.** As two loose
- * public fields (`slotSet` + a separately-built provenance), a caller could resolve event A and
- * event B and hand over `{ slotSet: A.slotSet, provenance: B.provenance }` — predicting across A's
- * courts while all three presenters state the courts came from B. That needs no `any` and no
- * malformed data, and it defeats the provenance guarantee the batch fix exists to provide. Carrying
- * only the event's IDENTITY, and letting `getLineupPlan` derive the provenance from it, removes the
- * second field to disagree with; the brand removes the ability to fabricate the first.
- * (Codex adversarial review of PR #82, round 2, Finding 2 [medium].)
+ * **One read, two columns, deliberately.** `events.format` and `events.league_scope` are read by
+ * different consumers, but they must be read at the same instant. nadal runs `tn mcp serve` beside a
+ * CLI invocation against one WAL database, so a `tn event add` committing between two separate
+ * lookups is an ordinary concurrent-process interleaving — and two lookups would let one
+ * `report build` predict across version A's courts while naming version B's evidence scope. That is
+ * the same cross-process race Codex rated high on PR #82 (Finding 1), one column over, and the fix
+ * is the same: resolve once, hand the value down.
+ *
+ * **Opaque by construction, for a reason a plain structural type could not carry.** As loose public
+ * fields, a caller could resolve event A and event B and hand over `{ slotSet: A.slotSet,
+ * event: B.event }` — predicting across A's courts while all three presenters state the courts came
+ * from B. That needs no `any` and no malformed data, and it defeats the provenance guarantee this
+ * exists to provide. Carrying only the event's IDENTITY, and letting `getLineupPlan` derive the
+ * provenance from it, removes the second field to disagree with; the brand removes the ability to
+ * fabricate the first. (Codex adversarial review of PR #82, round 2, Finding 2 [medium].)
  */
-export type ResolvedEventFormat = {
+export type ResolvedEvent = {
   readonly event: { readonly id: number; readonly name: string };
-  readonly slotSet: readonly EventCourt[];
-  readonly [resolvedEventFormat]: true;
+  /** The event's own kind and date range, carried ONLY so `requireSlotSet` can render a
+   * copy-pasteable `tn event add` line without a second read of the row — which would reintroduce,
+   * inside the refusal path, the very two-read window this type exists to close. Deliberately kept
+   * out of `event` above, which stays the two fields a presenter may state as provenance. */
+  readonly recordedAs: {
+    readonly kind: string;
+    readonly startsOn: string | null;
+    readonly endsOn: string | null;
+  };
+  /** `null` when no format is on file. Callers that REQUIRE one go through `requireSlotSet`, which
+   * carries the refusal — this type deliberately does not, so an event can carry an evidence scope
+   * without also being obliged to carry a court list. */
+  readonly slotSet: readonly EventCourt[] | null;
+  /** #97's evidence scope, or `null` when none is on file (every league counts — the pre-#97
+   * behavior). Read by `getTeamProfile` / `getPlayerProfile`; deliberately IGNORED by
+   * `getLineupPlan`, see its doc comment. */
+  readonly leagueScope: LeagueScope | null;
+  readonly [resolvedEvent]: true;
 };
 
 /**
- * Looks up a named event and validates its stored format, or refuses. Exact match against
- * `events.name` (the unique key) — the same resolve-by-name-or-refuse mechanism
- * `src/ingest/match-add.ts` already uses; nothing is inferred from a partial or fuzzy match. No
- * silent fall back to the observed slot set when a named event has no format: that would be the
- * exact silent-lie class this repo has logged before.
+ * Looks up a named event and validates BOTH of its stored structured columns, or refuses. Exact
+ * match against `events.name` (the unique key) — the same resolve-by-name-or-refuse mechanism
+ * `src/ingest/match-add.ts` already uses; nothing is inferred from a partial or fuzzy match.
  *
  * **Separated from `getLineupPlan` so a BATCH caller can resolve once and reuse.** `tn report build`
  * renders one dossier per team, and nadal genuinely runs two PROCESSES against one WAL database
@@ -97,50 +120,85 @@ export type ResolvedEventFormat = {
  * teams' dossiers would otherwise let ONE batch emit a two-court dossier and a four-court dossier
  * that each name the same event — while `docs/cli/GRAMMAR.md` promises the named event's format
  * applies to *every* dossier the run builds. A per-team lookup cannot keep that promise; one
- * up-front resolution can. (Codex adversarial review of PR #82, Finding 1 [high].)
+ * up-front resolution can. (Codex adversarial review of PR #82, Finding 1 [high].) #97 puts the
+ * evidence scope under the same guarantee, in the same read.
  *
  * Resolving up front also moves the refusal EARLIER, which is the same batch discipline
  * `writeSectionalsDossiers` already applies to filesystem leaves: a bad event name now refuses
  * before any dossier is prepared, rather than on the first team that happens to have court history
  * — and it closes the case where a build over a team set that is empty, or entirely without
  * history, would have accepted an unknown event name in silence.
+ *
+ * **What this does NOT refuse, deliberately: a missing format.** That refusal moved to
+ * `requireSlotSet` below, so that #97's evidence scope is reachable on an event with no court list.
+ * Every existing caller that needed the old behavior calls `requireSlotSet` at the same point
+ * `resolveEventFormat` used to throw, so refusal timing is unchanged for all of them.
+ *
+ * A CORRUPTED stored value in either column still refuses here, fail-closed: `readEventFormat` first
+ * (`InvalidEventFormatError`), then `readLeagueScope` (`InvalidLeagueScopeError`). The format is
+ * checked first so an event whose columns are both damaged reports them in the order they are typed.
+ * This does mean `tn lineup plan <team> <event>` now refuses on an unreadable LEAGUE SCOPE, a column
+ * it does not itself use — accepted, and the right direction: an unreadable scope means the database
+ * has been hand-edited into a shape our writer cannot produce, and the neighbouring command quietly
+ * proceeding would be the surprising outcome, not the refusal. Unreachable through `tn event add`.
  */
-export function resolveEventFormat(db: Db, eventName: string): ResolvedEventFormat {
+export function resolveEvent(db: Db, eventName: string): ResolvedEvent {
   const eventRow = db.select().from(events).where(eq(events.name, eventName)).all()[0];
   if (eventRow === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
-  // `readEventFormat` throws `InvalidEventFormatError` on a corrupted stored value (defense in
-  // depth — only `addEvent` writes this column in production) — allowed to propagate as-is rather
-  // than being re-wrapped, since it is already its own distinct, presenter-renderable class.
+  // Both readers throw their own distinct, presenter-renderable class on a corrupted stored value
+  // (defense in depth — only `addEvent` writes these columns in production) — allowed to propagate
+  // as-is rather than being re-wrapped.
   const format = readEventFormat(eventRow.format);
-  if (format === null) {
-    throw new EventHasNoFormatError(
-      `event "${eventName}" has no format on file — add one first, e.g. ` +
-        `tn event add "${eventName}" ${eventRow.kind} ${eventRow.startsOn ?? "<starts-on>"} ` +
-        `${eventRow.endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
-    );
-  }
+  const leagueScope = readLeagueScope(eventRow.leagueScope);
   const resolved = {
     event: Object.freeze({ id: eventRow.id, name: eventRow.name }),
+    recordedAs: Object.freeze({ kind: eventRow.kind, startsOn: eventRow.startsOn, endsOn: eventRow.endsOn }),
     // Deep-frozen, not merely `readonly`: `readonly` is erased at compile time, so a holder could
     // reach through `resolved.slotSet[0].slot = "…"` and mutate the courts a whole batch is
     // predicting across, between one team and the next.
-    slotSet: Object.freeze(format.map((court) => Object.freeze({ ...court }))),
+    slotSet: format === null ? null : Object.freeze(format.map((court) => Object.freeze({ ...court }))),
+    // Frozen for the same reason, one level shallower (its `prefixes` array is the only reachable
+    // mutable): a holder editing the scope mid-batch would give two teams in one run different
+    // evidence while both dossiers name the same event.
+    leagueScope:
+      leagueScope === null
+        ? null
+        : Object.freeze({ mode: leagueScope.mode, prefixes: Object.freeze([...leagueScope.prefixes]) }),
   };
   // NON-enumerable, so object spread and `Object.assign` do not carry it — `{ ...a, slotSet: b.slotSet }`
   // therefore produces a value without the brand, which `getLineupPlan` rejects at runtime.
-  Object.defineProperty(resolved, resolvedEventFormat, { value: true, enumerable: false });
-  return Object.freeze(resolved) as ResolvedEventFormat;
+  Object.defineProperty(resolved, resolvedEvent, { value: true, enumerable: false });
+  return Object.freeze(resolved) as ResolvedEvent;
+}
+
+/**
+ * The slot set a caller REQUIRES, or the refusal. No silent fall back to the observed slot set when
+ * a named event has no format: that would be the exact silent-lie class this repo has logged before.
+ *
+ * Split out of `resolveEvent` (#97) so that an evidence scope does not have to be accompanied by a
+ * court list to exist. Called at the same point `resolveEventFormat` used to throw — immediately
+ * after resolution, before any dossier is prepared — so "a bad event aborts the whole build with
+ * nothing written" is unchanged.
+ */
+export function requireSlotSet(resolved: ResolvedEvent): readonly EventCourt[] {
+  if (resolved.slotSet !== null) return resolved.slotSet;
+  const { kind, startsOn, endsOn } = resolved.recordedAs;
+  throw new EventHasNoFormatError(
+    `event "${resolved.event.name}" has no format on file — add one first, e.g. ` +
+      `tn event add "${resolved.event.name}" ${kind} ${startsOn ?? "<starts-on>"} ` +
+      `${endsOn ?? "<ends-on>"} "S1:singles,D1:doubles"`,
+  );
 }
 
 /** Runtime half of the opacity guarantee. The brand's TYPE stops a caller naming it; this stops a
  * caller reconstructing the value around it — and the two are not redundant, because TypeScript
  * models an object spread from the declared type, so `{ ...a }` can still typecheck as a
- * `ResolvedEventFormat` while carrying no brand at runtime. Checking here is what makes the
+ * `ResolvedEvent` while carrying no brand at runtime. Checking here is what makes the
  * non-enumerable brand mean something rather than merely look like it does. */
-function assertResolvedByUs(value: ResolvedEventFormat): void {
-  if ((value as Record<symbol, unknown>)[resolvedEventFormat] !== true) {
+function assertResolvedByUs(value: ResolvedEvent): void {
+  if ((value as Record<symbol, unknown>)[resolvedEvent] !== true) {
     throw new Error(
-      "getLineupPlan: the resolved event format was not produced by resolveEventFormat — a copied or " +
+      "getLineupPlan: the resolved event was not produced by resolveEvent — a copied or " +
         "reconstructed value can pair one event's courts with another event's identity, which is the " +
         "provenance guarantee this type exists to hold",
     );
@@ -192,8 +250,20 @@ export type LineupPlan = LineupSlotProvenance & {
  * A player on the roster more than once (one `team_memberships` row per event — the schema allows
  * it, and a district roster plus a travel roster is the normal case) is counted ONCE here: the
  * roster is a set of people, and a duplicate id would let the same player be placed on two courts.
+ *
+ * **#97's evidence scope is deliberately NOT applied here, and this is the one reader that must not
+ * change.** The obvious assumption is the opposite, so it is stated rather than left to be inferred:
+ * a predicted lineup is already scoped by something stronger than a league predicate — its evidence
+ * is restricted to court matches linked to one of THIS TEAM's own `team_matches` rows, and those
+ * come from the team's own league page. Measured on the live database when #97 was written: 89 of 89
+ * of this function's evidence rows were already `Adult 40+ 3.5`. Applying a league scope on top would
+ * be a filter on an already-filtered set that removes nothing and implies a correctness this
+ * function gets from the team linkage instead. `courtMatchRowsForPlayers` is therefore called
+ * WITHOUT a scope below, and `resolved.leagueScope` is read by nothing in this function — pinned by
+ * a test that seeds a Mixed court match against the team's OWN team match, so the assertion would
+ * fail if a scope ever leaked in.
  */
-export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedEventFormat): LineupPlan {
+export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedEvent): LineupPlan {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getLineupPlan: no team with id ${teamId}`);
 
@@ -205,10 +275,14 @@ export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedE
   // ALREADY-RESOLVED format. The second form exists for a BATCH caller — `report build` over every
   // team — which must resolve once and reuse, never once per team; see `resolveEventFormat`'s doc
   // comment for the race that motivates it.
-  const resolved: ResolvedEventFormat | undefined =
-    event === undefined ? undefined : typeof event === "string" ? resolveEventFormat(db, event) : event;
+  const resolved: ResolvedEvent | undefined =
+    event === undefined ? undefined : typeof event === "string" ? resolveEvent(db, event) : event;
   if (resolved !== undefined) assertResolvedByUs(resolved);
-  const slotSet = resolved === undefined ? undefined : [...resolved.slotSet];
+  // `requireSlotSet` carries the "named event has no format" refusal that `resolveEventFormat` used
+  // to throw itself (#97 split it out so an evidence scope can exist without a court list). Called
+  // here, immediately after resolution and before any roster or court-match read, so the refusal
+  // lands at exactly the same point in the sequence it always did.
+  const slotSet = resolved === undefined ? undefined : [...requireSlotSet(resolved)];
   // Derived from the resolved event's own identity, never accepted as a second field alongside the
   // slot set — so the courts predicted and the event named can not disagree.
   const provenance: LineupSlotProvenance =
@@ -269,7 +343,9 @@ export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedE
           .map((r) => r.id),
   );
 
-  const allPlayerRows = courtMatchRowsForPlayers(db, rosterPlayerIds);
+  // No league scope passed, deliberately — see this function's doc comment. The team linkage below
+  // is the stronger restriction, and #97 names this reader as the one that must not change.
+  const allPlayerRows = courtMatchRowsForPlayers(db, rosterPlayerIds).rows;
   const courtRows = allPlayerRows.filter((row) => ownCourtMatchIds.has(row.id));
   const excludedOtherTeamMatches = allPlayerRows.length - courtRows.length;
 

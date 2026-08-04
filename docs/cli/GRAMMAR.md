@@ -136,7 +136,24 @@ supplied for an **unambiguous** day is still checked, not ignored: if it does no
 command refuses. Availability is stored per (player, event, day), so the same player and day can
 legitimately carry a different status for each overlapping event.
 
-`tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD> [format]` — payload positionals,
+`tn player show <name|usta:…> [event]` and `tn team show <name|tr:…> [event]` — the optional trailing
+`[event]` (#97) names an event whose **league scope** restricts the court matches every record, slot
+tendency, partner count and prior-meeting row is computed over. Same optional-trailing-positional
+shape as everywhere else; no new flags.
+
+Both commands print the scope **whether or not one applies** — `evidence:` names the filter and the
+count it set aside, `leagues counted:` names what survived it. The unscoped line ("no league scope
+applied — every league counts") is not filler: a filtered record that does not say what it filtered
+is the defect #97 was opened for, and an unfiltered record a reader cannot distinguish from a
+filtered one is that same defect one step out. An unknown event **refuses** rather than quietly
+falling back to unscoped, for the same reason `tn report build` refuses one.
+
+Unlike `tn lineup plan`/`tn report build`, these two do **not** require the event to have a `format`
+on file — they read its `league_scope`, never its court list. `tn team show`'s own `record:` line is
+never scoped: it comes from `team_matches`, which carries no league context at all, and the printed
+line says so.
+
+`tn event add <name> <league|tournament> <YYYY-MM-DD> <YYYY-MM-DD> [format] [league-scope]` — payload positionals,
 the same shape `tn player avail` uses, so this adds no flags. The date range is **inclusive at both
 ends**, matching the day lookup `tn player avail` resolves its event through, and a single-day event
 (`starts-on` equal to `ends-on`) is legal. A repeat under the same name **updates in place** rather
@@ -158,6 +175,27 @@ stored** — the same "never clobber a stored value with an incoming null" rule
 `upsertTeamMatch` already runs for `scheduledTime`/`site` — so a routine date correction never
 silently deletes a format recorded earlier. Given, it REPLACES the stored value outright; there is
 no way to CLEAR a stored format back to nothing in v1.
+
+The sixth positional, `[league-scope]` (#97), is the event's **evidence scope**: which league
+contexts a dossier built for this event may draw on. Syntax `<exclude|only>:<prefix>[,<prefix>…]`,
+matched as a **case-insensitive prefix** of `court_matches.league_context` —
+`"exclude:Mixed"` for Springfield Sectionals, and `"only:Mixed"`, its exact inverse, for a
+mixed-doubles tournament reading the same rows. It follows the identical omitted-preserves /
+given-replaces rule as `[format]`, with the identical v1 limitation (no way to clear one), and
+silently dropping it on a routine date correction would be worse than dropping a format: the dossier
+would not look wrong, it would quietly go back to counting every league.
+
+**A court match with no `league_context` on file is retained by every scope, in both modes** — a
+scope removes only what it can positively classify — and every surface reports that count separately
+rather than folding it into a league. This is not a preference: `tn match add` records a null league
+context for every court it takes from an in-event scorecard photo, and those are the event's own
+courts, the most in-scope evidence there is.
+
+**A scope is only reachable via the sixth positional if a `[format]` is also given**, since these are
+ordered positionals. That is stated rather than worked around, and it is unreachable in practice:
+the one command that READS a scope is `tn report build`, which already refuses an event with no
+format on file, so an event worth scoping necessarily has a format to re-state. The `event_add` MCP
+tool takes keyed arguments and has no such ordering, so `leagueScope` is nameable there alone.
 
 `tn player distinct <name>` and `tn player alias <known> <other>` (#94) — the two rulings a human can
 make about an ambiguous identity, and the **only** commands that write `players` / `player_aliases`
@@ -229,6 +267,14 @@ reported as a count. A team whose roster has long individual histories but no ma
 therefore **refuses**, which is the honest answer rather than a confident guess built on borrowed
 evidence.
 
+**A named event's league scope (#97) does NOT apply here, deliberately.** The obvious assumption is
+the opposite, so it is stated: this command's evidence is already restricted by something stronger
+than a league predicate — court matches linked to this team's own `team_matches` rows, which come
+from the team's own league page. Measured on the live database when #97 landed, 89 of 89 of this
+command's evidence rows were already `Adult 40+ 3.5`. Adding a league filter on top would remove
+nothing and would imply a correctness this command gets from the team linkage instead. The scope
+governs `tn report build`'s records, `tn player show` and `tn team show`; it does not govern this.
+
 `tn report build [sectionals|<team>] [event] [--json]` — `<team>` renders that one team's dossier;
 `sectionals`, and bare (no target), render one dossier per team on file plus a top-level
 `index.html`/`index.md`. Output root: `TN_REPORTS_PATH`, defaulting to repo-relative `reports/` —
@@ -241,6 +287,23 @@ The optional trailing `[event]` (#63) is the same disambiguator `tn lineup plan`
 applies to **every** dossier this run builds: each team's predicted-lineup section uses the named
 event's format instead of that team's own observed history, with the same refusals (unknown event,
 or one with no format on file) as `tn lineup plan`.
+
+**The named event also supplies the dossier's evidence scope** (#97, `tn event add`'s sixth
+positional). Each team's roster records, court-slot tendencies and prior-meeting rows are then
+computed only over court matches that scope retains, and every dossier carries an **Evidence scope**
+section naming the filter applied, the count it excluded, and — the other half — the leagues that
+survived it. That last part is not decoration: after `exclude:Mixed`, between 37% and 69% of the
+remaining evidence is still out-of-league (Adult 18+ 3.5, Adult 55+ 7.0/8.0, Tri-Level, Combo), an
+accepted residual that the page states rather than leaves implicit. A build that names **no** event
+prints the same section saying no scope applied.
+
+Two things on the page are **not** covered by the scope, and the section says so: the team record
+(derived from `team_matches`, which carries no league context) and the predicted lineup (restricted
+to this team's own schedule instead — see `tn lineup plan` below).
+
+The format and the scope are read from the event row **in one read**, once, before any dossier is
+prepared. Two lookups would let a `tn event add` committing mid-build from the neighbouring `tn mcp
+serve` process give one run version A's courts and version B's scope.
 
 **The event's format is resolved exactly once, before any dossier is prepared** — not once per team.
 That is what makes "every dossier" true rather than merely intended: nadal runs `tn mcp serve`

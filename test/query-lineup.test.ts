@@ -18,7 +18,7 @@ import {
   NoCourtMatchHistoryError,
   UnknownEventError,
   getLineupPlan,
-  resolveEventFormat,
+  resolveEvent,
 } from "../src/query/lineup.js";
 import { resolveTeamTarget } from "../src/query/team-profile.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -574,7 +574,7 @@ describe("getLineupPlan — an event's format overrides the derived slot set", (
   });
 
   // Codex adversarial review of PR #82, round 2, Finding 2 [medium]. The resolved value is opaque:
-  // only `resolveEventFormat` can build one, and it carries the event's IDENTITY rather than a
+  // only `resolveEvent` can build one, and it carries the event's IDENTITY rather than a
   // second, separately-constructed provenance field — so the courts predicted and the event named
   // cannot be recombined from two different events.
   it("a resolved format carries its own event identity — the courts and the named event cannot disagree", () => {
@@ -598,8 +598,8 @@ describe("getLineupPlan — an event's format overrides the derived slot set", (
         format: "S1:singles",
       });
 
-      const two = resolveEventFormat(db, "Two Court Event");
-      const one = resolveEventFormat(db, "One Court Event");
+      const two = resolveEvent(db, "Two Court Event");
+      const one = resolveEvent(db, "One Court Event");
 
       for (const [resolved, courts, name] of [
         [two, 2, "Two Court Event"],
@@ -611,8 +611,13 @@ describe("getLineupPlan — an event's format overrides the derived slot set", (
       }
 
       // The value exposes no separate provenance field to swap — the presenter-facing event name is
-      // derived from the same object the slot set came from.
-      expect(Object.keys(two)).toEqual(["event", "slotSet"]);
+      // derived from the same object the slot set came from. Pinned as an EXACT key list, not a
+      // subset check: the guarantee is that no SECOND field describing which event this is can
+      // appear alongside `event`, and only an exact list can assert that. #97 added `recordedAs`
+      // (the kind/date range `requireSlotSet` renders its refusal from) and `leagueScope` (the
+      // evidence scope, read from the same row in the same read) — neither is provenance, and this
+      // assertion is what forces a future field to be argued for rather than slipped in.
+      expect(Object.keys(two)).toEqual(["event", "recordedAs", "slotSet", "leagueScope"]);
 
       // Codex round 3 [medium]: a spread used to carry the brand, so `{ ...a, slotSet: b.slotSet }`
       // produced a value `getLineupPlan` trusted — B's courts labelled event A. The brand is now
@@ -625,12 +630,13 @@ describe("getLineupPlan — an event's format overrides the derived slot set", (
       // attacker-shaped caller would notice — the runtime check is the half that closes it.
       const mixed = { ...one, slotSet: two.slotSet };
       expect(Object.getOwnPropertySymbols(mixed), "a spread must not carry the brand").toHaveLength(0);
-      expect(() => getLineupPlan(db, teamId, mixed)).toThrow(/not produced by resolveEventFormat/);
+      expect(() => getLineupPlan(db, teamId, mixed)).toThrow(/not produced by resolveEvent/);
 
       // And the courts a batch is predicting across cannot be mutated between teams. `readonly` is
       // erased at runtime, so this needs a real freeze, not a type.
+      expect(two.slotSet).not.toBeNull();
       expect(Object.isFrozen(two.slotSet)).toBe(true);
-      expect(Object.isFrozen(two.slotSet[0])).toBe(true);
+      expect(Object.isFrozen(two.slotSet![0])).toBe(true);
     } finally {
       sqlite.close();
     }

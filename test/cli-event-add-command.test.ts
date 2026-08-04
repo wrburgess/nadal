@@ -270,10 +270,12 @@ describe("tn event add (end-to-end via dispatch)", () => {
       runMigrations();
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-      // Six positionals: name + kind + starts-on + ends-on + format (the now-documented fifth) +
-      // one genuinely extra token beyond that.
+      // Seven positionals: name + kind + starts-on + ends-on + format (the fifth, #63) +
+      // league-scope (the sixth, #97) + one genuinely extra token beyond that. The count moves with
+      // the grammar; what is being asserted — that a token past the last declared positional is
+      // REFUSED rather than silently dropped — does not.
       const code = await dispatch([
-        "event", "add", "Springfield", "tournament", "2026-08-28", "2026-08-30", "S1:singles", "extra",
+        "event", "add", "Springfield", "tournament", "2026-08-28", "2026-08-30", "S1:singles", "exclude:Mixed", "extra",
       ]);
 
       expect(code).toBe(1);
