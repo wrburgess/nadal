@@ -241,6 +241,25 @@ migration-reconciliation machinery in production forever to serve a window that 
   inside more than one event's range — a league season and a tournament inside it, which is ordinary.
   Without it that day refuses and lists the candidates rather than guessing which you meant.
 
+  `event_add` also takes an optional **`format`** (the court list, #63) and an optional
+  **`leagueScope`** (#97) — `"exclude:Mixed"` for Springfield, `"only:Mixed"` for a mixed-doubles
+  event over the same rows. Both follow "omitted preserves what is stored, given replaces it", so a
+  call made only to correct a date never silently deletes either. Because MCP arguments are keyed
+  rather than ordered, `leagueScope` is nameable here **without** also supplying a `format`, which
+  the CLI's positional sixth argument cannot do.
+
+- **`player_show` / `team_show`** take an optional **`event`** (#97), whose league scope restricts the
+  court matches every record, slot tendency, partner count and prior-meeting row is computed over.
+  This matters more in chat than at the terminal: agent chat is where the pairings get worked, so an
+  agent reasoning over unscoped records while the printed binder shows scoped ones would be arguing
+  from different evidence than the captain holding the page.
+
+  The result carries an **`evidenceScope`** object either way — the filter applied (`null` when
+  none), how many court matches were considered, retained and excluded, how many carry no league
+  context at all, and the leagues that survived. Read it before quoting a record: after
+  `exclude:Mixed`, a large share of what remains is still out-of-league, and `evidenceScope` is where
+  that is stated rather than assumed.
+
 ## Known limitations
 - **`team_pull`/`player_pull` still make real, live HTTP requests** when given a live target — an
   agent chat calling them mid-conversation hits the real network exactly like the CLI does. Prefer

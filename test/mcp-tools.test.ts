@@ -20,6 +20,7 @@ import * as fetchModule from "../src/ingest/fetch.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
+import { addEvent } from "../src/query/events.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
 import { seasonStart } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
@@ -328,6 +329,128 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     } finally {
       sqlite.close();
     }
+  });
+
+  // #97: `event_add`'s league scope, and the `event` input `player_show`/`team_show` gain so an
+  // agent working the pairings in chat (spec § Deliverables 3) reads the SAME scoped records the
+  // printed binder does. An agent handed unscoped numbers while the binder shows scoped ones is the
+  // drift the parity discipline in this file exists to prevent.
+  it("event_add accepts an optional leagueScope over MCP and returns the parsed scope", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "event_add",
+      arguments: {
+        target: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        leagueScope: "exclude:Mixed",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    // Note the absent `format` key: MCP arguments are KEYED rather than ordered, so a scope is
+    // nameable here without also supplying a court list — the one place the CLI's positional-order
+    // limitation does not apply.
+    expect(JSON.parse(textOf(result))).toEqual({
+      event: "Springfield Sectionals 2026",
+      kind: "tournament",
+      startsOn: "2026-08-28",
+      endsOn: "2026-08-30",
+      created: true,
+      leagueScope: { mode: "exclude", prefixes: ["Mixed"] },
+    });
+  });
+
+  it("event_add refuses an invalid leagueScope over MCP as a tool error, writing nothing", async () => {
+    runMigrations();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "event_add",
+      arguments: {
+        target: "Springfield",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        leagueScope: "drop:Mixed",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const { db, sqlite } = openDb();
+    try {
+      expect(db.select().from(events).all(), "a refusal must write nothing").toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("player_show and team_show scope their records to a named event, and report what they set aside", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Scoped Team" }).returning().get();
+    const nova = db.insert(players).values({ canonicalName: "Nova Norbury" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: nova.id, teamId: team.id, eventId: null }).run();
+    backfillNameKeys(db);
+    let mid = 0;
+    for (const league of ["Adult 40+ 3.5", "Mixed 40+ 7.0", "Mixed 18+ 7.0"]) {
+      mid += 1;
+      const cm = upsertCourtMatch(db, {
+        teamMatchId: null,
+        slot: "D1",
+        discipline: "doubles",
+        winnerSide: "home",
+        score: "6-3 6-4",
+        leagueContext: league,
+        playedOn: "2026-05-01",
+        sourceMatchId: `mcp-scope-${mid}`,
+      });
+      upsertCourtMatchPlayers(db, { courtMatchId: cm.id, playerId: nova.id, side: "home" });
+    }
+    addEvent(db, {
+      name: "Springfield Sectionals 2026",
+      kind: "tournament",
+      startsOn: "2026-08-28",
+      endsOn: "2026-08-30",
+      leagueScope: "exclude:Mixed",
+    });
+    sqlite.close();
+    const client = await connectedClient();
+
+    for (const name of ["player_show", "team_show"] as const) {
+      const target = name === "player_show" ? "Nova Norbury" : "Scoped Team";
+      const scoped = JSON.parse(
+        textOf(await client.callTool({ name, arguments: { target, event: "Springfield Sectionals 2026" } })),
+      ) as { evidenceScope: { retained: number; excluded: number; scope: unknown } };
+      const unscoped = JSON.parse(textOf(await client.callTool({ name, arguments: { target } }))) as {
+        evidenceScope: { retained: number; excluded: number; scope: unknown };
+      };
+
+      expect(scoped.evidenceScope, name).toMatchObject({ retained: 1, excluded: 2 });
+      expect(scoped.evidenceScope.scope, name).toEqual({ mode: "exclude", prefixes: ["Mixed"] });
+      // The two reads DIFFER, and the unscoped one says positively that it is unscoped.
+      expect(unscoped.evidenceScope, name).toMatchObject({ retained: 3, excluded: 0, scope: null });
+    }
+  });
+
+  it("player_show refuses an unknown event rather than returning unscoped records", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    db.insert(players).values({ canonicalName: "Nova Norbury" }).returning().get();
+    backfillNameKeys(db);
+    sqlite.close();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "player_show",
+      arguments: { target: "Nova Norbury", event: "Nope" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("unknown event");
   });
 
   it("lineup_plan accepts an optional event over MCP, and its format replaces the derived slot set", async () => {

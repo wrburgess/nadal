@@ -81,6 +81,12 @@ the prediction counts only matches belonging to **this team**. A roster whose pl
 histories elsewhere will show a healthy `slots:` line and then have `lineup plan` refuse — and you
 would go looking for the wrong problem.
 
+Naming an event on it (`tn team show <team> "Springfield Sectionals"`, #97) does not make it a valid
+preflight either. That applies the event's **league** scope, which is a different restriction from
+the team-linkage one this prediction uses: it drops mixed-doubles play, and keeps every in-league
+match the roster played for some *other* team. A scoped `slots:` line can still look healthy against
+a team `lineup plan` will refuse.
+
 The prediction is its own preflight. Either it renders, or it refuses and tells you what to run:
 
 ```

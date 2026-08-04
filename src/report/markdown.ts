@@ -7,9 +7,11 @@
 import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamCrossHeadToHead } from "../query/team-profile.js";
 import {
+  formatEvidenceScopeLine,
   formatPartnerFrequency,
   formatRatingTrajectory,
   formatRecord,
+  formatRetainedLeaguesLine,
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
@@ -108,6 +110,36 @@ function renderPriorMeetingsSectionMarkdown(dossier: TeamDossier): string {
       ? unavailable
       : dossier.players.map((p) => renderPlayerPriorMeetingsRowMarkdown(p, headToHead)).join("\n\n");
   return `## Prior meetings vs our players\n\n${body}`;
+}
+
+/**
+ * #97's non-optional disclosure: what the records, slot tendencies and prior meetings in this
+ * dossier were actually computed over. Rendered as its own section, ALWAYS — an unscoped dossier
+ * says so as plainly as a scoped one does, because a reader who cannot tell those two apart is back
+ * at the defect this issue was opened for.
+ *
+ * The closing sentence is what keeps the section from over-claiming, and it is the reason this is a
+ * section rather than a footnote. The scope does not govern everything on the page: the team record
+ * is derived from `team_matches` and carries no league context at all, and the predicted lineup is
+ * scoped by something stronger and different (this team's own schedule — see `getLineupPlan`).
+ * Printing a scope immediately above a lineup it does not govern, without saying so, would be a new
+ * silent lie of the same shape as the one being fixed.
+ */
+function renderEvidenceScopeMarkdown(dossier: TeamDossier): string {
+  const summary = dossier.team.evidenceScope;
+  const eventName = dossier.event?.name ?? null;
+  return [
+    "## Evidence scope",
+    "",
+    `**Records, court-slot tendencies and prior meetings below were computed over:** ` +
+      `${escapeMarkdownCell(formatEvidenceScopeLine(summary, eventName))}.`,
+    "",
+    `**Leagues counted:** ${escapeMarkdownCell(formatRetainedLeaguesLine(summary))}.`,
+    "",
+    "_The team record above is derived from team fixtures rather than court matches, and the " +
+      "predicted lineup below is restricted to this team's own schedule instead — neither is filtered " +
+      "by this scope._",
+  ].join("\n");
 }
 
 /**
@@ -227,6 +259,10 @@ export function renderDossierMarkdown(dossier: TeamDossier): string {
     renderRosterTableMarkdown(dossier) +
     "\n\n" +
     renderTeamRecordMarkdown(dossier) +
+    "\n\n" +
+    // Placed BEFORE everything it qualifies, not appended as a footnote: a scope that a reader meets
+    // only after they have already read the records has not scoped their reading of them.
+    renderEvidenceScopeMarkdown(dossier) +
     "\n\n" +
     renderPredictedLineupMarkdown(dossier) +
     "\n\n## Player detail\n\n" +

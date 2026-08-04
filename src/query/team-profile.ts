@@ -8,7 +8,15 @@ import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "./home-team.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
 import { headToHead, slotTendencies, teamMatchRecord, windowedRecord } from "./derive.js";
-import type { HeadToHeadResult, SlotTendency, TeamMatchRecordResult, TeamMatchRow, WindowedRecordResult } from "./types.js";
+import type { LeagueScope } from "./league-scope.js";
+import type {
+  EvidenceScopeSummary,
+  HeadToHeadResult,
+  SlotTendency,
+  TeamMatchRecordResult,
+  TeamMatchRow,
+  WindowedRecordResult,
+} from "./types.js";
 
 export type TeamTargetResolution =
   | { kind: "ok"; teamId: number }
@@ -87,12 +95,26 @@ export type TeamProfile = {
    * zero rows for a pair that never met. `null` — not an empty array — when no `versusTeamId`
    * was given, so "not requested" stays distinguishable from "requested, nothing found". */
   headToHead: TeamCrossHeadToHead[] | null;
+  /** #97: what every roster record, every slot tendency (per-member AND aggregated) and every
+   * head-to-head row above was computed over. ONE summary for the whole profile, not one per roster
+   * member, because all of them derive from a single `courtMatchRowsForPlayers` call — per-member
+   * copies would be N restatements of one fact, and any two of them drifting would be a lie the
+   * type made possible. */
+  evidenceScope: EvidenceScopeSummary;
 };
 
+/**
+ * `options.leagueScope` (#97) restricts the court matches every derived section below draws on —
+ * including `headToHead`, which is the same evidence question asked across two rosters: a prior
+ * meeting in mixed doubles says as little about a Sectionals court as a mixed record does.
+ *
+ * Omitted, every league counts, byte-identical to the pre-#97 behavior — and `evidenceScope` says so
+ * explicitly rather than leaving a reader to infer it from the absence of a filter line.
+ */
 export function getTeamProfile(
   db: Db,
   teamId: number,
-  options: { since: string; versusTeamId?: number },
+  options: { since: string; versusTeamId?: number; leagueScope?: LeagueScope | null },
 ): TeamProfile {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getTeamProfile: no team with id ${teamId}`);
@@ -125,7 +147,8 @@ export function getTeamProfile(
   const versusPlayerNamesById = new Map(versusPlayerRows.map((r) => [r.playerId, r.canonicalName]));
 
   const allRelevantPlayerIds = [...rosterPlayerRows.map((r) => r.playerId), ...versusPlayerIds];
-  const courtRows = courtMatchRowsForPlayers(db, allRelevantPlayerIds);
+  const evidence = courtMatchRowsForPlayers(db, allRelevantPlayerIds, options.leagueScope);
+  const courtRows = evidence.rows;
 
   const roster: RosterMemberProfile[] = rosterPlayerRows.map((p) => ({
     playerId: p.playerId,
@@ -171,5 +194,9 @@ export function getTeamProfile(
     teamRecord: teamMatchRecord(teamMatchRows, teamId, { since: options.since }),
     slotTendencies: aggregatedSlotTendencies,
     headToHead: headToHeadRows,
+    // Carried straight from the read that produced `courtRows` — see the same note in
+    // `getPlayerProfile`. Note what it does NOT describe: `teamRecord`, which is derived from
+    // `team_matches` and carries no league context of its own, so no scope has ever applied to it.
+    evidenceScope: evidence.scope,
   };
 }

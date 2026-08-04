@@ -3,10 +3,35 @@ import { openDb } from "../../db/client.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../../query/player-profile.js";
 import type { PlayerProfile } from "../../query/player-profile.js";
-import { globalFlags, parseArgs } from "../args.js";
+import { InvalidLeagueScopeError } from "../../query/league-scope.js";
+import { InvalidEventFormatError } from "../../query/event-format.js";
+import { UnknownEventError, resolveEvent } from "../../query/lineup.js";
+import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitJson, emitSummary } from "../emit.js";
-import { formatDataGapsLine, formatName, formatPartnerFrequency, formatRatingTrajectory, formatRecord, formatSlotTendencies } from "../format-profile.js";
+import {
+  formatDataGapsLine,
+  formatEvidenceScopeLine,
+  formatName,
+  formatPartnerFrequency,
+  formatRatingTrajectory,
+  formatRecord,
+  formatRetainedLeaguesLine,
+  formatSlotTendencies,
+} from "../format-profile.js";
 import { seasonLabel, seasonStart } from "../window.js";
+
+/** Every error a bad `[event]` argument can throw (#97) — caller-fixable, so it exits 1 with a
+ * diagnostic rather than an uncaught throw. `EventHasNoFormatError` is deliberately absent: this
+ * command reads the event's evidence scope, never its court format, so an event with no format on
+ * file is perfectly usable here (`resolveEvent` refuses only on an unknown name or a corrupted
+ * stored value — `requireSlotSet`, which this command never calls, carries the format refusal). */
+function isEventRefusal(err: unknown): err is UnknownEventError | InvalidLeagueScopeError | InvalidEventFormatError {
+  return (
+    err instanceof UnknownEventError ||
+    err instanceof InvalidLeagueScopeError ||
+    err instanceof InvalidEventFormatError
+  );
+}
 
 /**
  * Spec § Interfaces: `tn player show <name|usta:…> [--json]` — "full profile: ratings trajectory,
@@ -17,7 +42,7 @@ import { seasonLabel, seasonStart } from "../window.js";
  * error paths (missing/unknown/ambiguous target, a bad flag) still go through `emitSummary` so they
  * stay consistent with every other command's error contract.
  */
-function formatPlayerProfileText(profile: PlayerProfile, season: string): string {
+function formatPlayerProfileText(profile: PlayerProfile, season: string, eventName: string | null): string {
   const id = profile.identity;
   const aliasSuffix = id.aliases.length > 0 ? ` (aka ${id.aliases.map(formatName).join(", ")})` : "";
   const gapsLine = formatDataGapsLine(profile.dataGaps);
@@ -37,6 +62,11 @@ function formatPlayerProfileText(profile: PlayerProfile, season: string): string
         .map((m) => `${formatName(m.teamName)}${m.retiredAt !== null ? " (former)" : ""}`)
         .join(", ") || "none"
     }`,
+    // #97. Printed unconditionally, scoped or not — a reader who cannot tell a scoped profile from
+    // an unscoped one has learned nothing from the records two lines up. The second line is the
+    // accepted residual made concrete: what is STILL counted after the scope ran.
+    `  evidence: ${formatEvidenceScopeLine(profile.evidenceScope, eventName)}`,
+    `  leagues counted: ${formatRetainedLeaguesLine(profile.evidenceScope)}`,
   ];
   if (gapsLine !== null) lines.push(`  not collected yet: ${gapsLine}`);
   return lines.join("\n");
@@ -47,7 +77,9 @@ export const playerShow: Command = {
   verb: "show",
   summary: "Show a player's full profile: ratings trajectory, history, records",
   run: async (args) => {
-    const parsed = parseArgs(args, [], []);
+    // #97: an optional trailing `[event]` positional — the same shape `tn lineup plan`,
+    // `tn report build` and `tn player avail` already use, so this adds no flags.
+    const parsed = parsePayloadArgs(args, 1);
     const opts = globalFlags(parsed.flags);
     if (parsed.error !== undefined) {
       emitSummary("player show", "error", [["message", parsed.error]], opts);
@@ -57,6 +89,7 @@ export const playerShow: Command = {
       emitSummary("player show", "error", [["message", "missing target"]], opts);
       return 1;
     }
+    const [eventName] = parsed.payload;
 
     const { db, sqlite } = openDb();
     try {
@@ -77,14 +110,26 @@ export const playerShow: Command = {
 
       // ONE anchor for both the boundary and the label below (issue #90).
       const anchor = new Date();
-      const profile = getPlayerProfile(db, resolution.playerId, { since: seasonStart(anchor) });
+      // #97: the named event's evidence scope, resolved before the profile is built so a bad name
+      // refuses without printing anything. An event that records no scope resolves to `null`, which
+      // the profile reports as "no league scope applied" rather than silently reading as unscoped.
+      const leagueScope = eventName === undefined ? null : resolveEvent(db, eventName).leagueScope;
+      const profile = getPlayerProfile(db, resolution.playerId, { since: seasonStart(anchor), leagueScope });
 
       // `--quiet` wins over `--json` (GRAMMAR.md), same as `emitSummary` — checked here rather
       // than routed through `emitSummary` itself, since neither success form is a `key=value` line.
       if (!opts.quiet) {
-        console.log(opts.json ? emitJson(profile) : formatPlayerProfileText(profile, seasonLabel(anchor)));
+        console.log(
+          opts.json
+            ? emitJson(profile)
+            : formatPlayerProfileText(profile, seasonLabel(anchor), eventName ?? null),
+        );
       }
       return 0;
+    } catch (err) {
+      if (!isEventRefusal(err)) throw err;
+      emitSummary("player show", "error", [["message", err.message]], opts);
+      return 1;
     } finally {
       sqlite.close();
     }
