@@ -373,6 +373,67 @@ describe("getTeamProfile — the roster table, the aggregate, and prior meetings
     }
   });
 
+  // Codex adversarial review of PR #99, round 1, Finding 2 [A/medium]. The disclosure's counts have
+  // to be counts of the evidence the page actually DISPLAYS. `getTeamProfile` was fetching rows for
+  // the roster AND the versus roster, so a court match played only by OUR players — feeding no
+  // roster record, no slot tendency, and no head-to-head row (derive.ts's `headToHead` skips any row
+  // the roster member did not play in) — was still counted in `considered`/`excluded`. A dossier
+  // could then read "N of M retained, K excluded" where some of K changed nothing on the page.
+  it("counts only the evidence the profile actually displays — never a court match no section uses", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const opponentTeam = seedTeam(db, "OK/Dickason/40&Over3.5M");
+      const ourTeam = seedTeam(db, "HOA/Burgess-Zingg/40&Over3.5M");
+      const rival = seedPlayer(db, "Nova Norbury", opponentTeam);
+      const ours = seedPlayer(db, "Ada Ashby", ourTeam);
+      const stranger = seedPlayer(db, "Wren Wexley");
+
+      // Displayed: the rival met our player once, in league.
+      play(db, {
+        slot: "D1",
+        discipline: "doubles",
+        ours: [rival],
+        theirs: [ours],
+        leagueContext: "Adult 40+ 3.5",
+        won: false,
+      });
+
+      const before = getTeamProfile(db, opponentTeam, {
+        since: SEASON,
+        versusTeamId: ourTeam,
+        leagueScope: EXCLUDE_MIXED,
+      });
+
+      // NOT displayed anywhere on the opponent's dossier: OUR player's own mixed match against a
+      // third party. No opponent-roster player took part, so no section can reach it.
+      play(db, {
+        slot: "D3",
+        discipline: "doubles",
+        ours: [ours],
+        theirs: [stranger],
+        leagueContext: "Mixed 40+ 7.0",
+        won: true,
+      });
+
+      const after = getTeamProfile(db, opponentTeam, {
+        since: SEASON,
+        versusTeamId: ourTeam,
+        leagueScope: EXCLUDE_MIXED,
+      });
+
+      // Nothing the page shows moved...
+      expect(after.roster).toEqual(before.roster);
+      expect(after.slotTendencies).toEqual(before.slotTendencies);
+      expect(after.headToHead).toEqual(before.headToHead);
+      // ...so nothing the page CLAIMS about its evidence may move either. Before the fix,
+      // `considered` went 1 -> 2 and `excluded` went 0 -> 1 on this exact input.
+      expect(after.evidenceScope).toEqual(before.evidenceScope);
+      expect(after.evidenceScope).toMatchObject({ considered: 1, retained: 1, excluded: 0 });
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("the team record is NOT scoped — it comes from team fixtures, which carry no league context", () => {
     const { db, sqlite } = freshDb();
     try {

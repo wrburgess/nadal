@@ -2,6 +2,7 @@ import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
+import { InvalidLeagueScopeError } from "../../query/league-scope.js";
 import {
   EventHasNoFormatError,
   NoCourtMatchHistoryError,
@@ -83,12 +84,20 @@ export const lineupPlan: Command = {
           );
           return 1;
         }
-        // #63: a bad `[event]` argument is likewise caller-fixable — each of these three names
-        // exactly what to fix (the event, or a missing/invalid format), matching the posture above.
+        // #63, #97: a bad `[event]` argument is likewise caller-fixable — each of these four names
+        // exactly what to fix (the event, or a missing/invalid format, or a corrupted league scope),
+        // matching the posture above.
+        //
+        // `InvalidLeagueScopeError` is on this list even though this command deliberately IGNORES an
+        // event's league scope (see `getLineupPlan`). It still RESOLVES the event, and `resolveEvent`
+        // validates both structured columns fail-closed in one read — so an unreadable scope refuses
+        // here, and must refuse legibly. Without it this command exited 1 in complete silence; see
+        // the same fix and the general class in `report-build.ts`'s `isEventRefusal`.
         if (
           err instanceof UnknownEventError ||
           err instanceof EventHasNoFormatError ||
-          err instanceof InvalidEventFormatError
+          err instanceof InvalidEventFormatError ||
+          err instanceof InvalidLeagueScopeError
         ) {
           emitSummary("lineup plan", "error", [["message", err.message]], opts);
           return 1;
