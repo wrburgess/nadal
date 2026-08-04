@@ -241,8 +241,14 @@ for anyone step 2's cascade skipped, or any player you track outside a full team
 A refusal exits 1 and prints its reason in `message=`, in the same words the cascade warning uses —
 including the plural form when this player's history holds several ambiguities:
 `player pull status=error message="3 ambiguous identities — [1] … ; [2] … ; [3] …"`. Rule on every
-one listed (`tn player distinct` / `tn player alias`, as in step 2) and re-run once; a pull is
-all-or-nothing, so nothing of this player's history is on file until it succeeds.
+one listed (`tn player distinct` / `tn player alias`, as in step 2) and re-run once.
+
+**All-or-nothing means the DATABASE, not the disk.** No player, rating, court-match or participant
+row is committed until the pull succeeds — the whole pull is one transaction and a refusal rolls it
+back. The **raw page is already archived** either way: `archivePage` runs before parsing, so the
+fetched HTML and its provenance sit under `TN_RAW_PATH` (`raw/` when unset) even for a pull that
+refused. A refusal does **not** print that path — only `status=ok` carries `archived=` — so find it by
+its URL-derived slug if you want to inspect what was fetched.
 
 ### 4. USTA/WTN ratings — human-in-the-loop, not this runbook's job
 
