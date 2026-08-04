@@ -230,12 +230,14 @@ reviewer is not misled by a clean table — none is a bug in itself, and several
   issue that created it states: *a change that invalidates the map updates the map.*
 - **It is not the command reference.** `docs/cli/GRAMMAR.md` is, and it is test-guarded. This document
   names directories; it never lists commands.
-- **It is only weakly self-checking, and the weakness is worth stating exactly.**
-  `test/architecture-paths.test.ts` asserts that every token in this document **shaped like a repo
-  path** resolves on disk — anywhere it appears, in a code span, a link, a table cell or bare prose,
-  because the check scans for path shapes rather than parsing Markdown. What it does **not** check is
-  everything that matters more: whether a claim *about* a path is true, whether the map is complete, or
-  whether a new `src/` directory was given a row. Those are maintained by reading, not by CI.
+- **It is guarded only loosely, and the looseness is the honest part.**
+  `test/architecture-paths.test.ts` is a **best-effort** check that tokens shaped like repo paths
+  resolve on disk. It is a heuristic over delimiter-separated text — **not a Markdown parser, and not
+  exhaustive**; its known bypasses are recorded as an accepted residual (#104) rather than implied away. It
+  catches the case it exists for, a path here that no longer exists on disk, for every spelling this
+  document actually uses. It does **not** check the things that matter more: whether a claim *about* a
+  path is true, whether the map is complete, or whether a new `src/` directory was given a row. Those
+  are maintained by reading, not by CI — as is every other document in this repo.
 - **It supersedes an older count.** The v1 design spec
   (`docs/superpowers/specs/2026-07-29-nadal-v1-springfield-design.md`) describes "three thin
   presenters". There are **two** front doors; the dossier is a renderer, not a third door. That spec

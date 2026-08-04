@@ -7,11 +7,22 @@ import { describe, expect, it } from "vitest";
 // glob, so vendoring never reddens a host's own docs), and every nadal-authored doc sits outside it.
 //
 // WHAT THIS CHECK HOLDS FOR, STATED NARROWLY (rules/testing.md: never let a check's comment claim
-// coverage the code does not enforce). It asserts that every token in the document SHAPED LIKE a repo
-// path resolves on disk. It does NOT verify that any claim made ABOUT that path is true, that the map
-// is complete, that a newly added src/ directory was given a row, or that the prose matches the code.
-// Those stay unenforced, and ARCHITECTURE.md says so itself rather than letting this green imply
-// otherwise.
+// coverage the code does not enforce). It is BEST-EFFORT and NOT EXHAUSTIVE. It asserts that tokens
+// shaped like a repo path resolve on disk; it is a heuristic over delimiter-separated text, not a
+// Markdown parser. It does NOT verify that any claim made ABOUT a path is true, that the map is
+// complete, that a newly added src/ directory was given a row, or that the prose matches the code.
+//
+// KNOWN BYPASSES, disclosed rather than implied away — none occurs in ARCHITECTURE.md today, and each
+// is recorded as an accepted residual (issue #104) rather than treated as a defect to chase:
+//   - a path inside raw HTML (`<a href=src/x.ts>`) or an HTML comment — the token keeps its prefix
+//   - a backslash-escaped separator (`src\/x.ts`) — renders as a path, does not scan as one
+//   - a percent-encoded destination (`src%2Fx.ts`) — not a path shape
+//   - a path broken across a line break — the halves scan separately
+//   - a path containing a delimiter character (`src/query/(x).ts`) — SPLITS, and the live prefix
+//     `src/query/` then resolves, so a bad path can be masked by a good one. Same for a token trimmed
+//     to a live path (`src/query/:` -> `src/query/`).
+// Five review rounds established that closing these one at a time moves the defect sideways rather
+// than closing the class; what ended it was conceding the claim, not another spelling.
 //
 // WHY IT SCANS THE WHOLE DOCUMENT INSTEAD OF PARSING MARKDOWN (PR #103, four review rounds, two HC
 // decisions). Earlier revisions enumerated the markup constructs a path can sit inside — inline code
