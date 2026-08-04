@@ -12,8 +12,14 @@ import { describe, expect, it } from "vitest";
 // Markdown parser. It does NOT verify that any claim made ABOUT a path is true, that the map is
 // complete, that a newly added src/ directory was given a row, or that the prose matches the code.
 //
-// KNOWN BYPASSES, disclosed rather than implied away — none occurs in ARCHITECTURE.md today, and each
-// is recorded as an accepted residual (issue #104) rather than treated as a defect to chase:
+// KNOWN BYPASSES, disclosed rather than implied away — each is recorded as an accepted residual
+// (issue #104) rather than treated as a defect to chase:
+//   - A PATH INSIDE A FENCED CODE BLOCK IS NOT SCANNED. This one is deliberate and by design rather
+//     than a gap: a fence marks an ILLUSTRATION, and the test "ignores paths inside a fenced block"
+//     asserts exactly that. It is listed here because it is still a scope boundary — a real path named
+//     only inside a fence is unchecked — and a disclosure that omitted it would be the same kind of
+//     not-quite-true claim this list exists to end.
+// The rest are unintended, and none occurs in ARCHITECTURE.md today:
 //   - a path inside raw HTML (`<a href=src/x.ts>`) or an HTML comment — the token keeps its prefix
 //   - a backslash-escaped separator (`src\/x.ts`) — renders as a path, does not scan as one
 //   - a percent-encoded destination (`src%2Fx.ts`) — not a path shape
