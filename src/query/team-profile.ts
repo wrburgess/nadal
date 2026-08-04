@@ -146,8 +146,25 @@ export function getTeamProfile(
   // the first time in production.
   const versusPlayerNamesById = new Map(versusPlayerRows.map((r) => [r.playerId, r.canonicalName]));
 
-  const allRelevantPlayerIds = [...rosterPlayerRows.map((r) => r.playerId), ...versusPlayerIds];
-  const evidence = courtMatchRowsForPlayers(db, allRelevantPlayerIds, options.leagueScope);
+  // THIS ROSTER's court matches only — not the union with `versusPlayerIds`, which is what this
+  // read used to fetch.
+  //
+  // The union was redundant for every consumer and actively wrong for the disclosure. Redundant:
+  // each of the three things derived below is computed FOR a roster member — `windowedRecord` and
+  // `slotTendencies` take a roster player id, and `derive.ts`'s `headToHead` opens with
+  // `if (self === undefined) continue`, skipping every row the roster member did not play in. A
+  // court match that only OUR players played can therefore reach no section on this page. And any
+  // match that IS a prior meeting necessarily has a roster member in it, so it is already in this
+  // narrower set — the union added exactly the rows nothing can use.
+  //
+  // Wrong for the disclosure, which is what made it a defect rather than a wasted fetch (#97's
+  // scope item 3): `evidenceScope` must count the evidence the page DISPLAYS. Fetching the union
+  // meant an opposing player's own out-of-league match — invisible in every section — still moved
+  // `considered` and `excluded`, so a dossier could report a filter that set aside rows it never
+  // showed. A count that does not describe what is on the page is the same class of silent
+  // misstatement this issue exists to remove.
+  // (Codex adversarial review of PR #99, round 1, Finding 2 [medium].)
+  const evidence = courtMatchRowsForPlayers(db, rosterPlayerRows.map((r) => r.playerId), options.leagueScope);
   const courtRows = evidence.rows;
 
   const roster: RosterMemberProfile[] = rosterPlayerRows.map((p) => ({

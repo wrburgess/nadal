@@ -2,6 +2,7 @@ import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
+import { InvalidLeagueScopeError } from "../../query/league-scope.js";
 import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
@@ -13,11 +14,27 @@ import { seasonWindow } from "../window.js";
 
 const SECTIONALS_TARGET = "sectionals";
 
-/** Every error a bad `[event]` argument can throw (#63) — caller-fixable, so it exits 1 with a
- * diagnostic rather than an uncaught throw, matching every other refusal in this command. */
-function isEventRefusal(err: unknown): err is UnknownEventError | EventHasNoFormatError | InvalidEventFormatError {
+/** Every error a bad `[event]` argument can throw (#63, #97) — caller-fixable, so it exits 1 with a
+ * diagnostic rather than an uncaught throw, matching every other refusal in this command.
+ *
+ * `InvalidLeagueScopeError` belongs here for exactly the reason `InvalidEventFormatError` does: both
+ * are fail-closed decoders on the SAME `resolveEvent` call, and a hand-corrupted column is precisely
+ * what they exist for. Omitting it did not produce the stack trace this list exists to prevent — it
+ * produced something worse, an exit 1 with **nothing printed at all**, which reads as "the command
+ * did nothing" rather than "the command refused, here is why". The general shape, worth stating
+ * because the next structured column on `events` will meet it: **adding a decoder to a shared
+ * resolve path creates a new refusal class, and every caller that classifies refusals by an explicit
+ * `instanceof` list is silently incomplete until it is added to that list.**
+ * (Found by the AC's verify pass and independently by the Codex adversarial review of PR #99,
+ * round 1, Finding 3 [C1/medium].) */
+function isEventRefusal(
+  err: unknown,
+): err is UnknownEventError | EventHasNoFormatError | InvalidEventFormatError | InvalidLeagueScopeError {
   return (
-    err instanceof UnknownEventError || err instanceof EventHasNoFormatError || err instanceof InvalidEventFormatError
+    err instanceof UnknownEventError ||
+    err instanceof EventHasNoFormatError ||
+    err instanceof InvalidEventFormatError ||
+    err instanceof InvalidLeagueScopeError
   );
 }
 

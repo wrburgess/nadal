@@ -9,10 +9,14 @@
 // ALREADY correct — its evidence is restricted to court matches linked to the team's own
 // `team_matches` rows (89 of 89 measured in-league), so it must ignore the scope entirely. Sharing a
 // column would make the one reader that must ignore the scope the one reader obliged to decode it.
-// `resolveEvent` also refuses an event with no format (`EventHasNoFormatError`), which folded would
-// mean a scope could not exist without a court list. And `event-format.ts`'s round-trip guard pins
-// the COURT grammar exactly; widening that grammar to carry a second concept re-opens a contract
-// three adversarial review rounds hardened (PR #82).
+// A scope also has to be able to exist WITHOUT a court list — folded into `format`, it could not,
+// and the "named event has no format" refusal would take the evidence scope down with it. (That
+// refusal now lives in `requireSlotSet` rather than in `resolveEvent`, precisely so the two can fail
+// independently; an earlier draft of this comment said `resolveEvent` still carried it, which the
+// refactor in this same change had already made untrue — Codex adversarial review of PR #99, round 1,
+// Finding 4 [low].) And `event-format.ts`'s round-trip guard pins the COURT grammar exactly;
+// widening that grammar to carry a second concept re-opens a contract three adversarial review
+// rounds hardened (PR #82).
 //
 // WHY THE PREDICATE IS EVALUATED IN JS, not as SQL `league_context NOT LIKE 'Mixed%'`. Three separate
 // traps live in the SQL form: `%` and `_` inside a prefix are LIKE METACHARACTERS (so a scope naming
@@ -62,11 +66,30 @@ const leagueScopeSchema = z
   })
   .strict();
 
-/** The comparison key for a prefix or a league context. JS's `toLowerCase` is Unicode-aware; SQLite's
- * `lower()` is ASCII-only, which is one of the three reasons this predicate is not pushed into SQL
- * (see the module comment, and `src/db/name-key.ts` for the same argument about names). */
+/**
+ * The comparison key for a prefix or a league context: **NFKC, then lowercase.**
+ *
+ * NFKC first, and it is not decoration. Without it, a composed `"Café"` and a decomposed
+ * `"Cafe" + U+0301` are the same text to a reader and different strings to `startsWith`, so a scope
+ * would silently retain a row it names — and a full-width `"Ｍｉｘｅｄ 40+ 7.0"` would read as a
+ * different league entirely. This is the same normalization `src/db/name-key.ts` applies to names,
+ * for the same reason; only the punctuation-stripping half of that function is deliberately NOT
+ * reused here, since a league context's `+`, `.` and `-` are load-bearing (`Adult 40+ 3.5`,
+ * `Tri-Level 18+ 4.5`).
+ *
+ * **What this is NOT: full Unicode case folding.** `String.prototype.toLowerCase` maps `ß` to `ß`,
+ * never to `ss`, and JS exposes no case-folding table to fix that — so `exclude:STRASSE` does not
+ * match `Straße 3.5`. Stated rather than papered over, and pinned by a test, because the honest
+ * limitation is small (no USTA league context is non-ASCII; all 32 values observed on the live
+ * database are plain ASCII) while a claim of full folding would be wrong in a module whose entire
+ * job is deciding which evidence a dossier counts.
+ *
+ * SQLite's `lower()` does neither half — it is ASCII-only and has no NFKC — which is one of the
+ * three reasons this predicate is not pushed into SQL (see the module comment).
+ * (Codex adversarial review of PR #99, round 1, Finding 1 [medium].)
+ */
 function fold(value: string): string {
-  return value.toLowerCase();
+  return value.normalize("NFKC").toLowerCase();
 }
 
 /** Refuses a scope naming the same prefix twice. Compared FOLDED, because the match itself is

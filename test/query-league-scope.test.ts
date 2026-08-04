@@ -237,6 +237,42 @@ describe("leagueScopeRetains", () => {
     expect(leagueScopeRetains(league, only)).toBe(true);
   });
 
+  // Codex adversarial review of PR #99, round 1, Finding 1 [A/medium]. `toLowerCase()` alone is
+  // neither Unicode case folding nor normalization, and the two halves of that have different
+  // answers here.
+  //
+  // NORMALIZATION is closed: a composed and a decomposed spelling of the same text are the same
+  // text, and a prefix test that says otherwise is simply wrong. Built with `String.fromCharCode`
+  // rather than a `́` literal on purpose — an escape sequence written through a tool boundary
+  // can arrive as the character it describes (docs/findings.md, #66/PR #89), and this test would
+  // then silently be testing the composed form against itself.
+  it("normalizes, so a decomposed spelling matches a composed prefix", () => {
+    const decomposed = `Cafe${String.fromCharCode(0x301)} 3.5`; // "Café 3.5", combining acute
+    const composed = "Café 3.5";
+    expect(decomposed).not.toBe(composed); // the fixture is genuinely two different strings
+    expect(decomposed.normalize("NFC")).toBe(composed);
+
+    const scope = parseLeagueScope("exclude:Café");
+    expect(leagueScopeRetains(decomposed, scope)).toBe(false);
+    expect(leagueScopeRetains(composed, scope)).toBe(false);
+  });
+
+  it("normalizes compatibility forms too, so a full-width spelling is not a different league", () => {
+    // U+FF2D..U+FF44 — full-width "Mixed". NFKC folds it to ASCII; NFC would not.
+    const fullWidth = "Ｍｉｘｅｄ 40+ 7.0";
+    expect(leagueScopeRetains(fullWidth, parseLeagueScope("exclude:Mixed"))).toBe(false);
+  });
+
+  // FULL CASE FOLDING is NOT closed, and the module says so rather than claiming it. `ß` lowercases
+  // to `ß`, not to `ss`, in every JS runtime — closing this needs a case-folding table JS does not
+  // expose. Pinned as the DOCUMENTED behavior so the limitation cannot quietly change without
+  // someone editing this assertion and the comment it enforces.
+  it("does NOT do full case folding — ß and ss stay distinct, as documented", () => {
+    expect(leagueScopeRetains("Straße 3.5", parseLeagueScope("exclude:STRASSE"))).toBe(true);
+    // The reachable half of the same input still works: same spelling, different case.
+    expect(leagueScopeRetains("STRASSE 3.5", parseLeagueScope("exclude:strasse"))).toBe(false);
+  });
+
   it("matches any prefix in the list, not only the first", () => {
     const scope = { mode: "exclude", prefixes: ["Mixed", "Combo"] } as const;
     expect(leagueScopeRetains("Combo 6.5", scope)).toBe(false);
