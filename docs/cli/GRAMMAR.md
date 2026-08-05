@@ -147,7 +147,14 @@ range that had to be opted into would have left a forgotten flag silently reprod
 `--since` refuses rather than clamping: a value that is not a four-digit year, one later than the
 team page's season, or a span longer than ten seasons all exit `status=error` naming the bound and
 the count. The ten-season ceiling is a typo guard — `--since 1990` against a 2026 team page would
-otherwise issue roughly thirty-seven match-history requests **per roster entry**.
+otherwise issue roughly thirty-seven match-history requests **per roster entry**. "Four-digit" means
+the value must also **round-trip** as a number: `0999` is refused, because the derived list is built
+from the parsed number and would emit the three-digit `999` — accepting four digits and producing
+three.
+
+**`--since` without `--players` is refused, not ignored.** There is no cascade for it to bound, so
+the flag can only mean the operator believes they asked for one; the refusal names the missing
+`--players` rather than validating a value nothing would use.
 
 **The range reaches match history only — never the team page.** A team profile at an older season is
 a stale roster snapshot, and reconciling against one would soft-retire every player who joined since.

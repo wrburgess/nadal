@@ -133,17 +133,43 @@ describe("cascadeYears (#108)", () => {
   // at `year=1000` produces `"999"` — three digits — with no `--since` anywhere in the invocation.
   // Reporting that as `--since "999" is not a four-digit year` accuses the operator of passing a flag
   // they never typed, and leaves them nothing to correct. Same class as #94.
-  it.each([
-    ["1000", "999"],
-    ["0999", "998"],
-    ["0000", "-1"],
-  ])("blames the team page, not a --since nobody passed, when the derived default is unusable (%s)", (teamYear, derived) => {
+  // Only `1000` reaches this path now: a leading-zero season like `0999` is refused one check
+  // earlier, by the round-trip rule below. `1000` is the single season that is itself emittable but
+  // whose derived default (`999`) is not.
+  it.each([["1000", "999"]])(
+    "blames the team page, not a --since nobody passed, when the derived default is unusable (%s)",
+    (teamYear, derived) => {
     const result = cascadeYears(teamYear);
     expect(result.kind).toBe("error");
     if (result.kind !== "error") throw new Error("expected error");
     expect(result.message).not.toContain(`--since "${derived}"`);
     expect(result.message).toContain(String(Number(teamYear)));
     expect(result.message).toContain("pass an explicit --since");
+  });
+
+  // Codex review of PR #109, rated High. Four digits is not the whole predicate: `"0999"` matches
+  // `/^\d{4}$/`, but the derived list is built with `String(Number(...))`, so it comes back out as
+  // the THREE-digit `"999"` — a function accepting four digits and emitting three, which would then
+  // request `matchhistory.aspx?year=999` and report `years="999"`. The rule is now "round-trips
+  // through Number", one spelling for both the accepted and the emittable set.
+  it.each(["0999", "0000", "0001", "0026"])("refuses a leading-zero season it could not emit (%s)", (season) => {
+    const result = cascadeYears(season, season);
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("expected error");
+    expect(result.message).toContain("four-digit year");
+  });
+
+  it("never emits a season that is not four digits, for any accepted input", () => {
+    // The invariant the round-trip rule exists to guarantee, asserted directly over the whole
+    // accepted range rather than only at the inputs that happened to break.
+    // Team seasons chosen so `-3` stays four-digit — the point is the OUTPUT invariant, not the
+    // input-refusal paths those boundaries would exercise instead.
+    for (const teamYear of ["1003", "2026", "9999"]) {
+      const result = cascadeYears(teamYear, String(Number(teamYear) - 3));
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      for (const year of result.years) expect(year).toMatch(/^\d{4}$/);
+    }
   });
 
   it("still blames --since when the caller really did pass an unusable one", () => {
@@ -351,6 +377,34 @@ describe("pullTeam", () => {
       expect(row).toHaveLength(1);
     } finally {
       warnSpy.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  // Codex review of PR #109, rated High. `pullPlayer` writes its own URL to
+  // `players.tennisrecord_url` — the durable handle `tn player pull "<name>"` later RESOLVES. The
+  // cascade fetches newest-first, so without the `storeProfileUrl` guard the LAST write (the oldest
+  // season) wins and every future individual refresh of that player is silently pinned to the oldest
+  // season in the range. This assertion can distinguish the right season from the wrong one, which is
+  // exactly why the `year === canonicalSeason` branch is testable where the hoisted one was not.
+  it("leaves each player's durable URL on the NEWEST season, not the last one cascaded", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const { fetcher, years } = buildFetcher();
+      expect(years.length).toBeGreaterThan(1);
+      await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
+
+      const newest = years[0]!;
+      const oldest = years[years.length - 1]!;
+      for (const name of ROSTER_NAMES) {
+        const row = db.select().from(players).where(eq(players.canonicalName, name)).all()[0];
+        expect(row?.tennisrecordUrl, `${name} should keep the newest season's handle`).toBe(
+          matchHistoryUrlFor(name, newest),
+        );
+        expect(row?.tennisrecordUrl).not.toBe(matchHistoryUrlFor(name, oldest));
+      }
+    } finally {
       sqlite.close();
     }
   });

@@ -45,6 +45,16 @@ export type PlayerPullOptions = {
   url?: string;
   /** Read `path` instead of fetching; `sourceUrl` is the page's real URL for provenance/parsing. */
   from?: { path: string; sourceUrl: string };
+  /**
+   * Whether this pull may write its own URL to `players.tennisrecord_url`, the durable handle
+   * `tn player pull "<name>"` later resolves. Defaults to `true`.
+   *
+   * `team-pull`'s multi-season cascade (#108) sets it `false` for every season but the newest. The
+   * cascade fetches newest-first and each pull would otherwise write its own season's URL, so the
+   * LAST write — the OLDEST season — would win, silently pinning every future individual refresh of
+   * that player to the oldest season in the range. Found by the independent Codex review of PR #109.
+   */
+  storeProfileUrl?: boolean;
 };
 
 /**
@@ -277,7 +287,10 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
       const profiled = upsertPlayer(tx, {
         id: resolved.row.id,
         canonicalName: header.name,
-        tennisrecordUrl: url,
+        // `undefined` LEAVES the stored handle alone (`upsertPlayer` only writes fields that are
+        // defined) rather than nulling it — which is what lets an older-season cascade pull enrich
+        // matches and ratings without downgrading the durable URL. See `storeProfileUrl`.
+        tennisrecordUrl: options.storeProfileUrl === false ? undefined : url,
         gender: header.gender,
       });
 

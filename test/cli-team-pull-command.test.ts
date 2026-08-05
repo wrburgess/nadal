@@ -275,6 +275,49 @@ describe("tn team pull --players (partial cascade)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  // Codex review of PR #109, rated Medium. Without `--players` there is no cascade for `--since` to
+  // bound, and the service used to skip validation entirely — so `--since twenty` returned
+  // `status=ok years=""` while GRAMMAR.md promised a refusal for a malformed value. Refusing names
+  // the real mistake (the missing `--players`) rather than validating a value nothing would use.
+  it("--since without --players is refused, not silently ignored", async () => {
+    runMigrations();
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: team.html,
+      fetchedAt: new Date().toISOString(),
+    }));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "pull", team.source.url, "--since", "2026"]);
+
+    expect(code).toBe(1);
+    expect(logSpy).not.toHaveBeenCalled();
+    const line = String(errSpy.mock.calls[0]?.[0]);
+    expect(line).toMatch(/^team pull status=error /);
+    expect(line).toContain("--players");
+  });
+
+  // The same invocation with a MALFORMED value — the case that used to return status=ok, which is
+  // what made this a defect rather than a missing convenience.
+  it("--since without --players is refused even when the value is malformed", async () => {
+    runMigrations();
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: team.html,
+      fetchedAt: new Date().toISOString(),
+    }));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "pull", team.source.url, "--since", "twenty"]);
+
+    expect(code).toBe(1);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
   it("an out-of-range --since exits 1 with the service's refusal, not a stack trace", async () => {
     runMigrations();
     vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({

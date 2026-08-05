@@ -138,6 +138,22 @@ export const MAX_CASCADE_YEARS = 10;
 const FOUR_DIGIT_YEAR = /^\d{4}$/;
 
 /**
+ * A season string → its number, or `null` when it is not a season this cascade can emit.
+ *
+ * Four digits is not the whole predicate: `"0999"` matches the regex, and the derived list is built
+ * by `String(number)`, so it would come back out as the THREE-digit `"999"` — a function that
+ * accepts four digits and emits three, then requests `matchhistory.aspx?year=999` and reports
+ * `years="999"`. Requiring the value to ROUND-TRIP through `Number` is the whole rule in one
+ * spelling, so the accepted set and the emittable set cannot drift apart.
+ * (Codex review of PR #109, rated high.)
+ */
+function parseSeason(raw: string): number | null {
+  if (!FOUR_DIGIT_YEAR.test(raw)) return null;
+  const value = Number(raw);
+  return String(value) === raw ? value : null;
+}
+
+/**
  * The seasons one `--players` cascade fetches, newest first — issue #108.
  *
  * **One derivation, read once.** `team-pull` fetches the list it reports and reports the list it
@@ -160,17 +176,18 @@ export function cascadeYears(
   teamYear: string,
   since?: string,
 ): { kind: "ok"; years: string[] } | { kind: "error"; message: string } {
-  if (!FOUR_DIGIT_YEAR.test(teamYear)) {
+  const newest = parseSeason(teamYear);
+  if (newest === null) {
     return {
       kind: "error",
       message: `team page season "${sanitizeValue(teamYear)}" is not a four-digit year`,
     };
   }
-  const newest = Number(teamYear);
   // The DEFAULT is the fix. A caller who never learns `--since` exists still gets the two-season
   // pull, so a forgotten flag cannot silently reintroduce the one-year cascade this issue closes.
   const oldestRaw = since ?? String(newest - 1);
-  if (!FOUR_DIGIT_YEAR.test(oldestRaw)) {
+  const oldest = parseSeason(oldestRaw);
+  if (oldest === null) {
     // Blame the value the CALLER actually supplied, never one this function derived. A team page at
     // `year=1000` with no `--since` at all derives `"999"`, and reporting that as
     // `--since "999" is not a four-digit year` accuses the operator of passing a flag they never
@@ -184,7 +201,6 @@ export function cascadeYears(
           : `--since "${sanitizeValue(oldestRaw)}" is not a four-digit year`,
     };
   }
-  const oldest = Number(oldestRaw);
   if (oldest > newest) {
     return {
       kind: "error",
@@ -275,6 +291,16 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
   // `year=<older>` team profile is a stale roster snapshot, and `retireAbsentMemberships` below
   // would retire every player who joined since — silent roster loss. The range is a property of the
   // PLAYER match-history cascade alone; the team page stays exactly one fetch at its own season.
+  //
+  // `--since` without `--players` is REFUSED rather than ignored. There is no cascade to bound, so
+  // the flag can only mean the operator believes they asked for one — and silently accepting it
+  // meant a malformed `--since twenty` returned `status=ok` while the docs promised a refusal: a
+  // claim outrunning what the code enforces. Refusing names the real mistake (the missing
+  // `--players`) instead of validating a value that was never going to be used.
+  // (Codex review of PR #109, rated medium.)
+  if (options.since !== undefined && !cascadePlayers) {
+    return { kind: "error", message: "--since bounds the --players cascade; it does nothing without --players" };
+  }
   const teamYear = hrefParam(url, "year") ?? String(new Date(clock.now()).getUTCFullYear());
   const cascade = cascadePlayers ? cascadeYears(teamYear, options.since) : { kind: "ok" as const, years: [] };
   if (cascade.kind === "error") return { kind: "error", message: cascade.message };
@@ -515,12 +541,24 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       }
     }
 
+    // The season whose URL becomes each player's durable `players.tennisrecord_url` handle. Every
+    // pull would otherwise write its own season's URL and the LAST write — the oldest season — would
+    // win, pinning every future `tn player pull "<name>"` to the oldest season in the range. Named
+    // once here rather than compared inline, because this is a claim about WHICH SEASON is canonical,
+    // not about which loop iteration happens to be first. (Codex review of PR #109, rated high.)
+    const canonicalSeason = cascade.years[0];
+
     for (const year of cascade.years) {
       for (const entry of parsed.roster) {
         const playername = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
         if (playername === null || playername === "") continue;
         const playerUrl = matchHistoryUrlFor(playername, year);
-        const result = await pullPlayer({ db, fetchPage, url: playerUrl });
+        const result = await pullPlayer({
+          db,
+          fetchPage,
+          url: playerUrl,
+          storeProfileUrl: year === canonicalSeason,
+        });
         if (result.kind !== "ok") {
           // Qualified by season (#108): the same player can fail one year and succeed another, and a
           // bare name in this list could not tell an operator which — or whether a retry should
