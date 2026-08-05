@@ -46,15 +46,30 @@ export type PlayerPullOptions = {
   /** Read `path` instead of fetching; `sourceUrl` is the page's real URL for provenance/parsing. */
   from?: { path: string; sourceUrl: string };
   /**
-   * Whether this pull may write its own URL to `players.tennisrecord_url`, the durable handle
-   * `tn player pull "<name>"` later resolves. Defaults to `true`.
+   * How this pull may claim `players.tennisrecord_url` — the durable handle
+   * `tn player pull "<name>"` later RESOLVES, and which `resolveTargetUrl` treats as
+   * `unknown-target` when it is null.
    *
-   * `team-pull`'s multi-season cascade (#108) sets it `false` for every season but the newest. The
-   * cascade fetches newest-first and each pull would otherwise write its own season's URL, so the
-   * LAST write — the OLDEST season — would win, silently pinning every future individual refresh of
-   * that player to the oldest season in the range. Found by the independent Codex review of PR #109.
+   * - `"always"` (default) — write this pull's URL, as every caller outside the cascade does.
+   * - `"only-if-missing"` — write it **only** when the player has no handle yet.
+   *
+   * `team-pull`'s multi-season cascade (#108) passes `"only-if-missing"` for every season but the
+   * newest, and the policy has to be exactly this, for two failures pulled in opposite directions by
+   * two review rounds:
+   *
+   * - An unconditional write let the LAST write — the oldest season, since the cascade runs
+   *   newest-first — win, silently pinning every future refresh of that player to the oldest season
+   *   in the range. (Codex round 1, rated high.)
+   * - Suppressing the write outright then left a player CREATED by this pull with a null handle
+   *   whenever their newest season failed and an older one succeeded: matches and ratings landed, but
+   *   `tn player pull "<name>"` answered `unknown-target` and there was no way back to them by name.
+   *   (Codex round 2, rated high — a defect in the round-1 fix.)
+   *
+   * "Only if missing" satisfies both: a successful newest-season pull claims the handle first and
+   * older seasons cannot downgrade it, while a player whose newest season failed still ends up with
+   * the best handle actually obtained rather than none.
    */
-  storeProfileUrl?: boolean;
+  storeProfileUrl?: "always" | "only-if-missing";
 };
 
 /**
@@ -289,8 +304,10 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
         canonicalName: header.name,
         // `undefined` LEAVES the stored handle alone (`upsertPlayer` only writes fields that are
         // defined) rather than nulling it — which is what lets an older-season cascade pull enrich
-        // matches and ratings without downgrading the durable URL. See `storeProfileUrl`.
-        tennisrecordUrl: options.storeProfileUrl === false ? undefined : url,
+        // matches and ratings without downgrading the durable URL. The `!== null` half is what keeps
+        // a player who has NO handle yet from being left unreachable by name. See `storeProfileUrl`.
+        tennisrecordUrl:
+          options.storeProfileUrl === "only-if-missing" && resolved.row.tennisrecordUrl !== null ? undefined : url,
         gender: header.gender,
       });
 

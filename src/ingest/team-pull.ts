@@ -557,7 +557,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
           db,
           fetchPage,
           url: playerUrl,
-          storeProfileUrl: year === canonicalSeason,
+          storeProfileUrl: year === canonicalSeason ? "always" : "only-if-missing",
         });
         if (result.kind !== "ok") {
           // Qualified by season (#108): the same player can fail one year and succeed another, and a

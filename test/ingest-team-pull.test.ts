@@ -8,7 +8,7 @@ import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import { hrefParam } from "../src/parsers/dom.js";
 import { FetchError, type PageFetcher } from "../src/ingest/fetch.js";
-import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
+import { matchHistoryUrlFor, pullPlayer } from "../src/ingest/player-pull.js";
 import { MAX_CASCADE_YEARS, cascadeFailureWarning, cascadeYears, pullTeam } from "../src/ingest/team-pull.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { buildRosterPage, removeAllRosterRows, removeRosterRow } from "./helpers/roster-html.js";
@@ -405,6 +405,55 @@ describe("pullTeam", () => {
         expect(row?.tennisrecordUrl).not.toBe(matchHistoryUrlFor(name, oldest));
       }
     } finally {
+      sqlite.close();
+    }
+  });
+
+  // Codex review of PR #109 ROUND 2, rated High — a defect in round 1's own fix. Suppressing the
+  // older season's URL write outright left a player CREATED by this pull with a null handle whenever
+  // their newest season failed and an older one succeeded: matches and ratings landed, but
+  // `resolveTargetUrl` reads a null `tennisrecord_url` as `unknown-target`, so there was no way back
+  // to that player by name at all. The two rounds pull in opposite directions, so both are pinned.
+  it("falls back to an older season's URL when the newest season failed and the player had no handle", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const years = defaultYears();
+      const [newest, older] = [years[0]!, years[1]!];
+      const victim = ROSTER_NAMES[0]!;
+      // The victim's NEWEST season is unregistered — the stub throws, exactly as a 503 would — while
+      // their older season is served. The inverse of the partial-failure test above.
+      const fixtures = historyFixtures(ROSTER_NAMES, years);
+      delete fixtures[matchHistoryUrlFor(victim, newest)];
+      const fetcher = createStubFetcher({ [team.source.url]: { body: team.html }, ...fixtures });
+
+      const result = await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.skippedRosterEntries).toEqual([`${victim} (year=${newest})`]);
+
+      // The handle is the older season's — the best one actually obtained — never null.
+      const row = db.select().from(players).where(eq(players.canonicalName, victim)).all()[0];
+      expect(row?.tennisrecordUrl, "a player enriched from an older season must stay reachable by name").toBe(
+        matchHistoryUrlFor(victim, older),
+      );
+
+      // And the property that actually matters to an operator: the player resolves by NAME, which is
+      // what `tn player pull "<name>"` does. A null handle answers `unknown-target` instead.
+      const byName = await pullPlayer({
+        db,
+        fetchPage: createStubFetcher({
+          [matchHistoryUrlFor(victim, older)]: { body: syntheticEmptyMatchHistory(victim) },
+        }),
+        target: victim,
+      });
+      expect(byName.kind, "a later `tn player pull <name>` must resolve, not answer unknown-target").not.toBe(
+        "unknown-target",
+      );
+    } finally {
+      warnSpy.mockRestore();
       sqlite.close();
     }
   });
