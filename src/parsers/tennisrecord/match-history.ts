@@ -349,12 +349,16 @@ function parseRow(
 /**
  * `S1` → singles, `D1`–`D4` → doubles. Spec § Problem context: slots are per-event data.
  *
- * The optional trailing `X` marks the **mixed** format (`D3X` in a Flex Format 9.0 league). It says
- * who may fill the court, not how many — so it does not change the discipline, and all four `D3X`
- * rows in the archive carry a partner and two opponents like any other doubles court. It widens
- * the grammar by exactly one character on purpose: a cell that merely *starts* with `D` (`Default`
- * is the one that matters) is still refused, because reading a discipline nobody printed is how a
- * whole page of courts ends up silently misclassified instead of loudly rejected.
+ * The optional trailing `X` appears on `D3X`, in a league the page names "Flex Format 9.0" — a
+ * combined-rating mixed format, which is what `X` reads as. What the data shows directly, and what
+ * the classification actually rests on, is the **cardinality**: all four `D3X` rows in the archive
+ * carry a partner, and the three that were played carry two opponents (the fourth is a default,
+ * where nobody played and `assertCardinality` exempts the court). That is an ordinary doubles
+ * court, so the suffix qualifies who may fill it, not how many.
+ *
+ * It widens the grammar by exactly one character on purpose: a cell that merely *starts* with `D`
+ * (`Default` is the one that matters) is still refused, because reading a discipline nobody printed
+ * is how a whole page of courts ends up silently misclassified instead of loudly rejected.
  */
 function disciplineFor(slot: string, source: SourceRef): "singles" | "doubles" {
   if (/^S\d*X?$/i.test(slot)) return "singles";

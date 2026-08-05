@@ -578,8 +578,9 @@ describe("parseMatchHistory — mixed-format court slots", () => {
     );
 
   it("reads a mixed doubles court (D3X) as doubles rather than aborting the page", () => {
-    // `X` marks the mixed format; it does not change whether the court is singles or doubles, and
-    // all four archived `D3X` rows carry a partner and two opponents — doubles cardinality.
+    // The suffix qualifies who may fill the court, not how many. What the archive shows is the
+    // cardinality: all four `D3X` rows carry a partner, and the three that were played carry two
+    // opponents (the fourth is a default). That is an ordinary doubles court.
     const mixed = asSlot("D3X");
     expect(mixed).not.toBe(fixture.html);
 
@@ -589,6 +590,22 @@ describe("parseMatchHistory — mixed-format court slots", () => {
     expect(parsed[0]?.discipline).toBe("doubles");
     expect(parsed[0]?.partner).not.toBeNull();
     expect(parsed[0]?.opponents).toHaveLength(2);
+  });
+
+  it("accepts a DEFAULTED mixed court, the shape one of the four archived rows actually has", () => {
+    // Three of the four `D3X` rows were played; the fourth is a default, where nobody played and
+    // `assertCardinality` exempts the court. Asserting only the played shape would leave the
+    // archived row this fix exists to recover untested — and a default is where a discipline rule
+    // and a cardinality rule are most likely to disagree.
+    const cell = '<td style="text-align:center; vertical-align: top;">D3</td>';
+    expect(fixture.html.split(cell)).toHaveLength(2); // exactly one D3 court, so the swap is unambiguous
+
+    const parsed = parseMatchHistory(fixture.html.replace(cell, cell.replace(">D3<", ">D3X<")), fixture.source);
+
+    expect(parsed[2]?.slot).toBe("D3X");
+    expect(parsed[2]?.discipline).toBe("doubles");
+    expect(parsed[2]?.defaulted).toBe(true);
+    expect(parsed[2]?.opponents).toEqual([]);
   });
 
   it.each(["Default", "R2", "C-F", "16", "D3XY", "Doubles"])(
