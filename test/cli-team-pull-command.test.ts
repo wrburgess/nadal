@@ -254,6 +254,27 @@ describe("tn team pull --players (partial cascade)", () => {
     expect(line).toContain("skipped=18");
   });
 
+  // The plan called for this and the first cut of the PR omitted it. `--since` is a VALUE flag, so a
+  // trailing `--since` with nothing after it must be a parse error — not a silently-undefined value
+  // that would quietly fall back to the default range and look like it worked.
+  it("--since with no value exits 1 at the parser, before any fetch", async () => {
+    runMigrations();
+    const fetchSpy = vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: team.html,
+      fetchedAt: new Date().toISOString(),
+    }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "pull", team.source.url, "--players", "--since"]);
+
+    expect(code).toBe(1);
+    expect(String(errSpy.mock.calls[0]?.[0])).toContain("--since requires a value");
+    // And nothing was fetched — the refusal is at the parser, not after a wasted request.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("an out-of-range --since exits 1 with the service's refusal, not a stack trace", async () => {
     runMigrations();
     vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({

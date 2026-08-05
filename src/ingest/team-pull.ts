@@ -171,7 +171,18 @@ export function cascadeYears(
   // pull, so a forgotten flag cannot silently reintroduce the one-year cascade this issue closes.
   const oldestRaw = since ?? String(newest - 1);
   if (!FOUR_DIGIT_YEAR.test(oldestRaw)) {
-    return { kind: "error", message: `--since "${sanitizeValue(oldestRaw)}" is not a four-digit year` };
+    // Blame the value the CALLER actually supplied, never one this function derived. A team page at
+    // `year=1000` with no `--since` at all derives `"999"`, and reporting that as
+    // `--since "999" is not a four-digit year` accuses the operator of passing a flag they never
+    // typed — the #94 defect class exactly (report the value that actually failed), and unactionable
+    // besides, since there is no `--since` for them to go and correct.
+    return {
+      kind: "error",
+      message:
+        since === undefined
+          ? `the season before the team page's ${newest} is not a four-digit year — pass an explicit --since`
+          : `--since "${sanitizeValue(oldestRaw)}" is not a four-digit year`,
+    };
   }
   const oldest = Number(oldestRaw);
   if (oldest > newest) {
@@ -487,24 +498,27 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     // YEAR-OUTER, roster-inner — see `cascadeYears` for why the list is newest-first. Together they
     // mean an interrupted run has completed the most recent season for EVERY player (comparable
     // evidence across the field) rather than every season for an arbitrary prefix of players.
+    // A missing profile link is a property of the ROSTER ENTRY, not of any season — no season was
+    // ever attempted for it — so it is recorded ONCE, here, before the season loop begins, and
+    // without a `year=` qualifier. Hoisted out rather than guarded inside the loop with a
+    // "first season only" condition: that condition would be a value comparison standing in for an
+    // iteration index, and no fixture could distinguish it from the wrong index, leaving a branch in
+    // new code that no test can kill (`rules/testing.md`).
+    for (const entry of parsed.roster) {
+      const linked = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
+      if (linked === null || linked === "") {
+        skippedRosterEntries.push(entry.name);
+        // `entry.name` is parsed from a fetched roster page, so it is attacker-influenced and this
+        // is a raw stderr write with no summary formatter in front of it (`emitSummary` sanitizes;
+        // a bare `console.warn` does not). Found by the independent Codex review of PR #47.
+        console.warn(`team pull: roster entry "${sanitizeValue(entry.name)}" has no profile link — skipped`);
+      }
+    }
+
     for (const year of cascade.years) {
       for (const entry of parsed.roster) {
         const playername = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
-        if (playername === null || playername === "") {
-          // A missing profile link is a property of the ROSTER ENTRY, not of any one season, so it
-          // would otherwise be reported once per year for the same player. Recorded on the first
-          // season only, and without a `year=` qualifier, because naming one season would imply the
-          // other seasons succeeded for this entry — they were never attempted.
-          if (year === cascade.years[0]) {
-            skippedRosterEntries.push(entry.name);
-            // `entry.name` is parsed from a fetched roster page, so it is attacker-influenced and
-            // this is a raw stderr write with no summary formatter in front of it (`emitSummary`
-            // sanitizes; a bare `console.warn` does not). Found by the independent Codex review of
-            // PR #47.
-            console.warn(`team pull: roster entry "${sanitizeValue(entry.name)}" has no profile link — skipped`);
-          }
-          continue;
-        }
+        if (playername === null || playername === "") continue;
         const playerUrl = matchHistoryUrlFor(playername, year);
         const result = await pullPlayer({ db, fetchPage, url: playerUrl });
         if (result.kind !== "ok") {

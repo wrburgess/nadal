@@ -129,6 +129,30 @@ describe("cascadeYears (#108)", () => {
     expect(result.message).toContain("four-digit year");
   });
 
+  // Found by this PR's own adversarial pass. The DEFAULT is derived (`teamYear - 1`), so a team page
+  // at `year=1000` produces `"999"` — three digits — with no `--since` anywhere in the invocation.
+  // Reporting that as `--since "999" is not a four-digit year` accuses the operator of passing a flag
+  // they never typed, and leaves them nothing to correct. Same class as #94.
+  it.each([
+    ["1000", "999"],
+    ["0999", "998"],
+    ["0000", "-1"],
+  ])("blames the team page, not a --since nobody passed, when the derived default is unusable (%s)", (teamYear, derived) => {
+    const result = cascadeYears(teamYear);
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("expected error");
+    expect(result.message).not.toContain(`--since "${derived}"`);
+    expect(result.message).toContain(String(Number(teamYear)));
+    expect(result.message).toContain("pass an explicit --since");
+  });
+
+  it("still blames --since when the caller really did pass an unusable one", () => {
+    const result = cascadeYears("2026", "999");
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("expected error");
+    expect(result.message).toContain('--since "999"');
+  });
+
   it("refuses a malformed team-page season rather than deriving a range from it", () => {
     const result = cascadeYears("not-a-year");
     expect(result.kind).toBe("error");
