@@ -565,6 +565,43 @@ describe("parseMatchHistory — a tournament match links no teams", () => {
   });
 });
 
+describe("parseMatchHistory — mixed-format court slots", () => {
+  // Found by sweeping the fix above over all 281 archived pages: with tournaments handled, ONE
+  // page still aborted — on `D3X`, a real league court in a "Flex Format 9.0" mixed league. It is
+  // the only league slot in the whole archive that `disciplineFor` rejects (4 rows), and the page
+  // it kills belongs to a player this issue names as registered to compete. Folded in here rather
+  // than filed, because without it this PR's own recovery claim would be false for that player.
+  const asSlot = (slot: string): string =>
+    fixture.html.replace(
+      '<td style="text-align:center; vertical-align: top;">D2</td>',
+      `<td style="text-align:center; vertical-align: top;">${slot}</td>`,
+    );
+
+  it("reads a mixed doubles court (D3X) as doubles rather than aborting the page", () => {
+    // `X` marks the mixed format; it does not change whether the court is singles or doubles, and
+    // all four archived `D3X` rows carry a partner and two opponents — doubles cardinality.
+    const mixed = asSlot("D3X");
+    expect(mixed).not.toBe(fixture.html);
+
+    const parsed = parseMatchHistory(mixed, fixture.source);
+
+    expect(parsed[0]?.slot).toBe("D3X");
+    expect(parsed[0]?.discipline).toBe("doubles");
+    expect(parsed[0]?.partner).not.toBeNull();
+    expect(parsed[0]?.opponents).toHaveLength(2);
+  });
+
+  it.each(["Default", "R2", "C-F", "16", "D3XY", "Doubles"])(
+    "still refuses %s, which is not a court slot",
+    (slot) => {
+      // The mixed suffix widens the grammar by exactly one optional character. A cell that merely
+      // STARTS with D or S is not a slot, and admitting one would put a whole page of courts under
+      // a discipline nobody read off the page — silently wrong rather than loudly refused.
+      expect(() => parseMatchHistory(asSlot(slot), fixture.source)).toThrow(/court slot/);
+    },
+  );
+});
+
 describe("parseMatchHistory — mobile date correlation", () => {
   it.each([
     ["blank", ""],

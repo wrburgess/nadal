@@ -346,10 +346,19 @@ function parseRow(
   };
 }
 
-/** `S1` → singles, `D1`–`D4` → doubles. Spec § Problem context: slots are per-event data. */
+/**
+ * `S1` → singles, `D1`–`D4` → doubles. Spec § Problem context: slots are per-event data.
+ *
+ * The optional trailing `X` marks the **mixed** format (`D3X` in a Flex Format 9.0 league). It says
+ * who may fill the court, not how many — so it does not change the discipline, and all four `D3X`
+ * rows in the archive carry a partner and two opponents like any other doubles court. It widens
+ * the grammar by exactly one character on purpose: a cell that merely *starts* with `D` (`Default`
+ * is the one that matters) is still refused, because reading a discipline nobody printed is how a
+ * whole page of courts ends up silently misclassified instead of loudly rejected.
+ */
 function disciplineFor(slot: string, source: SourceRef): "singles" | "doubles" {
-  if (/^S\d*$/i.test(slot)) return "singles";
-  if (/^D\d*$/i.test(slot)) return "doubles";
+  if (/^S\d*X?$/i.test(slot)) return "singles";
+  if (/^D\d*X?$/i.test(slot)) return "doubles";
   throw new ParseError(
     `unrecognised court slot "${slot}"`,
     `${DESKTOP_TABLE} td:nth-child(4)`,
