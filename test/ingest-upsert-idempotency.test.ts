@@ -136,6 +136,19 @@ describe("upsert idempotency — the headline test", () => {
       const ratingObservationsAfterFirst = snapshot(ratingObservations);
 
       expect(teamMatchesAfterFirst).toHaveLength(10);
+
+      // NON-VACUITY, and it is load-bearing. `pullTeam` returns `kind: "ok"` even when every cascade
+      // failed — a failure lands in `skippedRosterEntries` and the command reports `status=partial`.
+      // So "14 court matches" is satisfied *both* by correct cross-season dedup AND by the second
+      // season's ingest throwing and being swallowed as a skip. Verified, not assumed: blind-inserting
+      // in `upsertCourtMatch` (no `(source_match_id, slot)` conflict target) left the count at 14 and
+      // this whole test green until this assertion was added — the duplicate insert hit the unique
+      // INDEX, threw, and was absorbed. Assert the seasons actually landed before trusting the count.
+      expect(first.kind).toBe("ok");
+      if (first.kind !== "ok") throw new Error("expected ok");
+      expect(first.skippedRosterEntries).toEqual([]);
+      expect(first.years).toEqual(cascadeSeasons());
+
       // Fourteen, not twenty-eight (#108). Avery Ashby's history was served for BOTH cascade seasons
       // above, so these fourteen courts arrived twice inside this single pull — once per season page.
       // A cascade that spanned seasons without `(source_match_id, slot)` deduping across them would
