@@ -258,6 +258,313 @@ describe("parseMatchHistory — blank source match id", () => {
   });
 });
 
+/**
+ * A tournament match, in both renderings, transcribed VERBATIM from an archived 2025 page
+ * (`raw/tennisrecord/…playername=…&year=2025…`, a page that also carries 26 league matches).
+ * Every element, class, attribute and `<br>` is byte-identical to what the server sent; the only
+ * edit is the opponent's display name and `playername=` value, replaced with a stand-in that
+ * already appears in this fixture. No real identity enters the repository, and no NEW stand-in is
+ * invented — that would break the "same person maps to the same stand-in across every fixture"
+ * invariant in `test/fixtures/README.md`, whose substitution map lives outside this repo.
+ *
+ * Why transcribed rather than captured: committing an archived page as a fixture requires that
+ * out-of-repo map. Two verifications stand in for the one it would have bought — this real markup,
+ * and a sweep of the guard over all 281 archived pages recorded in the PR.
+ *
+ * Four things about this row matter, and each is separately fatal to the parser as it stood:
+ * it links NO teams, its court slot is `16` (not `S1`/`D2`), its result cell has no `mid=` anchor
+ * at all, and its mobile block has no `<th>` — the element the date correlation reads.
+ */
+const TOURNAMENT_DESKTOP_ROW = `
+                        <tr style='border-bottom:1px solid #ddd;'>
+                            <td style="text-align:left; vertical-align: top;">05/24/2025</td>
+
+                                <td style="text-align:left; vertical-align: top;">Tournament<br>S40NM3.5s</td>
+                                <td style="text-align:left; vertical-align: top; border-right:1px solid #ddd; max-width: 180px;">USTA MV 40+ NTRP & OPEN Section Tournament</td>
+
+
+                            <td style="text-align:center; vertical-align: top;">16</td>
+
+                            <td style="text-align:left; vertical-align: top;">
+
+                            </td>
+
+
+                                <td style="text-align:left; vertical-align: top; border-right:1px solid #ddd;">
+                                    <a class='link' href='/adult/matchhistory.aspx?playername=Kendry Kimberley&year=2025'>Kendry Kimberley</a><br>(<span style="color:#00DD00">3.43</span>)
+
+                                </td>
+
+                                <td style="text-align:center; vertical-align: top;">L</td>
+
+                                    <td style="text-align:center; vertical-align: top;">6-4<br>6-1</td>
+
+                                <td style="text-align:right; vertical-align: top;"><span style="color:#00DD00">S</span></td>
+                                <td style="text-align:right; vertical-align: top;"><span style="color:#00DD00">-----</span></td>
+
+                        </tr>
+
+`;
+
+const TOURNAMENT_MOBILE_BLOCK = `
+                <div class="container496">
+                    <table style="margin:auto; width:100%; font-size:12px;">
+
+                            <tr style="color:#7a7a7a; background-color:#f9f9f9;">
+                                <td colspan="3" style="text-align:center;">
+                                    USTA MV 40+ NTRP & OPEN Section Tournament
+                                </td>
+                            </tr>
+                            <tr style="color:#7a7a7a; background-color:#f9f9f9; border-bottom:1px solid #ddd;">
+                                <td style="text-align:left;" class="padding10">05/24/2025</td>
+                                <td style="text-align:center;">16</td>
+                                <td style="text-align:right;">Tournament<br>S40NM3.5s</td>
+                            </tr>
+
+                            <tr>
+                                <td></td>
+
+                                    <td style="text-align:center;">L</td>
+
+                                <td></td>
+                            </tr>
+
+
+                        <tr style="border-bottom:1px solid #ddd;">
+                            <td style="text-align:left;" class="padding10">
+
+                            </td>
+
+
+                                    <td style="text-align:center; vertical-align: top;">6-4<br>6-1</td>
+
+                                <td style="text-align:right;" class="padding10">
+                                    <a class='link' href='/adult/matchhistory.aspx?playername=Kendry Kimberley&year=2025'>Kendry Kimberley</a> (<span style="color:#00DD00">3.43</span>)
+
+                                </td>
+
+                        </tr>
+
+                        <tr>
+
+                                <td style="text-align:left;" class="padding10">Match: <span style="color:#00DD00">S</span></td>
+                                <td></td>
+                                <td style="text-align:right;" class="padding10">Rating: <span style="color:#00DD00">-----</span></td>
+
+                        </tr>
+                    </table>
+                </div>
+
+`;
+
+/** The literal that opens every desktop data row in this fixture (the header row differs). */
+const DESKTOP_ROW_OPEN = "<tr style='border-bottom:1px solid #ddd;'>";
+const MOBILE_BLOCK_OPEN = '<div class="container496">';
+
+function countOf(html: string, needle: string): number {
+  return html.split(needle).length - 1;
+}
+
+/**
+ * Splice a tournament match into BOTH renderings at the same position, so the page stays the shape
+ * a real one has. Inserting into only one rendering would trip the existing desktop/mobile count
+ * check and the test would pass for the wrong reason.
+ *
+ * The helper VERIFIES its own splice — every anchor found, and exactly one match added to each
+ * rendering. Without that, a fixture edit that moved an anchor would silently leave the page
+ * unspliced, and every assertion below would pass against a page with no tournament in it.
+ */
+function withTournament(
+  html: string,
+  at: number | "end",
+  parts: { row?: string; block?: string } = {},
+): string {
+  const row = parts.row ?? TOURNAMENT_DESKTOP_ROW;
+  const block = parts.block ?? TOURNAMENT_MOBILE_BLOCK;
+  const beforeRows = countOf(html, DESKTOP_ROW_OPEN);
+  const beforeBlocks = countOf(html, MOBILE_BLOCK_OPEN);
+
+  const insertAt = (source: string, offset: number, insertion: string): string =>
+    source.slice(0, offset) + insertion + source.slice(offset);
+
+  const nth = (source: string, needle: string, index: number): number => {
+    let offset = -1;
+    for (let seen = 0; seen <= index; seen += 1) {
+      offset = source.indexOf(needle, offset + 1);
+      if (offset === -1) throw new Error(`fixture has no occurrence ${index} of ${needle}`);
+    }
+    return offset;
+  };
+
+  let spliced: string;
+  if (at === "end") {
+    // Past the last desktop row means before the table that closes it; past the last mobile block
+    // means after that block's own closing </div>.
+    const lastRow = html.lastIndexOf(DESKTOP_ROW_OPEN);
+    if (lastRow === -1) throw new Error("fixture has no desktop match rows to append after");
+    const tableEnd = html.indexOf("</table>", lastRow);
+    if (tableEnd === -1) throw new Error("fixture's desktop table is unterminated");
+    spliced = insertAt(html, tableEnd, row);
+
+    const lastBlock = spliced.lastIndexOf(MOBILE_BLOCK_OPEN);
+    if (lastBlock === -1) throw new Error("fixture has no mobile match blocks to append after");
+    const blockTable = spliced.indexOf("</table>", lastBlock);
+    const blockEnd = spliced.indexOf("</div>", blockTable);
+    if (blockTable === -1 || blockEnd === -1) throw new Error("fixture's last mobile block is unterminated");
+    spliced = insertAt(spliced, blockEnd + "</div>".length, block);
+  } else {
+    spliced = insertAt(html, nth(html, DESKTOP_ROW_OPEN, at), row);
+    spliced = insertAt(spliced, nth(spliced, MOBILE_BLOCK_OPEN, at), block);
+  }
+
+  if (
+    countOf(spliced, DESKTOP_ROW_OPEN) !== beforeRows + 1 ||
+    countOf(spliced, MOBILE_BLOCK_OPEN) !== beforeBlocks + 1
+  ) {
+    throw new Error("splice did not add exactly one match to each rendering");
+  }
+  return spliced;
+}
+
+describe("parseMatchHistory — a tournament match links no teams", () => {
+  it("ingests the league matches on a page that also carries a tournament block", () => {
+    // The regression this issue is about: ONE tournament entry aborted the parse of the whole page
+    // and discarded every league match on it — 356 of them across 14 archived pages, costing ten
+    // registered players their entire 2025 season. The assertion is equality with the unspliced
+    // page, not a count: a fix that dropped or reshuffled a league match would still pass a count.
+    const spliced = withTournament(fixture.html, 0);
+
+    expect(parseMatchHistory(spliced, fixture.source)).toEqual(matches);
+  });
+
+  it("omits the tournament court rather than recording it with a null opponent", () => {
+    // A tournament block links no opponent TEAM because there is none to link — so storing the
+    // court would mean a record that silently belongs to no opponent, and (see the next test) one
+    // with no idempotency key to reconcile it on the next pull.
+    const parsed = parseMatchHistory(withTournament(fixture.html, 0), fixture.source);
+
+    expect(parsed.some((m) => m.playedOn === "2025-05-24")).toBe(false);
+    expect(parsed.every((m) => m.opponentTeamName !== "")).toBe(true);
+    expect(parsed.every((m) => m.leagueContext !== "Tournament S40NM3.5s")).toBe(true);
+  });
+
+  it.each(["16", "R2", "C-F", "P1-F"])(
+    "skips a tournament court on slot %s, which is not a court slot at all",
+    (slot) => {
+      // Every one of these is a real slot value from the archive, and none matches `S\\d*`/`D\\d*`.
+      // The row also carries NO `mid=` anchor. Both are fatal in `parseRow`, so a page that parses
+      // proves the row is skipped BEFORE that function — not that a guard was loosened to admit it.
+      const row = TOURNAMENT_DESKTOP_ROW.replace(
+        '<td style="text-align:center; vertical-align: top;">16</td>',
+        `<td style="text-align:center; vertical-align: top;">${slot}</td>`,
+      );
+      const block = TOURNAMENT_MOBILE_BLOCK.replace(
+        '<td style="text-align:center;">16</td>',
+        `<td style="text-align:center;">${slot}</td>`,
+      );
+
+      expect(parseMatchHistory(withTournament(fixture.html, 0, { row, block }), fixture.source))
+        .toEqual(matches);
+    },
+  );
+
+  it.each([0, 7, "end" as const])("correlates correctly with the tournament at position %s", (at) => {
+    // Position is what the two renderings are correlated by, so a guard that reads the wrong index
+    // would corrupt every opponent team after the tournament rather than fail. First, middle and
+    // last each exercise a different slice of that correlation.
+    expect(parseMatchHistory(withTournament(fixture.html, at), fixture.source)).toEqual(matches);
+  });
+
+  it("throws when a block links no teams and the row is NOT marked a tournament", () => {
+    // The whole point of the fix. `parseOpponentTeams`'s doc comment refuses to return a null
+    // opponent because a mobile-markup change would then become scouting history that is silently
+    // missing who each match was against. That refusal must survive: only a POSITIVE tournament
+    // signal admits a teamless block, never the absence of team links.
+    const row = TOURNAMENT_DESKTOP_ROW.replace(
+      '<td style="text-align:left; vertical-align: top;">Tournament<br>S40NM3.5s</td>',
+      `<td style="text-align:left; vertical-align: top;"><a class='link' href='/adult/league.aspx?flightname=4.0 Men&year=2026&s=6'>Adult 18+<br>4.0</a></td>`,
+    );
+
+    // Asserting the MESSAGE, not just the type: every mutation below throws a ParseError before
+    // the fix exists too, so a bare `toThrow(ParseError)` would pass whether or not the guard is
+    // there. The reason is the assertion.
+    expect(() => parseMatchHistory(withTournament(fixture.html, 0, { row }), fixture.source))
+      .toThrow(/links 0 teams, expected 2/);
+  });
+
+  it("throws when the row says tournament but the block still links two teams", () => {
+    // The renderings disagree about what kind of match this is. Trusting the desktop column alone
+    // would silently discard a real league match whose league cell had been renamed.
+    const block = TOURNAMENT_MOBILE_BLOCK.replace(
+      '<td colspan="3" style="text-align:center;">',
+      `<td colspan="3" style="text-align:center;"><a Class='link' href='/adult/teamprofile.aspx?teamname=Norbury%2c Nova&year=2026'>Norbury, Nova<br>Missouri Valley</a><a Class='link' href='/adult/teamprofile.aspx?teamname=Sable%2c Sawyer&year=2026'>Sable, Sawyer<br>Missouri Valley</a>`,
+    );
+
+    expect(() => parseMatchHistory(withTournament(fixture.html, 0, { block }), fixture.source))
+      .toThrow(/tournament but its mobile block links 2 teams/);
+  });
+
+  it("throws when the row says tournament but the block carries a league header row", () => {
+    // A league block renders its header in `<th>`; a tournament block has none anywhere. If a page
+    // ever produced both signals at once, the parser cannot tell which rendering to believe, and
+    // guessing is what would put a real match's opponents on the wrong row.
+    const block = TOURNAMENT_MOBILE_BLOCK.replace(
+      '<td style="text-align:left;" class="padding10">05/24/2025</td>',
+      '<th style="text-align:left;" class="padding10">05/24/2025</th>',
+    );
+
+    // The message matters here more than anywhere: without the `<th>` guard this same mutation
+    // still throws — the header lookup would take the date off the wrong cell and fail on THAT.
+    // Only asserting the reason makes the guard killable, and an unkillable guard is not a guard.
+    expect(() => parseMatchHistory(withTournament(fixture.html, 0, { block }), fixture.source))
+      .toThrow(/renders a league header row/);
+  });
+
+  it("throws when a tournament block's date disagrees with its desktop row", () => {
+    // Tournament rows are correlated by date exactly like league rows — skipping the row must not
+    // mean skipping the check that proves the two renderings are still in step. Without it, a
+    // reordering would shift which rows are treated as tournaments and silently drop a league match.
+    const block = TOURNAMENT_MOBILE_BLOCK.replace(
+      '<td style="text-align:left;" class="padding10">05/24/2025</td>',
+      '<td style="text-align:left;" class="padding10">06/24/2025</td>',
+    );
+
+    expect(() => parseMatchHistory(withTournament(fixture.html, 0, { block }), fixture.source))
+      .toThrow(/renderings disagree at tournament row 0: desktop has 2025-05-24/);
+  });
+
+  it("throws when a tournament row's own date is unreadable", () => {
+    // The other half of the same correlation. A desktop date that cannot be read is not "a row we
+    // were dropping anyway" — it is the signal that the rendering changed, and the rows this
+    // parser believes are tournaments are derived from that same table.
+    const row = TOURNAMENT_DESKTOP_ROW.replace(
+      '<td style="text-align:left; vertical-align: top;">05/24/2025</td>',
+      '<td style="text-align:left; vertical-align: top;">not a date</td>',
+    );
+
+    expect(() => parseMatchHistory(withTournament(fixture.html, 0, { row }), fixture.source))
+      .toThrow(/desktop has no readable date/);
+  });
+
+  it("returns an empty list for a season that was nothing but tournaments", () => {
+    // The boundary where every row is skipped. "No league matches played" and "the results table
+    // is gone" must stay different outcomes, exactly as they already do for a truly empty season.
+    const empty = loadFixture("tennisrecord/match-history-empty");
+    const withRow = empty.html.replace(
+      /(<th style="text-align:right;">Rating<\/th>\s*<\/tr>)/,
+      `$1${TOURNAMENT_DESKTOP_ROW}`,
+    );
+    const spliced = withRow.replace(
+      /(<div class="small">)\s*(<\/div>)/,
+      `$1${TOURNAMENT_MOBILE_BLOCK}$2`,
+    );
+
+    expect(spliced).not.toBe(empty.html);
+    expect(countOf(spliced, MOBILE_BLOCK_OPEN)).toBe(1);
+    expect(parseMatchHistory(spliced, empty.source)).toEqual([]);
+  });
+});
+
 describe("parseMatchHistory — mobile date correlation", () => {
   it.each([
     ["blank", ""],

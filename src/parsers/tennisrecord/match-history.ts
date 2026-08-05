@@ -41,7 +41,14 @@ const MATCH_COLUMNS: RegExp[] = [
 ];
 
 /**
- * Parse a TennisRecord player match history into one record per court played.
+ * The value a tournament entry prints in the desktop table's League column, and in the same
+ * position of the mobile block. It is the POSITIVE signal that a teamless block is legitimate:
+ * across all 281 archived pages it appears on 61 of 61 teamless rows and on 0 of 3996 league rows.
+ */
+const TOURNAMENT_LEAGUE_LABEL = "Tournament";
+
+/**
+ * Parse a TennisRecord player match history into one record per LEAGUE court played.
  *
  * This is the richest public source in the project: it carries the court slot, the partner, the
  * opponents, the score and the resulting dynamic rating for every match a player has played,
@@ -53,6 +60,14 @@ const MATCH_COLUMNS: RegExp[] = [
  * the mobile block (`div.small`) names the opponent team. We read the desktop table for the
  * record and take the opponent team from the mobile block by position, refusing to guess if the
  * two ever fall out of step.
+ *
+ * **Tournament courts are correlated and then omitted, not recorded.** A tournament entry is real
+ * play, but it carries none of what a court record is keyed and scoped by: no TennisLink teams to
+ * link, a draw position (`R2`, `C-F`, `16`) rather than a court slot, and — decisively — no `mid=`
+ * match id, which is half of `court_match_source_unique`. Storing one would mean a row the next
+ * pull cannot reconcile, so re-running the pull would duplicate it, breaking spec § Ingestion's
+ * first discipline. They are still date-correlated like every other row before being dropped, so
+ * omitting them cannot hide the two renderings falling out of step.
  */
 export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRecord[] {
   const $ = cheerio.load(html);
@@ -62,80 +77,184 @@ export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRe
   const rows = table.find("tr").filter((_, tr) => $(tr).find("td").length > 0);
   if (rows.length === 0) return [];
 
-  const opponentTeams = parseOpponentTeams($, source);
-  if (opponentTeams.length !== rows.length) {
+  // Counted BEFORE the blocks are read, so renderings of different lengths report that fact rather
+  // than whatever the first unpaired block happens to violate.
+  const blocks = $(MOBILE_MATCH);
+  if (blocks.length !== rows.length) {
     throw new ParseError(
-      `desktop rendering has ${rows.length} matches but mobile rendering has ${opponentTeams.length}`,
+      `desktop rendering has ${rows.length} matches but mobile rendering has ${blocks.length}`,
       `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
       source.url,
     );
   }
 
+  // Which rows are tournaments is decided by the DESKTOP table, then required to agree with the
+  // mobile block. Reading either rendering alone would let one of them silently reclassify a match.
+  const isTournament = rows
+    .toArray()
+    .map((tr) => lines($, $($(tr).find("td").get(1)))[0] === TOURNAMENT_LEAGUE_LABEL);
+  const correlates = parseMobileCorrelates($, blocks, isTournament, source);
+
   return rows
-    .map((index, tr) => {
-      const opponentTeam = opponentTeams[index];
+    .toArray()
+    .map((tr, index) => {
+      const correlate = correlates[index];
       // Unreachable while the length check above holds; kept as a type-level guarantee that the
       // record is never built from a missing correlate rather than as a runtime branch.
-      if (opponentTeam === undefined) {
+      if (correlate === undefined) {
         throw new ParseError(
           `no mobile block correlates with desktop row ${index}`,
           `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
           source.url,
         );
       }
-      return parseRow($, $(tr), opponentTeam, source);
+      const row = $(tr);
+      if (correlate.kind === "tournament") {
+        assertTournamentRenderingsAgree($, row, correlate.playedOn, index, source);
+        return null;
+      }
+      return parseRow($, row, correlate, source);
     })
-    .get()
+    .filter((record): record is CourtMatchRecord => record !== null)
     .map((record) => {
       assertCardinality(record, source);
       return courtMatchRecordSchema.parse(record);
     });
 }
 
-type OpponentTeam = { name: string; section: string | null; playedOn: string };
+type OpponentTeam = { kind: "league"; name: string; section: string | null; playedOn: string };
+type TournamentEntry = { kind: "tournament"; playedOn: string };
+type MatchCorrelate = OpponentTeam | TournamentEntry;
 
 /**
  * The mobile block renders one small table per match, linking both teams — the profiled player's
  * and the opponent's — with the opponent second. We keep its date too, so the positional
  * correlation with the desktop table is verified rather than trusted.
  *
- * A block that does not link exactly two teams throws. Returning a null opponent instead would
- * turn a mobile-markup change into scouting history that is silently missing who each match was
- * against, while every other field still looks correct.
+ * A league block that does not link exactly two teams throws. Returning a null opponent instead
+ * would turn a mobile-markup change into scouting history that is silently missing who each match
+ * was against, while every other field still looks correct. That refusal is unchanged: only a
+ * block whose DESKTOP row positively declares a tournament is allowed to name no opponent team,
+ * and it is then required to look like one (`parseTournamentBlock`).
  */
-function parseOpponentTeams($: CheerioAPI, source: SourceRef): OpponentTeam[] {
-  return $(MOBILE_MATCH)
-    .map((_, block) => {
-      const $block = $(block);
-      const teamCells = $block.find("a[href*='teamprofile.aspx']");
-      if (teamCells.length !== 2) {
-        throw new ParseError(
-          `mobile match block links ${teamCells.length} teams, expected 2 (own and opponent)`,
-          `${MOBILE_MATCH} a[href*='teamprofile.aspx']`,
-          source.url,
-        );
-      }
-      const parts = lines($, $(teamCells.get(1)));
-      const name = parts[0];
-      if (name === undefined || name === "") {
-        throw new ParseError("mobile match block names no opponent team", MOBILE_MATCH, source.url);
-      }
-      // The date is REQUIRED, not best-effort. It is the only thing that verifies the positional
-      // correlation with the desktop table; skipping the comparison when it fails to parse leaves
-      // count-only matching, under which a reordering silently attributes every opponent team
-      // after the divergence to the wrong match.
-      // (Provenance: Codex adversarial review round 10 on PR #26.)
-      const playedOn = parseUsDate($block.find("th").first().text());
-      if (playedOn === null) {
-        throw new ParseError(
-          "mobile match block has no parseable date to correlate on",
-          `${MOBILE_MATCH} th`,
-          source.url,
-        );
-      }
-      return { name, section: parts[1] ?? null, playedOn };
-    })
-    .get();
+function parseMobileCorrelates(
+  $: CheerioAPI,
+  blocks: Cheerio<AnyNode>,
+  isTournament: boolean[],
+  source: SourceRef,
+): MatchCorrelate[] {
+  return blocks.toArray().map((block, index) => {
+    const $block = $(block);
+    const teamCells = $block.find("a[href*='teamprofile.aspx']");
+    if (isTournament[index] === true) {
+      return parseTournamentBlock($, $block, teamCells.length, source);
+    }
+    if (teamCells.length !== 2) {
+      throw new ParseError(
+        `mobile match block links ${teamCells.length} teams, expected 2 (own and opponent)`,
+        `${MOBILE_MATCH} a[href*='teamprofile.aspx']`,
+        source.url,
+      );
+    }
+    const parts = lines($, $(teamCells.get(1)));
+    const name = parts[0];
+    if (name === undefined || name === "") {
+      throw new ParseError("mobile match block names no opponent team", MOBILE_MATCH, source.url);
+    }
+    // The date is REQUIRED, not best-effort. It is the only thing that verifies the positional
+    // correlation with the desktop table; skipping the comparison when it fails to parse leaves
+    // count-only matching, under which a reordering silently attributes every opponent team
+    // after the divergence to the wrong match.
+    // (Provenance: Codex adversarial review round 10 on PR #26.)
+    const playedOn = parseUsDate($block.find("th").first().text());
+    if (playedOn === null) {
+      throw new ParseError(
+        "mobile match block has no parseable date to correlate on",
+        `${MOBILE_MATCH} th`,
+        source.url,
+      );
+    }
+    return { kind: "league", name, section: parts[1] ?? null, playedOn };
+  });
+}
+
+/**
+ * A tournament block, verified rather than assumed.
+ *
+ * The desktop row has already declared this match a tournament; that alone is not enough to stop
+ * requiring an opponent team, because a page where the two renderings disagree is exactly the case
+ * this parser refuses to guess about. So the block must corroborate on two further counts —
+ * it links NO team profiles, and it renders no `<th>` header row (a league block always does, on
+ * all 3996 in the archive; a tournament block never does) — and its own date must be readable in
+ * the row it labels `Tournament`, which is a third corroboration and the value the caller
+ * correlates on.
+ */
+function parseTournamentBlock(
+  $: CheerioAPI,
+  $block: Cheerio<AnyNode>,
+  teamLinks: number,
+  source: SourceRef,
+): TournamentEntry {
+  if (teamLinks !== 0) {
+    throw new ParseError(
+      `desktop row is a tournament but its mobile block links ${teamLinks} teams, expected none`,
+      `${MOBILE_MATCH} a[href*='teamprofile.aspx']`,
+      source.url,
+    );
+  }
+  if ($block.find("th").length > 0) {
+    throw new ParseError(
+      "desktop row is a tournament but its mobile block renders a league header row",
+      `${MOBILE_MATCH} th`,
+      source.url,
+    );
+  }
+  // The block's own `Tournament` cell locates the header row without counting rows: a tournament
+  // block leads with a full-width name row that a league block has no equivalent of, so a
+  // positional read would be one markup tweak away from taking the date off the wrong line.
+  const header = $block
+    .find("tr")
+    .filter((_, tr) =>
+      $(tr)
+        .find("td")
+        .toArray()
+        .some((cell) => lines($, $(cell))[0] === TOURNAMENT_LEAGUE_LABEL),
+    )
+    .first();
+  const playedOn = parseUsDate(header.find("td").first().text());
+  if (playedOn === null) {
+    throw new ParseError(
+      "tournament block has no parseable date to correlate on",
+      `${MOBILE_MATCH} tr td`,
+      source.url,
+    );
+  }
+  return { kind: "tournament", playedOn };
+}
+
+/**
+ * A tournament row is dropped, but not before it is correlated.
+ *
+ * Skipping the date comparison for a row we discard anyway would be the easy shortcut and it costs
+ * the one guarantee that makes positional correlation safe: if the renderings ever fall out of
+ * step, the rows this parser *thinks* are tournaments shift too, and a real league match gets
+ * discarded in silence.
+ */
+function assertTournamentRenderingsAgree(
+  $: CheerioAPI,
+  row: Cheerio<AnyNode>,
+  blockPlayedOn: string,
+  index: number,
+  source: SourceRef,
+): void {
+  const playedOn = parseUsDate($(row.find("td").get(0)).text());
+  if (playedOn !== blockPlayedOn) {
+    throw new ParseError(
+      `renderings disagree at tournament row ${index}: desktop has ${playedOn ?? "no readable date"}, mobile block has ${blockPlayedOn}`,
+      `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
+      source.url,
+    );
+  }
 }
 
 function parseRow(
