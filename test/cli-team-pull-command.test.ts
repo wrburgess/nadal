@@ -41,8 +41,11 @@ describe("tn team pull (end-to-end via dispatch)", () => {
 
     expect(code).toBe(0);
     expect(logSpy).toHaveBeenCalledTimes(1);
+    // `years=""` — no `--players`, so no cascade ran and no season was fetched (#108). Asserted as
+    // part of the whole anchored line rather than skipped, because the field being EMPTY here is the
+    // signal that a pull without `--players` enriched nobody.
     expect(logSpy.mock.calls[0]?.[0]).toMatch(
-      /^team pull status=ok team=".+" roster=18 matches=10 archived=".+" retired=0$/,
+      /^team pull status=ok team=".+" roster=18 matches=10 archived=".+" retired=0 years=""$/,
     );
   });
 
@@ -106,6 +109,7 @@ describe("tn team pull (end-to-end via dispatch)", () => {
       archivedPath: "raw/tennisrecord/x.html",
       skippedRosterEntries: [],
       retiredCount: 0,
+      years: [],
     });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -227,6 +231,89 @@ describe("tn team pull --players (partial cascade)", () => {
     vi.restoreAllMocks();
   });
 
+  // Issue #108 — the `--since` surface. The service owns every rule about what a season is
+  // (`cascadeYears`); these assert the flag is wired, parsed, and that a refusal reaches the operator
+  // as a summary line rather than a stack trace.
+  it("--since narrows the cascade to the named season and reports it", async () => {
+    runMigrations();
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: url === team.source.url ? team.html : "<html><body>not a match history</body></html>",
+      fetchedAt: new Date().toISOString(),
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await dispatch(["team", "pull", team.source.url, "--players", "--since", "2026"]);
+
+    const line = String(errSpy.mock.calls[0]?.[0]);
+    expect(line).toContain('years="2026"');
+    // One season, so one skip per roster entry — not the two the default range would produce.
+    expect(line).toContain("skipped=18");
+  });
+
+  it("an out-of-range --since exits 1 with the service's refusal, not a stack trace", async () => {
+    runMigrations();
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: team.html,
+      fetchedAt: new Date().toISOString(),
+    }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "pull", team.source.url, "--players", "--since", "2099"]);
+
+    expect(code).toBe(1);
+    const line = String(errSpy.mock.calls[0]?.[0]);
+    expect(line).toMatch(/^team pull status=error /);
+    expect(line).toContain("2099");
+  });
+
+  it("a malformed --since exits 1 and names what a season looks like", async () => {
+    runMigrations();
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: team.html,
+      fetchedAt: new Date().toISOString(),
+    }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "pull", team.source.url, "--players", "--since", "twenty"]);
+
+    expect(code).toBe(1);
+    expect(String(errSpy.mock.calls[0]?.[0])).toContain("four-digit year");
+  });
+
+  // `--since` must be declared in `teamPull.valueFlags`, not merely read out of `parsed.flags`. The
+  // router's target scan is value-flag-aware: an UNDECLARED `--since` would leave its value `2026`
+  // looking like a positional, and the command would pull the team named "2026". Putting the flag
+  // BEFORE the target is what makes the two spellings distinguishable — with the flag last, a
+  // missing declaration is invisible.
+  it("--since is a declared value flag, so its value is never mistaken for the target", async () => {
+    runMigrations();
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: url === team.source.url ? team.html : "<html><body>not a match history</body></html>",
+      fetchedAt: new Date().toISOString(),
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "pull", "--since", "2026", team.source.url, "--players"]);
+
+    // Reached the real team page and cascaded — not an "unknown team target \"2026\"" error.
+    expect(code).toBe(1); // partial: the stub serves no match history
+    const line = String(errSpy.mock.calls[0]?.[0]);
+    expect(line).toMatch(/^team pull status=partial /);
+    expect(line).toContain('years="2026"');
+  });
+
   it("REGRESSION: a cascade that fails for every roster entry reports status=partial and exits non-zero", async () => {
     runMigrations();
     // The team page parses; every cascaded player page is structurally broken, so each pullPlayer
@@ -248,7 +335,12 @@ describe("tn team pull --players (partial cascade)", () => {
     expect(errSpy).toHaveBeenCalledTimes(1);
     const line = String(errSpy.mock.calls[0]?.[0]);
     expect(line).toMatch(/^team pull status=partial /);
-    expect(line).toContain("skipped=18");
+    // 18 roster entries × 2 default seasons (#108) — a skip is per (player, season), because that is
+    // the unit a retry acts on. The count is derived from the reported season list rather than
+    // hardcoded, so it cannot drift out of step with the shipped default range.
+    const seasons = /years="([^"]*)"/.exec(line)?.[1]?.split(",") ?? [];
+    expect(seasons).toHaveLength(2);
+    expect(line).toContain(`skipped=${18 * seasons.length}`);
     expect(line).toContain('skippedEntries="');
   });
 });

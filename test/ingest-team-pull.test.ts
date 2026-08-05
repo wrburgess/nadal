@@ -9,7 +9,7 @@ import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.j
 import { hrefParam } from "../src/parsers/dom.js";
 import { FetchError, type PageFetcher } from "../src/ingest/fetch.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
-import { cascadeFailureWarning, pullTeam } from "../src/ingest/team-pull.js";
+import { MAX_CASCADE_YEARS, cascadeFailureWarning, cascadeYears, pullTeam } from "../src/ingest/team-pull.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { buildRosterPage, removeAllRosterRows, removeRosterRow } from "./helpers/roster-html.js";
 import { loadFixture } from "./helpers/fixtures.js";
@@ -62,20 +62,130 @@ function syntheticEmptyMatchHistory(name: string): string {
   </body></html>`;
 }
 
-function buildFetcher(names = ROSTER_NAMES) {
-  const year = hrefParam(team.source.url, "year") ?? "2026";
-  const fixtures: Record<string, { body: string }> = { [team.source.url]: { body: team.html } };
-  for (const name of names) {
-    fixtures[matchHistoryUrlFor(name, year)] = { body: syntheticEmptyMatchHistory(name) };
-  }
-  return { fetcher: createStubFetcher(fixtures), year };
+/**
+ * The seasons the fixture team page's cascade will fetch under the shipped default (#108) — derived
+ * from the same function production uses, so a change to the default range cannot leave these
+ * fixtures registering a year the cascade no longer asks for (or missing one it now does).
+ */
+function defaultYears(since?: string): string[] {
+  const derived = cascadeYears(hrefParam(team.source.url, "year") ?? "2026", since);
+  if (derived.kind !== "ok") throw new Error(`fixture team URL has an unusable season: ${derived.message}`);
+  return derived.years;
 }
 
+/** Match-history fixtures for every (name × season) the cascade will request. */
+function historyFixtures(names: string[], years: string[]): Record<string, { body: string }> {
+  const fixtures: Record<string, { body: string }> = {};
+  for (const year of years) {
+    for (const name of names) {
+      fixtures[matchHistoryUrlFor(name, year)] = { body: syntheticEmptyMatchHistory(name) };
+    }
+  }
+  return fixtures;
+}
+
+function buildFetcher(names = ROSTER_NAMES, since?: string) {
+  const years = defaultYears(since);
+  const fixtures: Record<string, { body: string }> = {
+    [team.source.url]: { body: team.html },
+    ...historyFixtures(names, years),
+  };
+  return { fetcher: createStubFetcher(fixtures), year: years[0]!, years };
+}
+
+
+// Issue #108. `cascadeYears` is the ONE place a season range is derived — the cascade fetches the
+// list it reports and reports the list it fetched, because there is only one list. #90 / PR #91 spent
+// two review rounds on the opposite shape, so the refusals are asserted as whole messages here, not
+// as "it threw something".
+describe("cascadeYears (#108)", () => {
+  it("defaults to the team page's season plus the one before it, newest first", () => {
+    expect(cascadeYears("2026")).toEqual({ kind: "ok", years: ["2026", "2025"] });
+  });
+
+  it("spans an explicit --since inclusively, newest first, with no duplicates", () => {
+    const result = cascadeYears("2026", "2023");
+    expect(result).toEqual({ kind: "ok", years: ["2026", "2025", "2024", "2023"] });
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(new Set(result.years).size).toBe(result.years.length);
+  });
+
+  it("returns exactly one season when --since equals the team page's season (the boundary)", () => {
+    expect(cascadeYears("2026", "2026")).toEqual({ kind: "ok", years: ["2026"] });
+  });
+
+  it("refuses a --since later than the team page's season, naming both", () => {
+    const result = cascadeYears("2026", "2027");
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("expected error");
+    expect(result.message).toContain("2027");
+    expect(result.message).toContain("2026");
+  });
+
+  it.each(["", "26", "20268", "twenty", "2o26", " 2026"])("refuses a malformed --since %j", (since) => {
+    const result = cascadeYears("2026", since);
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("expected error");
+    expect(result.message).toContain("four-digit year");
+  });
+
+  it("refuses a malformed team-page season rather than deriving a range from it", () => {
+    const result = cascadeYears("not-a-year");
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") throw new Error("expected error");
+    expect(result.message).toContain("four-digit year");
+  });
+
+  it("accepts a span of exactly MAX_CASCADE_YEARS and refuses one more, naming the bound and the count", () => {
+    const atLimit = cascadeYears("2026", String(2026 - MAX_CASCADE_YEARS + 1));
+    expect(atLimit.kind).toBe("ok");
+    if (atLimit.kind !== "ok") throw new Error("expected ok");
+    expect(atLimit.years).toHaveLength(MAX_CASCADE_YEARS);
+
+    const overLimit = cascadeYears("2026", String(2026 - MAX_CASCADE_YEARS));
+    expect(overLimit.kind).toBe("error");
+    if (overLimit.kind !== "error") throw new Error("expected error");
+    // The count as well as the bound: "at most 10" alone does not tell an operator that `--since
+    // 1990` asked for 37, which is the number that explains the refusal.
+    expect(overLimit.message).toContain(String(MAX_CASCADE_YEARS));
+    expect(overLimit.message).toContain(String(MAX_CASCADE_YEARS + 1));
+  });
+});
 
 describe("pullTeam", () => {
   useTnDbPath();
   // Without this, a pull archives its pages into the repo own raw/ on every test run.
   useTnRawPath();
+
+  // The team URL is the only source of the season, so a URL without one falls back to the clock.
+  // Injected, never read from the wall clock: `rules/testing.md` forbids a test whose expected value
+  // is whatever year the suite happens to run in — that test would pass in 2026 and silently rot.
+  it("falls back to the injected clock's UTC year when the team URL carries no season", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const yearlessUrl = "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Cascade";
+      const roster = buildRosterPage({ teamName: "Cascade Test", players: ["Avery Ashby"] });
+      const fetcher = createStubFetcher({
+        [yearlessUrl]: { body: roster },
+        ...historyFixtures(["Avery Ashby"], ["2031", "2030"]),
+      });
+
+      const result = await pullTeam({
+        db,
+        fetchPage: fetcher,
+        target: yearlessUrl,
+        cascadePlayers: true,
+        clock: { now: () => Date.UTC(2031, 5, 1) },
+      });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.years).toEqual(["2031", "2030"]);
+    } finally {
+      sqlite.close();
+    }
+  });
 
   it("writes the team, every roster membership, and every schedule row as a team_match with its source_match_id", async () => {
     runMigrations();
@@ -117,23 +227,127 @@ describe("pullTeam", () => {
     }
   });
 
-  it("--players cascades exactly one fetch per roster profile link, each exactly once", async () => {
+  it("--players cascades exactly one fetch per roster profile link PER SEASON, each exactly once", async () => {
     runMigrations();
     const { db, sqlite } = openDb();
     try {
-      const { fetcher, year } = buildFetcher();
+      const { fetcher, years } = buildFetcher();
       const result = await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
 
       expect(result.kind).toBe("ok");
-      // One call for the team page, plus one per roster entry.
-      expect(fetcher.calls).toHaveLength(1 + ROSTER_NAMES.length);
+      if (result.kind !== "ok") throw new Error("expected ok");
+      // The default is a RANGE (#108), not one season — assert it is actually more than one, so this
+      // test cannot silently pass against the single-year cascade it exists to rule out.
+      expect(years.length).toBeGreaterThan(1);
+      expect(result.years).toEqual(years);
+
+      // One call for the team page, plus one per (roster entry × season).
+      expect(fetcher.calls).toHaveLength(1 + ROSTER_NAMES.length * years.length);
       expect(fetcher.calls[0]).toBe(team.source.url);
 
-      const expectedCascadeUrls = ROSTER_NAMES.map((name) => matchHistoryUrlFor(name, year));
+      const expectedCascadeUrls = years.flatMap((year) => ROSTER_NAMES.map((name) => matchHistoryUrlFor(name, year)));
       const actualCascadeUrls = fetcher.calls.slice(1);
-      expect(actualCascadeUrls.sort()).toEqual(expectedCascadeUrls.sort());
+      // EXACT set equality, not containment: a missing season and a surplus one both fail here.
+      expect([...actualCascadeUrls].sort()).toEqual([...expectedCascadeUrls].sort());
       // Exactly once each — no duplicates.
       expect(new Set(actualCascadeUrls).size).toBe(actualCascadeUrls.length);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // THE load-bearing guard of #108. The obvious implementation of "pull a range of years" loops the
+  // WHOLE pull over the range — and a `year=<older>` TEAM profile is a stale roster snapshot, so
+  // `retireAbsentMemberships` would soft-retire every player who joined since. That is silent roster
+  // loss, strictly worse than the missing-history bug being fixed. Both directions are pinned: the
+  // team page is fetched once, and the memberships survive.
+  it("fetches the team page exactly once, at its own season — a range never re-fetches a roster", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const { fetcher, years } = buildFetcher();
+      await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
+
+      expect(years.length).toBeGreaterThan(1);
+      const teamPageCalls = fetcher.calls.filter((url) => url.includes("teamprofile.aspx"));
+      expect(teamPageCalls).toEqual([team.source.url]);
+      // And specifically not the older season's team page, which is the URL that would do the damage.
+      const olderTeamUrl = team.source.url.replace(`year=${years[0]!}`, `year=${years[1]!}`);
+      expect(olderTeamUrl).not.toBe(team.source.url);
+      expect(fetcher.calls).not.toContain(olderTeamUrl);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("retires nobody on a multi-season cascade — the range reaches match history, never the roster", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const { fetcher, years } = buildFetcher();
+      const result = await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(years.length).toBeGreaterThan(1);
+      // Every roster member from the single snapshot is live. A whole-pull-over-years implementation
+      // reddens here with retiredCount=18 and zero un-retired memberships.
+      expect(result.retiredCount).toBe(0);
+      const live = db.select().from(teamMemberships).all().filter((m) => m.retiredAt === null);
+      expect(live).toHaveLength(ROSTER_NAMES.length);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("writes the season that succeeded when a player fails in one season only", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const years = defaultYears();
+      const [newest, older] = [years[0]!, years[1]!];
+      const victim = ROSTER_NAMES[0]!;
+      // Every fixture EXCEPT the victim's older season — that one URL is simply unregistered, so the
+      // stub throws exactly as a real 503 would.
+      const fixtures = historyFixtures(ROSTER_NAMES, years);
+      delete fixtures[matchHistoryUrlFor(victim, older)];
+      const fetcher = createStubFetcher({ [team.source.url]: { body: team.html }, ...fixtures });
+
+      const result = await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      // Named with the season that failed, and ONLY that season — the newest one succeeded and must
+      // not be reported as skipped. A bare name here could not tell those two apart.
+      expect(result.skippedRosterEntries).toEqual([`${victim} (year=${older})`]);
+      // The successful season was still fetched and still committed the player.
+      expect(fetcher.calls).toContain(matchHistoryUrlFor(victim, newest));
+      const row = db.select().from(players).where(eq(players.canonicalName, victim)).all();
+      expect(row).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  it("cascades newest season first, completing the whole roster before moving to the older one", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const { fetcher, years } = buildFetcher();
+      await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
+
+      // Newest first: a run killed by rate-limiting partway should have completed the most recent
+      // season for EVERY player — comparable evidence across the field — not every season for an
+      // arbitrary prefix of players.
+      expect(years).toEqual([...years].sort().reverse());
+
+      // Year-outer: the season of each cascade URL, in call order, is a run of one season then the
+      // next — never interleaved.
+      const seasonSequence = fetcher.calls.slice(1).map((url) => hrefParam(url, "year"));
+      const runs = seasonSequence.filter((season, i) => season !== seasonSequence[i - 1]);
+      expect(runs).toEqual(years);
     } finally {
       sqlite.close();
     }
@@ -161,11 +375,9 @@ describe("pullTeam", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const stubFetcher = createStubFetcher({
         [team.source.url]: { body: mutated },
-        ...Object.fromEntries(
-          ROSTER_NAMES.filter((n) => n !== "Ellis Eastwick").map((name) => [
-            matchHistoryUrlFor(name, hrefParam(team.source.url, "year") ?? "2026"),
-            { body: syntheticEmptyMatchHistory(name) },
-          ]),
+        ...historyFixtures(
+          ROSTER_NAMES.filter((n) => n !== "Ellis Eastwick"),
+          defaultYears(),
         ),
       });
 
@@ -196,11 +408,9 @@ describe("pullTeam", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const stubFetcher = createStubFetcher({
         [team.source.url]: { body: mutated },
-        ...Object.fromEntries(
-          ROSTER_NAMES.filter((n) => n !== "Ellis Eastwick").map((name) => [
-            matchHistoryUrlFor(name, hrefParam(team.source.url, "year") ?? "2026"),
-            { body: syntheticEmptyMatchHistory(name) },
-          ]),
+        ...historyFixtures(
+          ROSTER_NAMES.filter((n) => n !== "Ellis Eastwick"),
+          defaultYears(),
         ),
       });
 
@@ -980,7 +1190,17 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
   const TEAM_URL = "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Cascade&year=2026";
   const OK_PLAYER = "Avery Ashby";
   const FAILING_PLAYER = "Nova Norbury";
-  const FAILING_URL = matchHistoryUrlFor(FAILING_PLAYER, "2026");
+  /**
+   * These tests are about the SHAPE of one warning line, so they pin the cascade to a single season
+   * (`since: ONLY_SEASON`) rather than the shipped two-season default (#108). Left at the default,
+   * each would emit a second warning for a season this hand-rolled fetcher does not serve, and the
+   * assertions would be measuring the test's own fixture gap instead of the branch under test.
+   * The season-qualified entry name is asserted here too — that qualifier is #108's, and it is part
+   * of the line an operator actually reads.
+   */
+  const ONLY_SEASON = "2026";
+  const FAILING_ENTRY = `${FAILING_PLAYER} (year=${ONLY_SEASON})`;
+  const FAILING_URL = matchHistoryUrlFor(FAILING_PLAYER, ONLY_SEASON);
 
   /**
    * A two-member roster whose second member's match-history fetch throws `failure`. Hand-rolled
@@ -1009,15 +1229,17 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
         fetchPage: fetcherFailing(new FetchError(`fetch failed with status 503: ${FAILING_URL}`, 503, FAILING_URL)),
         target: TEAM_URL,
         cascadePlayers: true,
+        since: ONLY_SEASON,
       });
 
       // The team itself committed; only the enrichment was skipped.
       expect(result.kind).toBe("ok");
       if (result.kind !== "ok") throw new Error("expected ok");
-      expect(result.skippedRosterEntries).toEqual([FAILING_PLAYER]);
+      expect(result.skippedRosterEntries).toEqual([FAILING_ENTRY]);
+      expect(result.years).toEqual([ONLY_SEASON]);
 
       expect(warnSpy).toHaveBeenCalledWith(
-        `team pull: cascading "${FAILING_PLAYER}" failed (error) — ` +
+        `team pull: cascading "${FAILING_ENTRY}" failed (error) — ` +
           `fetch failed with status 503: ${FAILING_URL} — skipped`,
       );
     } finally {
@@ -1042,10 +1264,11 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
         fetchPage: fetcherFailing(new Error(`parse failed${ESC}[2J at${RTL_OVERRIDE} row 3`)),
         target: TEAM_URL,
         cascadePlayers: true,
+        since: ONLY_SEASON,
       });
 
       expect(warnSpy).toHaveBeenCalledWith(
-        `team pull: cascading "${FAILING_PLAYER}" failed (error) — parse failed [2J at  row 3 — skipped`,
+        `team pull: cascading "${FAILING_ENTRY}" failed (error) — parse failed [2J at  row 3 — skipped`,
       );
     } finally {
       warnSpy.mockRestore();
@@ -1071,9 +1294,10 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
         fetchPage: fetcherFailing(new Error("")),
         target: TEAM_URL,
         cascadePlayers: true,
+        since: ONLY_SEASON,
       });
 
-      expect(warnSpy).toHaveBeenCalledWith(`team pull: cascading "${FAILING_PLAYER}" failed (error) — skipped`);
+      expect(warnSpy).toHaveBeenCalledWith(`team pull: cascading "${FAILING_ENTRY}" failed (error) — skipped`);
     } finally {
       warnSpy.mockRestore();
       sqlite.close();

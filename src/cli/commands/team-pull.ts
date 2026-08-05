@@ -16,7 +16,7 @@ export const teamPull: Command = {
   // safe: `run` is a closure that only reads `teamPull` when it is actually invoked, long after
   // this object literal has finished initializing.
   booleanFlags: ["players"],
-  valueFlags: ["from", "source-url"],
+  valueFlags: ["from", "source-url", "since"],
   run: async (args) => {
     const parsed = parseArgs(args, teamPull.booleanFlags ?? [], teamPull.valueFlags ?? []);
     const opts = globalFlags(parsed.flags);
@@ -30,6 +30,10 @@ export const teamPull: Command = {
     }
     const from = parsed.flags.from;
     const sourceUrl = parsed.flags["source-url"];
+    // Issue #108. Passed through unvalidated on purpose: `cascadeYears` owns every rule about what a
+    // season is, and re-checking the shape here would be a second spelling of one predicate. An
+    // invalid value comes back as a `{ kind: "error" }` and prints on the `status=error` branch below.
+    const since = parsed.flags.since;
     if ((from !== undefined) !== (sourceUrl !== undefined)) {
       emitSummary("team pull", "error", [["message", "--from requires --source-url and vice versa"]], opts);
       return 1;
@@ -42,6 +46,7 @@ export const teamPull: Command = {
         fetchPage,
         target: parsed.target,
         cascadePlayers: parsed.flags.players === true,
+        since: typeof since === "string" ? since : undefined,
         from: typeof from === "string" && typeof sourceUrl === "string" ? { path: from, sourceUrl } : undefined,
       });
 
@@ -56,6 +61,11 @@ export const teamPull: Command = {
           // `fields` (rather than only the `ok` branch below) so the `partial` branch, which
           // spreads `fields` too, reports it just as honestly.
           ["retired", result.retiredCount],
+          // Issue #108: which seasons the cascade fetched, newest first — empty without `--players`.
+          // Reported on BOTH the `ok` and `partial` branches (they spread `fields`) because a
+          // one-year pull and a range pull are otherwise indistinguishable from the summary line,
+          // which is exactly how the single-year defect stayed invisible for the whole v1 build.
+          ["years", result.years.join(",")],
         ];
 
         // The team transaction has already committed, so a cascade failure is NOT an error — but it

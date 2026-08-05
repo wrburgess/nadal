@@ -15,7 +15,7 @@ import { hrefParam } from "../src/parsers/dom.js";
 import { AmbiguousIdentityError } from "../src/ingest/errors.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
-import { pullTeam } from "../src/ingest/team-pull.js";
+import { cascadeYears, pullTeam } from "../src/ingest/team-pull.js";
 import {
   normalizeSiteKey,
   normalizeTimeKey,
@@ -80,14 +80,29 @@ function syntheticEmptyMatchHistory(name: string): string {
   </body></html>`;
 }
 
+function cascadeSeasons(): string[] {
+  const derived = cascadeYears(hrefParam(team.source.url, "year") ?? "2026", undefined);
+  if (derived.kind !== "ok") throw new Error(`fixture team URL has an unusable season: ${derived.message}`);
+  return derived.years;
+}
+
+/**
+ * Every season the cascade requests (#108) is served, and Avery Ashby's real match-history fixture is
+ * served for **every** one of them — the SAME `mid=` ids arriving from two different season pages.
+ *
+ * That overlap is realistic (a league season straddling the calendar boundary appears on both year
+ * pages) and it is the point: a multi-season cascade is only safe because `court_matches` dedupes on
+ * `(source_match_id, slot)`. Serving one season per URL would have quietly tested nothing about that.
+ */
 function buildFetcher() {
-  const year = hrefParam(team.source.url, "year") ?? "2026";
   const fixtures: Record<string, { body: string }> = {
     [team.source.url]: { body: team.html },
   };
-  for (const name of ROSTER_NAMES) {
-    const url = matchHistoryUrlFor(name, year);
-    fixtures[url] = name === "Avery Ashby" ? { body: matchHistory.html } : { body: syntheticEmptyMatchHistory(name) };
+  for (const year of cascadeSeasons()) {
+    for (const name of ROSTER_NAMES) {
+      const url = matchHistoryUrlFor(name, year);
+      fixtures[url] = name === "Avery Ashby" ? { body: matchHistory.html } : { body: syntheticEmptyMatchHistory(name) };
+    }
   }
   return createStubFetcher(fixtures);
 }
@@ -121,6 +136,11 @@ describe("upsert idempotency — the headline test", () => {
       const ratingObservationsAfterFirst = snapshot(ratingObservations);
 
       expect(teamMatchesAfterFirst).toHaveLength(10);
+      // Fourteen, not twenty-eight (#108). Avery Ashby's history was served for BOTH cascade seasons
+      // above, so these fourteen courts arrived twice inside this single pull — once per season page.
+      // A cascade that spanned seasons without `(source_match_id, slot)` deduping across them would
+      // land here at 14 × the season count, and every dossier record would double-count.
+      expect(cascadeSeasons().length).toBeGreaterThan(1);
       expect(courtMatchesAfterFirst).toHaveLength(14);
       expect(ratingObservationsAfterFirst.length).toBeGreaterThan(0);
 

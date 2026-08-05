@@ -6,7 +6,7 @@ import { hrefParam } from "../parsers/dom.js";
 import { ParseError, parseTennisRecordTeam } from "../parsers/index.js";
 import { archivePage } from "./archive.js";
 import { AmbiguousIdentityError, ambiguousMessage, type AmbiguousIdentity } from "./errors.js";
-import type { PageFetcher } from "./fetch.js";
+import type { Clock, PageFetcher } from "./fetch.js";
 import { findTeamByName, resolvePlayer, resolveTeam } from "./identity.js";
 import { matchHistoryUrlFor, pullPlayer, slugFromUrl, type PlayerPullResult } from "./player-pull.js";
 import { retireAbsentMemberships, upsertMembership, upsertTeam, upsertTeamMatch } from "./upsert.js";
@@ -25,6 +25,16 @@ export type TeamPullOptions = {
   from?: { path: string; sourceUrl: string };
   /** `--players`: cascade each roster entry with a profile link through `pullPlayer`. */
   cascadePlayers?: boolean;
+  /**
+   * `--since`: the EARLIEST season the `--players` cascade fetches. Omitted, it defaults to the
+   * season before the team page's own — see `cascadeYears`, which owns the whole rule.
+   */
+  since?: string;
+  /**
+   * Injectable so the "team URL carries no `year=`" fallback is testable without a wall-clock read.
+   * Defaults to the real clock. Same `Clock` shape `fetchPage` already injects.
+   */
+  clock?: Clock;
 };
 
 export type TeamPullResult =
@@ -34,7 +44,20 @@ export type TeamPullResult =
       rosterCount: number;
       matchCount: number;
       archivedPath: string;
+      /**
+       * Issue #108: each entry is `"<name> (year=<Y>)"`, not a bare name. The cascade now spans
+       * several seasons, and the SAME player can fail one season and succeed another — a bare name
+       * cannot say which, so an operator reading only this list could not tell a player with no data
+       * at all from one missing a single year. Empty when nothing was skipped.
+       */
       skippedRosterEntries: string[];
+      /**
+       * Issue #108: the seasons the `--players` cascade actually fetched, newest first — empty when
+       * no cascade ran. Reported so a reader of the summary line can tell a one-year pull from a
+       * range pull without inspecting archive filenames, which is how this defect stayed invisible.
+       * This is the SAME list the cascade looped over, never a second computation of it.
+       */
+      years: string[];
       /** Issue #49: how many pre-existing roster rows this pull just soft-retired (present before,
        * absent from this parse). Surfaced on the result — not only in the database — because
        * retirement removes a player from every current-roster read/write, and a caller relying on
@@ -105,6 +128,70 @@ export function cascadeFailureWarning(entryName: string, result: Exclude<PlayerP
   return sanitizeValue(`team pull: cascading "${entryName}" failed (${result.kind})${detail} — skipped`);
 }
 
+/**
+ * How many seasons one cascade may span. A typo bound, not a policy: `--since 1990` against a 2026
+ * team page would otherwise launch ~37 match-history requests PER ROSTER ENTRY against a source
+ * already observed rate-limiting (#98 measured four transient failures in a single 20-player run).
+ */
+export const MAX_CASCADE_YEARS = 10;
+
+const FOUR_DIGIT_YEAR = /^\d{4}$/;
+
+/**
+ * The seasons one `--players` cascade fetches, newest first — issue #108.
+ *
+ * **One derivation, read once.** `team-pull` fetches the list it reports and reports the list it
+ * fetched, because there is only ever one list. #90 / PR #91 spent two review rounds on the opposite
+ * shape — a filter bound and its printed label carried as separate values, which a caller could set
+ * to disagree so the code filtered 2025 and printed 2026 — and the thing that finally closed it was
+ * *read the value once into a local, validate it, derive everything from that primitive*. This
+ * function is that read; nothing else in the pull may recompute a year.
+ *
+ * **Newest-first is deliberate**, not incidental ordering. Rate-limiting is a live failure mode, so
+ * a run that dies partway should have completed the MOST RECENT season across the whole roster —
+ * comparable evidence for every player — rather than an arbitrary prefix of players across every
+ * season. The caller's loop is year-outer for the same reason.
+ *
+ * **Returns a refusal rather than throwing.** `pullTeam`'s transaction try/catch closes above the
+ * cascade, so a throw here would escape the function entirely; every caller already reports a
+ * `{ kind: "error" }` as `status=error`.
+ */
+export function cascadeYears(
+  teamYear: string,
+  since?: string,
+): { kind: "ok"; years: string[] } | { kind: "error"; message: string } {
+  if (!FOUR_DIGIT_YEAR.test(teamYear)) {
+    return {
+      kind: "error",
+      message: `team page season "${sanitizeValue(teamYear)}" is not a four-digit year`,
+    };
+  }
+  const newest = Number(teamYear);
+  // The DEFAULT is the fix. A caller who never learns `--since` exists still gets the two-season
+  // pull, so a forgotten flag cannot silently reintroduce the one-year cascade this issue closes.
+  const oldestRaw = since ?? String(newest - 1);
+  if (!FOUR_DIGIT_YEAR.test(oldestRaw)) {
+    return { kind: "error", message: `--since "${sanitizeValue(oldestRaw)}" is not a four-digit year` };
+  }
+  const oldest = Number(oldestRaw);
+  if (oldest > newest) {
+    return {
+      kind: "error",
+      message: `--since ${oldest} is later than the team page's season ${newest} — that range holds no seasons`,
+    };
+  }
+  const span = newest - oldest + 1;
+  if (span > MAX_CASCADE_YEARS) {
+    return {
+      kind: "error",
+      message: `--since ${oldest} spans ${span} seasons back from ${newest}; the cascade fetches at most ${MAX_CASCADE_YEARS}`,
+    };
+  }
+  const years: string[] = [];
+  for (let year = newest; year >= oldest; year -= 1) years.push(String(year));
+  return { kind: "ok", years };
+}
+
 /** `"3-2"` → `[3, 2]`; anything else (a bye, a blank result) → `[null, null]`. */
 function parseResultCounts(result: string | null): [number | null, number | null] {
   const match = result === null ? null : /^(\d+)\s*-\s*(\d+)$/.exec(result);
@@ -130,6 +217,7 @@ function parseResultCounts(result: string | null): [number | null, number | null
  */
 export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult> {
   const { db, fetchPage, from, cascadePlayers = false } = options;
+  const clock = options.clock ?? { now: () => Date.now() };
 
   let url: string;
   let body: string;
@@ -165,6 +253,20 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       return { kind: "error", message: errorMessage(err) };
     }
   }
+
+  // Derived HERE — after `url` is known, before the archive and before the team transaction — so a
+  // bad `--since` refuses without leaving a committed write or an archived page behind. It costs one
+  // already-completed GET on the refusal path, and that is the deliberate price of having exactly
+  // ONE derivation site: a cheap shape-check up here plus the real rule further down would be two
+  // spellings of one predicate, which is how a guard rots sideways one edit at a time.
+  //
+  // `teamYear` is read from the TEAM page's own URL and is NEVER used to re-fetch a team page. A
+  // `year=<older>` team profile is a stale roster snapshot, and `retireAbsentMemberships` below
+  // would retire every player who joined since — silent roster loss. The range is a property of the
+  // PLAYER match-history cascade alone; the team page stays exactly one fetch at its own season.
+  const teamYear = hrefParam(url, "year") ?? String(new Date(clock.now()).getUTCFullYear());
+  const cascade = cascadePlayers ? cascadeYears(teamYear, options.since) : { kind: "ok" as const, years: [] };
+  if (cascade.kind === "error") return { kind: "error", message: cascade.message };
 
   const archivedPath = archivePage({ sourceSet: "tennisrecord", slug: slugFromUrl(url), url, body, httpStatus });
 
@@ -382,25 +484,39 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
 
   const skippedRosterEntries: string[] = [];
   if (cascadePlayers) {
-    const year = hrefParam(url, "year") ?? String(new Date().getUTCFullYear());
-    for (const entry of parsed.roster) {
-      const playername = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
-      if (playername === null || playername === "") {
-        skippedRosterEntries.push(entry.name);
-        // `entry.name` is parsed from a fetched roster page, so it is attacker-influenced and this
-        // is a raw stderr write with no summary formatter in front of it (`emitSummary` sanitizes;
-        // a bare `console.warn` does not). Found by the independent Codex review of PR #47.
-        console.warn(`team pull: roster entry "${sanitizeValue(entry.name)}" has no profile link — skipped`);
-        continue;
-      }
-      const playerUrl = matchHistoryUrlFor(playername, year);
-      const result = await pullPlayer({ db, fetchPage, url: playerUrl });
-      if (result.kind !== "ok") {
-        skippedRosterEntries.push(entry.name);
-        // Names the identity that actually failed, not the player we happened to be cascading, and
-        // says WHY for every failure kind — see `cascadeFailureWarning` for both defects and for
-        // why its shape lives in one function rather than inline here.
-        console.warn(cascadeFailureWarning(entry.name, result));
+    // YEAR-OUTER, roster-inner — see `cascadeYears` for why the list is newest-first. Together they
+    // mean an interrupted run has completed the most recent season for EVERY player (comparable
+    // evidence across the field) rather than every season for an arbitrary prefix of players.
+    for (const year of cascade.years) {
+      for (const entry of parsed.roster) {
+        const playername = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
+        if (playername === null || playername === "") {
+          // A missing profile link is a property of the ROSTER ENTRY, not of any one season, so it
+          // would otherwise be reported once per year for the same player. Recorded on the first
+          // season only, and without a `year=` qualifier, because naming one season would imply the
+          // other seasons succeeded for this entry — they were never attempted.
+          if (year === cascade.years[0]) {
+            skippedRosterEntries.push(entry.name);
+            // `entry.name` is parsed from a fetched roster page, so it is attacker-influenced and
+            // this is a raw stderr write with no summary formatter in front of it (`emitSummary`
+            // sanitizes; a bare `console.warn` does not). Found by the independent Codex review of
+            // PR #47.
+            console.warn(`team pull: roster entry "${sanitizeValue(entry.name)}" has no profile link — skipped`);
+          }
+          continue;
+        }
+        const playerUrl = matchHistoryUrlFor(playername, year);
+        const result = await pullPlayer({ db, fetchPage, url: playerUrl });
+        if (result.kind !== "ok") {
+          // Qualified by season (#108): the same player can fail one year and succeed another, and a
+          // bare name in this list could not tell an operator which — or whether a retry should
+          // re-fetch one season or all of them.
+          skippedRosterEntries.push(`${entry.name} (year=${year})`);
+          // Names the identity that actually failed, not the player we happened to be cascading, and
+          // says WHY for every failure kind — see `cascadeFailureWarning` for both defects and for
+          // why its shape lives in one function rather than inline here.
+          console.warn(cascadeFailureWarning(`${entry.name} (year=${year})`, result));
+        }
       }
     }
   }
@@ -413,5 +529,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     archivedPath,
     skippedRosterEntries,
     retiredCount,
+    // The list the loop above actually iterated — not a recomputation. See `cascadeYears`.
+    years: cascade.years,
   };
 }
