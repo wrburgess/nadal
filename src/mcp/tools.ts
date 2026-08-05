@@ -93,9 +93,14 @@ export const MCP_TOOLS: McpToolDef[] = [
       players: z.boolean().optional(),
       from: z.string().optional(),
       sourceUrl: z.string().optional(),
+      // Issue #108. Deliberately `z.string()` rather than a `z.number()` or a regex: `cascadeYears`
+      // owns every rule about what a season is, and a second shape declared here would be a second
+      // spelling of one predicate — the exact drift that let the CLI and this surface disagree in
+      // #94. An invalid value reaches the service and comes back as a named refusal.
+      since: z.string().optional(),
     },
     handler: async (rawArgs) => {
-      const args = rawArgs as { target: string; players?: boolean; from?: string; sourceUrl?: string };
+      const args = rawArgs as { target: string; players?: boolean; from?: string; sourceUrl?: string; since?: string };
       if ((args.from !== undefined) !== (args.sourceUrl !== undefined)) {
         throw new McpToolError("from requires sourceUrl and vice versa");
       }
@@ -106,6 +111,7 @@ export const MCP_TOOLS: McpToolDef[] = [
           fetchPage,
           target: args.target,
           cascadePlayers: args.players === true,
+          since: args.since,
           from: args.from !== undefined && args.sourceUrl !== undefined ? { path: args.from, sourceUrl: args.sourceUrl } : undefined,
         });
         if (result.kind !== "ok") {
@@ -130,6 +136,11 @@ export const MCP_TOOLS: McpToolDef[] = [
           // its own: omitting it here would let an MCP-driven pull retire real teammates with
           // nothing in the response to say so, while the CLI reported it.
           retiredCount: result.retiredCount,
+          // Issue #108, and for the same reason `retiredCount` is spelled out above: this handler
+          // hand-builds its result object, so a field added to the CLI summary does NOT reach MCP on
+          // its own. Omitting it would leave an MCP-driven caller unable to tell a one-season pull
+          // from a range pull — the exact blindness that hid the single-year defect.
+          years: result.years,
         };
       } finally {
         sqlite.close();

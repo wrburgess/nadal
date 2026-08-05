@@ -1096,6 +1096,65 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     vi.restoreAllMocks();
   });
 
+  // Issue #108, and the same hazard #49 records above: this handler hand-builds its result object,
+  // so `years` does not reach MCP just because the CLI prints it. Driven through the real SDK
+  // request/response machinery rather than by calling the handler directly — the surface-parity
+  // lesson from PR #54 round 8, where a fix landed on the schema and the CLI and missed MCP.
+  it("team_pull over MCP accepts `since` and reports the seasons it actually cascaded (#108)", async () => {
+    runMigrations();
+    const teamFixture = loadFixture("tennisrecord/team");
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: url === teamFixture.source.url ? teamFixture.html : "<html><body>not a match history</body></html>",
+      fetchedAt: new Date().toISOString(),
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const client = await connectedClient();
+
+    // Default: the shipped range, more than one season.
+    const ranged = await client.callTool({
+      name: "team_pull",
+      arguments: { target: teamFixture.source.url, players: true },
+    });
+    expect(ranged.isError).not.toBe(true);
+    const rangedYears = (JSON.parse(textOf(ranged)) as { years: string[] }).years;
+    expect(rangedYears.length).toBeGreaterThan(1);
+
+    // `since` narrows it, through the schema, over the wire.
+    const narrowed = await client.callTool({
+      name: "team_pull",
+      arguments: { target: teamFixture.source.url, players: true, since: "2026" },
+    });
+    expect(narrowed.isError).not.toBe(true);
+    expect((JSON.parse(textOf(narrowed)) as { years: string[] }).years).toEqual(["2026"]);
+
+    vi.restoreAllMocks();
+  });
+
+  it("team_pull over MCP surfaces an invalid `since` as a named refusal, not a crash (#108)", async () => {
+    runMigrations();
+    const teamFixture = loadFixture("tennisrecord/team");
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: teamFixture.html,
+      fetchedAt: new Date().toISOString(),
+    }));
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "team_pull",
+      arguments: { target: teamFixture.source.url, players: true, since: "nope" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("four-digit year");
+
+    vi.restoreAllMocks();
+  });
+
   it("player_pull over MCP calls the exact same pullPlayer service the CLI uses, via a stubbed fetcher", async () => {
     runMigrations();
     const matchHistory = loadFixture("tennisrecord/match-history");

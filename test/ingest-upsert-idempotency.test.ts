@@ -15,7 +15,7 @@ import { hrefParam } from "../src/parsers/dom.js";
 import { AmbiguousIdentityError } from "../src/ingest/errors.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
-import { pullTeam } from "../src/ingest/team-pull.js";
+import { cascadeYears, pullTeam } from "../src/ingest/team-pull.js";
 import {
   normalizeSiteKey,
   normalizeTimeKey,
@@ -80,14 +80,52 @@ function syntheticEmptyMatchHistory(name: string): string {
   </body></html>`;
 }
 
+function cascadeSeasons(): string[] {
+  const derived = cascadeYears(hrefParam(team.source.url, "year") ?? "2026", undefined);
+  if (derived.kind !== "ok") throw new Error(`fixture team URL has an unusable season: ${derived.message}`);
+  return derived.years;
+}
+
+/**
+ * A `mid=` that exists ONLY on the older season's page. Rewriting one id in the older fixture gives
+ * that season a match the newest season does not have, so the two pages overlap on thirteen courts
+ * and diverge on one.
+ */
+const OLDER_SEASON_ONLY_MID = "999001";
+
+function olderSeasonHistory(html: string): string {
+  const rewritten = html.replace(/mid=173703/g, `mid=${OLDER_SEASON_ONLY_MID}`);
+  if (rewritten === html) throw new Error("fixture no longer contains mid=173703 — update this helper");
+  return rewritten;
+}
+
+/**
+ * Every season the cascade requests (#108) is served with Avery Ashby's real match-history fixture,
+ * but the OLDER season's copy carries one rewritten `mid=`. Both properties are load-bearing:
+ *
+ * - **The thirteen shared ids** prove cross-season dedup: a multi-season cascade is only safe because
+ *   `court_matches` keys on `(source_match_id, slot)`, and identical pages are what exercise it.
+ * - **The one divergent id** proves the older season's rows actually LAND. Serving byte-identical
+ *   pages left a third false-green world (Codex review of PR #109): an implementation that fetched
+ *   the older season, returned `ok`, and discarded every parsed match would satisfy the row count,
+ *   the empty skip list, and the reported season list alike. Nothing distinguished "deduped" from
+ *   "silently dropped" until one row could only have come from the older page.
+ */
 function buildFetcher() {
-  const year = hrefParam(team.source.url, "year") ?? "2026";
   const fixtures: Record<string, { body: string }> = {
     [team.source.url]: { body: team.html },
   };
-  for (const name of ROSTER_NAMES) {
-    const url = matchHistoryUrlFor(name, year);
-    fixtures[url] = name === "Avery Ashby" ? { body: matchHistory.html } : { body: syntheticEmptyMatchHistory(name) };
+  const seasons = cascadeSeasons();
+  const newest = seasons[0];
+  for (const year of seasons) {
+    for (const name of ROSTER_NAMES) {
+      const url = matchHistoryUrlFor(name, year);
+      if (name !== "Avery Ashby") {
+        fixtures[url] = { body: syntheticEmptyMatchHistory(name) };
+        continue;
+      }
+      fixtures[url] = { body: year === newest ? matchHistory.html : olderSeasonHistory(matchHistory.html) };
+    }
   }
   return createStubFetcher(fixtures);
 }
@@ -121,7 +159,33 @@ describe("upsert idempotency — the headline test", () => {
       const ratingObservationsAfterFirst = snapshot(ratingObservations);
 
       expect(teamMatchesAfterFirst).toHaveLength(10);
-      expect(courtMatchesAfterFirst).toHaveLength(14);
+
+      // NON-VACUITY, and it is load-bearing. `pullTeam` returns `kind: "ok"` even when every cascade
+      // failed — a failure lands in `skippedRosterEntries` and the command reports `status=partial`.
+      // So "14 court matches" is satisfied *both* by correct cross-season dedup AND by the second
+      // season's ingest throwing and being swallowed as a skip. Verified, not assumed: blind-inserting
+      // in `upsertCourtMatch` (no `(source_match_id, slot)` conflict target) left the count at 14 and
+      // this whole test green until this assertion was added — the duplicate insert hit the unique
+      // INDEX, threw, and was absorbed. Assert the seasons actually landed before trusting the count.
+      expect(first.kind).toBe("ok");
+      if (first.kind !== "ok") throw new Error("expected ok");
+      expect(first.skippedRosterEntries).toEqual([]);
+      expect(first.years).toEqual(cascadeSeasons());
+
+      // Fifteen: fourteen ids shared by both season pages, deduped to fourteen rows, PLUS the one
+      // id that exists only on the older season's page (#108).
+      //
+      // Both halves matter. Without dedup this would be 14 × the season count and every dossier
+      // record would double-count. Without the divergent id, an implementation that fetched the older
+      // season and discarded everything it parsed would ALSO produce a passing count — the third
+      // false-green world the independent Codex review of PR #109 identified.
+      expect(cascadeSeasons().length).toBeGreaterThan(1);
+      expect(courtMatchesAfterFirst).toHaveLength(15);
+
+      // The older season's exclusive row is on disk — the assertion that "the older season landed"
+      // rather than merely "the count looks right".
+      const olderOnly = snapshot(courtMatches).filter((row) => row.sourceMatchId === OLDER_SEASON_ONLY_MID);
+      expect(olderOnly, "the older season's exclusive match must be ingested, not silently dropped").toHaveLength(1);
       expect(ratingObservationsAfterFirst.length).toBeGreaterThan(0);
 
       const fetcher2 = buildFetcher();

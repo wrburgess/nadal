@@ -77,7 +77,12 @@ command is an error, not silently ignored.
 `status=` carries a third value beyond `ok` and `error`: **`status=partial`**, emitted by
 `tn team pull --players` when the team itself was written but one or more requested roster cascades
 did not land. It prints to stderr and **exits non-zero**, and names the affected entries in
-`skipped=` / `skippedEntries=`. The team write has already committed and is not rolled back — that
+`skipped=` / `skippedEntries=`. Each entry reads `"<name> (year=<Y>)"` (#108): the cascade spans
+several seasons, and the same player can fail one season and succeed another — a bare name could not
+say which, nor whether a retry should re-fetch one season or all of them. The one exception is a
+roster entry with **no profile link at all**, which is a property of the entry rather than of any
+season: it is named once, unqualified, because no season was ever attempted for it. The team write
+has already committed and is not rolled back — that
 is precisely why the outcome is `partial` rather than `error`, and why it must not be reported as
 `ok`: a caller that reads only the exit code would otherwise record a success in which zero of the
 requested player pulls happened.
@@ -125,6 +130,35 @@ looks for `--help` then depends on whether that resolved:
 Planned (spec § Interfaces; rows move up as commands land): `team list`,
 `player list`, `event show`,
 `db backup/restore`.
+
+`tn team pull <name|tr:…|url> [--players] [--since YYYY] [--from … --source-url …]` — `--players`
+cascades each roster entry with a profile link through `pullPlayer`, and `--since` (#108) names the
+**earliest season** that cascade fetches. The range is inclusive from `--since` through the team
+page's own season, walked **newest-first**, and the seasons actually fetched are reported as
+`years="2026,2025"` on every summary line — a one-season pull and a range pull are otherwise
+indistinguishable from the output, which is how the original single-season cascade stayed invisible
+for the whole v1 build.
+
+**Omitted, `--since` defaults to the season before the team page's own**, so the default is a
+two-season pull. That default is the fix rather than a convenience: before #108 the cascade fetched
+exactly one season, and the database held no court-level play at all from the season before it. A
+range that had to be opted into would have left a forgotten flag silently reproducing that.
+
+`--since` refuses rather than clamping: a value that is not a four-digit year, one later than the
+team page's season, or a span longer than ten seasons all exit `status=error` naming the bound and
+the count. The ten-season ceiling is a typo guard — `--since 1990` against a 2026 team page would
+otherwise issue roughly thirty-seven match-history requests **per roster entry**. "Four-digit" means
+the value must also **round-trip** as a number: `0999` is refused, because the derived list is built
+from the parsed number and would emit the three-digit `999` — accepting four digits and producing
+three.
+
+**`--since` without `--players` is refused, not ignored.** There is no cascade for it to bound, so
+the flag can only mean the operator believes they asked for one; the refusal names the missing
+`--players` rather than validating a value nothing would use.
+
+**The range reaches match history only — never the team page.** A team profile at an older season is
+a stale roster snapshot, and reconciling against one would soft-retire every player who joined since.
+The team page is fetched exactly once, at its own season, whatever `--since` says.
 
 `tn player avail <name> <YYYY-MM-DD> <status> [event]` — the fourth positional is **optional** and
 names which event the day belongs to. It is needed only when the day falls inside more than one

@@ -440,6 +440,11 @@ describe("the ambiguous-identity report (#94)", () => {
     });
   });
 
+  // Every cascade below passes `since: year`, pinning it to the ONE season its fixtures serve. The
+  // shipped default spans two (#108), and at the default each of these would emit a second warning
+  // for a season this stub has no fixture for — the assertions would then be measuring the fixture
+  // gap rather than the ambiguity-reporting branch they exist to pin. The `(year=…)` qualifier in
+  // the expected lines is #108's and is part of what an operator reads.
   describe("pullTeam", () => {
     const TEAM_URL = "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Test&year=2026";
 
@@ -492,16 +497,17 @@ describe("the ambiguous-identity report (#94)", () => {
           }),
           target: TEAM_URL,
           cascadePlayers: true,
+          since: year,
         });
 
         // The team itself committed; only the enrichment was skipped — that is why this is a
         // warning and a `partial`, not an error.
         expect(result.kind).toBe("ok");
         if (result.kind !== "ok") throw new Error("expected ok");
-        expect(result.skippedRosterEntries).toEqual([PROFILED]);
+        expect(result.skippedRosterEntries).toEqual([`${PROFILED} (year=${year})`]);
 
         expect(warnSpy).toHaveBeenCalledWith(
-          `team pull: cascading "${PROFILED}" failed (ambiguous) — ` +
+          `team pull: cascading "${PROFILED} (year=${year})" failed (ambiguous) — ` +
             `ambiguous identity "${FIRST_PARTNER}" (match partner) — near: ${near} — skipped`,
         );
         warnSpy.mockRestore();
@@ -535,14 +541,15 @@ describe("the ambiguous-identity report (#94)", () => {
           }),
           target: TEAM_URL,
           cascadePlayers: true,
+          since: year,
         });
 
         expect(result.kind).toBe("ok");
         if (result.kind !== "ok") throw new Error("expected ok");
-        expect(result.skippedRosterEntries).toEqual([PROFILED]);
+        expect(result.skippedRosterEntries).toEqual([`${PROFILED} (year=${year})`]);
 
         expect(warnSpy).toHaveBeenCalledWith(
-          `team pull: cascading "${PROFILED}" failed (ambiguous) — 2 ambiguous identities — ` +
+          `team pull: cascading "${PROFILED} (year=${year})" failed (ambiguous) — 2 ambiguous identities — ` +
             `[1] "${FIRST_PARTNER}" (match partner) — near: ${nearPartner}; ` +
             `[2] "${FIRST_OPPONENT}" (match opponent) — near: ${nearOpponent} — skipped`,
         );
@@ -590,6 +597,7 @@ describe("the ambiguous-identity report (#94)", () => {
           }),
           target: TEAM_URL,
           cascadePlayers: true,
+          since: year,
         });
 
         const warned = warnSpy.mock.calls.map((c) => String(c[0]));
@@ -601,7 +609,7 @@ describe("the ambiguous-identity report (#94)", () => {
         // out by hand rather than through `sanitizeValue`, so a broken sanitizer cannot move both
         // sides of the assertion together.
         expect(warned[0]).toBe(
-          `team pull: cascading "${PROFILED}" failed (ambiguous) — ` +
+          `team pull: cascading "${PROFILED} (year=${year})" failed (ambiguous) — ` +
             'ambiguous identity "Nova  [2J Norbury" (match partner) — near: Novo  [2J Norbury — skipped',
         );
         expect(warned[0]).not.toContain(ESC);

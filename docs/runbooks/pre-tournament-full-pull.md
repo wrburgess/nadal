@@ -168,7 +168,22 @@ TennisRecord live. `--players` cascades every roster entry that carries a profil
 own `player pull`, so one command refreshes the team's schedule, roster membership, and (for linked
 players) their own match history and TennisRecord dynamic rating together.
 
-Expected: `team pull status=ok team="<team>" roster=N matches=M archived="<raw dir>/tennisrecord/….html" retired=R`, exit 0.
+**The cascade fetches two seasons by default** (#108) — the team page's own and the one before it —
+because TennisRecord's match history is partitioned by season, and pulling only the current one left
+the database with no court-level play whatsoever from the prior season. Add `--since YYYY` to reach
+further back; `--since <the team page's season>` narrows it to one.
+
+Budget for that: **roughly double the requests of a one-season pull** — about 154 for a 77-player
+field rather than 77 — against a source that has already been observed rate-limiting. Expect
+proportionally more transient skips than the four seen in a single 20-player session, and handle them
+exactly as below; nothing about a skip changes, there are just more chances to hit one. The
+politeness delay between requests is unchanged, so a full-field pull takes correspondingly longer.
+
+Expected: `team pull status=ok team="<team>" roster=N matches=M archived="<raw dir>/tennisrecord/….html" retired=R years="2026,2025"`, exit 0.
+
+`years=` is the seasons the cascade actually fetched, newest first — **empty without `--players`**,
+since nothing was cascaded. Check it rather than assuming: it is the only thing in the output that
+distinguishes a full range pull from a one-season one.
 
 `archived=` is where the raw fetched page landed (`TN_RAW_PATH` if set, `raw/` otherwise) — every
 live pull archives the page it fetched before parsing it, the same as a `--from` replay archives the
@@ -177,8 +192,15 @@ pull found absent from the current page (issue #49) — expected when a roster t
 pulls, worth a second look if `R` is large and unexpected.
 
 **If a cascade partly fails**, the line reads
-`team pull status=partial team="<team>" roster=N matches=M archived="…" retired=R skipped=K skippedEntries="<names>"`
+`team pull status=partial team="<team>" roster=N matches=M archived="…" retired=R years="…" skipped=K skippedEntries="<names>"`
 and exits 1. The team write already landed — only the named player pulls did not.
+
+**Each skipped entry names its season**, as `"<name> (year=2025)"` (#108). That qualifier is the
+retry instruction: a player listed for one season only needs that season re-pulled, and a player
+listed for every season is a different problem. `K` therefore counts (player × season) failures, not
+players — 36 on a total cascade failure across an 18-player roster and two seasons, not 18. A roster
+entry with **no profile link** is the one unqualified entry: it is named once, without a season,
+because no season was ever attempted for it.
 
 **`skippedEntries` names the players it was CASCADING, which is not always who the problem is.** Read
 the `team pull: cascading …` warnings on stderr before doing anything; each one names the identity
