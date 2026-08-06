@@ -215,7 +215,7 @@ size the work before you read a single warning:
 
 | Field, when non-zero | Then |
 |---|---|
-| `retryable=` | those entries hit a fault identified as transient — HTTP 408/425/429 or any 5xx, a timeout, one of the enumerated connection codes, or SQLite contention. Re-pull each `[retryable]` player individually (step 3); they typically succeed immediately. Four such failures in one live session were all clean on the first retry. |
+| `retryable=` | those entries hit a fault **positively identified** as transient — HTTP 408/425/429 or any 5xx; a request timeout or abort; one of the enumerated connection codes `ECONNRESET` · `ECONNREFUSED` · `ETIMEDOUT` · `EAI_AGAIN` · `EPIPE`; or SQLite contention (`SQLITE_BUSY*`, `SQLITE_LOCKED`, `SQLITE_LOCKED_SHAREDCACHE`). Re-pull each `[retryable]` player individually (step 3); they typically succeed immediately. Four such failures in one live session were all clean on the first retry. |
 | `permanent=` | those entries reproduce exactly on a retry — any other 4xx, a parse failure, an unruled ambiguous identity, or a roster row with no profile link. **Do not re-run them**; read the matching warning below and act on its cause. |
 | `unclassified=` | the failure could not be positively identified either way. Read the `team pull: cascading …` warning for those entries; the reason is there. This is a deliberate third answer — a wrong `retryable` would have you re-run a doomed pull twice. **A network failure lands here more often than you might expect**: only the enumerated connection codes are `retryable`, so `ENOTFOUND` (NXDOMAIN — a dead host and a flapping resolver are indistinguishable), `ENETUNREACH` and `EHOSTUNREACH` all report `unclassified`. The reason names the code; judge it yourself. |
 
@@ -248,20 +248,21 @@ cause; each one names the identity that actually failed **and why** (#96). Every
   without their match history, and the `[permanent]` tag is telling you exactly that.
   (Found by the independent Codex review of PR #119: the previous wording sent an operator to a
   command that answers `unknown player target` every time.)
-- *A fetch or parse failure* — the warning reads
-  `cascading "<roster player>" failed (error) — <reason>`. The disposition already sorts these two:
-  - `[retryable]` — `fetch failed with status <5xx>: <url>`, an HTTP 408/425/429, a timeout, or one
-    of the **enumerated** connection codes (the list is in the table above, and in
-    `docs/cli/GRAMMAR.md`).
-  - `[permanent]` — a `4xx` status other than those three, or a parse failure naming a missing
-    element. The page changed shape, or that player's profile is gone; nothing in this runbook fixes
-    it and the team is refreshed without them.
-  - `[unclassified]` — **a connection failure is not automatically retryable.** A code outside the
-    enumeration (`ENOTFOUND`, `ENETUNREACH`, `EHOSTUNREACH`, …) lands here, and the reason names the
-    code so you can judge it. Do not read "it looks like a network error" as "re-run it".
+- *A fetch, parse, or write failure* — the warning reads
+  `cascading "<roster player>" failed (error) — <reason>`. **The tag already sorted it for you; the
+  disposition table above is the one place that says which failures map to which tag, and this bullet
+  deliberately does not repeat it.** (It did, for three review rounds: once too wide — "a socket
+  error" — and once too narrow, omitting SQLite contention and aborts. Every patch was right about
+  the instance and wrong the next round, which is the tell that the second copy was the defect. Same
+  class as the runbook digression deleted in #96.)
 
-  The reason is still worth reading on a `[permanent]` one, because *which* of those two it is
-  decides whether to look at the page or at the parser.
+  What the tag does **not** tell you is *which* thing broke, and that is what the reason is for. On a
+  `[permanent]` one it decides whether to look at the upstream page or at the parser; on an
+  `[unclassified]` one it is the whole diagnosis, since nothing classified it for you.
+
+  One thing worth internalizing rather than looking up: **a failure that looks like a network problem
+  is not automatically `[retryable]`.** `ENOTFOUND`, `ENETUNREACH` and `EHOSTUNREACH` all tag
+  `[unclassified]`, because none of them distinguishes a transient fault from a permanent one.
 
 - *An ambiguous identity* — tagged `[permanent]`. The warning reads
   `cascading "<roster player>" failed (ambiguous) — ambiguous identity "<incoming>" (<where>) — near: <candidates>`,
