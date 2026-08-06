@@ -407,4 +407,152 @@ describe("tn team pull --players (partial cascade)", () => {
     expect(line).toContain(`skipped=${18 * seasons.length}`);
     expect(line).toContain('skippedEntries="');
   });
+
+  /**
+   * Issue #98. Before this, `skipped=K skippedEntries="<names>"` said how much did not land and
+   * nothing about what to do — an operator could not size a re-run without reading K stderr warnings.
+   *
+   * `pullTeam` is mocked here rather than driven through fixtures on purpose: these tests are about
+   * the RENDERING of a mixed disposition set, and building three distinct real failures through the
+   * fetch layer would put the fixture's own shape between the assertion and the line under test.
+   * The classification itself is pinned end-to-end in `test/ingest-team-pull.test.ts`.
+   */
+  describe("the partial line says what to do about each skipped entry (#98)", () => {
+    const teamRow = {
+      id: 1,
+      name: "Cascade Test",
+      section: null,
+      district: null,
+      tennislinkUrl: null,
+      rosterObservedAt: null,
+      rosterObservedUrl: null,
+      tennisrecordUrl: null,
+      isHome: null,
+      nameKey: null,
+      nameKeyLength: null,
+    };
+
+    function mockPullWithSkipped(skippedRosterEntries: teamPullModule.SkippedRosterEntry[]): void {
+      vi.spyOn(teamPullModule, "pullTeam").mockResolvedValue({
+        kind: "ok",
+        team: teamRow,
+        rosterCount: 3,
+        matchCount: 0,
+        archivedPath: "raw/tennisrecord/x.html",
+        skippedRosterEntries,
+        retiredCount: 0,
+        years: ["2026"],
+      });
+    }
+
+    const MIXED: teamPullModule.SkippedRosterEntry[] = [
+      { entry: "Ann Ashby (year=2026)", disposition: "retryable", reason: "fetch failed with status 503: u" },
+      { entry: "Bo Byrne (year=2026)", disposition: "permanent", reason: "fetch failed with status 404: u" },
+      { entry: "Cy Carrow", disposition: "permanent", reason: "roster entry has no profile link on the team page" },
+      { entry: "Di Dorne (year=2026)", disposition: "unclassified", reason: "boom" },
+    ];
+
+    it("reports a count per disposition and tags every named entry", async () => {
+      runMigrations();
+      mockPullWithSkipped(MIXED);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      const code = await dispatch(["team", "pull", "https://www.tennisrecord.com/x", "--players"]);
+
+      expect(code).toBe(1);
+      const line = String(errSpy.mock.calls[0]?.[0]);
+      expect(line).toMatch(/^team pull status=partial /);
+      expect(line).toContain("skipped=4");
+      expect(line).toContain("retryable=1");
+      expect(line).toContain("permanent=2");
+      expect(line).toContain("unclassified=1");
+      expect(line).toContain(
+        'skippedEntries="Ann Ashby (year=2026) [retryable], Bo Byrne (year=2026) [permanent], ' +
+          'Cy Carrow [permanent], Di Dorne (year=2026) [unclassified]"',
+      );
+    });
+
+    /**
+     * The counts summarize the SAME list the line names, so a run where they disagree is a run where
+     * the operator's re-run estimate is wrong. Asserted by reading both back OUT of the rendered
+     * line — a test that recomputed them from `MIXED` would agree with a miscount that happened to
+     * be computed the same wrong way twice.
+     */
+    it("the three counts sum to skipped= and match the tags actually printed", async () => {
+      runMigrations();
+      mockPullWithSkipped(MIXED);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await dispatch(["team", "pull", "https://www.tennisrecord.com/x", "--players"]);
+
+      const line = String(errSpy.mock.calls[0]?.[0]);
+      const read = (key: string) => Number(new RegExp(`\\b${key}=(\\d+)\\b`).exec(line)?.[1]);
+      expect(read("retryable") + read("permanent") + read("unclassified")).toBe(read("skipped"));
+
+      const entries = /skippedEntries="((?:[^"\\]|\\.)*)"/.exec(line)?.[1] ?? "";
+      for (const disposition of ["retryable", "permanent", "unclassified"]) {
+        const tagged = entries.split(`[${disposition}]`).length - 1;
+        expect(tagged, `${disposition} tags must match its count`).toBe(read(disposition));
+      }
+    });
+
+    it("carries the same four fields under --json", async () => {
+      runMigrations();
+      mockPullWithSkipped(MIXED);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await dispatch(["team", "pull", "https://www.tennisrecord.com/x", "--players", "--json"]);
+
+      const payload = JSON.parse(String(errSpy.mock.calls[0]?.[0]));
+      expect(payload).toMatchObject({
+        status: "partial",
+        skipped: 4,
+        retryable: 1,
+        permanent: 2,
+        unclassified: 1,
+      });
+    });
+
+    // The boundary that must not regress: a clean cascade is still `ok`, and none of the new fields
+    // appear on it. A count that printed `retryable=0` on every successful pull would be noise on
+    // the line an operator reads most often.
+    it("prints none of the new fields when nothing was skipped", async () => {
+      runMigrations();
+      mockPullWithSkipped([]);
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["team", "pull", "https://www.tennisrecord.com/x", "--players"]);
+
+      expect(code).toBe(0);
+      const line = String(logSpy.mock.calls[0]?.[0]);
+      expect(line).toMatch(/^team pull status=ok /);
+      for (const key of ["skipped=", "retryable=", "permanent=", "unclassified=", "skippedEntries="]) {
+        expect(line, `${key} must not appear on a clean pull`).not.toContain(key);
+      }
+    });
+
+    /**
+     * A roster name is scraped data, so it reaches this line attacker-influenced — and #98 adds a
+     * SECOND untrusted string beside it, since `reason` can quote the document a parser choked on.
+     * Pinned as a whole-line equality rather than an absence-of-ESC search: "contains nothing
+     * executable" is only assertable by naming the entire string (docs/findings.md).
+     */
+    it("sanitizes a hostile entry name in the tagged rendering", async () => {
+      runMigrations();
+      const ESC = String.fromCharCode(0x1b);
+      const RTL_OVERRIDE = String.fromCharCode(0x202e);
+      mockPullWithSkipped([
+        { entry: `Ann${RTL_OVERRIDE}${ESC}[2J Ashby`, disposition: "retryable", reason: "boom" },
+      ]);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await dispatch(["team", "pull", "https://www.tennisrecord.com/x", "--players"]);
+
+      expect(String(errSpy.mock.calls[0]?.[0])).toBe(
+        'team pull status=partial team="Cascade Test" roster=3 matches=0 archived="raw/tennisrecord/x.html" ' +
+          'retired=0 years="2026" skipped=1 retryable=1 permanent=0 unclassified=0 ' +
+          'skippedEntries="Ann  [2J Ashby [retryable]"',
+      );
+    });
+  });
 });

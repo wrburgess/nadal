@@ -6,6 +6,7 @@ import { hrefParam } from "../parsers/dom.js";
 import { ParseError, parseTennisRecordTeam } from "../parsers/index.js";
 import { archivePage } from "./archive.js";
 import { AmbiguousIdentityError, ambiguousMessage, type AmbiguousIdentity } from "./errors.js";
+import type { FailureDisposition } from "./failure-disposition.js";
 import type { Clock, PageFetcher } from "./fetch.js";
 import { findTeamByName, resolvePlayer, resolveTeam } from "./identity.js";
 import { matchHistoryUrlFor, pullPlayer, slugFromUrl, type PlayerPullResult } from "./player-pull.js";
@@ -37,6 +38,34 @@ export type TeamPullOptions = {
   clock?: Clock;
 };
 
+/**
+ * One roster entry the `--players` cascade did not enrich, and what an operator should do about it
+ * (#98).
+ *
+ * It is a RECORD rather than a string because the three facts have three different readers: `entry`
+ * is what a human recognizes, `disposition` is what a caller branches on, and `reason` is what
+ * someone reads when the disposition says to investigate. #96 put the reason on a stderr warning
+ * line, which left every machine surface — the `skippedEntries=` summary field and the MCP handler's
+ * result — carrying names alone: neither could distinguish a rate-limited pull worth re-running from
+ * a dead profile URL or a page-shape regression worth investigating.
+ *
+ * Deliberately NOT a second array running beside the names. `cascadeYears` below records what that
+ * shape cost in #90/PR #91 — a value and its label carried separately, which a caller could set to
+ * disagree — and a disposition list indexed against a name list is the same thing one field over.
+ */
+export type SkippedRosterEntry = {
+  /**
+   * Issue #108: `"<name> (year=<Y>)"`, not a bare name. The cascade spans several seasons and the
+   * SAME player can fail one and succeed another, so a bare name could not say which — nor whether a
+   * retry should re-fetch one season or all of them. A roster entry with no profile link is the one
+   * unqualified form: no season was ever attempted for it.
+   */
+  entry: string;
+  disposition: FailureDisposition;
+  /** The same text `cascadeFailureWarning` prints, from the same derivation — see `failureReason`. */
+  reason: string;
+};
+
 export type TeamPullResult =
   | {
       kind: "ok";
@@ -44,13 +73,8 @@ export type TeamPullResult =
       rosterCount: number;
       matchCount: number;
       archivedPath: string;
-      /**
-       * Issue #108: each entry is `"<name> (year=<Y>)"`, not a bare name. The cascade now spans
-       * several seasons, and the SAME player can fail one season and succeed another — a bare name
-       * cannot say which, so an operator reading only this list could not tell a player with no data
-       * at all from one missing a single year. Empty when nothing was skipped.
-       */
-      skippedRosterEntries: string[];
+      /** One record per (roster entry × season) the cascade could not enrich; empty when none. */
+      skippedRosterEntries: SkippedRosterEntry[];
       /**
        * Issue #108: the seasons the `--players` cascade actually fetched, newest first — empty when
        * no cascade ran. Reported so a reader of the summary line can tell a one-year pull from a
@@ -119,13 +143,33 @@ function resolveTargetUrl(
  * from forging the punctuation that separates the facts.
  */
 export function cascadeFailureWarning(entryName: string, result: Exclude<PlayerPullResult, { kind: "ok" }>): string {
-  const reason = result.kind === "ambiguous" ? ambiguousMessage(result) : result.message;
+  const reason = failureReason(result);
   // A reason that renders to nothing but spaces — an `Error("")`, or a message made entirely of
   // control characters the sanitizer replaces — would print as ` —  — skipped`, which reads as a
   // truncated line rather than as "this failure carried no reason", and is indistinguishable at a
   // glance from the defect above. Say the kind and stop.
   const detail = sanitizeValue(reason).trim() === "" ? "" : ` — ${reason}`;
   return sanitizeValue(`team pull: cascading "${entryName}" failed (${result.kind})${detail} — skipped`);
+}
+
+/**
+ * WHY a pull failed, in the one rendering every surface reports (#98).
+ *
+ * Extracted from `cascadeFailureWarning` above, which was its only reader until the skipped-entry
+ * record needed the same string. Two spellings of "the reason" — one interpolated into the stderr
+ * line, one built for the result — is precisely the drift `ambiguousMessage`'s own docblock was
+ * moved into `errors.ts` to prevent, and `cascadeYears` states as a rule below: derive once, and let
+ * every reader read that derivation.
+ *
+ * Returned UNSANITIZED, exactly as it was when it lived inline. Sanitizing here would sanitize the
+ * warning's reason twice and, worse, would sanitize the fields of a record separately from the line
+ * they are rendered into — and `cascadeFailureWarning`'s whole argument for sanitizing the FINISHED
+ * line is that per-field sanitizing is what lets an interpolated value forge the punctuation between
+ * facts. Each surface sanitizes at its own output boundary: the warning over its whole line, the CLI
+ * through `emitSummary`/`quoteSummaryValue`, and MCP through `sanitizeJson`.
+ */
+export function failureReason(result: Exclude<PlayerPullResult, { kind: "ok" }>): string {
+  return result.kind === "ambiguous" ? ambiguousMessage(result) : result.message;
 }
 
 /**
@@ -519,7 +563,7 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     return { kind: "error", message: errorMessage(err) };
   }
 
-  const skippedRosterEntries: string[] = [];
+  const skippedRosterEntries: SkippedRosterEntry[] = [];
   if (cascadePlayers) {
     // YEAR-OUTER, roster-inner — see `cascadeYears` for why the list is newest-first. Together they
     // mean an interrupted run has completed the most recent season for EVERY player (comparable
@@ -533,7 +577,16 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
     for (const entry of parsed.roster) {
       const linked = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
       if (linked === null || linked === "") {
-        skippedRosterEntries.push(entry.name);
+        // The third reachable input to the classification, and the one that is easy to miss: it is
+        // not a `PlayerPullResult` at all — no pull was ever attempted — so it reaches this list by
+        // a different path and would be left unclassified by omission. `permanent` because no retry
+        // adds a link the team page does not carry; the fix is `tn player pull` for that person, or
+        // an upstream page that names them properly.
+        skippedRosterEntries.push({
+          entry: entry.name,
+          disposition: "permanent",
+          reason: "roster entry has no profile link on the team page",
+        });
         // `entry.name` is parsed from a fetched roster page, so it is attacker-influenced and this
         // is a raw stderr write with no summary formatter in front of it (`emitSummary` sanitizes;
         // a bare `console.warn` does not). Found by the independent Codex review of PR #47.
@@ -563,7 +616,16 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
           // Qualified by season (#108): the same player can fail one year and succeed another, and a
           // bare name in this list could not tell an operator which — or whether a retry should
           // re-fetch one season or all of them.
-          skippedRosterEntries.push(`${entry.name} (year=${year})`);
+          //
+          // The disposition is READ off the result (#98), never re-derived here. By this point the
+          // typed error is long gone — `pullPlayer` flattened it to `message` — so classifying at
+          // this line could only mean matching that string, and a `ParseError` quotes the fetched
+          // page, which would let a scraped document award itself a `retryable` label.
+          skippedRosterEntries.push({
+            entry: `${entry.name} (year=${year})`,
+            disposition: result.disposition,
+            reason: failureReason(result),
+          });
           // Names the identity that actually failed, not the player we happened to be cascading, and
           // says WHY for every failure kind — see `cascadeFailureWarning` for both defects and for
           // why its shape lives in one function rather than inline here.

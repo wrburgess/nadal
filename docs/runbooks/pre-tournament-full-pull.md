@@ -199,7 +199,7 @@ pull found absent from the current page (issue #49) — expected when a roster t
 pulls, worth a second look if `R` is large and unexpected.
 
 **If a cascade partly fails**, the line reads
-`team pull status=partial team="<team>" roster=N matches=M archived="…" retired=R years="…" skipped=K skippedEntries="<names>"`
+`team pull status=partial team="<team>" roster=N matches=M archived="…" retired=R years="…" skipped=K retryable=<n> permanent=<n> unclassified=<n> skippedEntries="<entries>"`
 and exits 1. The team write already landed — only the named player pulls did not.
 
 **Each skipped entry names its season**, as `"<name> (year=2025)"` (#108). That qualifier is the
@@ -209,27 +209,37 @@ players — 36 on a total cascade failure across an 18-player roster and two sea
 entry with **no profile link** is the one unqualified entry: it is named once, without a season,
 because no season was ever attempted for it.
 
-**`skippedEntries` names the players it was CASCADING, which is not always who the problem is.** Read
-the `team pull: cascading …` warnings on stderr before doing anything; each one names the identity
-that actually failed **and why** (#96). Every warning ends `— skipped` and carries its reason in
-between. There are three common causes and they want different responses:
+**And each entry carries what to do about it**, as a `[retryable]` / `[permanent]` /
+`[unclassified]` suffix, counted by the three fields that sum to `K` (#98). Read those first — they
+size the work before you read a single warning:
 
-- *A roster row with no profile link on the page at all* — cascades can never reach it. Pull that
-  player individually (step 3).
+| Field, when non-zero | Then |
+|---|---|
+| `retryable=` | those entries hit a transient fault (a 5xx/408/425/429, a timeout, a socket or DNS error, SQLite contention). Re-pull each `[retryable]` player individually (step 3); they typically succeed immediately. Four such failures in one live session were all clean on the first retry. |
+| `permanent=` | those entries reproduce exactly on a retry — any other 4xx, a parse failure, an unruled ambiguous identity, or a roster row with no profile link. **Do not re-run them**; read the matching warning below and act on its cause. |
+| `unclassified=` | the failure could not be positively identified either way. Read the `team pull: cascading …` warning for those entries; the reason is there. This is a deliberate third answer — a wrong `retryable` would have you re-run a doomed pull twice. |
+
+**There is no automatic retry, deliberately** — it carries its own rate-limiting question
+(#96 → *Not in scope*, reaffirmed in #98).
+
+**`skippedEntries` names the players it was CASCADING, which is not always who the problem is.** Once
+the counts have told you the shape, read the `team pull: cascading …` warnings on stderr for the
+cause; each one names the identity that actually failed **and why** (#96). Every warning ends
+`— skipped` and carries its reason in between. There are three common causes:
+
+- *A roster row with no profile link on the page at all* — tagged `[permanent]`, and cascades can
+  never reach it. Pull that player individually (step 3).
 - *A fetch or parse failure* — the warning reads
-  `cascading "<roster player>" failed (error) — <reason>`. **The reason is the whole decision**, so
-  read it rather than the word `error`:
-  - `fetch failed with status <5xx>: <url>`, a timeout, or a socket error is usually **transient** —
-    pull that one player individually (step 3) and it typically succeeds immediately. Four of these
-    in one live session were all clean on the first retry.
-  - a `4xx` status, or a parse failure naming a missing element, is **not** transient — retrying
-    reproduces it. The page changed shape, or that player's profile is gone; nothing in this runbook
-    fixes it and the team is refreshed without them.
+  `cascading "<roster player>" failed (error) — <reason>`. The disposition already sorts these two:
+  - `[retryable]` — `fetch failed with status <5xx>: <url>`, a timeout, or a socket error.
+  - `[permanent]` — a `4xx` status, or a parse failure naming a missing element. The page changed
+    shape, or that player's profile is gone; nothing in this runbook fixes it and the team is
+    refreshed without them.
 
-  There is no automatic retry, deliberately (its own rate-limiting question, #96 → *Not in scope*),
-  and nothing yet classifies these two for you in `skippedEntries=` (#98) — the warning is where the
-  distinction lives today.
-- *An ambiguous identity* — the warning reads
+  The reason is still worth reading on a `[permanent]` one, because *which* of those two it is
+  decides whether to look at the page or at the parser.
+
+- *An ambiguous identity* — tagged `[permanent]`. The warning reads
   `cascading "<roster player>" failed (ambiguous) — ambiguous identity "<incoming>" (<where>) — near: <candidates>`,
   or, when that player's pull met more than one,
   `— <N> ambiguous identities — [1] "<incoming>" (<where>) — near: <candidates>; [2] …`.
@@ -252,6 +262,11 @@ between. There are three common causes and they want different responses:
   Then re-run the cascade. Observed live on `OK/Dickason` (#94): three skipped entries, whose real
   ambiguities were `Karson Davis` near `Mason Davis`, `Austin DuBois` near `Justin DuBois`, and
   `Steve Coon` near `Steve Boos` — none of them the three players `skippedEntries` named.
+
+**Driving this from an agent rather than a terminal?** The `team_pull` MCP tool returns
+`skippedRosterEntries` as one `{ entry, disposition, reason }` record per skip, so nothing has to be
+extracted from the summary line. `skippedEntries=` is a human display — a scraped roster name can
+itself contain a comma or a bracket, and neither is escaped against that (`docs/cli/GRAMMAR.md`).
 
 ### 3. Pull any player individually who needs it
 
