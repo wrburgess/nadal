@@ -122,11 +122,23 @@ describe("assertOutputPathSafe", () => {
   });
 
   // Codex adversarial review, PR #31 round 3: every test above passes an ALREADY-RESOLVED absolute
-  // root. `TN_RAW_PATH`/a future `TN_REPORTS_PATH` unset resolves instead to a bare repo-relative
-  // string ("raw"/"reports") — the exact shape that let the un-generalized guard ship throwing on
-  // every call under its own documented default, because every test of it set the env var to a
-  // temp dir instead. This exercises that shape directly against the generic guard.
-  describe("the documented-default shape (a bare repo-relative root string, mirroring an unset env var)", () => {
+  // root, so nothing exercised the guard against a bare repo-relative root STRING — the exact shape
+  // that let the un-generalized guard ship throwing on every call, because every test of it set the
+  // env var to a temp dir instead. These tests exercise that shape directly.
+  //
+  // What changed, and why the label below no longer says "documented default" (Codex adversarial
+  // review, PR #116): this block used to describe a bare `"raw"`/`"reports"` as the shape an UNSET
+  // env var produces. Issue #111 made that false — `rawRoot()`/`reportsRoot()` now return
+  // package-root-anchored ABSOLUTE paths when unset, so a bare relative root reaches the guard only
+  // via an EXPLICIT relative override (`TN_RAW_PATH=raw`), which is still reachable and still worth
+  // guarding. The tests are unchanged and still valuable; only the claim about where this input
+  // comes from was wrong, and a stale claim here would let a reader count this block as coverage of
+  // the anchored default it no longer touches.
+  //
+  // The anchored default has its own coverage, in the accessors rather than here:
+  // `test/ingest-archive.test.ts` (`rawRoot()` unset) and `test/db-client.test.ts` (`dbPath()`
+  // unset), both asserting an absolute path under the package root.
+  describe("a bare repo-relative root string (reachable via an explicit relative env override)", () => {
     afterEach(() => {
       rmSync(resolve("reports"), { recursive: true, force: true });
     });
