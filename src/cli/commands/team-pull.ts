@@ -76,13 +76,36 @@ export const teamPull: Command = {
         // the entries, and exits non-zero — the outcome is visible to a caller that only reads the
         // exit code.
         if (result.skippedRosterEntries.length > 0) {
+          // Issue #98. `skipped=K` alone said how much did not land, never what to do about it — an
+          // operator could not tell a rate-limited pull to re-run from a dead URL to investigate
+          // without reading the stderr warnings one by one. The three counts sum to `skipped`, so a
+          // caller reading only this line can size the re-run; the per-entry `[disposition]` suffix
+          // says which entries make it up.
+          //
+          // Counted from the SAME array that is rendered, in one pass — not tallied from a second
+          // read of the result — so a count and the entries it summarizes cannot disagree.
+          const counts = { retryable: 0, permanent: 0, unclassified: 0 };
+          const rendered: string[] = [];
+          for (const skipped of result.skippedRosterEntries) {
+            counts[skipped.disposition] += 1;
+            rendered.push(`${skipped.entry} [${skipped.disposition}]`);
+          }
+
           emitSummary(
             "team pull",
             "partial",
             [
               ...fields,
               ["skipped", result.skippedRosterEntries.length],
-              ["skippedEntries", result.skippedRosterEntries.join(", ")],
+              ["retryable", counts.retryable],
+              ["permanent", counts.permanent],
+              ["unclassified", counts.unclassified],
+              // Separator unchanged from before #98. It is a HUMAN display and not a safe parse
+              // target — a scraped roster name may itself contain `,` or `[` — which is why the
+              // machine surface for this is the MCP handler's structured `skippedRosterEntries`, and
+              // why the three counts above are their own fields rather than something to extract
+              // from this string. GRAMMAR.md states that limit rather than leaving it implied.
+              ["skippedEntries", rendered.join(", ")],
             ],
             opts,
           );

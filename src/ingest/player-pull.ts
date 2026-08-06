@@ -11,6 +11,7 @@ import {
   type AmbiguousIdentities,
   type AmbiguousIdentity,
 } from "./errors.js";
+import { dispositionOfThrown, type FailureDisposition } from "./failure-disposition.js";
 import type { PageFetcher } from "./fetch.js";
 import { findPlayerByName, resolvePlayer } from "./identity.js";
 import { ParseError, parseMatchHistory, parseTennisRecordHeader, type CourtMatchRecord } from "../parsers/index.js";
@@ -82,13 +83,27 @@ export type PlayerPullOptions = {
  * to those files (they belong to a parallel change). Built only through `ambiguousOutcome` below,
  * so the flat fields cannot disagree with the list.
  */
-type AmbiguousPullOutcome = { kind: "ambiguous" } & AmbiguousIdentity & AmbiguousIdentities;
+type AmbiguousPullOutcome = { kind: "ambiguous"; disposition: "permanent" } & AmbiguousIdentity & AmbiguousIdentities;
 
 function ambiguousOutcome(identities: readonly [AmbiguousIdentity, ...AmbiguousIdentity[]]): AmbiguousPullOutcome {
   const [first] = identities;
-  return { kind: "ambiguous", ...first, identities };
+  // Set HERE, in the one constructor of this outcome, for the same reason the flat fields are derived
+  // here: a disposition assigned at each call site is one a future site can forget or contradict.
+  // Always `permanent` — a re-run refuses identically until a human rules with `tn player distinct` /
+  // `tn player alias`, which is a decision no retry can make.
+  return { kind: "ambiguous", disposition: "permanent", ...first, identities };
 }
 
+/**
+ * Every non-`ok` variant carries a `disposition` (#98), so a consumer can act on the outcome without
+ * branching on `kind` first and without parsing `message`. That uniformity is the point: `pullTeam`'s
+ * cascade reads `result.disposition` for whatever came back, and a variant added later that forgets
+ * the field is a compile error rather than a silently unclassified failure.
+ *
+ * `unknown-target` and `ambiguous` are `permanent` by construction — a player with no stored handle
+ * and an unruled identity are both states a retry cannot leave. Only `error` is classified from the
+ * caught value, at the three sites in `pullPlayer` where the typed error still exists.
+ */
 export type PlayerPullResult =
   | {
       kind: "ok";
@@ -96,9 +111,9 @@ export type PlayerPullResult =
       courtMatchCount: number;
       archivedPath: string;
     }
-  | { kind: "unknown-target"; message: string }
+  | { kind: "unknown-target"; message: string; disposition: "permanent" }
   | AmbiguousPullOutcome
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; disposition: FailureDisposition };
 
 function resolveTargetUrl(
   db: Db,
@@ -229,12 +244,23 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
     } else if (options.target !== undefined) {
       const resolved = resolveTargetUrl(db, options.target);
       if (resolved.kind === "unknown-target") {
-        return { kind: "unknown-target", message: `unknown player target "${options.target}"` };
+        return {
+          kind: "unknown-target",
+          message: `unknown player target "${options.target}"`,
+          disposition: "permanent",
+        };
       }
       if (resolved.kind === "ambiguous") return resolved;
       resolvedUrl = resolved.url;
     } else {
-      return { kind: "error", message: "pullPlayer: one of target, url, or from is required" };
+      // A caller-shape mistake, not a runtime fault: no retry supplies an argument that was never
+      // passed. Named `permanent` directly rather than run through the classifier, which reads a
+      // caught value and there is none here.
+      return {
+        kind: "error",
+        message: "pullPlayer: one of target, url, or from is required",
+        disposition: "permanent",
+      };
     }
     url = resolvedUrl;
     try {
@@ -242,7 +268,9 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
       body = page.body;
       httpStatus = page.status;
     } catch (err) {
-      return { kind: "error", message: errorMessage(err) };
+      // The fetch `catch`: `err` is still the FetchError / timeout / socket failure here, and this is
+      // the only place its status and code exist. One line down it is a string (#98).
+      return { kind: "error", message: errorMessage(err), disposition: dispositionOfThrown(err) };
     }
   }
 
@@ -261,7 +289,8 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
     header = parseTennisRecordHeader(body, source);
     matches = parseMatchHistory(body, source);
   } catch (err) {
-    if (err instanceof ParseError) return { kind: "error", message: err.message };
+    if (err instanceof ParseError)
+      return { kind: "error", message: err.message, disposition: dispositionOfThrown(err) };
     throw err;
   }
 
@@ -389,6 +418,9 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
     return { kind: "ok", player, courtMatchCount: matches.length, archivedPath };
   } catch (err) {
     if (err instanceof AmbiguousIdentityError) return ambiguousOutcome(err.identities);
-    return { kind: "error", message: errorMessage(err) };
+    // The write transaction's `catch`. NOT uniformly permanent: `SQLITE_BUSY` from a concurrent
+    // writer is exactly the failure a re-run clears, and collapsing it into `permanent` would send an
+    // operator to investigate contention that had already resolved.
+    return { kind: "error", message: errorMessage(err), disposition: dispositionOfThrown(err) };
   }
 }
