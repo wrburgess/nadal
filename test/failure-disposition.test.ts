@@ -28,6 +28,16 @@ describe("dispositionOfThrown — HTTP status", () => {
   });
 
   /**
+   * `permanent` is EVERY non-retryable status, not only the 4xx family. `fetchPage` throws
+   * `FetchError` on any `!response.ok`, so a `304` reaches the classifier too — and both docs
+   * described the row as "any other 4xx", which omitted it. Pinned here so the prose stays true.
+   * (Codex attestation review of PR #119, rated medium.)
+   */
+  it.each([304, 100, 302])("classifies the non-4xx status %i as permanent too", (status) => {
+    expect(dispositionOfThrown(new FetchError(`fetch failed with status ${status}: u`, status, "u"))).toBe("permanent");
+  });
+
+  /**
    * The edges of the enumeration, both sides of each. A table of "the statuses we thought of" passes
    * whether the predicate is `=== 429` or `>= 429`; only the neighbours distinguish them, and an
    * off-by-one on `500` is what would silently reclassify every server error as permanent.

@@ -93,7 +93,7 @@ three bare-number fields that count them and sum to `skipped=`:
 | Disposition | Field | Means | Do |
 |---|---|---|---|
 | `retryable` | `retryable=` | positively identified as transient — HTTP 408/425/429 or any 5xx; a request timeout or abort; one of the enumerated connection codes `ECONNRESET` · `ECONNREFUSED` · `ETIMEDOUT` · `EAI_AGAIN` · `EPIPE`; or SQLite contention (`SQLITE_BUSY*`, `SQLITE_LOCKED`, `SQLITE_LOCKED_SHAREDCACHE`) | re-run that player's pull; it typically succeeds immediately |
-| `permanent` | `permanent=` | positively identified as reproducible — any other 4xx, a parse failure, an unruled ambiguous identity, or a roster row with no profile link | investigate; a retry reproduces it exactly |
+| `permanent` | `permanent=` | positively identified as reproducible — **any other HTTP status** the fetch failed on (every non-2xx that is not listed above, so a 4xx, but also a 3xx such as a `304`), a parse failure, an unruled ambiguous identity, or a roster row with no profile link | investigate; a retry reproduces it exactly |
 | `unclassified` | `unclassified=` | neither could be established from the failure itself | read the `team pull: cascading …` warning on stderr, which carries the reason |
 
 **The `retryable` row is an enumeration, and it claims nothing wider than it lists.** A network
