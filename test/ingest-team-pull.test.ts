@@ -359,7 +359,10 @@ describe("pullTeam", () => {
       const [newest, older] = [years[0]!, years[1]!];
       const victim = ROSTER_NAMES[0]!;
       // Every fixture EXCEPT the victim's older season — that one URL is simply unregistered, so the
-      // stub throws exactly as a real 503 would.
+      // stub throws and the cascade reports a skip. The stub's throw is a bare `Error`, so #98
+      // classifies it `unclassified` rather than `retryable`: this fixture reproduces the SKIP, not a
+      // particular transport failure. The dispositions themselves are pinned against real
+      // `FetchError`s in the `#98` block at the end of this file.
       const fixtures = historyFixtures(ROSTER_NAMES, years);
       delete fixtures[matchHistoryUrlFor(victim, older)];
       const fetcher = createStubFetcher({ [team.source.url]: { body: team.html }, ...fixtures });
@@ -370,7 +373,9 @@ describe("pullTeam", () => {
       if (result.kind !== "ok") throw new Error("expected ok");
       // Named with the season that failed, and ONLY that season — the newest one succeeded and must
       // not be reported as skipped. A bare name here could not tell those two apart.
-      expect(result.skippedRosterEntries).toEqual([`${victim} (year=${older})`]);
+      expect(result.skippedRosterEntries).toEqual([
+        { entry: `${victim} (year=${older})`, disposition: "unclassified", reason: expect.any(String) },
+      ]);
       // The successful season was still fetched and still committed the player.
       expect(fetcher.calls).toContain(matchHistoryUrlFor(victim, newest));
       const row = db.select().from(players).where(eq(players.canonicalName, victim)).all();
@@ -422,8 +427,8 @@ describe("pullTeam", () => {
       const years = defaultYears();
       const [newest, older] = [years[0]!, years[1]!];
       const victim = ROSTER_NAMES[0]!;
-      // The victim's NEWEST season is unregistered — the stub throws, exactly as a 503 would — while
-      // their older season is served. The inverse of the partial-failure test above.
+      // The victim's NEWEST season is unregistered — the stub throws — while their older season is
+      // served. The inverse of the partial-failure test above; same note on the disposition.
       const fixtures = historyFixtures(ROSTER_NAMES, years);
       delete fixtures[matchHistoryUrlFor(victim, newest)];
       const fetcher = createStubFetcher({ [team.source.url]: { body: team.html }, ...fixtures });
@@ -432,7 +437,9 @@ describe("pullTeam", () => {
 
       expect(result.kind).toBe("ok");
       if (result.kind !== "ok") throw new Error("expected ok");
-      expect(result.skippedRosterEntries).toEqual([`${victim} (year=${newest})`]);
+      expect(result.skippedRosterEntries).toEqual([
+        { entry: `${victim} (year=${newest})`, disposition: "unclassified", reason: expect.any(String) },
+      ]);
 
       // The handle is the older season's — the best one actually obtained — never null.
       const row = db.select().from(players).where(eq(players.canonicalName, victim)).all()[0];
@@ -545,7 +552,16 @@ describe("pullTeam", () => {
 
       expect(result.kind).toBe("ok");
       if (result.kind !== "ok") throw new Error("expected ok");
-      expect(result.skippedRosterEntries).toEqual(["Ellis Eastwick"]);
+      // Unqualified by season (no season was ever attempted) and `permanent` (#98): no retry adds a
+      // profile link the team page does not carry. This entry never passes through `pullPlayer`, so
+      // it reaches the list by its own path and is the one most easily left unclassified.
+      expect(result.skippedRosterEntries).toEqual([
+        {
+          entry: "Ellis Eastwick",
+          disposition: "permanent",
+          reason: "roster entry has no profile link on the team page",
+        },
+      ]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Ellis Eastwick"));
 
       // The player still exists — the roster membership isn't crashed or silently dropped, only
@@ -1362,7 +1378,13 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
       // The team itself committed; only the enrichment was skipped.
       expect(result.kind).toBe("ok");
       if (result.kind !== "ok") throw new Error("expected ok");
-      expect(result.skippedRosterEntries).toEqual([FAILING_ENTRY]);
+      expect(result.skippedRosterEntries).toEqual([
+        {
+          entry: FAILING_ENTRY,
+          disposition: "retryable",
+          reason: `fetch failed with status 503: ${FAILING_URL}`,
+        },
+      ]);
       expect(result.years).toEqual([ONLY_SEASON]);
 
       expect(warnSpy).toHaveBeenCalledWith(
@@ -1442,6 +1464,7 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
       cascadeFailureWarning("Ellis Eastwick", {
         kind: "unknown-target",
         message: 'unknown player target "Ellis Eastwick"',
+        disposition: "permanent",
       }),
     ).toBe(
       'team pull: cascading "Ellis Eastwick" failed (unknown-target) — unknown player target "Ellis Eastwick" — skipped',
@@ -1459,6 +1482,7 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
     const rendered = cascadeFailureWarning(`Ellis${RTL_OVERRIDE}${ESC}[2J Eastwick`, {
       kind: "error",
       message: "fetch failed with status 503",
+      disposition: "retryable",
     });
     expect(rendered).toBe(
       'team pull: cascading "Ellis  [2J Eastwick" failed (error) — fetch failed with status 503 — skipped',
@@ -1467,9 +1491,175 @@ describe("the cascade warning says WHY a roster entry was skipped, for every fai
 
   it("an `ambiguous` renders the three facts through the shared formatter, unchanged from #94", () => {
     const identity = { incoming: "Austin DuBois", candidates: ["Justin DuBois"], context: "match opponent" };
-    expect(cascadeFailureWarning("John Jennings", { kind: "ambiguous", ...identity, identities: [identity] })).toBe(
+    expect(
+      cascadeFailureWarning("John Jennings", {
+        kind: "ambiguous",
+        disposition: "permanent",
+        ...identity,
+        identities: [identity],
+      }),
+    ).toBe(
       'team pull: cascading "John Jennings" failed (ambiguous) — ' +
         'ambiguous identity "Austin DuBois" (match opponent) — near: Justin DuBois — skipped',
     );
+  });
+});
+
+/**
+ * Issue #98. #96 put the REASON on the stderr warning line; every machine-readable surface still
+ * carried bare names, so a caller reading the summary line or the MCP result could not tell a
+ * rate-limited pull worth re-running from a dead URL or a page-shape regression worth investigating.
+ *
+ * These assert the SKIPPED RECORD, which is where that distinction now lives. The warning line is
+ * deliberately unchanged and is asserted alongside, because the record's `reason` and the warning's
+ * reason come from one derivation (`failureReason`) and a test reading only one of them would let the
+ * two drift apart — the shape `cascadeYears`' docblock records #90/PR #91 paying two rounds for.
+ */
+describe("a skipped roster entry says what to DO about it (#98)", () => {
+  useTnDbPath();
+  useTnRawPath();
+
+  const TEAM_URL = "https://www.tennisrecord.com/adult/teamprofile.aspx?teamname=Cascade&year=2026";
+  const ONLY_SEASON = "2026";
+  const RETRYING = "Avery Ashby";
+  const PERMANENT = "Nova Norbury";
+  const UNLINKED = "Uma Unlinked";
+
+  /**
+   * A roster whose members each fail (or succeed) their own way, so ONE pull can produce every
+   * disposition at once. `fetcherFailing` above serves a single failure; a mixed run is what proves
+   * the disposition is carried per ENTRY rather than decided once for the whole cascade.
+   */
+  function mixedFetcher(rosterHtml: string, failures: Record<string, unknown>): PageFetcher {
+    return async (url: string) => {
+      if (url === TEAM_URL) {
+        return { url, status: 200, body: rosterHtml, fetchedAt: new Date().toISOString() };
+      }
+      const failure = failures[url];
+      if (failure !== undefined) throw failure;
+      // Serve whichever roster member this history URL belongs to; the header parser reads the name
+      // back out, so handing it the wrong one would fail for a reason unrelated to the test.
+      const name = [RETRYING, PERMANENT, UNLINKED].find((n) => url === matchHistoryUrlFor(n, ONLY_SEASON));
+      if (name === undefined) throw new Error(`test fetcher: unexpected url "${url}"`);
+      return { url, status: 200, body: syntheticEmptyMatchHistory(name), fetchedAt: new Date().toISOString() };
+    };
+  }
+
+  it("classifies a 5xx cascade failure as retryable, with the reason the warning carries", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const url = matchHistoryUrlFor(RETRYING, ONLY_SEASON);
+      const result = await pullTeam({
+        db,
+        fetchPage: mixedFetcher(buildRosterPage({ teamName: "Cascade Test", players: [RETRYING] }), {
+          [url]: new FetchError(`fetch failed with status 503: ${url}`, 503, url),
+        }),
+        target: TEAM_URL,
+        cascadePlayers: true,
+        since: ONLY_SEASON,
+      });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.skippedRosterEntries).toEqual([
+        {
+          entry: `${RETRYING} (year=${ONLY_SEASON})`,
+          disposition: "retryable",
+          reason: `fetch failed with status 503: ${url}`,
+        },
+      ]);
+      // ONE derivation: the record's reason is exactly the substring the warning line renders.
+      expect(warnSpy).toHaveBeenCalledWith(
+        `team pull: cascading "${RETRYING} (year=${ONLY_SEASON})" failed (error) — ` +
+          `fetch failed with status 503: ${url} — skipped`,
+      );
+    } finally {
+      warnSpy.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  // The neighbouring case, and the one a wrong `retryable` label would ruin: same shape of failure,
+  // opposite instruction to the operator.
+  it("classifies a 404 cascade failure as permanent", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const url = matchHistoryUrlFor(PERMANENT, ONLY_SEASON);
+      const result = await pullTeam({
+        db,
+        fetchPage: mixedFetcher(buildRosterPage({ teamName: "Cascade Test", players: [PERMANENT] }), {
+          [url]: new FetchError(`fetch failed with status 404: ${url}`, 404, url),
+        }),
+        target: TEAM_URL,
+        cascadePlayers: true,
+        since: ONLY_SEASON,
+      });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.skippedRosterEntries).toEqual([
+        {
+          entry: `${PERMANENT} (year=${ONLY_SEASON})`,
+          disposition: "permanent",
+          reason: `fetch failed with status 404: ${url}`,
+        },
+      ]);
+    } finally {
+      warnSpy.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  /**
+   * Two dispositions plus the no-link skip in ONE pull — the case a per-cascade (rather than
+   * per-entry) classification cannot represent, since it would have to pick one answer for a run
+   * that genuinely has three. The no-profile-link entry is the one that never reaches `pullPlayer`.
+   */
+  it("carries a different disposition per entry within one cascade", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const roster = buildRosterPage({ teamName: "Cascade Test", players: [RETRYING, PERMANENT, UNLINKED] });
+      const unlinked = roster.replace(
+        `<a class="link" href="/adult/profile.aspx?playername=${UNLINKED}">${UNLINKED}</a>`,
+        UNLINKED,
+      );
+      expect(unlinked, "the fixture must actually drop the profile link").not.toBe(roster);
+
+      const retryUrl = matchHistoryUrlFor(RETRYING, ONLY_SEASON);
+      const permUrl = matchHistoryUrlFor(PERMANENT, ONLY_SEASON);
+      const result = await pullTeam({
+        db,
+        fetchPage: mixedFetcher(unlinked, {
+          [retryUrl]: new FetchError("rate limited", 429, retryUrl),
+          [permUrl]: new FetchError("gone", 410, permUrl),
+        }),
+        target: TEAM_URL,
+        cascadePlayers: true,
+        since: ONLY_SEASON,
+      });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.skippedRosterEntries).toEqual([
+        // Recorded FIRST and unqualified — hoisted out of the season loop, because no season was ever
+        // attempted for it (#108's rule, preserved through this change).
+        {
+          entry: UNLINKED,
+          disposition: "permanent",
+          reason: "roster entry has no profile link on the team page",
+        },
+        { entry: `${RETRYING} (year=${ONLY_SEASON})`, disposition: "retryable", reason: "rate limited" },
+        { entry: `${PERMANENT} (year=${ONLY_SEASON})`, disposition: "permanent", reason: "gone" },
+      ]);
+    } finally {
+      warnSpy.mockRestore();
+      sqlite.close();
+    }
   });
 });

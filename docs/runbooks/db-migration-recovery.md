@@ -150,9 +150,17 @@ merge-reconciliation logic in production for a database that is disposable by de
 
 Only reachable on a database you migrated **on the `fix/46-team-url-unique-identity` branch before
 it was merged** — i.e. while #46's migration was still numbered `0006`. `main` then landed #49's
-own `0006`/`0007`/`0008`, so #46's renumbered to `0009`, and drizzle's migrator decides what to
-apply by a **timestamp watermark**, not per-migration hashes (`sqlite-core/dialect.js`: apply only
-`if (Number(lastDbMigration.created_at) < migration.folderMillis)`).
+own `0006`/`0007`/`0008`, so #46's renumbered to `0009`, and the migrator decides what to
+apply by a **timestamp watermark**, not per-migration hashes (`src/db/client.ts`'s `applyMigrations`:
+apply only `if (Number(watermark.createdAt) < migration.folderMillis)`).
+
+The **rule** is unchanged since this section was written; **who owns it** changed in issue #117.
+`tn` used to call drizzle's `migrate()` (`sqlite-core/dialect.js`), which read this watermark
+*outside* the transaction that acted on it — so two concurrent `tn db migrate` processes could both
+read an empty journal and the second would replay migrations the first had already committed.
+`applyMigrations` reads it under `BEGIN IMMEDIATE` instead. The watermark comparison below is
+byte-for-byte drizzle's, and a test asserts the two implementations produce identical databases, so
+everything this section says about recovery still holds exactly as written.
 
 That watermark is what breaks: a database carrying the old `0006` recorded `when = 1785511662427`,
 which sits *between* #49's `0006` (`1785511384473`) and its `0007` (`1785515827922`). So on the next

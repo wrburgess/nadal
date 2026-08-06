@@ -504,7 +504,16 @@ describe("the ambiguous-identity report (#94)", () => {
         // warning and a `partial`, not an error.
         expect(result.kind).toBe("ok");
         if (result.kind !== "ok") throw new Error("expected ok");
-        expect(result.skippedRosterEntries).toEqual([`${PROFILED} (year=${year})`]);
+        // `permanent` (#98): re-running refuses identically until someone rules with
+        // `tn player distinct` / `tn player alias`. The `reason` is the SAME rendering the warning
+        // below carries — one derivation (`failureReason`), asserted from both ends here.
+        expect(result.skippedRosterEntries).toEqual([
+          {
+            entry: `${PROFILED} (year=${year})`,
+            disposition: "permanent",
+            reason: `ambiguous identity "${FIRST_PARTNER}" (match partner) — near: ${near}`,
+          },
+        ]);
 
         expect(warnSpy).toHaveBeenCalledWith(
           `team pull: cascading "${PROFILED} (year=${year})" failed (ambiguous) — ` +
@@ -546,7 +555,17 @@ describe("the ambiguous-identity report (#94)", () => {
 
         expect(result.kind).toBe("ok");
         if (result.kind !== "ok") throw new Error("expected ok");
-        expect(result.skippedRosterEntries).toEqual([`${PROFILED} (year=${year})`]);
+        // The whole pass's rendering reaches the RECORD too, not only the stderr line — an MCP
+        // caller sees both ambiguities without reading stderr at all (#98).
+        expect(result.skippedRosterEntries).toEqual([
+          {
+            entry: `${PROFILED} (year=${year})`,
+            disposition: "permanent",
+            reason:
+              `2 ambiguous identities — [1] "${FIRST_PARTNER}" (match partner) — near: ${nearPartner}; ` +
+              `[2] "${FIRST_OPPONENT}" (match opponent) — near: ${nearOpponent}`,
+          },
+        ]);
 
         expect(warnSpy).toHaveBeenCalledWith(
           `team pull: cascading "${PROFILED} (year=${year})" failed (ambiguous) — 2 ambiguous identities — ` +

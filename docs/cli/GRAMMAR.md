@@ -77,15 +77,43 @@ command is an error, not silently ignored.
 `status=` carries a third value beyond `ok` and `error`: **`status=partial`**, emitted by
 `tn team pull --players` when the team itself was written but one or more requested roster cascades
 did not land. It prints to stderr and **exits non-zero**, and names the affected entries in
-`skipped=` / `skippedEntries=`. Each entry reads `"<name> (year=<Y>)"` (#108): the cascade spans
-several seasons, and the same player can fail one season and succeed another — a bare name could not
-say which, nor whether a retry should re-fetch one season or all of them. The one exception is a
-roster entry with **no profile link at all**, which is a property of the entry rather than of any
-season: it is named once, unqualified, because no season was ever attempted for it. The team write
-has already committed and is not rolled back — that
+`skipped=` / `skippedEntries=`. Each entry reads `"<name> (year=<Y>) [<disposition>]"`. The
+`(year=<Y>)` qualifier is #108's: the cascade spans several seasons, and the same player can fail one
+season and succeed another — a bare name could not say which, nor whether a retry should re-fetch one
+season or all of them. The one exception is a roster entry with **no profile link at all**, which is a
+property of the entry rather than of any season: it is named once, unqualified, because no season was
+ever attempted for it. The team write has already committed and is not rolled back — that
 is precisely why the outcome is `partial` rather than `error`, and why it must not be reported as
 `ok`: a caller that reads only the exit code would otherwise record a success in which zero of the
 requested player pulls happened.
+
+The `[<disposition>]` suffix is #98's, and it answers *what to do next* — three values, alongside
+three bare-number fields that count them and sum to `skipped=`:
+
+| Disposition | Field | Means | Do |
+|---|---|---|---|
+| `retryable` | `retryable=` | positively identified as transient — HTTP 408/425/429 or any 5xx; a request timeout or abort; one of the enumerated connection codes `ECONNRESET` · `ECONNREFUSED` · `ETIMEDOUT` · `EAI_AGAIN` · `EPIPE`; or SQLite contention (`SQLITE_BUSY*`, `SQLITE_LOCKED`, `SQLITE_LOCKED_SHAREDCACHE`) | re-run that player's pull; it typically succeeds immediately |
+| `permanent` | `permanent=` | positively identified as reproducible — **any other HTTP status** the fetch failed on (every non-2xx that is not listed above, so a 4xx, but also a 3xx such as a `304`), a parse failure, an unruled ambiguous identity, or a roster row with no profile link | investigate; a retry reproduces it exactly |
+| `unclassified` | `unclassified=` | neither could be established from the failure itself | read the `team pull: cascading …` warning on stderr, which carries the reason |
+
+**The `retryable` row is an enumeration, and it claims nothing wider than it lists.** A network
+failure whose code is *not* on that list — `ENOTFOUND`, `ENETUNREACH`, `EHOSTUNREACH` — reports
+`unclassified`, not `retryable`. `ENOTFOUND` in particular is NXDOMAIN, which a permanently dead host
+returns exactly as a flapping resolver does, so nothing about it identifies a transient fault;
+`EAI_AGAIN` is on the list precisely because the resolver itself says "temporary, retry".
+
+`unclassified` is a real third answer and not a placeholder: a wrong `retryable` would send an
+operator to re-run a doomed pull twice before reading the warning, which is worse than saying nothing.
+Every `retryable` and `permanent` verdict is derived from a typed error — an HTTP status, an error
+class, or a `code` — never from matching the text of a message, because a failure's message can quote
+a fetched page.
+
+**`skippedEntries=` is a human display, not a parse target.** A roster name is scraped, so it may
+itself contain a comma or a bracket, and neither the `", "` separator nor the `[…]` suffix is escaped
+against that. A caller that needs to act per entry reads the `team_pull` MCP tool's
+`skippedRosterEntries`, which returns one `{ entry, disposition, reason }` record per skip; a caller
+that only needs to size a re-run reads the three count fields, which are their own `key=value` pairs
+and need no extraction from a string.
 
 The parity test (`test/cli-grammar-parity.test.ts`) fails CI when this table and the router's
 registry diverge — in either direction. `dispatch` resolves the noun+verb pair FIRST, and how it

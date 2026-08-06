@@ -17,6 +17,7 @@ import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { courtMatchPlayers, courtMatches, events, players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
 import * as fetchModule from "../src/ingest/fetch.js";
+import * as teamPullModule from "../src/ingest/team-pull.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
@@ -1186,6 +1187,109 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("four-digit year");
+
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Issue #98. An agent driving nadal over MCP is the caller LEAST able to read a stderr warning
+   * line, and until now it received bare names — so it could not tell a rate-limited pull worth
+   * re-running from a dead profile URL worth investigating. The handler hand-builds its result, so
+   * this field does not follow the service's shape on its own; that is what this pins.
+   */
+  it("team_pull over MCP returns a disposition and a reason per skipped entry (#98)", async () => {
+    runMigrations();
+    const teamFixture = loadFixture("tennisrecord/team");
+    // Every cascaded player page is structurally broken, so each pull returns a ParseError —
+    // classified `permanent`, since retrying reproduces it.
+    vi.spyOn(fetchModule, "fetchPage").mockImplementation(async (url: string) => ({
+      url,
+      status: 200,
+      body: url === teamFixture.source.url ? teamFixture.html : "<html><body>not a match history</body></html>",
+      fetchedAt: new Date().toISOString(),
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "team_pull",
+      arguments: { target: teamFixture.source.url, players: true, since: "2026" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    const skipped = (
+      JSON.parse(textOf(result)) as {
+        skippedRosterEntries: Array<{ entry: string; disposition: string; reason: string }>;
+      }
+    ).skippedRosterEntries;
+
+    expect(skipped).toHaveLength(18);
+    // Asserted on VALUES, not on `typeof` — a shape check passes against three empty strings.
+    for (const row of skipped) {
+      expect(row.entry).toMatch(/ \(year=2026\)$/);
+      expect(row.disposition).toBe("permanent");
+      expect(row.reason).toContain("selector:");
+    }
+
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * `sanitizeJson` recursed into arrays and flat strings before #98; the skipped entries are now
+   * NESTED objects, and `reason` is a second attacker-influenced string beside the scraped name (a
+   * ParseError quotes the document it choked on). This proves the guard reaches inside the record
+   * rather than only the array it sits in — an omission that would be invisible in every other test.
+   */
+  it("team_pull sanitizes inside the nested skipped-entry records, not only the flat fields (#98)", async () => {
+    runMigrations();
+    const RTL_OVERRIDE = String.fromCharCode(0x202e);
+    const ESC = String.fromCharCode(0x1b);
+    const teamFixture = loadFixture("tennisrecord/team");
+
+    vi.spyOn(teamPullModule, "pullTeam").mockResolvedValue({
+      kind: "ok",
+      team: {
+        id: 1,
+        name: "Cascade Test",
+        section: null,
+        district: null,
+        tennislinkUrl: null,
+        rosterObservedAt: null,
+        rosterObservedUrl: null,
+        tennisrecordUrl: null,
+        isHome: null,
+        nameKey: null,
+        nameKeyLength: null,
+      },
+      rosterCount: 1,
+      matchCount: 0,
+      archivedPath: "raw/tennisrecord/x.html",
+      skippedRosterEntries: [
+        {
+          entry: `Ann${RTL_OVERRIDE} Ashby (year=2026)`,
+          disposition: "permanent",
+          reason: `parse failed${ESC}[2J at row 3`,
+        },
+      ],
+      retiredCount: 0,
+      years: ["2026"],
+    });
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "team_pull",
+      arguments: { target: teamFixture.source.url, players: true },
+    });
+
+    const skipped = (
+      JSON.parse(textOf(result)) as {
+        skippedRosterEntries: Array<{ entry: string; disposition: string; reason: string }>;
+      }
+    ).skippedRosterEntries;
+
+    expect(skipped).toEqual([
+      { entry: "Ann  Ashby (year=2026)", disposition: "permanent", reason: "parse failed [2J at row 3" },
+    ]);
 
     vi.restoreAllMocks();
   });

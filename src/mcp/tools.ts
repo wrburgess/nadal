@@ -147,6 +147,15 @@ export const MCP_TOOLS: McpToolDef[] = [
           rosterCount: result.rosterCount,
           matchCount: result.matchCount,
           archivedPath: result.archivedPath,
+          // Issue #98: each element is now a RECORD — `{ entry, disposition, reason }` — not a bare
+          // name. This is a breaking change to this tool's result shape, made deliberately: an agent
+          // driving nadal over MCP is the caller least able to read a stderr warning line, so a name
+          // list left it unable to tell a pull worth re-running from one worth investigating. It
+          // gets the fields; the CLI renders the same records into its summary line.
+          //
+          // `sanitizeJson` (src/sanitize.ts) recurses into arrays and plain-prototype objects, so
+          // the scraped `entry` and the failure-quoting `reason` are both sanitized at this
+          // boundary exactly as the flat strings were.
           skippedRosterEntries: result.skippedRosterEntries,
           // Issue #49: same reason `tn team pull` prints `retired=N` — retirement REMOVES a player
           // from every current-roster read and write gate, so it has to be visible in the surface's
