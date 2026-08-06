@@ -1,3 +1,4 @@
+import { dbBackup } from "./commands/db-backup.js";
 import { dbMigrate } from "./commands/db-migrate.js";
 import { eventAdd } from "./commands/event-add.js";
 import { lineupPlan } from "./commands/lineup-plan.js";
@@ -34,6 +35,7 @@ export type Command = {
 
 export const COMMANDS: Command[] = [
   dbMigrate,
+  dbBackup,
   teamPull,
   teamShow,
   teamHome,

@@ -112,6 +112,7 @@ looks for `--help` then depends on whether that resolved:
 | Command | Summary |
 |---------|---------|
 | `tn db migrate` | Apply pending schema migrations |
+| `tn db backup` | Take a verified snapshot of the database |
 | `tn team pull` | Pull a team roster and schedule from TennisRecord |
 | `tn team show` | Show a team's roster and match record |
 | `tn team home` | Designate a team as home (our team) for availability, notes, and dossiers |
@@ -129,7 +130,7 @@ looks for `--help` then depends on whether that resolved:
 
 Planned (spec § Interfaces; rows move up as commands land): `team list`,
 `player list`, `event show`,
-`db backup/restore`.
+`db restore`.
 
 `tn team pull <name|tr:…|url> [--players] [--since YYYY] [--from … --source-url …]` — `--players`
 cascades each roster entry with a profile link through `pullPlayer`, and `--since` (#108) names the

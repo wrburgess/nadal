@@ -3,12 +3,20 @@
 ## When to use this
 
 Before anything risky to `data/nadal.db` (or wherever `TN_DB_PATH` points) — a migration, a bulk
-re-pull, an experiment you might want to walk back. **`tn db backup` and `tn db restore` do not
-exist.** Grep `src/cli/router.ts`'s `COMMANDS` registry — the 13 real commands — and neither noun
-appears; `docs/cli/GRAMMAR.md`'s *Planned* section lists `db backup/restore` as a future surface,
-not a present one. Until it ships, backing up means talking to SQLite directly. This is that drill,
-verified end to end against a real database: take a safe backup, prove it actually holds your rows,
-restore it, and confirm `tn db migrate` still accepts the result.
+re-pull, an experiment you might want to walk back. **Run `tn db backup` (#110).** It resolves the
+source from `TN_DB_PATH` (`data/nadal.db` by default), refuses rather than silently overwriting an
+existing snapshot, and reads back the written file's own table-by-table row counts against the
+source before reporting success — the coordination step 2 below exists to hand-roll. On a
+verification disagreement it leaves the (still-diagnosable) snapshot on disk rather than deleting
+the only evidence of what went wrong.
+
+**`tn db restore` does not exist yet.** Grep `src/cli/router.ts`'s `COMMANDS` registry and the noun
+is absent; `docs/cli/GRAMMAR.md`'s *Planned* section still lists `db restore` as a future surface.
+Until it ships, getting a backup file BACK into place means talking to SQLite directly — steps 3-5
+below. Steps 1 and 2 below keep their manual `sqlite3` form too, labelled as the fallback for a
+machine with no `tn` on `PATH`; prefer `tn db backup` when you have it, verified end to end against
+a real database in the same way this drill always was: take a safe backup, prove it actually holds
+your rows, restore it, and confirm `tn db migrate` still accepts the result.
 
 ## Before you start
 
@@ -27,6 +35,18 @@ restore it, and confirm `tn db migrate` still accepts the result.
 ## Steps
 
 ### 1. Take a backup — with `.backup`, never `cp`
+
+**Prefer `tn db backup`** — no arguments, no prompts:
+
+```sh
+tn db backup
+```
+
+Prints `db backup status=ok source="..." destination="..." tables=N rows=M` and exits 0, or
+`status=error message="..."` on stderr and exits 1 on any refusal or verification failure. The
+destination is always `{source's directory}/backups/{name}-{UTC timestamp}.db`; there is no `--to`
+override in v1. What follows is the manual fallback — for a machine with no `tn` on `PATH`, or to
+hand-verify the mechanism `tn db backup` automates.
 
 ```sh
 printf 'absolute path to the live database: '; IFS= read -r DB || DB=
@@ -100,6 +120,11 @@ apostrophe (verified against the same path); it does not survive a literal `"` i
 avoidable by not choosing a backup destination that contains one.
 
 ### 2. Verify the backup — a passing `PRAGMA` is not enough on its own
+
+`tn db backup` already did this step itself — its readback-and-compare against the source's own
+table counts (not merely `PRAGMA integrity_check`) IS this verification, and a disagreement is why
+it would have exited non-zero above rather than printing `status=ok`. Run the manual version below
+only when you took the backup by hand in step 1's fallback, or want independent confirmation.
 
 ```sh
 # Check the file exists BEFORE opening it: `sqlite3 "$BAK"` on a missing path creates an empty
@@ -238,10 +263,13 @@ an ad hoc leftover file is the unreliable one.
 
 ## Known limitations
 
-- **`tn db backup`/`tn db restore` do not exist.** Both are listed in `docs/cli/GRAMMAR.md`'s
-  *Planned* section only; the 15 commands actually in `src/cli/router.ts`'s `COMMANDS` registry
-  include neither. This whole runbook is the manual substitute, and it stays that way until that
-  work is scoped and shipped.
+- **`tn db restore` does not exist.** It is listed in `docs/cli/GRAMMAR.md`'s *Planned* section
+  only — grep `src/cli/router.ts`'s `COMMANDS` registry and the noun is absent. `tn db backup`
+  (#110) shipped, so steps 1-2 above prefer it; steps 3-5 (the restore half) remain the manual
+  substitute until restore is scoped and shipped too.
+- **`tn db backup` has no `--to` flag.** The destination is always derived from the source's own
+  path (`{source's directory}/backups/{name}-{UTC timestamp}.db`); there is no way to name a
+  different destination from the CLI. Out of scope for #110 per PROJECT.md -> "What a PR is for".
 - **No automated check verifies this runbook's prose.** `test/cli-grammar-parity.test.ts`
   parity-checks only `docs/cli/GRAMMAR.md`'s `## Commands` table (noun/verb/summary, in both
   directions); it has no opinion on `docs/runbooks/`, and nothing else reads this file either. A
