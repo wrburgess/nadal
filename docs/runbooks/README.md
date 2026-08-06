@@ -50,5 +50,6 @@ command is missing.
 - [pre-tournament-full-pull.md](pre-tournament-full-pull.md) — refresh every scouted team end to
   end: live TennisRecord pulls, the human-in-the-loop USTA/WTN path, and the TennisLink hole (#27)
   none of it closes
-- [backup-restore.md](backup-restore.md) — `sqlite3 .backup`/`.restore` drill against the database
-  `tn` actually ships today (no `tn db backup`/`db restore` command exists yet)
+- [backup-restore.md](backup-restore.md) — `tn db backup` for the snapshot half (#110), with the
+  hand-run `sqlite3` drill retained below it as the fallback for a machine without `tn`; restoring is
+  still the manual `.restore` drill, since no `tn db restore` command exists yet

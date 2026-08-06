@@ -6,6 +6,7 @@
 // this whole table can be unit/parity-tested without standing up a server or a transport.
 
 import { z } from "zod";
+import { backupDatabase } from "../db/backup.js";
 import { openDb, runMigrations } from "../db/client.js";
 import { teams } from "../db/schema.js";
 import { eq } from "drizzle-orm";
@@ -82,6 +83,21 @@ export const MCP_TOOLS: McpToolDef[] = [
       runMigrations();
       return { status: "ok" };
     },
+  },
+
+  {
+    name: "db_backup",
+    cliCommand: "db backup",
+    description: "Take a verified snapshot of the database",
+    inputShape: {},
+    // Not optional (issue #110, Task 5): test/mcp-tool-parity.test.ts requires a tool per
+    // registered command, and `CLI_ONLY_COMMANDS` is reserved for a command with no service
+    // function to call — `db backup` has one (`backupDatabase`), so it is mirrored like every
+    // other command rather than opted out. Returns the real `BackupResult` object, matching every
+    // other writer above that hands back its own result rather than a bare `{status:"ok"}` —
+    // `db_migrate`'s literal status object above is the exception, since `runMigrations` itself
+    // returns nothing to report.
+    handler: async () => backupDatabase(),
   },
 
   {
