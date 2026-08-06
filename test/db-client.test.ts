@@ -117,7 +117,7 @@ describe("openDb() vs. a missing database (issue #111)", () => {
   // work). The result was that a misconfigured `TN_DB_PATH` told the operator to run `tn db
   // migrate` — which cannot repair ENOTDIR — while `writeRequestLogRow`'s MissingDatabaseError
   // carve-out silently swallowed the real storage failure. Only the raw `open(2)` errno separates
-  // them, which is what `isAbsentPath` now uses.
+  // them, which is what `openFailureCode` now uses.
   //
   // ENOTDIR is the case pinned here because it is deterministic for any user. The EACCES sibling is
   // deliberately not asserted: `chmod 000` does not stop a process running as root, so the test

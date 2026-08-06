@@ -259,7 +259,7 @@ describe("request telemetry vs. a database that does not exist yet (issue #111)"
   // adversarial review, PR #116, [medium], class A). The test above proves a failure against an
   // EXISTING database still prints. This one proves a failure against a path that does not exist —
   // but is not *absent*, it is unreachable — also still prints, rather than being mistaken for the
-  // benign pre-bootstrap case and discarded. Before `isAbsentPath` classified by errno, a
+  // benign pre-bootstrap case and discarded. Before `openFailureCode` classified by errno, a
   // `TN_DB_PATH` pointing THROUGH a regular file produced a MissingDatabaseError here, so this
   // silently swallowed a genuine storage misconfiguration and the operator saw nothing at all.
   it("still prints when the database path is unopenable rather than absent (parent is a regular file)", async () => {

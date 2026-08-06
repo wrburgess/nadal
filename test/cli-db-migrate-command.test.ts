@@ -125,7 +125,7 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
       // UNREACHABLE, and `tn db migrate` cannot fix ENOTDIR: swallowing it discarded the one
       // signal pointing at the real, misconfigured `TN_DB_PATH`.
       //
-      // `isAbsentPath` now classifies by `open(2)` errno, so only ENOENT is silenced and this
+      // `openFailureCode` now classifies by `open(2)` errno, so only ENOENT is silenced and this
       // ENOTDIR surfaces. Asserted as two DISTINCT lines rather than a bumped count, so the test
       // fails if either message is lost or if one is printed twice.
       expect(errorSpy).toHaveBeenCalledTimes(2);
