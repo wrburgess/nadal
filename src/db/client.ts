@@ -1,6 +1,11 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+// `drizzle-orm/migrator` is a PUBLIC entry point in drizzle-orm's `exports` map, not a reach into
+// its internals — it is the same module drizzle's own `better-sqlite3/migrator` imports this same
+// function from. Issue #117 replaces drizzle's `migrate()` (see `applyMigrations` below) but keeps
+// its migration-file reader, so the journal parsing, the `--> statement-breakpoint` split and the
+// hash derivation all stay drizzle's rather than becoming a second implementation to keep in step.
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,10 +33,12 @@ export type OpenDbOptions = {
   create?: boolean;
 };
 
-// drizzle-orm's migrator resolves `migrationsFolder` with plain `fs` calls against
+// drizzle-orm's `readMigrationFiles` resolves `migrationsFolder` with plain `fs` calls against
 // `process.cwd()` — it does no path resolution of its own. Anchor to this module's own
 // location (repo root, two levels up from src/db/) so `tn db migrate` finds the migrations
-// regardless of the caller's working directory.
+// regardless of the caller's working directory. (Still true after #117: the migration APPLICATION
+// moved into `applyMigrations` below, but reading the files is still drizzle's, and it still
+// resolves this path the same way.)
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = join(MODULE_DIR, "..", "..", "drizzle");
 
@@ -114,6 +121,72 @@ function openFailureCode(path: string): string | null {
   }
 }
 
+/**
+ * `attempts` × `delayMs` is 5s deliberately — the same budget as better-sqlite3's default
+ * `busy_timeout`, which bounds the OTHER wait a concurrent bootstrap can encounter (`BEGIN IMMEDIATE`
+ * in `applyMigrations`). One bootstrap should not have two different patiences.
+ */
+const WAL_CONVERSION_ATTEMPTS = 250;
+const WAL_CONVERSION_DELAY_MS = 20;
+
+/**
+ * Blocks the thread for `ms`. `Atomics.wait` rather than a spin on `Date.now()`: better-sqlite3 is
+ * synchronous top to bottom, so there is no async point to yield at, and a spin would burn a core
+ * for the whole wait. Node permits `Atomics.wait` on the main thread (browsers do not).
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Issue #117, mechanism 2. `PRAGMA journal_mode = WAL` is **not** covered by SQLite's busy handler:
+ * converting a database's journal mode needs a brief exclusive lock, and when it cannot get one
+ * SQLite returns `SQLITE_BUSY` immediately instead of waiting out `busy_timeout`. Two `tn db migrate`
+ * processes bootstrapping the same new database therefore collide *here*, in `openDb`, before the
+ * migrator is reached at all — which is why `applyMigrations`' `BEGIN IMMEDIATE` cannot fix this half
+ * on its own. It accounted for 5 of 11 measured failures.
+ *
+ * **The reachable window is only the conversion itself**, and that bound is measured rather than
+ * argued: on a database that is ALREADY `wal`, the pragma is a no-op needing no lock and succeeds
+ * even while another connection holds an open write transaction. So this retry is reached only on the
+ * first open of a brand-new file, and the other ~30 `openDb` call sites — which always meet an
+ * already-converted database — never enter it. `test/db-migrate-serialization.test.ts` pins both
+ * halves of that, so a later change cannot widen the window silently.
+ *
+ * Reading the mode before setting it is what implements that bound: the early return is the
+ * already-`wal` case, not an optimisation.
+ *
+ * `attempts` and `delayMs` are parameters solely so the exhaustion case can be exercised in
+ * milliseconds instead of five seconds — the same kind of narrow, test-facing seam as
+ * `OpenDbOptions.verbose` above, and no caller passes either. Exported for the same reason
+ * `losslessPath` and `UNRENDERABLE` below are: the contended cases can be set up directly here and
+ * only awkwardly through `openDb`.
+ *
+ * What this deliberately does NOT do: check the mode the pragma RETURNS. SQLite can in principle
+ * report the unchanged mode rather than raising, and a database that silently stayed in `delete`
+ * mode would slip through. That is exactly today's behaviour — the pre-#117 code discarded the
+ * pragma's return value too — and no test in this repo can reach it, so guarding it would add a
+ * branch nothing can kill (`rules/testing.md`). The scope here is the SQLITE_BUSY collision that was
+ * measured, not every way a conversion could disappoint.
+ */
+export function enableWal(
+  sqlite: Database.Database,
+  attempts: number = WAL_CONVERSION_ATTEMPTS,
+  delayMs: number = WAL_CONVERSION_DELAY_MS,
+): void {
+  for (let attempt = 1; ; attempt++) {
+    if (sqlite.pragma("journal_mode", { simple: true }) === "wal") return;
+    try {
+      sqlite.pragma("journal_mode = WAL");
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "SQLITE_BUSY" || attempt >= attempts) throw err;
+    }
+    sleepSync(delayMs);
+  }
+}
+
 export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
   if (options.create === true) {
     mkdirSync(dirname(path), { recursive: true });
@@ -138,7 +211,7 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
     }
     throw err;
   }
-  sqlite.pragma("journal_mode = WAL");
+  enableWal(sqlite);
   sqlite.pragma("foreign_keys = ON");
   return { sqlite, db: drizzle(sqlite) };
 }
@@ -218,20 +291,33 @@ export function losslessPath(value: string): string {
 }
 
 /**
- * drizzle-orm's `SQLiteSyncDialect` wraps every failed migration statement in a `DrizzleError`
- * whose OWN message is the generic `Failed to run the query '<sql>'` — the actual
- * better-sqlite3 message ("UNIQUE constraint failed: ...") lives on `.cause` (native `Error.cause`,
- * which `DrizzleError`'s constructor sets). Walking the whole chain rather than checking two fixed
- * levels keeps this matching if a future drizzle-orm version stops wrapping, or wraps one deeper.
+ * Collects every `message` down an error's `.cause` chain so `TEAMS_URL_UNIQUE_FAILURE` can be
+ * matched against all of them at once.
+ *
+ * **Why a chain and not just `err.message` — re-derived for #117, because the original reason
+ * expired.** This walk was written when `runMigrations` called drizzle's `migrate()`, which wrapped
+ * every failed statement in a `DrizzleError` whose own message was the generic
+ * `Failed to run the query '<sql>'`, putting the real better-sqlite3 text ("UNIQUE constraint failed:
+ * …") one level down on `.cause`. Matching the top level alone would have missed it. `applyMigrations`
+ * above no longer wraps: `sqlite.exec()` throws better-sqlite3's `SqliteError` directly, so the text
+ * this function is looking for is now at the TOP of the chain and a one-level read would find it.
+ *
+ * The walk stays anyway, and the reason is a live one rather than inertia: it is what makes the match
+ * independent of **who** throws. Node's own `Error.cause` is used widely, better-sqlite3 is free to
+ * start wrapping, and the legacy-upgrade tests build databases through drizzle's `migrate()` directly
+ * (`test/helpers/legacy-migrations.ts`), so a `DrizzleError` chain is still constructible in this
+ * repo. A one-level read would be correct today and quietly wrong the first time any of those
+ * changes. `test/db-teams-url-unique-upgrade.test.ts` asserts the resulting message by exact
+ * equality, so the match itself is pinned either way.
  *
  * Written as a walk, not as `err instanceof Error ? … : String(err)` guards, for a testing reason
  * (`rules/testing.md`: never keep a branch no test can kill). Those guards cannot fail in this
- * codebase — `migrate()`'s throw is always an `Error` — so no fixture distinguishes them, and an
- * unkillable branch reads as coverage to every later reader. The loop condition has no such
- * problem: it is exercised in both directions on every call (true for the DrizzleError, true for
- * its cause, false at the end of the chain), so a mutation to it is caught. A non-`Error` throw
- * yields `""` here, which matches no pattern and so falls through to the `throw err` below — the
- * original is re-thrown untouched, which is what the discarded `String(err)` branch was for.
+ * codebase — a migration statement's throw is always an `Error` — so no fixture distinguishes them,
+ * and an unkillable branch reads as coverage to every later reader. The loop condition has no such
+ * problem: it is exercised in both directions on every call (true for the thrown error, false at the
+ * end of the chain), so a mutation to it is caught. A non-`Error` throw yields `""` here, which
+ * matches no pattern and so falls through to the `throw err` below — the original is re-thrown
+ * untouched, which is what the discarded `String(err)` branch was for.
  *
  * That argument is unchanged by the `errorMessage()` call below, which answers a DIFFERENT
  * question (#64). The walk decides what to do with a non-`Error` THROW; `errorMessage` decides what
@@ -251,14 +337,113 @@ function messageChain(err: unknown): string {
   return messages.join("\n");
 }
 
-export function runMigrations(path: string = dbPath()): void {
+/**
+ * Byte-for-byte drizzle's own bookkeeping DDL (`sqlite-core/dialect.js`), tabs included, so a
+ * database bootstrapped by `tn` is indistinguishable in `sqlite_master` from one bootstrapped by
+ * drizzle's `migrate()`. SQLite stores a CREATE statement's text verbatim from the `CREATE` keyword
+ * on, so the interior whitespace is part of what a comparison sees — the first draft used backticks
+ * and a single line, which produced a functionally identical table whose stored DDL differed. Pinned
+ * by `test/db-migrate-serialization.test.ts`'s equivalence case, which asserts every `sqlite_master`
+ * row matches drizzle's exactly.
+ */
+const DRIZZLE_MIGRATIONS_TABLE_DDL =
+  'CREATE TABLE IF NOT EXISTS "__drizzle_migrations" (\n' +
+  "\t\t\t\tid SERIAL PRIMARY KEY,\n" +
+  "\t\t\t\thash text NOT NULL,\n" +
+  "\t\t\t\tcreated_at numeric\n" +
+  "\t\t\t)";
+
+/**
+ * Issue #117, mechanism 1 — the reason this repo applies migrations itself instead of calling
+ * drizzle's `migrate()`.
+ *
+ * drizzle-orm 0.45.2's `SQLiteSyncDialect.migrate` runs the bookkeeping `CREATE TABLE IF NOT EXISTS`
+ * and the journal read `SELECT … ORDER BY created_at DESC LIMIT 1` in **autocommit**, and only then
+ * issues a **deferred** `BEGIN`. The decision of what to apply is therefore made outside the
+ * transaction that applies it, and a deferred `BEGIN` takes no write lock until its first write — so
+ * two processes bootstrapping one new database both read an empty journal, the first commits every
+ * migration, and the second replays `0000` onto tables that now exist and fails on
+ * `CREATE TABLE availability`. Reproduced: 6 of 11 measured failures took this path (the other 5 were
+ * `enableWal` above). SQLite's busy timeout does not help — nothing here is waiting on a lock; the
+ * read is simply stale.
+ *
+ * `BEGIN IMMEDIATE` takes the write lock **up front**, so the journal read below happens under it and
+ * nothing can commit between the read and the writes it decides on. A second process blocks at the
+ * `BEGIN IMMEDIATE` (which *is* covered by the busy handler), then reads the journal the first
+ * process just wrote and correctly applies nothing.
+ *
+ * **Everything else is drizzle's semantics, deliberately unchanged** — same bookkeeping table, same
+ * single pre-loop **timestamp watermark** (`Number(watermark) < folderMillis`, evaluated against one
+ * read rather than a running maximum), same `INSERT ("hash", "created_at")`, same statement split via
+ * `readMigrationFiles`. That watermark rule is what
+ * `docs/runbooks/db-migration-recovery.md` documents as the recovery procedure's premise, and what an
+ * existing database's journal already encodes; changing it here would silently re-apply or silently
+ * skip migrations on every database in existence. The equivalence is asserted rather than asserted
+ * *about*: `test/db-migrate-serialization.test.ts` migrates one database with each implementation and
+ * compares `sqlite_master` and `__drizzle_migrations` row for row, which is also what fails loudly if
+ * a future drizzle-orm upgrade changes the format underneath this copy.
+ *
+ * `BEGIN IMMEDIATE` sits OUTSIDE the `try`, which is why the catch can `ROLLBACK` unconditionally
+ * rather than testing `sqlite.inTransaction` first: reaching the catch means the transaction opened.
+ * The remaining worry would be SQLite rolling back on its own before we do — but its automatic-
+ * rollback classes (`SQLITE_FULL`, `SQLITE_IOERR`, `SQLITE_NOMEM`, `SQLITE_BUSY`, an explicit
+ * `ON CONFLICT ROLLBACK`) are unreachable here: a constraint failure aborts the STATEMENT, not the
+ * transaction, and we hold the write lock so no other writer can make us busy. A guard for it would
+ * be a branch no test in this repo can kill, which `rules/testing.md` treats as worse than its
+ * absence — so the structure removes the need for one instead of the comment excusing it.
+ */
+function applyMigrations(sqlite: Database.Database): void {
+  // Read the files BEFORE taking the lock: this is filesystem I/O with its own failure mode ("Can't
+  // find meta/_journal.json"), and there is no reason for it to happen inside a transaction or to
+  // leave one open if it throws.
+  const migrations = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER });
+
+  sqlite.exec("BEGIN IMMEDIATE");
+  try {
+    sqlite.exec(DRIZZLE_MIGRATIONS_TABLE_DDL);
+    const watermark = sqlite
+      .prepare(`SELECT created_at AS createdAt FROM "__drizzle_migrations" ORDER BY created_at DESC LIMIT 1`)
+      .get() as { createdAt: unknown } | undefined;
+    const record = sqlite.prepare(
+      `INSERT INTO "__drizzle_migrations" ("hash", "created_at") VALUES (?, ?)`,
+    );
+    for (const migration of migrations) {
+      if (watermark === undefined || Number(watermark.createdAt) < migration.folderMillis) {
+        // `exec`, not `prepare().run()`: a `--> statement-breakpoint` chunk is one statement today,
+        // but `exec` runs every statement in whatever it is given, whereas `prepare` rejects a
+        // multi-statement string outright. Verified against all twelve migrations — the resulting
+        // schema is identical either way.
+        for (const statement of migration.sql) sqlite.exec(statement);
+        record.run(migration.hash, migration.folderMillis);
+      }
+    }
+    sqlite.exec("COMMIT");
+  } catch (err) {
+    sqlite.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * `options.verbose` is the SAME observation seam `openDb` already documents (issue #32, ask #4),
+ * forwarded one level so a test can see the statement SEQUENCE this function issues rather than only
+ * its end state. Issue #117 needs exactly that: the defect it fixes is an ORDERING one — the
+ * migration journal being read before the transaction that acts on it — and ordering is invisible in
+ * a finished database, which is why the pre-fix behavior looked correct to every existing test.
+ * `test/db-migrate-serialization.test.ts` asserts the order through this parameter, deterministically,
+ * instead of racing two processes and hoping.
+ */
+export function runMigrations(
+  path: string = dbPath(),
+  options: Pick<OpenDbOptions, "verbose"> = {},
+): void {
   // The ONLY caller that opts into `create: true` — bootstrapping a fresh database (or
   // continuing to migrate an existing one) is exactly this function's job. Every other one of the
   // ~30 `openDb()` call sites inherits the new `create: false` default (issue #111).
-  const { db, sqlite } = openDb(path, { create: true });
+  const { db, sqlite } = openDb(path, { ...options, create: true });
   try {
     try {
-      migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+      applyMigrations(sqlite);
     } catch (err) {
       const chain = messageChain(err);
       if (TEAMS_URL_UNIQUE_FAILURE.test(chain)) {
