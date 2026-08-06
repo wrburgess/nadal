@@ -8,9 +8,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import Database from "better-sqlite3";
 import { eq } from "drizzle-orm";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
@@ -72,6 +72,40 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const result = await client.callTool({ name: "db_migrate", arguments: {} });
     expect(result.isError).not.toBe(true);
     expect(JSON.parse(textOf(result))).toEqual({ status: "ok" });
+  });
+
+  // Issue #111 on the MCP surface specifically. This is the surface the defect was WORST on and the
+  // one docs/runbooks/agent-chat-over-mcp.md already documents at length: an MCP server inherits its
+  // working directory from the client's own config, so before this fix a server started with the
+  // wrong cwd silently created an empty database and then answered every query from it — an agent
+  // driving nadal got confident, well-formed, empty answers with nothing anywhere saying why.
+  //
+  // `openDb()` now refuses, and the assertion that matters is that the refusal arrives as a legible
+  // tool result rather than a crash or an opaque failure: `src/mcp/server.ts` relies on the SDK
+  // converting ANY handler throw into `{ isError: true }`, and MissingDatabaseError is not an
+  // McpToolError, so nothing but that general conversion carries it. Worth pinning, because the
+  // ~14 `openDb()` call sites in src/mcp/tools.ts inherit the new `create: false` default without
+  // this PR touching a line of that file.
+  it("a non-bootstrap tool against a missing database refuses legibly instead of creating an empty one", async () => {
+    const client = await connectedClient();
+
+    // No runMigrations() — the fixture's TN_DB_PATH names a path that does not exist yet.
+    expect(existsSync(dbFixture.path())).toBe(false);
+
+    const result = await client.callTool({ name: "team_show", arguments: { target: "Team A" } });
+
+    expect(result.isError).toBe(true);
+    const message = textOf(result);
+    expect(message).toContain(resolve(dbFixture.path()));
+    expect(message).toContain("tn db migrate");
+
+    // The whole point: the refusal did not bootstrap the very database it refused to open.
+    expect(existsSync(dbFixture.path())).toBe(false);
+
+    // "Not a crash" proven concretely, the same way the sibling refusal test above does it: the
+    // same connection still answers after the failure.
+    const after = await client.callTool({ name: "db_migrate", arguments: {} });
+    expect(after.isError).not.toBe(true);
   });
 
   it("team_show over MCP returns the SAME payload as calling the shared service function directly — proves the service layer is shared, not re-implemented", async () => {

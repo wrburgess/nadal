@@ -1,4 +1,7 @@
 import Database from "better-sqlite3";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as client from "../src/db/client.js";
 import { runMigrations } from "../src/db/client.js";
@@ -200,5 +203,82 @@ describe("request telemetry", () => {
     });
     expect(code).toBe(1);
     expect(rows()[0]?.outcome).toBe("error:unknown");
+  });
+});
+
+// Issue #111 Task 6: `logRequest` wraps EVERY dispatched command, including one run before `tn db
+// migrate` has ever bootstrapped a database. Once `openDb()` refuses a missing file
+// (`MissingDatabaseError`), telemetry's own write attempt hits that same refusal on every
+// pre-bootstrap command — and must not turn it into a spurious stderr line ahead of the command's
+// own diagnostic, nor create the very file the command hasn't asked for yet.
+describe("request telemetry vs. a database that does not exist yet (issue #111)", () => {
+  it("writes nothing, prints nothing, and creates no file when the database is missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-request-log-missing-"));
+    const missingPath = join(dir, "missing.db");
+    const original = process.env.TN_DB_PATH;
+    process.env.TN_DB_PATH = missingPath;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await logRequest("cli", "db migrate", [], async () => 0);
+      // The wrapped command's own exit code is untouched — telemetry's silence is invisible to it.
+      expect(code).toBe(0);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(existsSync(missingPath)).toBe(false);
+      expect(existsSync(dir)).toBe(true); // the CALLER's own directory, not created BY this call
+    } finally {
+      errorSpy.mockRestore();
+      if (original === undefined) delete process.env.TN_DB_PATH;
+      else process.env.TN_DB_PATH = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The over-swallowing guard rail this task's own risk note calls for: a MissingDatabaseError is
+  // silenced, but a DIFFERENT telemetry failure against a database that DOES exist — a dropped
+  // table, in this case, the same fixture the "closes the sqlite handle" test above already uses —
+  // must still reach stderr exactly as it does today. Distinguishing the two is the whole point of
+  // catching `MissingDatabaseError` BY CLASS rather than widening the catch to "any openDb/insert
+  // failure".
+  it("still prints a real telemetry failure against an EXISTING database (a dropped table)", async () => {
+    const seed = new Database(fixture.path());
+    seed.exec("DROP TABLE request_log");
+    seed.close();
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await logRequest("cli", "db migrate", [], async () => 0);
+      expect(code).toBe(0);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("telemetry: request_log write failed"));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  // The OTHER half of the over-swallowing guard, and the half that was actually broken (Codex
+  // adversarial review, PR #116, [medium], class A). The test above proves a failure against an
+  // EXISTING database still prints. This one proves a failure against a path that does not exist —
+  // but is not *absent*, it is unreachable — also still prints, rather than being mistaken for the
+  // benign pre-bootstrap case and discarded. Before `openFailureCode` classified by errno, a
+  // `TN_DB_PATH` pointing THROUGH a regular file produced a MissingDatabaseError here, so this
+  // silently swallowed a genuine storage misconfiguration and the operator saw nothing at all.
+  it("still prints when the database path is unopenable rather than absent (parent is a regular file)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-request-log-enotdir-"));
+    const blocker = join(dir, "blocker");
+    writeFileSync(blocker, "a regular file, not a directory");
+    const original = process.env.TN_DB_PATH;
+    process.env.TN_DB_PATH = join(blocker, "nadal.db");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await logRequest("cli", "team show", [], async () => 0);
+      expect(code).toBe(0);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("telemetry: request_log write failed"));
+    } finally {
+      errorSpy.mockRestore();
+      if (original === undefined) delete process.env.TN_DB_PATH;
+      else process.env.TN_DB_PATH = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

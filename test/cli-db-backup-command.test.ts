@@ -148,11 +148,15 @@ describe("tn db backup (end-to-end via dispatch)", () => {
   it("15: a missing source exits 1, reports status=error, and creates no database at the resolved path", async () => {
     // Blocking the PARENT with a regular file makes BOTH `backupDatabase`'s own open attempt AND
     // telemetry's own `openDb()` call (which runs unconditionally after every dispatched command,
-    // success or failure — src/telemetry/request-log.ts) fail for the same ENOTDIR reason. Without
-    // this, telemetry's openDb() would silently CREATE an empty database at this exact path once
-    // dispatch finishes — making "no database exists at the resolved path afterwards" false for a
-    // reason that has nothing to do with db backup's own refusal. Mirrors the identical seam
-    // test/cli-db-migrate-command.test.ts's own ENOTDIR case isolates the same way.
+    // success or failure — src/telemetry/request-log.ts) fail for the same ENOTDIR reason.
+    //
+    // That blocking was originally a WORKAROUND: without it, telemetry's `openDb()` silently
+    // CREATED an empty database at this exact path once dispatch finished, which is the defect
+    // `docs/findings.md` recorded as `bug · open · (#110, verify — belongs to #111, not folded)`.
+    // Issue #111 fixed it (`openDb` no longer creates by default), so the workaround is no longer
+    // load-bearing — test 17 below now exercises the plain, unblocked case this one could not.
+    // Kept as-is because ENOTDIR is still a distinct state worth pinning, not because it is needed
+    // to make the assertion below reachable.
     const blockerFile = join(mkdtempSync(join(tmpdir(), "tn-")), "blocker");
     writeFileSync(blockerFile, "not a directory");
     const missingPath = join(blockerFile, "nested", "cmd.db");
@@ -190,5 +194,44 @@ describe("tn db backup (end-to-end via dispatch)", () => {
     expect(fields.source).toBe(trickyPath); // decodes back to the exact real path
 
     logSpy.mockRestore();
+  });
+
+  // Closes the `bug · open · (#110, verify — belongs to #111, not folded)` entry in
+  // `docs/findings.md`, which recorded exactly this end-to-end observation:
+  //
+  //   `TN_DB_PATH=…/absent.db tn db backup` prints `status=error … nothing to back up`, exits 1 —
+  //   and `absent.db` exists afterward.
+  //
+  // The service layer never created it (`test/db-backup.test.ts` scenario 3 already asserted that);
+  // `dispatch`'s telemetry wrapper did, after the command had already refused. Test 15 above could
+  // only assert "nothing was created" by blocking the parent so telemetry failed too — this is the
+  // plain case it had to avoid, with an ordinary existing parent directory and nothing standing in
+  // telemetry's way but the fix itself.
+  it("17: a missing source with an EXISTING parent leaves no database behind, and telemetry stays silent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-absent-source-"));
+    const missingPath = join(dir, "absent.db");
+    process.env.TN_DB_PATH = missingPath;
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const code = await dispatch(["db", "backup"]);
+
+      expect(code).toBe(1);
+      expect(logSpy).not.toHaveBeenCalled();
+      const lines = errorSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines.find((l) => l.startsWith("db backup"))).toMatch(/^db backup status=error message=".+"$/);
+
+      // The finding, directly: the refusal must not manufacture the artifact it refused over.
+      expect(existsSync(missingPath)).toBe(false);
+      expect(readdirSync(dir)).toEqual([]);
+
+      // And telemetry must not add a second, less useful diagnostic ahead of the command's own —
+      // there is nothing to log to yet, which is a benign state rather than a failure.
+      expect(lines.filter((l) => l.startsWith("telemetry:"))).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 });

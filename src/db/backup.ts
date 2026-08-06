@@ -235,9 +235,19 @@ export async function backupDatabase(sourcePath?: string, destinationPath?: stri
   const source = resolve(sourcePath ?? dbPath());
   assertNoSilentTrim("source", source);
 
-  // 2. `fileMustExist: true`, never `openDb()` — `openDb()` `mkdirSync`s the parent and creates an
-  // empty database, which would make "no source" unreachable rather than refused. This IS the
+  // 2. `fileMustExist: true`, opened directly rather than through `openDb()`. This IS the
   // structural refusal: a missing source cannot be manufactured by the check for it.
+  //
+  // The ORIGINAL reason for avoiding `openDb()` — that it `mkdirSync`ed the parent and created an
+  // empty database, making "no source" unreachable rather than refused — **stopped being true in
+  // issue #111**, which gave `openDb()` a `create` option defaulting to `false` and moved both the
+  // `mkdirSync` and the create-on-open behind it. The two now agree rather than conflict.
+  //
+  // This call still stays direct, for reasons that outlive that one: `openDb()` sets
+  // `journal_mode = WAL` and `foreign_keys = ON` on what it opens, and a backup SOURCE is read and
+  // must not have pragmas applied to it; and this module wants SQLite's own error here, which the
+  // lines below already discriminate for themselves, rather than `openDb()`'s `MissingDatabaseError`.
+  // Kept as a deliberate choice with current reasoning, not as a workaround for a fixed defect.
   let sqlite: InstanceType<typeof Database>;
   try {
     sqlite = new Database(source, { fileMustExist: true });

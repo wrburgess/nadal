@@ -8,6 +8,7 @@ import { extname } from "node:path";
 import { courtMatchPlayers, events, teamMatches, teams } from "../db/schema.js";
 import { errorMessage } from "../error-message.js";
 import { openInputFileSafely, readBoundedFromFd } from "../fs/output-root.js";
+import { repoDefault } from "../fs/package-root.js";
 import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
 import { findTeamByName, resolveRosterPlayer } from "./identity.js";
@@ -585,16 +586,17 @@ export function describeMatchAddRefusal(result: Extract<AddMatchFromScorecardRes
 const DEFAULT_SCORECARD_PHOTOS_DIR = "scorecard-photos";
 
 /**
- * Mirrors `dbPath()`/`rawRoot()`/`reportsRoot()`: an explicit env var when set, a repo-relative
- * default otherwise — no new flag, matching the existing `TN_DB_PATH`/`TN_RAW_PATH`/
- * `TN_REPORTS_PATH` idiom. Deliberately NOT named "intake" anywhere in this: that word already
- * names the Generic Baseline's own Intake Pipeline (Watchlist voices, `scout`/`clip` — see
- * AGENTS.md), an unrelated subsystem, and reusing it here for "where scorecard photos wait to be
- * read" would be exactly the kind of same-word-different-meaning collision that idiom already
- * warns against.
+ * Mirrors `dbPath()`/`rawRoot()`/`reportsRoot()`: an explicit env var when set (used verbatim — a
+ * relative `TN_SCORECARD_PHOTOS_PATH` stays cwd-relative, the documented escape hatch), a
+ * package-root-anchored default otherwise (issue #111) — no new flag, matching the existing
+ * `TN_DB_PATH`/`TN_RAW_PATH`/`TN_REPORTS_PATH` idiom. Deliberately NOT named "intake" anywhere in
+ * this: that word already names the Generic Baseline's own Intake Pipeline (Watchlist voices,
+ * `scout`/`clip` — see AGENTS.md), an unrelated subsystem, and reusing it here for "where scorecard
+ * photos wait to be read" would be exactly the kind of same-word-different-meaning collision that
+ * idiom already warns against.
  */
 export function scorecardPhotosRoot(): string {
-  return process.env.TN_SCORECARD_PHOTOS_PATH ?? DEFAULT_SCORECARD_PHOTOS_DIR;
+  return repoDefault(process.env.TN_SCORECARD_PHOTOS_PATH, DEFAULT_SCORECARD_PHOTOS_DIR);
 }
 
 /**

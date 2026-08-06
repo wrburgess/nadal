@@ -75,10 +75,49 @@ describe("backupDatabase (issue #110)", () => {
 
     await expect(backupDatabase(missingPath)).rejects.toThrow(BackupRefusedError);
 
-    // The regression guard against ever routing this check back through `openDb()`, which
-    // `mkdirSync`s the parent as a side effect of merely checking whether the source exists.
+    // This asserts the refusal creates nothing, which is still worth pinning. What it no longer
+    // does is guard the choice its previous comment claimed: that comment said `openDb()`
+    // `mkdirSync`s the parent as a side effect of checking whether the source exists, and issue
+    // #111 made that false — `openDb()` now `mkdirSync`s only under `create: true` and otherwise
+    // opens with `fileMustExist: true`. So both assertions below would stay green even if
+    // `backupDatabase` were routed back through a default `openDb()`, which is exactly the
+    // refactor they were written to catch. The guard that actually discriminates it now lives in
+    // scenario 3b below. (Found by the independent Codex review of PR #116 while checking whether
+    // #110's merge left stale claims behind — it had, in one more place than the merge log said.)
     expect(existsSync(missingPath)).toBe(false);
     expect(existsSync(missingDir)).toBe(false);
+  });
+
+  // The replacement guard for the rationale scenario 3 lost, pinning the reasons `src/db/backup.ts`
+  // NOW gives for opening SQLite directly rather than through `openDb()`: a backup SOURCE is only
+  // read, and must not have `openDb()`'s `journal_mode = WAL` / `foreign_keys = ON` pragmas applied
+  // to it.
+  //
+  // `journal_mode` is the discriminator because it is the one that PERSISTS: setting it to WAL
+  // rewrites the source database's own header, so the damage outlives the connection. Measured, not
+  // assumed — a DELETE-mode source stays `delete` through a direct open, and becomes `wal`
+  // permanently once `openDb()`'s pragma runs. Routing `backupDatabase` through a default
+  // `openDb()` therefore turns this test red, which is the property scenario 3 no longer has.
+  it("3b: leaves the SOURCE's journal_mode untouched — the reason the source is opened directly", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-journal-mode-"));
+    const sourcePath = join(dir, "delete-mode.db");
+    runMigrations(sourcePath);
+
+    // runMigrations goes through openDb({ create: true }), so the fixture starts in WAL; put it
+    // into DELETE deliberately, which is the state a pragma-applying open would destroy.
+    const seed = new Database(sourcePath);
+    seed.pragma("journal_mode = DELETE");
+    seed.close();
+    expect(new Database(sourcePath).pragma("journal_mode", { simple: true })).toBe("delete");
+
+    await backupDatabase(sourcePath, join(dir, "backups", "snapshot.db"));
+
+    const after = new Database(sourcePath, { fileMustExist: true });
+    try {
+      expect(after.pragma("journal_mode", { simple: true })).toBe("delete");
+    } finally {
+      after.close();
+    }
   });
 
   it("4: refuses a destination that already exists, and leaves its bytes byte-for-byte unchanged", async () => {

@@ -48,10 +48,12 @@ to this path, both hardened after a Codex adversarial review found `sourceImage`
 arbitrary local-file-read primitive (rated Critical):
 
 - **The photo must already sit inside the configured scorecard-photos root** —
-  `TN_SCORECARD_PHOTOS_PATH` if set, `scorecard-photos/` (gitignored) relative to the repo
-  otherwise, mirroring `TN_DB_PATH`/`TN_RAW_PATH`/`TN_REPORTS_PATH`. A path outside that root, or a
-  symlink anywhere in the chain to it, is refused rather than read. Save (or move) the photo there
-  before calling `match_add`.
+  `TN_SCORECARD_PHOTOS_PATH` if set (resolved against the caller's cwd when relative), or
+  `scorecard-photos/` (gitignored) anchored to the `tn` checkout itself otherwise (issue #111 — the
+  same directory no matter which directory `tn` was invoked from), mirroring
+  `TN_DB_PATH`/`TN_RAW_PATH`/`TN_REPORTS_PATH` exactly. A path outside that root, or a symlink
+  anywhere in the chain to it, is refused rather than read. Save (or move) the photo there before
+  calling `match_add`.
 - **Archiving happens AFTER the match is recorded, not before.** A refused ingest (an unknown team,
   an unresolved player, anything) persists nothing — the photo is read only once the database write
   has already succeeded. A photo that then fails to archive (a bad path, an oversized file, content
@@ -82,7 +84,9 @@ on success. Beyond that:
 # Read the SAME database the ingest wrote to. A hardcoded `data/nadal.db` silently reads a stale
 # file whenever TN_DB_PATH is set, and — since SQLite creates on open — conjures an empty decoy when
 # that path holds nothing, so the readback would "verify" a match that is not in the database you
-# just wrote.
+# just wrote. The `${TN_DB_PATH:-data/nadal.db}` fallback below has the same requirement as every
+# other runbook's: it re-derives the unset default against THIS shell's cwd, so it only agrees with
+# `tn`'s own anchored default (issue #111) when this shell IS the checkout root.
 DB="${TN_DB_PATH:-data/nadal.db}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
 case "$DB" in

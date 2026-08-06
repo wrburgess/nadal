@@ -19,6 +19,20 @@ tn --help     # expect: tn <noun> <verb> <target> [payload] [flags]
 prints this step rather than running it. If you would rather install nothing, run `./bin/tn` from the
 repo root and read every `tn ...` line below as `./bin/tn ...`.
 
+**The install boundary (issue #111).** `tn`'s default database (`data/nadal.db`), archive root
+(`raw/`), reports root (`reports/`), and scorecard-photos root are all anchored to wherever
+`src/fs/package-root.ts` itself resolves on disk — i.e. **this checkout**, never the caller's
+working directory. `npm link` is the supported install path specifically *because* it links to this
+checkout rather than copying it: every `tn` invocation, from anywhere on your machine, still
+resolves its module files here and therefore still reads/writes the same `data/nadal.db`, `raw/`,
+etc. under this repo. A hypothetical global tarball install (`npm install -g` from a packaged
+tarball rather than `npm link`) would instead copy the package into `node_modules` somewhere under
+npm's global prefix, and the anchored defaults would then point INSIDE that installed copy — a
+different `data/nadal.db` than this checkout's, and one a normal `git status` here would never show
+as dirty. `package.json` is `"private": true` with no publish/build step, so this is a boundary
+worth naming rather than a currently reachable path — `npm link` is the only shipped, documented
+install.
+
 **`npm link` does not touch your `PATH`.** It only creates the symlink; whether your shell finds it
 depends on whether npm's global bin directory is already on `PATH`. With a version manager (mise,
 nvm, fnm, volta) it normally is. With a custom prefix it may not be, and `npm link` still reports

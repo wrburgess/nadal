@@ -16,6 +16,7 @@ import {
   overwriteOutputFile,
   resolveRealOutputPath,
 } from "../fs/output-root.js";
+import { repoDefault } from "../fs/package-root.js";
 import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "../query/home-team.js";
 import { NoCourtMatchHistoryError, getLineupPlan, requireSlotSet, resolveEvent } from "../query/lineup.js";
@@ -30,10 +31,12 @@ import type { TeamDossier } from "./types.js";
 
 const DEFAULT_REPORTS_DIR = "reports";
 
-/** Mirrors `dbPath()`/`rawRoot()`: an explicit env var when set, a repo-relative default otherwise
- * — no new flag, no grammar change (Task 8's constraint), exactly like `TN_DB_PATH`/`TN_RAW_PATH`. */
+/** Mirrors `dbPath()`/`rawRoot()`: an explicit env var when set (used verbatim — a relative
+ * `TN_REPORTS_PATH` stays cwd-relative, the documented escape hatch), a package-root-anchored
+ * default otherwise (issue #111) — no new flag, no grammar change (Task 8's constraint), exactly
+ * like `TN_DB_PATH`/`TN_RAW_PATH`. */
 export function reportsRoot(): string {
-  return process.env.TN_REPORTS_PATH ?? DEFAULT_REPORTS_DIR;
+  return repoDefault(process.env.TN_REPORTS_PATH, DEFAULT_REPORTS_DIR);
 }
 
 function assertReportPathSafe(candidatePath: string, root: string = reportsRoot()): void {

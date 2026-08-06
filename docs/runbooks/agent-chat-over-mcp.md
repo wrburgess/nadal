@@ -148,8 +148,9 @@ unchanged, so it does **not** name the failing database — you have to identify
 
 ```sh
 # This error does not name the database, so the shell's TN_DB_PATH is the best signal available.
-# Confirm it is the one you were using — `echo "${TN_DB_PATH:-data/nadal.db}"` — before running
-# this; a stale value would move and rebuild an unrelated database.
+# If TN_DB_PATH is unset, `tn` used its own anchored default — "<checkout>/data/nadal.db" (issue
+# #111), NOT `./data/nadal.db` relative to wherever this shell happens to be — find the checkout
+# root and use that path. A stale TN_DB_PATH would otherwise move and rebuild an unrelated database.
 case "${TN_DB_PATH:-}" in
   /*) DB="$TN_DB_PATH" ;;                                   # set, and absolute — use it as-is
   *)  printf 'absolute path to the database that failed: '  # otherwise paste it; `read -r` takes the
@@ -166,9 +167,11 @@ case "$DB" in
 esac
 ```
 
-**Resolve it to an absolute path.** The `data/nadal.db` default is *relative* and resolves against
-the working directory of the process, so recovering from a different directory than the failed run
-used would move a different file entirely.
+**Resolve it to an absolute path.** An explicit `TN_DB_PATH` set to a relative path still resolves
+against the working directory of the process (issue #111 does not change that), so recovering from
+a different directory than the failed run used would move a different file entirely. The *unset*
+default no longer has this problem — it is anchored to the `tn` checkout itself — but a stale or
+relative override is still a real way to end up moving the wrong file.
 
 Two things this line used to get wrong, both fixed under #56 after the Codex adversarial review found
 the same class one runbook over:
@@ -193,10 +196,12 @@ Nothing you typed by hand is at risk **except captain notes and availability**, 
 else.
 
 **Stay in the shell where you ran the `export` above** — the restore commands resolve their database
-the same way `tn db migrate` does, so in a fresh shell they would write `data/nadal.db` and report
-success. If you restore over MCP instead, the server must have been started with that same
-`TN_DB_PATH`; the tools read the server's environment, not yours, and nothing in the tool result
-would tell you they diverged.
+the same way `tn db migrate` does, so in a fresh shell (with `TN_DB_PATH` no longer exported) they
+would fall back to `tn`'s own anchored default and report success — writing a *fresh*, freshly
+migrated database at the checkout's `data/nadal.db` (the same file regardless of which shell or
+directory you are in, since issue #111) rather than the file you moved aside. If you restore over
+MCP instead, the server must have been started with that same `TN_DB_PATH`; the tools read the
+server's environment, not yours, and nothing in the tool result would tell you they diverged.
 
 **To recover those, follow
 [db-migration-recovery.md](db-migration-recovery.md) → *General note on data at risk*, reading from

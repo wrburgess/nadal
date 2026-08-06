@@ -9,6 +9,7 @@ import {
   assertArchivePathSafe,
   rawRoot,
 } from "../src/ingest/archive.js";
+import { PACKAGE_ROOT } from "../src/fs/package-root.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
 
 // `writeFileSync`/`openSync` are named ESM exports of a Node built-in, and Node's built-in module
@@ -29,10 +30,13 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 describe("rawRoot", () => {
-  it("defaults to 'raw' when TN_RAW_PATH is unset", () => {
+  // Issue #111: this used to assert `rawRoot() === "raw"` — the bare, unanchored default — which
+  // is exactly the shape that let `cd docs && tn player pull …` silently write under
+  // `./docs/raw/` instead of the repo's real `raw/`. The unset default is now anchored absolute.
+  it("defaults to an absolute, package-root-anchored 'raw' when TN_RAW_PATH is unset", () => {
     const original = process.env.TN_RAW_PATH;
     delete process.env.TN_RAW_PATH;
-    expect(rawRoot()).toBe("raw");
+    expect(rawRoot()).toBe(join(PACKAGE_ROOT, "raw"));
     if (original === undefined) delete process.env.TN_RAW_PATH;
     else process.env.TN_RAW_PATH = original;
   });
@@ -315,9 +319,11 @@ describe("archivePage under the DOCUMENTED DEFAULT (TN_RAW_PATH unset)", () => {
       httpStatus: 200,
     });
 
-    // Resolved before comparing: with TN_RAW_PATH unset the returned path is repo-relative, which is
-    // the pre-existing contract (rawRoot() defaults to the bare string "raw").
-    expect(resolve(htmlPath).startsWith(join(resolve("raw"), "tennisrecord"))).toBe(true);
+    // Issue #111: with TN_RAW_PATH unset, rawRoot() now returns an absolute, package-root-anchored
+    // path rather than the bare relative string "raw" — this test's cwd happens to be the package
+    // root itself, so `resolve(rawRoot())` and `rawRoot()` agree here, but the assertion is written
+    // against rawRoot() directly so it does not silently depend on that coincidence.
+    expect(resolve(htmlPath).startsWith(join(resolve(rawRoot()), "tennisrecord"))).toBe(true);
     expect(readFileSync(htmlPath, "utf8")).toBe("<html>default</html>");
     expect(existsSync(`${htmlPath}.provenance.json`)).toBe(true);
   });

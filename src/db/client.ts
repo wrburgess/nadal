@@ -1,12 +1,18 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdirSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { errorMessage } from "../error-message.js";
+import { repoDefault } from "../fs/package-root.js";
 import { backfillNameKeys } from "./name-key.js";
 
+// Stays a BARE directory name — issue #111's anchoring goes in the ACCESSOR (`dbPath()` below),
+// never here. `assertRootSafe`/`assertOutputPathSafe` (src/fs/output-root.ts) take a
+// `permittedDir` argument that they resolve against the package root themselves; the sibling
+// `DEFAULT_RAW_DIR`/`DEFAULT_REPORTS_DIR`/`DEFAULT_SCORECARD_PHOTOS_DIR` constants play exactly
+// that role for their own callers, so keeping this one the same shape means one pattern, not two.
 export const DEFAULT_DB_PATH = "data/nadal.db";
 
 export type OpenDbOptions = {
@@ -15,6 +21,11 @@ export type OpenDbOptions = {
   // observation seam the query-count test uses to assert resolution issues a constant number of
   // statements regardless of table size, rather than one per row.
   verbose?: (message?: unknown, ...args: unknown[]) => void;
+  // Issue #111: `false` by DEFAULT (see `openDb` below). `runMigrations` is the only caller that
+  // passes `true` — every other one of the ~30 `openDb()` call sites is untouched and inherits the
+  // new default, which refuses to silently create (and silently populate with an empty, unmigrated
+  // schema) a database nothing has bootstrapped yet.
+  create?: boolean;
 };
 
 // drizzle-orm's migrator resolves `migrationsFolder` with plain `fs` calls against
@@ -24,13 +35,109 @@ export type OpenDbOptions = {
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = join(MODULE_DIR, "..", "..", "drizzle");
 
+/**
+ * Issue #111: an unset `TN_DB_PATH` used to resolve to the bare relative string `DEFAULT_DB_PATH`,
+ * which every caller then resolved against `process.cwd()` — so `tn player pull …` run from
+ * anywhere other than the repo root silently created (and, on a second run, silently read from) a
+ * DIFFERENT, empty database under that cwd's own `data/` directory rather than the repo's real one.
+ * `repoDefault` anchors the unset case to the package root instead, exactly like
+ * `MIGRATIONS_FOLDER` above already anchors the migrations folder.
+ *
+ * An EXPLICIT `TN_DB_PATH` is returned verbatim, `??` preserved exactly as before — a relative
+ * override is a deliberate escape hatch (documented in the runbooks) and stays resolved against the
+ * caller's cwd, and an empty-string override stays a set-but-empty value rather than becoming
+ * "unset".
+ */
 export function dbPath(): string {
-  return process.env.TN_DB_PATH ?? DEFAULT_DB_PATH;
+  return repoDefault(process.env.TN_DB_PATH, DEFAULT_DB_PATH);
+}
+
+/**
+ * Issue #111: a missing database used to be silently bootstrapped into existence — `mkdirSync`
+ * unconditionally created the parent directory and `new Database(path)` (no `fileMustExist`) then
+ * created an empty, UNMIGRATED file — so a command run before `tn db migrate` reported
+ * `status=ok` against a database with no tables at all, discovered only later as a confusing "no
+ * such table" failure with no mention of the real cause.
+ *
+ * `create` now defaults to `false`: no `mkdirSync` at all (today's unconditional call was itself a
+ * silent directory-creator, so it is gated the same way the file is) and the file must already
+ * exist (`fileMustExist: true` — better-sqlite3's own enforcement at `open(2)`, not a
+ * check-then-act pre-check racing across a WAL database). `runMigrations` is the only caller that
+ * opts in with `create: true`, which is exactly where creating a fresh database is the intended
+ * behavior. When that open fails, `openFailureCode` below shapes the message — by errno, never by
+ * `existsSync` — and offers `tn db migrate` conditionally rather than promising it.
+ */
+export class MissingDatabaseError extends Error {}
+
+/**
+ * Why did an open of `path` fail — because there was nothing there to open, or for some other
+ * reason? Returns the `open(2)` errno, or `null` when the file opens fine (so SQLite objected to
+ * its CONTENT, not its reachability).
+ *
+ * Asked ONLY after a database open has already failed, purely to shape the error message. It never
+ * decides whether to proceed, so it is not a check-then-act guard — `fileMustExist` at `open(2)` is
+ * what enforces.
+ *
+ * **This predicate answers "is there anything to open", and deliberately does NOT try to answer
+ * "will `tn db migrate` fix it".** That distinction is the whole design, and it was reached by
+ * getting it wrong twice under adversarial review of PR #116:
+ *
+ *   | state                       | SQLite          | existsSync | open(2) | lstat  | migrate fixes it? |
+ *   |-----------------------------|-----------------|------------|---------|--------|-------------------|
+ *   | file absent                 | SQLITE_CANTOPEN | false      | ENOENT  | ENOENT | yes               |
+ *   | parent directory absent     | SQLITE_CANTOPEN | false      | ENOENT  | ENOENT | yes               |
+ *   | parent is a REGULAR FILE    | SQLITE_CANTOPEN | false      | ENOTDIR | ENOTDIR| no                |
+ *   | parent not traversable      | SQLITE_CANTOPEN | false      | EACCES  | EACCES | no                |
+ *   | DANGLING SYMLINK at leaf    | SQLITE_CANTOPEN | false      | ENOENT  | ok     | no                |
+ *   | dangling symlink ANCESTOR   | SQLITE_CANTOPEN | false      | ENOENT  | ENOENT | no                |
+ *   | symlink -> absent, dir ok   | SQLITE_CANTOPEN | false      | ENOENT  | ok     | yes               |
+ *
+ * All measured, none assumed. Read the last column against the two before it: **no single-call
+ * predicate matches it.** `existsSync` misses four rows. `open(2)` errno misses the two dangling-
+ * symlink rows (the Codex finding that killed revision two). `lstat` fixes the leaf-symlink row but
+ * breaks the last one — a legitimate symlink to a database that simply has not been created yet —
+ * and still misses the ancestor row. Each revision was locally justified and none converged, which
+ * is the signature of a predicate being asked the wrong question.
+ *
+ * So the question changed instead. The remedy in the message below is offered **conditionally**
+ * ("if it has not been created yet"), never promised, and the message carries the observed errno.
+ * That claim is true on every row above, including the ones this predicate classifies loosely — the
+ * operator is told what was seen and what to try, not what will work. A predicate that only has to
+ * report an observation cannot leak the way one that has to prove a future outcome does.
+ */
+function openFailureCode(path: string): string | null {
+  try {
+    closeSync(openSync(path, "r"));
+    return null;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+  }
 }
 
 export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
-  mkdirSync(dirname(path), { recursive: true });
-  const sqlite = options.verbose !== undefined ? new Database(path, { verbose: options.verbose }) : new Database(path);
+  if (options.create === true) {
+    mkdirSync(dirname(path), { recursive: true });
+  }
+  let sqlite: Database.Database;
+  try {
+    sqlite =
+      options.verbose !== undefined
+        ? new Database(path, { verbose: options.verbose, fileMustExist: options.create !== true })
+        : new Database(path, { fileMustExist: options.create !== true });
+  } catch (err) {
+    const code = options.create === true ? null : openFailureCode(path);
+    if (code === "ENOENT") {
+      // Conditional, never a promise — see `openFailureCode`. "if it has not been created yet"
+      // stays true even on the paths this cannot tell apart (a dangling symlink reads as ENOENT
+      // exactly like a database that simply has not been bootstrapped), so the operator is told
+      // what was observed and what to try, not what will work.
+      throw new MissingDatabaseError(
+        `cannot open database at ${resolve(path)} (ENOENT: nothing to open) — ` +
+          `if it has not been created yet, run \`tn db migrate\``,
+      );
+    }
+    throw err;
+  }
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   return { sqlite, db: drizzle(sqlite) };
@@ -145,7 +252,10 @@ function messageChain(err: unknown): string {
 }
 
 export function runMigrations(path: string = dbPath()): void {
-  const { db, sqlite } = openDb(path);
+  // The ONLY caller that opts into `create: true` — bootstrapping a fresh database (or
+  // continuing to migrate an existing one) is exactly this function's job. Every other one of the
+  // ~30 `openDb()` call sites inherits the new `create: false` default (issue #111).
+  const { db, sqlite } = openDb(path, { create: true });
   try {
     try {
       migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });

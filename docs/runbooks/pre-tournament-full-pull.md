@@ -42,6 +42,10 @@ current."
 - You know which teams are already on file. There is no `tn team list` yet (`docs/cli/GRAMMAR.md`'s
   *Planned* section, not the 13 shipped commands) — enumerate directly:
   ```sh
+  # This `${TN_DB_PATH:-data/nadal.db}` fallback assumes you are running this shell FROM the tn
+  # checkout root — it re-derives the default against THIS SHELL's cwd, which only matches what
+  # `tn` itself resolves (issue #111: anchored to the checkout, not the caller's cwd) when the two
+  # agree. Run this from the checkout root, or export TN_DB_PATH explicitly, so they cannot diverge.
   DB="${TN_DB_PATH:-data/nadal.db}"
   # Refuse before touching anything: sqlite3 CREATES an empty database for a path that does not
   # exist, so a typo in TN_DB_PATH would otherwise print "no teams", read as "nothing to refresh",
@@ -95,6 +99,9 @@ a standing automatic one. The batch therefore selects **only** TennisRecord host
 anything it skipped rather than silently dropping it:
 
 ```sh
+# Same assumption as step "Before you start" above: this fallback re-derives the default against
+# THIS shell's cwd, so it only agrees with `tn`'s own anchored default (issue #111) when you are
+# running from the checkout root. Export TN_DB_PATH explicitly if you are not.
 DB="${TN_DB_PATH:-data/nadal.db}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
 # The reads below use SQLite's `file:` URI form (`mode=ro`, so they cannot modify the DATABASE —

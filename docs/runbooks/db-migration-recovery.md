@@ -45,10 +45,12 @@ esac
 ```
 
 `export TN_DB_PATH="$DB"` is not decoration, and **`export` rather than a one-off prefix** is the
-load-bearing part. `tn` resolves its database from `TN_DB_PATH` or the `data/nadal.db` default —
-**never** from your shell's `$DB`. So a bare `tn db migrate` after the move rebuilds the default and
-leaves the database you moved aside missing (verified: it created `data/nadal.db` while the selected
-file stayed 0 bytes). And a one-off `TN_DB_PATH="$DB" tn db migrate` fixes only *that* command: the
+load-bearing part. `tn` resolves its database from `TN_DB_PATH` or its own anchored default
+(`<checkout>/data/nadal.db` — issue #111 anchors this to the `tn` checkout itself, not the shell's
+working directory) — **never** from your shell's `$DB`. So a bare `tn db migrate` after the move
+recreates that anchored default fresh and leaves the database you moved aside missing (verified: it
+created `data/nadal.db` under the checkout root while the selected file stayed 0 bytes). And a
+one-off `TN_DB_PATH="$DB" tn db migrate` fixes only *that* command: the
 re-pull and every restore step below would still write the default, succeeding all the way while the
 rebuilt database stays empty. Because the export step *is* correctly bound to `$BAK`, that failure is
 especially deceptive — you would export the right data and restore it into the wrong place.
@@ -64,12 +66,15 @@ the Codex adversarial review of #56 after this runbook shipped it:
   `IFS= read -r` takes the line **verbatim**, so there is no quoting to get right at all: paste a path
   with spaces, apostrophes or backslashes and it lands in `$DB` unchanged. This one is pointed: #56
   removed a shell-quoting surface from the code and promptly recreated it as an *instruction*.
-- **Do not fall back to `data/nadal.db`.** That default is **relative**, and `dbPath()` resolves it
-  against the working directory of the process — so it names whatever `data/nadal.db` sits under
-  *your current* directory, which need not be the one the failed run used. The error deliberately
-  prints an **absolute** path for exactly this reason; use that, not the default. (Recovering from
-  the repo root after a run that failed in `/tmp/a` would otherwise move `<repo>/data/nadal.db` and
-  leave the broken database untouched — the wrong-file class again, one layer further out.)
+- **Do not fall back to `data/nadal.db`.** Since issue #111, `dbPath()`'s unset default resolves to
+  an **absolute** path anchored to the `tn` checkout itself — the same file no matter which
+  directory you happen to run the recovery from — but it is still not necessarily the file that
+  failed: a stale `TN_DB_PATH` left over in this shell overrides it, and the file you just moved
+  aside is neither the override nor the anchored default (moving it is precisely what makes it
+  neither). The error deliberately prints an **absolute** path for exactly this reason; use that,
+  never re-derive the default yourself. (A stale `TN_DB_PATH` pointing at `/tmp/a/data.db` would
+  otherwise move and rebuild THAT file instead of the one the error actually named — the wrong-file
+  class again, one layer further out.)
 
 The error deliberately does **not** print this command filled in for you, though it used to
 (issue #56). Emitting it meant `src/db/client.ts` permanently owned a shell-quoting surface, a
@@ -167,14 +172,19 @@ above.
 
 This error is **rethrown unchanged**: it does not match `runMigrations`' duplicate-URL predicate, so
 it never passes through the message that names the database. Unlike the case above, **the error does
-not tell you which file failed.** It is `TN_DB_PATH` if you set it, `data/nadal.db` otherwise —
-resolve that to an absolute path yourself, and apply every safeguard from the first section (`-i`,
-`--`, both paths quoted, a backup name that is not already taken):
+not tell you which file failed.** It is `TN_DB_PATH` if you set it — resolved against **your
+shell's** cwd when it is a relative path, since issue #111 does not change that explicit-override
+behavior — or `tn`'s own anchored default otherwise (`<checkout>/data/nadal.db`, the SAME file no
+matter which directory you run `tn` from). Resolve whichever one applies to an absolute path, and
+apply every safeguard from the first section (`-i`, `--`, both paths quoted, a backup name that is
+not already taken):
 
 ```sh
 # Unlike the first recovery, THIS error does not name the database — so the shell's TN_DB_PATH is
-# the best available signal. Confirm it is the one you were actually using before running this:
-# `echo "${TN_DB_PATH:-data/nadal.db}"`. If it is not, paste the right absolute path at the prompt.
+# the best available signal. If TN_DB_PATH is unset, `tn` used its own anchored default —
+# "<checkout>/data/nadal.db" (issue #111) — which is NOT the same as `./data/nadal.db` relative to
+# wherever this shell happens to be; find the checkout root (where you cloned or `npm link`ed this
+# repo) and use that path, not a bare `data/nadal.db` typed here.
 case "${TN_DB_PATH:-}" in
   /*) DB="$TN_DB_PATH" ;;
   *)  printf 'absolute path to the database that failed: '
@@ -354,7 +364,8 @@ To restore after re-pulling, work back **up** the dependency order above.
 ```sh
 # Safe for simple values only — see the warning above before using these for note text.
 # EVERY line here writes to $TN_DB_PATH. If this is a new shell, re-run the `export` from the
-# recovery step first, or these will restore into data/nadal.db and silently succeed.
+# recovery step first, or these will silently succeed against `tn`'s own anchored default
+# (<checkout>/data/nadal.db, issue #111) instead of the database you are actually recovering.
 tn team home '<name from home-team-backup.csv>'
 tn event add '<name>' '<kind>' '<starts_on>' '<ends_on>'      # one per events-backup.csv row
 tn player avail '<player>' '<day>' '<status>' '<event>'       # one per availability-backup.csv row
