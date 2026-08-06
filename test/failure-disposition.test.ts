@@ -160,7 +160,13 @@ describe("dispositionOfThrown — SQLite contention", () => {
 
   // The extended result codes better-sqlite3 actually registers
   // (`node_modules/better-sqlite3/src/util/constants.cpp`), reached through a drizzle wrapper the way
-  // a real migration/query failure arrives.
+  // a real QUERY failure arrives.
+  //
+  // Says "query", not "migration/query", since issue #117 landed alongside this: `runMigrations` no
+  // longer calls drizzle's `migrate()`, so a migration statement now throws better-sqlite3's
+  // `SqliteError` DIRECTLY, with no `DrizzleError` around it. Every drizzle-mediated query still
+  // wraps, so the wrapped shape below is real — it just is not the migration path any more. The
+  // unwrapped shape is covered by the bare-code case above, so both arrival shapes are still tested.
   it.each(["SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY_TIMEOUT", "SQLITE_LOCKED_SHAREDCACHE"])(
     "classifies the extended code %s behind a wrapper as retryable",
     (code) => {
