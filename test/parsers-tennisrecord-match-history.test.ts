@@ -644,6 +644,46 @@ describe("parseMatchHistory — the two renderings are correlated by match id, n
     expect(() => parseMatchHistory(wrongSlot, fixture.source)).toThrow(/court slot/);
   });
 
+  it("throws when a mobile block links more than one match result", () => {
+    // Reviewer finding (Codex round 2, class B). A key selected out of a set that may hold more
+    // than one element is not a key: `.first()` would let a second link ahead of the genuine one
+    // decide the comparison. All 3996 archived league blocks link exactly one.
+    const twoLinks = fixture.html.replace(
+      '<td style="text-align:center;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">',
+      '<td style="text-align:center;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=99999">x</a><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">',
+    );
+    expect(twoLinks).not.toBe(fixture.html);
+
+    expect(() => parseMatchHistory(twoLinks, fixture.source)).toThrow(/expected exactly 1/);
+  });
+
+  it("throws when a desktop result cell links more than one match result", () => {
+    // The same rule on the other rendering. The Reviewer named the mobile instance; both sides feed
+    // the same comparison, and fixing only the reported one is how this class survives a fix.
+    const twoLinks = fixture.html.replace(
+      '<td style="text-align:center; vertical-align: top;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">',
+      '<td style="text-align:center; vertical-align: top;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=99999">x</a><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">',
+    );
+    expect(twoLinks).not.toBe(fixture.html);
+
+    expect(() => parseMatchHistory(twoLinks, fixture.source)).toThrow(/expected exactly 1/);
+  });
+
+  it("throws on a swapped block even when a matching match id is injected ahead of its own", () => {
+    // The Reviewer's full bypass: swap two same-date blocks, then prepend the id the correlation
+    // is about to look for, so date, slot and id all agree while the opponent TEAM still comes from
+    // the wrong block. The cardinality rule is what closes it — the injected link makes two.
+    const sameDate = fixture.html.replaceAll("11/08/2025", "11/15/2025");
+    const swapped = swapBlocks(sameDate, 0, 1);
+    const spoofed = swapped.replace(
+      '<td style="text-align:center;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=',
+      '<td style="text-align:center;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">x</a><a class="link" href="/adult/matchresults.aspx?year=2026&mid=',
+    );
+    expect(spoofed).not.toBe(swapped);
+
+    expect(() => parseMatchHistory(spoofed, fixture.source)).toThrow(/expected exactly 1/);
+  });
+
   it("throws when a tournament block's court slot does not belong to its row", () => {
     // Dropped rows get the same treatment. If the correlation slipped, WHICH rows are believed to
     // be tournaments slips with it — and those are discarded silently, so this is the one path

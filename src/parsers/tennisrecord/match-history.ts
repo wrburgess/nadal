@@ -199,13 +199,27 @@ function parseMobileCorrelates(
     // and the slot beside it completes the pair — measured present and equal to the desktop row on
     // all 3996 archived league blocks, and unique per page. `parseRow` compares all three.
     // (Provenance: Codex adversarial review class-A finding on PR #114.)
+    // Exactly one, not the first of however many. A correlation key selected out of a set that may
+    // hold more than one element is not a key: a second link ahead of the genuine one would decide
+    // the comparison, so the guard could be satisfied by a block that is not this row's. Every one
+    // of the 3996 archived league blocks links exactly one, so requiring it costs nothing.
+    // (Provenance: Codex adversarial review class-B finding on PR #114, round 2 — a fresh instance
+    // of this repo's most-recorded defect class, `.find()`/`[0]` over a set never proven singular.)
+    const resultLinks = $block.find("a[href*='matchresults.aspx']");
+    if (resultLinks.length !== 1) {
+      throw new ParseError(
+        `mobile match block links ${resultLinks.length} match results, expected exactly 1`,
+        `${MOBILE_MATCH} a[href*='matchresults.aspx']`,
+        source.url,
+      );
+    }
     return {
       kind: "league",
       name,
       section: parts[1] ?? null,
       playedOn,
       slot: collapse($(headers.get(1)).text()),
-      sourceMatchId: hrefParam($block.find("a[href*='matchresults.aspx']").first().attr("href"), "mid"),
+      sourceMatchId: hrefParam(resultLinks.attr("href"), "mid"),
     };
   });
 }
@@ -365,7 +379,18 @@ function parseRow(
   // `mid=` with no value yields an empty string, not null — an empty idempotency key is as
   // unusable as a missing one, and the null-only check contradicted the comment above it.
   // (Provenance: Codex adversarial review round 7 on PR #26.)
-  const sourceMatchId = hrefParam(cell(7).find("a").attr("href"), "mid");
+  // The desktop side of the same cardinality rule. The Reviewer named the mobile instance; applying
+  // a finding only where it was reported is the recorded way this class survives a fix, and both
+  // sides feed the same comparison. Every archived league row carries exactly one anchor here.
+  const resultLinks = cell(7).find("a");
+  if (resultLinks.length !== 1) {
+    throw new ParseError(
+      `court on ${playedOn} links ${resultLinks.length} match results, expected exactly 1`,
+      `${DESKTOP_TABLE} td:nth-child(8) a`,
+      source.url,
+    );
+  }
+  const sourceMatchId = hrefParam(resultLinks.attr("href"), "mid");
   if (sourceMatchId === null || sourceMatchId === "") {
     throw new ParseError(
       `court on ${playedOn} has no source match id`,
