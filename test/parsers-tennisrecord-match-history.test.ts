@@ -565,17 +565,118 @@ describe("parseMatchHistory — a tournament match links no teams", () => {
   });
 });
 
+describe("parseMatchHistory — the two renderings are correlated by match id, not by date", () => {
+  // Reviewer finding A (Codex, class A/high, at b45f860). Date equality cannot prove the two
+  // renderings are in step: measured across the archive, 102 of 281 pages carry two league rows
+  // sharing one date (218 such groups). On those, a reordered mobile rendering would attach each
+  // match's opponent TEAM to the other match — the record still validates, cardinality still
+  // passes, and the dossier is simply wrong about who was played.
+  //
+  // No combination of header fields is unique (date alone: 218 ambiguous groups; +slot: 67;
+  // +league: 37), so "fail closed when ambiguous" would abort 50 real pages. The `mid=` match id
+  // is the actual key: present on 3996 of 3996 league blocks, equal to its desktop row's on every
+  // one, and unique per page when paired with the slot.
+
+  /** Byte spans of each mobile block, so two can be exchanged whole. */
+  const blockSpans = (html: string): Array<[number, number]> => {
+    const spans: Array<[number, number]> = [];
+    let from = 0;
+    for (;;) {
+      const start = html.indexOf(MOBILE_BLOCK_OPEN, from);
+      if (start === -1) return spans;
+      const table = html.indexOf("</table>", start);
+      const end = html.indexOf("</div>", table) + "</div>".length;
+      if (table === -1 || end < table) throw new Error("unterminated mobile block in fixture");
+      spans.push([start, end]);
+      from = end;
+    }
+  };
+
+  const swapBlocks = (html: string, i: number, j: number): string => {
+    const spans = blockSpans(html);
+    const a = spans[i];
+    const b = spans[j];
+    if (a === undefined || b === undefined || a[0] >= b[0]) throw new Error("bad swap indices");
+    return (
+      html.slice(0, a[0]) +
+      html.slice(b[0], b[1]) +
+      html.slice(a[1], b[0]) +
+      html.slice(a[0], a[1]) +
+      html.slice(b[1])
+    );
+  };
+
+  it("throws when two same-date league blocks are swapped, which date equality cannot see", () => {
+    // Codex's exact trace, built rather than argued. Matches 0 and 1 are BOTH `D2`, so once their
+    // dates agree neither the date check nor a slot check can tell the blocks apart — only the
+    // match id can. Without it this page parses and silently reports the wrong opponent team for
+    // two matches.
+    const sameDate = fixture.html.replaceAll("11/08/2025", "11/15/2025");
+    expect(sameDate).not.toBe(fixture.html);
+
+    const swapped = swapBlocks(sameDate, 0, 1);
+    expect(swapped).not.toBe(sameDate);
+    expect(swapped.length).toBe(sameDate.length); // an exchange, not an edit
+
+    expect(() => parseMatchHistory(swapped, fixture.source)).toThrow(/match id/);
+  });
+
+  it("throws when a block's match id does not belong to its row", () => {
+    const wrongId = fixture.html.replace(
+      '<td style="text-align:center;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">',
+      '<td style="text-align:center;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=99999">',
+    );
+    expect(wrongId).not.toBe(fixture.html);
+
+    expect(() => parseMatchHistory(wrongId, fixture.source)).toThrow(/match id/);
+  });
+
+  it("throws when a block's court slot does not belong to its row", () => {
+    // The slot is carried in both renderings and agrees on all 3996 archived league blocks. It is
+    // a second, independent correlate — a page could in principle reuse a match id across courts
+    // of one team match, and the slot is what separates them.
+    const wrongSlot = fixture.html.replace(
+      '<th style="text-align:center;">D2</th>',
+      '<th style="text-align:center;">D4</th>',
+    );
+    expect(wrongSlot).not.toBe(fixture.html);
+
+    expect(() => parseMatchHistory(wrongSlot, fixture.source)).toThrow(/court slot/);
+  });
+
+  it("throws when a tournament block's court slot does not belong to its row", () => {
+    // Dropped rows get the same treatment. If the correlation slipped, WHICH rows are believed to
+    // be tournaments slips with it — and those are discarded silently, so this is the one path
+    // where a weak check loses a league match with no error at all.
+    const block = TOURNAMENT_MOBILE_BLOCK.replace(
+      '<td style="text-align:center;">16</td>',
+      '<td style="text-align:center;">R4</td>',
+    );
+
+    expect(() => parseMatchHistory(withTournament(fixture.html, 0, { block }), fixture.source))
+      .toThrow(/court slot/);
+  });
+});
+
 describe("parseMatchHistory — mixed-format court slots", () => {
   // Found by sweeping the fix above over all 281 archived pages: with tournaments handled, ONE
   // page still aborted — on `D3X`, a real league court in a "Flex Format 9.0" mixed league. It is
   // the only league slot in the whole archive that `disciplineFor` rejects (4 rows), and the page
   // it kills belongs to a player this issue names as registered to compete. Folded in here rather
   // than filed, because without it this PR's own recovery claim would be false for that player.
-  const asSlot = (slot: string): string =>
-    fixture.html.replace(
-      '<td style="text-align:center; vertical-align: top;">D2</td>',
-      `<td style="text-align:center; vertical-align: top;">${slot}</td>`,
-    );
+  // BOTH renderings carry the slot, and they are now correlated on it — so a test that rewrote only
+  // the desktop cell would trip the correlation guard and pass for the wrong reason. (It did: this
+  // helper originally edited the desktop cell alone, and the guard added for the Reviewer's class-A
+  // finding is what surfaced it.)
+  const asSlot = (slot: string, from = "D2"): string => {
+    const desktop = `<td style="text-align:center; vertical-align: top;">${from}</td>`;
+    const mobile = `<th style="text-align:center;">${from}</th>`;
+    const edited = fixture.html
+      .replace(desktop, desktop.replace(`>${from}<`, `>${slot}<`))
+      .replace(mobile, mobile.replace(`>${from}<`, `>${slot}<`));
+    expect(edited).not.toBe(fixture.html);
+    return edited;
+  };
 
   it("reads a mixed doubles court (D3X) as doubles rather than aborting the page", () => {
     // The suffix qualifies who may fill the court, not how many. What the archive shows is the
@@ -600,7 +701,7 @@ describe("parseMatchHistory — mixed-format court slots", () => {
     const cell = '<td style="text-align:center; vertical-align: top;">D3</td>';
     expect(fixture.html.split(cell)).toHaveLength(2); // exactly one D3 court, so the swap is unambiguous
 
-    const parsed = parseMatchHistory(fixture.html.replace(cell, cell.replace(">D3<", ">D3X<")), fixture.source);
+    const parsed = parseMatchHistory(asSlot("D3X", "D3"), fixture.source);
 
     expect(parsed[2]?.slot).toBe("D3X");
     expect(parsed[2]?.discipline).toBe("doubles");
@@ -608,7 +709,7 @@ describe("parseMatchHistory — mixed-format court slots", () => {
     expect(parsed[2]?.opponents).toEqual([]);
   });
 
-  it.each(["Default", "R2", "C-F", "16", "D3XY", "Doubles"])(
+  it.each(["Default", "R2", "C-F", "16", "D3XY", "Doubles", "DX", "SX", "D", "S"])(
     "still refuses %s, which is not a court slot",
     (slot) => {
       // The mixed suffix widens the grammar by exactly one optional character. A cell that merely

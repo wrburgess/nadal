@@ -66,8 +66,15 @@ const TOURNAMENT_LEAGUE_LABEL = "Tournament";
  * link, a draw position (`R2`, `C-F`, `16`) rather than a court slot, and — decisively — no `mid=`
  * match id, which is half of `court_match_source_unique`. Storing one would mean a row the next
  * pull cannot reconcile, so re-running the pull would duplicate it, breaking spec § Ingestion's
- * first discipline. They are still date-correlated like every other row before being dropped, so
- * omitting them cannot hide the two renderings falling out of step.
+ * first discipline.
+ *
+ * **What correlates the two renderings is the match id and the court slot, not the date.** A date
+ * looks sufficient and is not: a player plays two courts on one day often enough that 102 of the
+ * 281 archived pages carry a same-date pair, so on those a reordered mobile rendering would give
+ * each match the other's opponent team — silently, since every other field would still be right.
+ * The `mid=` the block links is the same team-match id the record is keyed on, and the slot beside
+ * it completes the pair. Dropped tournament rows are correlated too, on the date and slot they do
+ * carry, because a row mistaken for a tournament vanishes with no error at all.
  */
 export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRecord[] {
   const $ = cheerio.load(html);
@@ -110,7 +117,7 @@ export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRe
       }
       const row = $(tr);
       if (correlate.kind === "tournament") {
-        assertTournamentRenderingsAgree($, row, correlate.playedOn, index, source);
+        assertTournamentRenderingsAgree($, row, correlate, index, source);
         return null;
       }
       return parseRow($, row, correlate, source);
@@ -122,8 +129,20 @@ export function parseMatchHistory(html: string, source: SourceRef): CourtMatchRe
     });
 }
 
-type OpponentTeam = { kind: "league"; name: string; section: string | null; playedOn: string };
-type TournamentEntry = { kind: "tournament"; playedOn: string };
+/**
+ * What the mobile block contributes, plus everything it carries that BOTH renderings carry — those
+ * extra fields are not data, they are the proof that this block belongs to that row. Only `name`
+ * and `section` reach the record; `playedOn`, `slot` and `sourceMatchId` exist to be compared.
+ */
+type OpponentTeam = {
+  kind: "league";
+  name: string;
+  section: string | null;
+  playedOn: string;
+  slot: string;
+  sourceMatchId: string | null;
+};
+type TournamentEntry = { kind: "tournament"; playedOn: string; slot: string };
 type MatchCorrelate = OpponentTeam | TournamentEntry;
 
 /**
@@ -161,12 +180,12 @@ function parseMobileCorrelates(
     if (name === undefined || name === "") {
       throw new ParseError("mobile match block names no opponent team", MOBILE_MATCH, source.url);
     }
-    // The date is REQUIRED, not best-effort. It is the only thing that verifies the positional
-    // correlation with the desktop table; skipping the comparison when it fails to parse leaves
+    // The date is REQUIRED, not best-effort. Skipping the comparison when it fails to parse leaves
     // count-only matching, under which a reordering silently attributes every opponent team
     // after the divergence to the wrong match.
     // (Provenance: Codex adversarial review round 10 on PR #26.)
-    const playedOn = parseUsDate($block.find("th").first().text());
+    const headers = $block.find("th");
+    const playedOn = parseUsDate($(headers.get(0)).text());
     if (playedOn === null) {
       throw new ParseError(
         "mobile match block has no parseable date to correlate on",
@@ -174,7 +193,20 @@ function parseMobileCorrelates(
         source.url,
       );
     }
-    return { kind: "league", name, section: parts[1] ?? null, playedOn };
+    // The date is NOT sufficient on its own, which is the correction round 10's rule needed: a
+    // player plays two courts on one day often enough that 102 of the 281 archived pages carry a
+    // same-date pair. The `mid=` the block links is the same team-match id the record is keyed on,
+    // and the slot beside it completes the pair — measured present and equal to the desktop row on
+    // all 3996 archived league blocks, and unique per page. `parseRow` compares all three.
+    // (Provenance: Codex adversarial review class-A finding on PR #114.)
+    return {
+      kind: "league",
+      name,
+      section: parts[1] ?? null,
+      playedOn,
+      slot: collapse($(headers.get(1)).text()),
+      sourceMatchId: hrefParam($block.find("a[href*='matchresults.aspx']").first().attr("href"), "mid"),
+    };
   });
 }
 
@@ -221,7 +253,8 @@ function parseTournamentBlock(
         .some((cell) => lines($, $(cell))[0] === TOURNAMENT_LEAGUE_LABEL),
     )
     .first();
-  const playedOn = parseUsDate(header.find("td").first().text());
+  const headerCells = header.find("td");
+  const playedOn = parseUsDate($(headerCells.get(0)).text());
   if (playedOn === null) {
     throw new ParseError(
       "tournament block has no parseable date to correlate on",
@@ -229,28 +262,40 @@ function parseTournamentBlock(
       source.url,
     );
   }
-  return { kind: "tournament", playedOn };
+  // Same header row, second cell: the draw position. A tournament block links no `mid=` (0 of 61
+  // in the archive), so the slot is the only second correlate available on this path — and it is
+  // the one that matters, since a mis-correlated tournament row is DISCARDED rather than refused.
+  return { kind: "tournament", playedOn, slot: collapse($(headerCells.get(1)).text()) };
 }
 
 /**
  * A tournament row is dropped, but not before it is correlated.
  *
- * Skipping the date comparison for a row we discard anyway would be the easy shortcut and it costs
- * the one guarantee that makes positional correlation safe: if the renderings ever fall out of
- * step, the rows this parser *thinks* are tournaments shift too, and a real league match gets
- * discarded in silence.
+ * Skipping the comparison for a row we discard anyway would be the easy shortcut, and this is the
+ * one path where getting it wrong is silent: a refused league row raises a `ParseError`, but a row
+ * mistaken for a tournament simply disappears. So both fields the two renderings share — the date
+ * and the draw position — must agree.
  */
 function assertTournamentRenderingsAgree(
   $: CheerioAPI,
   row: Cheerio<AnyNode>,
-  blockPlayedOn: string,
+  correlate: TournamentEntry,
   index: number,
   source: SourceRef,
 ): void {
-  const playedOn = parseUsDate($(row.find("td").get(0)).text());
-  if (playedOn !== blockPlayedOn) {
+  const cells = row.find("td");
+  const playedOn = parseUsDate($(cells.get(0)).text());
+  if (playedOn !== correlate.playedOn) {
     throw new ParseError(
-      `renderings disagree at tournament row ${index}: desktop has ${playedOn ?? "no readable date"}, mobile block has ${blockPlayedOn}`,
+      `renderings disagree at tournament row ${index}: desktop has ${playedOn ?? "no readable date"}, mobile block has ${correlate.playedOn}`,
+      `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
+      source.url,
+    );
+  }
+  const slot = collapse($(cells.get(3)).text());
+  if (slot !== correlate.slot) {
+    throw new ParseError(
+      `renderings disagree at tournament row ${index}: desktop court slot "${slot}", mobile block "${correlate.slot}"`,
       `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
       source.url,
     );
@@ -291,6 +336,13 @@ function parseRow(
 
   const teamParts = lines($, cell(2));
   const slot = collapse(cell(3).text());
+  if (opponentTeam.slot !== slot) {
+    throw new ParseError(
+      `renderings disagree on ${playedOn}: desktop court slot "${slot}", mobile block "${opponentTeam.slot}"`,
+      `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
+      source.url,
+    );
+  }
   const opponentParts = lines($, cell(5));
   const defaulted = opponentParts.some((part) => /^default/i.test(part));
   const rawMatchRating = collapse(cell(8).text());
@@ -318,6 +370,18 @@ function parseRow(
     throw new ParseError(
       `court on ${playedOn} has no source match id`,
       `${DESKTOP_TABLE} td:nth-child(8) a[href*='mid=']`,
+      source.url,
+    );
+  }
+  // The strongest correlate the two renderings share, and the reason date equality is not enough:
+  // a same-date pair occurs on 102 of the 281 archived pages, and a reordered mobile rendering
+  // would hand each of those matches the OTHER one's opponent team — a record that validates, has
+  // the right score and slot, and is simply wrong about who was played.
+  // (Provenance: Codex adversarial review class-A finding on PR #114.)
+  if (opponentTeam.sourceMatchId !== sourceMatchId) {
+    throw new ParseError(
+      `renderings disagree on ${playedOn}: desktop match id "${sourceMatchId}", mobile block "${opponentTeam.sourceMatchId ?? "none"}"`,
+      `${DESKTOP_TABLE} / ${MOBILE_MATCH}`,
       source.url,
     );
   }
@@ -359,10 +423,17 @@ function parseRow(
  * It widens the grammar by exactly one character on purpose: a cell that merely *starts* with `D`
  * (`Default` is the one that matters) is still refused, because reading a discipline nobody printed
  * is how a whole page of courts ends up silently misclassified instead of loudly rejected.
+ *
+ * **A digit is now required**, which is narrower than the `\d*` this file carried before the mixed
+ * suffix existed. `\d*` plus an optional `X` would have admitted bare `DX`/`SX` — a source typo or
+ * a new token becoming plausible-looking data under a real idempotency key. Every one of the 3996
+ * archived league courts carries a digit, so nothing legitimate is lost; and it closes the older
+ * hole in the same move, since bare `S` was already accepted and `S` is a real *tournament* draw
+ * position (semifinal). (Provenance: Codex adversarial review class-B finding on PR #114.)
  */
 function disciplineFor(slot: string, source: SourceRef): "singles" | "doubles" {
-  if (/^S\d*X?$/i.test(slot)) return "singles";
-  if (/^D\d*X?$/i.test(slot)) return "doubles";
+  if (/^S\d+X?$/i.test(slot)) return "singles";
+  if (/^D\d+X?$/i.test(slot)) return "doubles";
   throw new ParseError(
     `unrecognised court slot "${slot}"`,
     `${DESKTOP_TABLE} td:nth-child(4)`,
