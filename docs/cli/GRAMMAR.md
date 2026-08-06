@@ -92,9 +92,15 @@ three bare-number fields that count them and sum to `skipped=`:
 
 | Disposition | Field | Means | Do |
 |---|---|---|---|
-| `retryable` | `retryable=` | positively identified as transient — a 5xx/408/425/429, a timeout, a socket or DNS error, or SQLite contention | re-run that player's pull; it typically succeeds immediately |
+| `retryable` | `retryable=` | positively identified as transient — HTTP 408/425/429 or any 5xx; a request timeout or abort; one of the enumerated connection codes `ECONNRESET` · `ECONNREFUSED` · `ETIMEDOUT` · `EAI_AGAIN` · `EPIPE`; or SQLite contention (`SQLITE_BUSY*`, `SQLITE_LOCKED`, `SQLITE_LOCKED_SHAREDCACHE`) | re-run that player's pull; it typically succeeds immediately |
 | `permanent` | `permanent=` | positively identified as reproducible — any other 4xx, a parse failure, an unruled ambiguous identity, or a roster row with no profile link | investigate; a retry reproduces it exactly |
 | `unclassified` | `unclassified=` | neither could be established from the failure itself | read the `team pull: cascading …` warning on stderr, which carries the reason |
+
+**The `retryable` row is an enumeration, and it claims nothing wider than it lists.** A network
+failure whose code is *not* on that list — `ENOTFOUND`, `ENETUNREACH`, `EHOSTUNREACH` — reports
+`unclassified`, not `retryable`. `ENOTFOUND` in particular is NXDOMAIN, which a permanently dead host
+returns exactly as a flapping resolver does, so nothing about it identifies a transient fault;
+`EAI_AGAIN` is on the list precisely because the resolver itself says "temporary, retry".
 
 `unclassified` is a real third answer and not a placeholder: a wrong `retryable` would send an
 operator to re-run a doomed pull twice before reading the warning, which is worse than saying nothing.

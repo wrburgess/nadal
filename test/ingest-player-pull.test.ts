@@ -262,6 +262,40 @@ describe("pullPlayer disposition (#98)", () => {
   });
 
   /**
+   * The OTHER `unknown-target` branch, and the one an operator actually meets: a player who IS on
+   * file but has no stored handle, because a `--players` cascade created them from a roster row that
+   * carried no profile link. `resolveTargetUrl` finds the row, sees `tennisrecordUrl === null`, and
+   * refuses with the same message a never-seen name gets.
+   *
+   * This is the trace behind a runbook correction (`docs/runbooks/pre-tournament-full-pull.md` step 2):
+   * that step used to tell an operator to pull such a player individually by name, which cannot work.
+   * Pinned here so the doc's claim rests on an executed check rather than on a reading of the code.
+   * (Found by the independent Codex review of PR #119, rated medium.)
+   */
+  it("refuses a resolved player who has no stored handle — the no-profile-link roster case", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Exactly what `pullTeam` does for a roster row with no profile link: resolve the name,
+      // creating the row, and never supply a URL.
+      const created = resolvePlayer(db, { name: "Uma Unlinked" });
+      expect(created.kind).toBe("created");
+      if (created.kind === "ambiguous") throw new Error("expected a resolved row");
+      expect(created.row.tennisrecordUrl, "the roster page supplied no URL").toBeNull();
+
+      const result = await pullPlayer({ db, fetchPage: createStubFetcher({}), target: "Uma Unlinked" });
+
+      expect(result).toMatchObject({
+        kind: "unknown-target",
+        message: 'unknown player target "Uma Unlinked"',
+        disposition: "permanent",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  /**
    * The THIRD catch site — the one around the write transaction, which the two above never reach.
    * `db` is an injected seam, so a transaction that throws a contention code is reachable without
    * mocking anything inside the pull. Left uncovered, this site would return `unclassified` for a

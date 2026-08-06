@@ -27,13 +27,26 @@ const RETRYABLE_STATUSES = new Set([
 ]);
 
 /**
- * libuv/DNS codes that mean the request never got a real answer. `ENOTFOUND` is the judgement call
- * in this list: a permanently dead host resolves to it too, so a retry can be futile. It is retryable
- * anyway because the observed cause on this source is a transient resolver failure, and because the
- * cost of the two mistakes is asymmetric — one wasted re-run against a human sent to investigate a
- * fault that had already healed.
+ * Codes for a connection that was established and then failed, or a resolver that explicitly said
+ * "ask again". Each one is a fault in the *attempt*, not a statement about the destination, so a
+ * retry is a real remedy for all of them.
+ *
+ * **`ENOTFOUND` is deliberately NOT here, and it was, in an earlier revision of this file.** The
+ * justification then was "the observed cause on this source is a transient resolver failure" — an
+ * empirical claim with no measurement behind it. #98's four measured failures were rate-limiting,
+ * not DNS. `ENOTFOUND` is NXDOMAIN, which a permanently dead host returns exactly as a flapping
+ * resolver does, so it cannot be *positively identified* as transient — and this module's whole
+ * contract is that `retryable` is only ever positively identified. It falls to `unclassified`, which
+ * sends the operator to the reason instead of to a re-run that may be doomed. `EAI_AGAIN` stays,
+ * because it is the resolver's own "temporary failure, retry" code.
+ * (Independent Codex review of PR #119, rated medium.)
+ *
+ * **The list is exactly what is enumerated — no wider class is claimed.** A libuv code not named
+ * here (`ENETUNREACH`, `EHOSTUNREACH`, …) is `unclassified`, not retryable. GRAMMAR.md and the
+ * runbook say so in those words rather than promising "a socket error"; the same review found the
+ * prose asserting a class this set does not cover.
  */
-const RETRYABLE_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND", "EPIPE"]);
+const RETRYABLE_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "EPIPE"]);
 
 /** `AbortSignal.timeout` rejects with a `TimeoutError`; a manual abort gives `AbortError`. */
 const RETRYABLE_ERROR_NAMES = new Set(["TimeoutError", "AbortError"]);

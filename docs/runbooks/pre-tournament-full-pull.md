@@ -215,9 +215,9 @@ size the work before you read a single warning:
 
 | Field, when non-zero | Then |
 |---|---|
-| `retryable=` | those entries hit a transient fault (a 5xx/408/425/429, a timeout, a socket or DNS error, SQLite contention). Re-pull each `[retryable]` player individually (step 3); they typically succeed immediately. Four such failures in one live session were all clean on the first retry. |
+| `retryable=` | those entries hit a fault identified as transient — HTTP 408/425/429 or any 5xx, a timeout, one of the enumerated connection codes, or SQLite contention. Re-pull each `[retryable]` player individually (step 3); they typically succeed immediately. Four such failures in one live session were all clean on the first retry. |
 | `permanent=` | those entries reproduce exactly on a retry — any other 4xx, a parse failure, an unruled ambiguous identity, or a roster row with no profile link. **Do not re-run them**; read the matching warning below and act on its cause. |
-| `unclassified=` | the failure could not be positively identified either way. Read the `team pull: cascading …` warning for those entries; the reason is there. This is a deliberate third answer — a wrong `retryable` would have you re-run a doomed pull twice. |
+| `unclassified=` | the failure could not be positively identified either way. Read the `team pull: cascading …` warning for those entries; the reason is there. This is a deliberate third answer — a wrong `retryable` would have you re-run a doomed pull twice. **A network failure lands here more often than you might expect**: only the enumerated connection codes are `retryable`, so `ENOTFOUND` (NXDOMAIN — a dead host and a flapping resolver are indistinguishable), `ENETUNREACH` and `EHOSTUNREACH` all report `unclassified`. The reason names the code; judge it yourself. |
 
 **There is no automatic retry, deliberately** — it carries its own rate-limiting question
 (#96 → *Not in scope*, reaffirmed in #98).
@@ -228,7 +228,26 @@ cause; each one names the identity that actually failed **and why** (#96). Every
 `— skipped` and carries its reason in between. There are three common causes:
 
 - *A roster row with no profile link on the page at all* — tagged `[permanent]`, and cascades can
-  never reach it. Pull that player individually (step 3).
+  never reach it.
+
+  **`tn player pull "<their name>"` will NOT work here, and step 3 as written cannot help.** The team
+  pull did create the player and their membership, but with no `tennisrecord_url` — so resolving them
+  by name refuses with `unknown player target "<name>"`, because there is no stored handle to fetch.
+  That is the same refusal a never-seen name gives, and it is not a bug: the roster page never
+  supplied a URL for this person.
+
+  Find their profile on TennisRecord by hand and pull **the URL**, which bypasses name resolution and
+  stores the handle for next time:
+
+  ```sh
+  printf 'their TennisRecord match-history URL: '; IFS= read -r url
+  tn player pull "$url"
+  ```
+
+  If no profile exists upstream, this roster entry cannot be enriched at all — the team is refreshed
+  without their match history, and the `[permanent]` tag is telling you exactly that.
+  (Found by the independent Codex review of PR #119: the previous wording sent an operator to a
+  command that answers `unknown player target` every time.)
 - *A fetch or parse failure* — the warning reads
   `cascading "<roster player>" failed (error) — <reason>`. The disposition already sorts these two:
   - `[retryable]` — `fetch failed with status <5xx>: <url>`, a timeout, or a socket error.

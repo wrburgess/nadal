@@ -57,10 +57,37 @@ describe("dispositionOfThrown — transport failures", () => {
     expect(dispositionOfThrown(namedError(name))).toBe("retryable");
   });
 
-  it.each(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND", "EPIPE"])(
+  it.each(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "EPIPE"])(
     "classifies the socket code %s as retryable",
     (code) => {
       expect(dispositionOfThrown(errorWithCode(code))).toBe("retryable");
+    },
+  );
+
+  /**
+   * `ENOTFOUND` is NXDOMAIN, which a permanently dead host returns exactly as a flapping resolver
+   * does — so it cannot be positively identified as transient, and this module never claims a
+   * `retryable` it has not positively identified. An earlier revision had it retryable on the
+   * strength of an unmeasured claim about this source. (Codex review of PR #119, rated medium.)
+   *
+   * `EAI_AGAIN` beside it is the contrast that makes the rule legible rather than arbitrary: the
+   * resolver itself says "temporary failure, try again", which IS a positive identification.
+   */
+  it("does NOT classify ENOTFOUND as retryable — NXDOMAIN is not evidence of a transient fault", () => {
+    expect(dispositionOfThrown(errorWithCode("ENOTFOUND"))).toBe("unclassified");
+    expect(dispositionOfThrown(errorWithCode("EAI_AGAIN"))).toBe("retryable");
+  });
+
+  /**
+   * The enumeration's edge, in the direction the docs used to overclaim. These are real libuv codes
+   * for a network fault, and they are `unclassified` because this module enumerates rather than
+   * pattern-matches `E*` — pinned so the prose in GRAMMAR.md and the runbook cannot drift back into
+   * promising "a socket error" as a class.
+   */
+  it.each(["ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "ECONNABORTED"])(
+    "leaves the unenumerated network code %s unclassified rather than claiming a wider class",
+    (code) => {
+      expect(dispositionOfThrown(errorWithCode(code))).toBe("unclassified");
     },
   );
 
