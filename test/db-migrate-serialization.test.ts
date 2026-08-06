@@ -210,6 +210,30 @@ describe("enabling WAL is safe against a concurrent converter (#117)", () => {
     }
   });
 
+  it("retries an EXTENDED busy code too, not only the bare SQLITE_BUSY", () => {
+    // SQLite defines SQLITE_BUSY as a family and better-sqlite3 reports the extended name on
+    // `.code` — measured: a write on a stale WAL read snapshot raises `SQLITE_BUSY_SNAPSHOT`, not
+    // `SQLITE_BUSY`. A guard written as `code !== "SQLITE_BUSY"` therefore reads a
+    // `SQLITE_BUSY_RECOVERY` during conversion as "not contention" and fails fast, reinstating the
+    // very symptom the retry removes.
+    //
+    // Driven from a stub rather than a real database because the conversion path raises the BARE
+    // code in every state reachable here — so the real database can only ever exercise the member
+    // that was already covered, which is exactly how an enumeration bug survives a green suite.
+    let calls = 0;
+    const extendedBusy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY_RECOVERY" });
+    const stub = {
+      pragma(source: string) {
+        if (!source.includes("=")) return "delete";
+        calls += 1;
+        throw extendedBusy;
+      },
+    } as unknown as Database.Database;
+
+    expect(() => enableWal(stub, 3, 1)).toThrow(extendedBusy);
+    expect(calls, "an extended busy code was not retried").toBe(3);
+  });
+
   it("propagates a non-SQLITE_BUSY failure on the first attempt instead of retrying it", () => {
     // A readonly connection cannot convert, and the reason is not contention — so the retry loop
     // must fail fast rather than spend its whole 5s budget on an error more waiting cannot fix.

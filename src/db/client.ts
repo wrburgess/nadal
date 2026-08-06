@@ -146,12 +146,19 @@ function sleepSync(ms: number): void {
  * migrator is reached at all — which is why `applyMigrations`' `BEGIN IMMEDIATE` cannot fix this half
  * on its own. It accounted for 5 of 11 measured failures.
  *
- * **The reachable window is only the conversion itself**, and that bound is measured rather than
+ * **The contended window is only the conversion itself**, and that bound is measured rather than
  * argued: on a database that is ALREADY `wal`, the pragma is a no-op needing no lock and succeeds
- * even while another connection holds an open write transaction. So this retry is reached only on the
- * first open of a brand-new file, and the other ~30 `openDb` call sites — which always meet an
- * already-converted database — never enter it. `test/db-migrate-serialization.test.ts` pins both
- * halves of that, so a later change cannot widen the window silently.
+ * even while another connection holds an open write transaction. `tn db migrate` converts at
+ * bootstrap, so in the normal flow every later `openDb` — all ~30 call sites — meets a converted
+ * database and cannot contend. `test/db-migrate-serialization.test.ts` pins that, so a later change
+ * cannot widen the window silently.
+ *
+ * Stated that way on purpose, because the tighter phrasing was **false in this repo**: an earlier
+ * draft said the retry is "reached only on the first open of a brand-new file". Any database `tn` has
+ * not yet converted enters this loop — including one built by an external tool, and including the
+ * delete-mode fixtures the legacy-upgrade tests construct with a bare `new Database(path)`
+ * (`test/db-teams-url-unique-upgrade.test.ts`), which `runMigrations` then converts. Entering the loop
+ * is harmless and normal; what is bounded is *contention*, which needs two converters at once.
  *
  * Reading the mode before setting it is what implements that bound: the early return is the
  * already-`wal` case, not an optimisation.
@@ -180,8 +187,15 @@ export function enableWal(
       sqlite.pragma("journal_mode = WAL");
       return;
     } catch (err) {
+      // `startsWith`, not `!== "SQLITE_BUSY"` — SQLite defines SQLITE_BUSY as a FAMILY
+      // (`SQLITE_BUSY_SNAPSHOT`, `SQLITE_BUSY_RECOVERY`, `SQLITE_BUSY_TIMEOUT`) and better-sqlite3
+      // surfaces the EXTENDED name on `.code`, verified rather than assumed: a write on a stale WAL
+      // read snapshot reports `SQLITE_BUSY_SNAPSHOT`, not `SQLITE_BUSY`. Matching the base code alone
+      // would classify a recovery-time busy as "not contention" and fail fast — reinstating exactly
+      // the symptom this retry exists to remove, on the rarer path where it is hardest to diagnose.
+      // Derived from the family rather than enumerating the one member that happened to be measured.
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "SQLITE_BUSY" || attempt >= attempts) throw err;
+      if (code?.startsWith("SQLITE_BUSY") !== true || attempt >= attempts) throw err;
     }
     sleepSync(delayMs);
   }
