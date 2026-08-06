@@ -121,15 +121,55 @@ describe("dispositionOfThrown — SQLite contention", () => {
     expect(dispositionOfThrown(errorWithCode(code))).toBe("retryable");
   });
 
-  // better-sqlite3 codes arrive with a suffix on some paths (`SQLITE_BUSY_SNAPSHOT`), and drizzle
-  // wraps the error besides — so the match is a prefix test taken anywhere in the chain.
-  it("classifies a suffixed busy code behind a wrapper as retryable", () => {
-    const wrapped = new Error("Failed to run the query", { cause: errorWithCode("SQLITE_BUSY_SNAPSHOT") });
-    expect(dispositionOfThrown(wrapped)).toBe("retryable");
+  // The extended result codes better-sqlite3 actually registers
+  // (`node_modules/better-sqlite3/src/util/constants.cpp`), reached through a drizzle wrapper the way
+  // a real migration/query failure arrives.
+  it.each(["SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY_TIMEOUT", "SQLITE_LOCKED_SHAREDCACHE"])(
+    "classifies the extended code %s behind a wrapper as retryable",
+    (code) => {
+      expect(dispositionOfThrown(new Error("Failed to run the query", { cause: errorWithCode(code) }))).toBe(
+        "retryable",
+      );
+    },
+  );
+
+  /**
+   * `SQLITE_LOCKED_VTAB` shares `SQLITE_LOCKED`'s prefix and is NOT contention — a locked virtual
+   * table does not clear on a retry. It is the case that makes `SQLITE_LOCKED` an exact set while
+   * `SQLITE_BUSY` stays a prefix, and a prefix match here would hand out the one verdict this module
+   * treats as worst to get wrong: a `retryable` an operator acts on twice.
+   */
+  it("does NOT classify SQLITE_LOCKED_VTAB as retryable — a locked vtab is not contention", () => {
+    expect(dispositionOfThrown(errorWithCode("SQLITE_LOCKED_VTAB"))).toBe("unclassified");
   });
 
   it("does not claim a constraint violation is retryable", () => {
     expect(dispositionOfThrown(errorWithCode("SQLITE_CONSTRAINT_UNIQUE"))).toBe("unclassified");
+  });
+});
+
+/**
+ * The FetchError branch's fallback, which a `typeof status === "number"` test would route to
+ * `permanent` instead — asserting "retrying reproduces this" about a status nothing identified.
+ * `NaN` and `Infinity` are both numbers and neither compares into the 5xx range, so they reached the
+ * `return "permanent"` below the range check. Constructible without a cast, so this is a real input
+ * class rather than a defensive branch no fixture can distinguish.
+ */
+describe("dispositionOfThrown — a FetchError with an unusable status", () => {
+  it.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["-Infinity", Number.NEGATIVE_INFINITY],
+    ["a fractional status", 503.5],
+    // The four land on DIFFERENT wrong answers under a `typeof` test — NaN and both infinities fall
+    // through to `permanent`, while `503.5` compares into the 5xx range and comes back `retryable` —
+    // so the title says "rather than guessing" instead of naming one of them.
+  ])("classifies a status of %s as unclassified rather than guessing", (_label, status) => {
+    expect(dispositionOfThrown(new FetchError("odd", status as number, "u"))).toBe("unclassified");
+  });
+
+  it("classifies a FetchError whose status was never set as unclassified", () => {
+    expect(dispositionOfThrown(new FetchError("no status", undefined as unknown as number, "u"))).toBe("unclassified");
   });
 });
 

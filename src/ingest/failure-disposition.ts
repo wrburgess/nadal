@@ -39,11 +39,24 @@ const RETRYABLE_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI
 const RETRYABLE_ERROR_NAMES = new Set(["TimeoutError", "AbortError"]);
 
 /**
- * SQLite contention. Matched as a PREFIX because better-sqlite3 returns extended result codes on
- * some paths (`SQLITE_BUSY_SNAPSHOT`, `SQLITE_LOCKED_SHAREDCACHE`), and an exact-equality set would
- * silently miss them while reading as though it covered the class.
+ * SQLite contention, in the two shapes the extended result codes actually take.
+ *
+ * better-sqlite3 sets `err.code` to the extended name where SQLite defines one — read from
+ * `node_modules/better-sqlite3/src/util/constants.cpp`, which registers `SQLITE_BUSY_RECOVERY`,
+ * `SQLITE_BUSY_SNAPSHOT`, `SQLITE_LOCKED_SHAREDCACHE` and `SQLITE_LOCKED_VTAB` as literal strings —
+ * so an exact match on the two base codes alone would silently miss the extended forms while reading
+ * as though it covered the class.
+ *
+ * **`SQLITE_BUSY` is a prefix and `SQLITE_LOCKED` is not, and that asymmetry is the point.** Every
+ * `SQLITE_BUSY*` code is contention that clears on a retry. `SQLITE_LOCKED*` is not uniform:
+ * `SQLITE_LOCKED_SHAREDCACHE` is contention, but `SQLITE_LOCKED_VTAB` reports a locked virtual table,
+ * which a retry does not clear — so a prefix here would hand out the one verdict this module says is
+ * worst to get wrong, a `retryable` an operator would act on twice. nadal declares no virtual tables
+ * today; the enumeration is written for what the codes MEAN rather than for what this schema happens
+ * to reach, because the second is a fact about the caller and the first is a fact about SQLite.
  */
-const RETRYABLE_CODE_PREFIXES = ["SQLITE_BUSY", "SQLITE_LOCKED"];
+const RETRYABLE_CODE_PREFIXES = ["SQLITE_BUSY"];
+const RETRYABLE_EXACT_CODES = new Set(["SQLITE_LOCKED", "SQLITE_LOCKED_SHAREDCACHE"]);
 
 /**
  * How far the `cause` walk goes. `Error.cause` is an ordinary writable property, so a cycle is
@@ -86,12 +99,17 @@ function classifyLink(value: unknown): FailureDisposition | null {
   // is a stronger fact than anything else on the object.
   if (isInstanceOf(value, FetchError)) {
     const status = readProperty(value, "status");
-    if (typeof status === "number") {
-      if (RETRYABLE_STATUSES.has(status) || (status >= 500 && status <= 599)) return "retryable";
+    // `Number.isInteger`, not `typeof === "number"`. `NaN` and `Infinity` are both numbers and
+    // neither compares into the 5xx range, so a `typeof` test would fall through to `permanent` —
+    // asserting "retrying reproduces this" about a status nothing ever identified, which is exactly
+    // the claim this module's docblock says it never makes. They land in `unclassified` instead.
+    if (Number.isInteger(status)) {
+      const code = status as number;
+      if (RETRYABLE_STATUSES.has(code) || (code >= 500 && code <= 599)) return "retryable";
       return "permanent";
     }
-    // A FetchError with no numeric status is a shape this module does not recognize; say so rather
-    // than defaulting it into either bucket.
+    // A FetchError carrying no usable status is a shape this module does not recognize; say so
+    // rather than defaulting it into either bucket.
     return "unclassified";
   }
 
@@ -104,7 +122,7 @@ function classifyLink(value: unknown): FailureDisposition | null {
 
   const code = readProperty(value, "code");
   if (typeof code === "string") {
-    if (RETRYABLE_CODES.has(code)) return "retryable";
+    if (RETRYABLE_CODES.has(code) || RETRYABLE_EXACT_CODES.has(code)) return "retryable";
     if (RETRYABLE_CODE_PREFIXES.some((prefix) => code.startsWith(prefix))) return "retryable";
   }
 
