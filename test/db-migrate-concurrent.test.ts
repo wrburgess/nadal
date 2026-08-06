@@ -82,6 +82,16 @@ async function migrate(dbPath: string): Promise<{ stdout: string; stderr: string
  */
 describe("two concurrent `tn db migrate` processes on one new database (#117)", () => {
   it("both report status=ok and the database ends up completely migrated, every round", async () => {
+    // The reference every round is compared against: one process, no contention.
+    const referencePath = join(mkdtempSync(join(tmpdir(), "tn-reference-")), "reference.db");
+    const reference = await migrate(referencePath);
+    expect(reference.code, `reference migration failed: ${reference.stdout} ${reference.stderr}`).toBe(0);
+    const referenceDb = new Database(referencePath, { fileMustExist: true });
+    const uncontendedSchema = referenceDb
+      .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name")
+      .all();
+    referenceDb.close();
+
     for (let round = 0; round < ROUNDS; round++) {
       const dbPath = join(mkdtempSync(join(tmpdir(), "tn-concurrent-")), "concurrent.db");
 
@@ -108,12 +118,22 @@ describe("two concurrent `tn db migrate` processes on one new database (#117)", 
         .all()
         .map((row) => (row as { name: string }).name)
         .sort();
+      // Table names alone are too weak, and the Reviewer said so: an interleaving that created every
+      // table but skipped an INDEX — while still recording the journal row — would pass a name-only
+      // check. Compare the FULL schema against a database migrated with no concurrency at all, which
+      // makes indexes, triggers and the stored DDL text all part of the assertion.
+      const schema = sqlite
+        .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name")
+        .all();
       const applied = sqlite
         .prepare("SELECT count(*) AS count FROM `__drizzle_migrations`")
         .get() as { count: number };
       sqlite.close();
 
       expect(tables, `round ${round}`).toEqual(EXPECTED_TABLES);
+      expect(schema, `round ${round}: schema differs from an uncontended migration`).toEqual(
+        uncontendedSchema,
+      );
       // Each migration recorded exactly once: two processes must not both write journal rows.
       expect(applied.count, `round ${round}`).toBe(12);
     }

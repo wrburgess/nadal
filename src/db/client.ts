@@ -165,7 +165,8 @@ function sleepSync(ms: number): void {
  *
  * `attempts` and `delayMs` are parameters solely so the exhaustion case can be exercised in
  * milliseconds instead of five seconds — the same kind of narrow, test-facing seam as
- * `OpenDbOptions.verbose` above, and no caller passes either. Exported for the same reason
+ * `OpenDbOptions.verbose` above, and no PRODUCTION caller passes either — the tests do, which is
+ * what they are for. Exported for the same reason
  * `losslessPath` and `UNRENDERABLE` below are: the contended cases can be set up directly here and
  * only awkwardly through `openDb`.
  *
@@ -383,8 +384,18 @@ const DRIZZLE_MIGRATIONS_TABLE_DDL =
  *
  * `BEGIN IMMEDIATE` takes the write lock **up front**, so the journal read below happens under it and
  * nothing can commit between the read and the writes it decides on. A second process blocks at the
- * `BEGIN IMMEDIATE` (which *is* covered by the busy handler), then reads the journal the first
- * process just wrote and correctly applies nothing.
+ * `BEGIN IMMEDIATE` — which, unlike the journal-mode pragma, *is* covered by the busy handler — then
+ * reads the journal the first process just wrote and correctly applies nothing.
+ *
+ * **Within better-sqlite3's 5s `busy_timeout`, and not beyond it.** Said that way because the
+ * unqualified version was wrong: if the first process's transaction outlasts that budget — a large
+ * database where migration 0009's unique-index build is slow — the second gets `SQLITE_BUSY` and
+ * `tn db migrate` reports `database is locked` while the first goes on to commit. That is the
+ * ORIGINAL symptom of this issue, reproduced by a different cause, and no timeout value removes it;
+ * it only moves the threshold. It is accepted rather than solved: the failure is now a true statement
+ * about what happened ("database is locked", after actually waiting) instead of the false one it used
+ * to be ("table availability already exists"), and it needs a migration slower than every one on
+ * record. Recorded as a known limitation on PR #120 rather than hidden behind a bigger constant.
  *
  * **Everything else is drizzle's semantics, deliberately unchanged** — same bookkeeping table, same
  * single pre-loop **timestamp watermark** (`Number(watermark) < folderMillis`, evaluated against one
@@ -397,20 +408,31 @@ const DRIZZLE_MIGRATIONS_TABLE_DDL =
  * compares `sqlite_master` and `__drizzle_migrations` row for row, which is also what fails loudly if
  * a future drizzle-orm upgrade changes the format underneath this copy.
  *
- * `BEGIN IMMEDIATE` sits OUTSIDE the `try`, which is why the catch can `ROLLBACK` unconditionally
- * rather than testing `sqlite.inTransaction` first: reaching the catch means the transaction opened.
- * The remaining worry would be SQLite rolling back on its own before we do — but its automatic-
- * rollback classes (`SQLITE_FULL`, `SQLITE_IOERR`, `SQLITE_NOMEM`, `SQLITE_BUSY`, an explicit
- * `ON CONFLICT ROLLBACK`) are unreachable here: a constraint failure aborts the STATEMENT, not the
- * transaction, and we hold the write lock so no other writer can make us busy. A guard for it would
- * be a branch no test in this repo can kill, which `rules/testing.md` treats as worse than its
- * absence — so the structure removes the need for one instead of the comment excusing it.
+ * `BEGIN IMMEDIATE` sits OUTSIDE the `try`, so reaching the catch means the transaction opened. That
+ * is necessary but **not sufficient** for an unconditional `ROLLBACK`, which an earlier revision of
+ * this comment got wrong — it claimed SQLite's automatic-rollback classes (`SQLITE_FULL`,
+ * `SQLITE_IOERR`, `SQLITE_NOMEM`, `SQLITE_BUSY`, an explicit `ON CONFLICT ROLLBACK`) were
+ * "unreachable here" and that a guard would be a branch no test could kill. The independent Reviewer
+ * refuted it with a trace, and running the trace confirmed it: cap a database with
+ * `PRAGMA max_page_count`, and a migration statement raises `SQLITE_FULL` with `inTransaction`
+ * already `false` — after which a bare `ROLLBACK` throws *"cannot rollback - no transaction is
+ * active"* and **replaces** the real "database or disk is full". The masking error is the one the
+ * operator would have had to debug.
+ *
+ * So the guard is real, and it is killable — `test/db-migrate-serialization.test.ts` kills it with
+ * exactly that trace. Worth recording why the wrong version was persuasive: the reasoning about
+ * constraint failures aborting the statement rather than the transaction is *correct*, and it covers
+ * the only failure this change had actually produced. It was an argument from the reachable set
+ * someone had thought of, presented as a property of the code.
  */
-function applyMigrations(sqlite: Database.Database): void {
+export function applyMigrations(
+  sqlite: Database.Database,
+  migrationsFolder: string = MIGRATIONS_FOLDER,
+): void {
   // Read the files BEFORE taking the lock: this is filesystem I/O with its own failure mode ("Can't
   // find meta/_journal.json"), and there is no reason for it to happen inside a transaction or to
   // leave one open if it throws.
-  const migrations = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER });
+  const migrations = readMigrationFiles({ migrationsFolder });
 
   sqlite.exec("BEGIN IMMEDIATE");
   try {
@@ -423,17 +445,26 @@ function applyMigrations(sqlite: Database.Database): void {
     );
     for (const migration of migrations) {
       if (watermark === undefined || Number(watermark.createdAt) < migration.folderMillis) {
-        // `exec`, not `prepare().run()`: a `--> statement-breakpoint` chunk is one statement today,
-        // but `exec` runs every statement in whatever it is given, whereas `prepare` rejects a
-        // multi-statement string outright. Verified against all twelve migrations — the resulting
-        // schema is identical either way.
-        for (const statement of migration.sql) sqlite.exec(statement);
+        // `prepare().run()`, the SAME primitive drizzle uses — deliberately, and this was `exec` in
+        // the first revision. `exec` runs EVERY statement in the string it is given; `prepare`
+        // rejects a multi-statement one outright ("The supplied SQL string contains more than one
+        // statement"). Since a `--> statement-breakpoint` chunk is meant to be exactly one statement,
+        // that rejection is a guard, and `exec` silently discarded it: a hand-authored migration —
+        // and this repo hand-authors migration DML, in `0001` and `0010` — that forgot a breakpoint
+        // would have run both halves and recorded the migration as applied. Measured on the
+        // Reviewer's own trace: `exec` ran `CREATE TABLE audit …; DROP TABLE teams;` and the table
+        // was gone, where `prepare` refuses. Swapping a loud failure for a silent one is the trade
+        // this repo least wants, and matching drizzle here costs nothing.
+        for (const statement of migration.sql) sqlite.prepare(statement).run();
         record.run(migration.hash, migration.folderMillis);
       }
     }
     sqlite.exec("COMMIT");
   } catch (err) {
-    sqlite.exec("ROLLBACK");
+    // Conditional, because SQLite may already have rolled back — see the doc above. Rolling back
+    // when there is no transaction throws, and that throw would leave the catch propagating the
+    // WRONG error.
+    if (sqlite.inTransaction) sqlite.exec("ROLLBACK");
     throw err;
   }
 }

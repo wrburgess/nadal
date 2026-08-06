@@ -1,12 +1,12 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { enableWal, openDb, runMigrations } from "../src/db/client.js";
+import { applyMigrations, enableWal, openDb, runMigrations } from "../src/db/client.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = resolve(HERE, "..", "drizzle");
@@ -26,6 +26,22 @@ function snapshot(path: string): { schema: unknown[]; journal: unknown[] } {
     .all();
   sqlite.close();
   return { schema, journal };
+}
+
+/** A throwaway migrations folder holding one migration whose SQL is exactly `sql`. */
+function singleMigrationFolder(sql: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "tn-onemig-"));
+  mkdirSync(join(dir, "meta"), { recursive: true });
+  writeFileSync(
+    join(dir, "meta", "_journal.json"),
+    JSON.stringify({
+      version: "7",
+      dialect: "sqlite",
+      entries: [{ idx: 0, version: "6", when: 1785000000000, tag: "0000_probe", breakpoints: true }],
+    }),
+  );
+  writeFileSync(join(dir, "0000_probe.sql"), sql);
+  return dir;
 }
 
 /** Bootstrap a database the way drizzle's own migrator would, bypassing `runMigrations` entirely. */
@@ -146,6 +162,85 @@ describe("applying migrations locally is equivalent to drizzle's own migrator (#
 });
 
 /**
+ * Both cases here came from the independent Reviewer on PR #120, and both were confirmed by running
+ * the traces it supplied rather than by agreeing with them. Neither is reachable through the twelve
+ * migrations in `drizzle/`, which is exactly why they needed a purpose-built folder and a capped
+ * database — the equivalence test above cannot see either one.
+ */
+describe("applyMigrations fails loudly rather than quietly (#117, Reviewer round 1)", () => {
+  it("refuses a migration chunk holding more than one statement", () => {
+    // drizzle runs each chunk through `prepare().run()`, which rejects a multi-statement string.
+    // The first revision of `applyMigrations` used `exec`, which runs them all — so a hand-authored
+    // migration that forgot a `--> statement-breakpoint` would have executed both halves and
+    // recorded itself as applied. This repo DOES hand-author migration DML (0001, 0010), so that is
+    // a live shape, not a hypothetical.
+    //
+    // The reviewer's own trace, executed: with `exec` the `DROP TABLE` ran and `teams` was gone.
+    const folder = singleMigrationFolder("CREATE TABLE audit (id integer);\nDROP TABLE teams;");
+    const path = freshDbPath();
+    const sqlite = new Database(path);
+    sqlite.exec("CREATE TABLE teams (id integer primary key)");
+    try {
+      expect(() => applyMigrations(sqlite, folder)).toThrowError(/more than one statement/i);
+      // The guard is worth nothing if the damage happened before the throw.
+      const teams = sqlite
+        .prepare("SELECT count(*) AS count FROM sqlite_master WHERE name = 'teams'")
+        .get() as { count: number };
+      expect(teams.count, "the rejected migration still dropped the table").toBe(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("propagates the real error when SQLite has already rolled the transaction back itself", () => {
+    // `BEGIN IMMEDIATE` outside the `try` proves a transaction OPENED, not that it is still open.
+    // SQLite ends one itself on `SQLITE_FULL`, after which a bare `ROLLBACK` throws "cannot rollback
+    // - no transaction is active" and REPLACES the real error — so the operator debugs the wrong
+    // one. An earlier comment in `applyMigrations` asserted this was unreachable and that a guard
+    // would be unkillable; the reviewer refuted it and measurement settled it.
+    //
+    // **The exact shape matters, and the first version of this test had it wrong.** A capped
+    // database whose FIRST statement fails yields `inTransaction === true` — SQLite can still undo
+    // one statement, so a bare ROLLBACK succeeds and the test passed against the unguarded code it
+    // was written to reject. Measured across seven configurations: single-statement failures never
+    // abandon the transaction; a failure AFTER earlier statements in the same transaction have
+    // dirtied and spilled pages always does (7 of 7). That second shape is precisely
+    // `applyMigrations` — dozens of statements under one `BEGIN IMMEDIATE` — so the migration below
+    // is many small writes rather than one big one.
+    const path = freshDbPath();
+    const sqlite = new Database(path);
+    try {
+      sqlite.pragma("journal_mode = WAL");
+      sqlite.exec("CREATE TABLE ballast (id integer primary key, pad text)");
+      // Enough headroom for the bookkeeping table and the early inserts to land, little enough that
+      // the cap is hit long before the migration runs out of statements.
+      const pages = sqlite.pragma("page_count", { simple: true }) as number;
+      sqlite.pragma(`max_page_count = ${pages + 20}`);
+
+      const inserts = Array.from(
+        { length: 2000 },
+        () => `INSERT INTO ballast (pad) VALUES ('${"x".repeat(200)}')`,
+      ).join(";--> statement-breakpoint\n");
+
+      let thrown: unknown;
+      try {
+        applyMigrations(sqlite, singleMigrationFolder(inserts));
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown, "the capped migration did not fail at all").toBeDefined();
+      expect((thrown as Error).message).toMatch(/database or disk is full/i);
+      // The whole point: NOT the rollback's own error. An unconditional `ROLLBACK` surfaces
+      // "cannot rollback - no transaction is active" here and buries the real cause.
+      expect((thrown as Error).message).not.toMatch(/cannot rollback/i);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+/**
  * Issue #117's second mechanism, and the measurement that bounds it. `PRAGMA journal_mode = WAL`
  * does not honour SQLite's busy handler, so two processes converting one fresh database collide
  * before the migrator is reached at all.
@@ -163,9 +258,14 @@ describe("enabling WAL is safe against a concurrent converter (#117)", () => {
   });
 
   it("is a no-op on an already-WAL database even while another connection holds the write lock", () => {
-    // THIS is what keeps the retry above off the ~30 non-bootstrap `openDb` call sites: they always
-    // meet an already-converted database, where the pragma needs no lock. Pinned so that a later
-    // change to `openDb` cannot widen the contended window without reddening something.
+    // **This pins a PREMISE, not the retry** — flagged by the Reviewer, and the distinction is worth
+    // keeping straight: it passes against the old one-line `sqlite.pragma("journal_mode = WAL")` too,
+    // because on an already-WAL database that assignment is also a no-op under a held lock. That is
+    // the point. The premise is what bounds the whole fix — it is why converting is contended and
+    // re-asserting an existing mode is not, and therefore why the ~30 non-bootstrap `openDb` call
+    // sites never contend. If SQLite or better-sqlite3 ever made this pragma take a lock
+    // unconditionally, that bound would silently become false and this test is what would say so.
+    // The retry itself is covered by the two cases below.
     const path = freshDbPath();
     runMigrations(path);
 
