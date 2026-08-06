@@ -1,8 +1,9 @@
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_DB_PATH, dbPath, openDb, runMigrations } from "../src/db/client.js";
+import { DEFAULT_DB_PATH, MissingDatabaseError, dbPath, openDb, runMigrations } from "../src/db/client.js";
+import { PACKAGE_ROOT } from "../src/fs/package-root.js";
 import { playerAliases, players, teams } from "../src/db/schema.js";
 import { restoreTnDbPathAfterEach } from "./helpers/tn-db.js";
 
@@ -13,14 +14,32 @@ function freshDbPath(): string {
 describe("dbPath()", () => {
   restoreTnDbPathAfterEach();
 
-  it("falls back to DEFAULT_DB_PATH when TN_DB_PATH is unset", () => {
+  // Issue #111: this used to assert `dbPath() === DEFAULT_DB_PATH` — tautological, and it passed
+  // identically whether or not the returned path was anchored at all. The real contract is that the
+  // *unset* default resolves to an ABSOLUTE path under the package root, not the bare relative
+  // string a caller's own cwd could reinterpret.
+  it("falls back to an absolute, package-root-anchored path when TN_DB_PATH is unset", () => {
     delete process.env.TN_DB_PATH;
-    expect(dbPath()).toBe(DEFAULT_DB_PATH);
+    expect(dbPath()).toBe(join(PACKAGE_ROOT, DEFAULT_DB_PATH));
+    expect(resolve(dbPath())).toBe(dbPath());
   });
 
-  it("honors TN_DB_PATH when set", () => {
+  it("honors TN_DB_PATH verbatim when set to an absolute path", () => {
     process.env.TN_DB_PATH = "/tmp/tn-custom-path.db";
     expect(dbPath()).toBe("/tmp/tn-custom-path.db");
+  });
+
+  // The documented decision (issue #111): an override is used VERBATIM, so a relative
+  // `TN_DB_PATH` stays resolved against the CALLER's cwd, not re-anchored to the package root the
+  // way the unset default is. `??` (not `||`) is what makes this true even for an empty string.
+  it("honors TN_DB_PATH verbatim when set to a relative path — it is not re-anchored", () => {
+    process.env.TN_DB_PATH = "relative/tn.db";
+    expect(dbPath()).toBe("relative/tn.db");
+  });
+
+  it("treats an empty-string TN_DB_PATH as a set (not unset) value", () => {
+    process.env.TN_DB_PATH = "";
+    expect(dbPath()).toBe("");
   });
 });
 
@@ -49,5 +68,79 @@ describe("openDb() + schema", () => {
     expect(foundAliases[0]?.playerId).toBe(player.id);
 
     sqlite.close();
+  });
+});
+
+// Issue #111 Task 5: a missing database used to be silently bootstrapped into existence (an
+// unconditional `mkdirSync` plus a create-happy `new Database(path)`), so a command run before `tn
+// db migrate` reported `status=ok` against a database with no tables at all. `openDb()` now
+// refuses by default, and `create: true` (only `runMigrations`'s own choice) is what still creates.
+describe("openDb() vs. a missing database (issue #111)", () => {
+  it("throws MissingDatabaseError naming the resolved absolute path, creating neither the file nor its parent directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-missing-db-"));
+    const nestedPath = join(dir, "nested", "test.db"); // parent "nested" does not exist yet either
+
+    let caught: unknown;
+    try {
+      openDb(nestedPath);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(MissingDatabaseError);
+    expect((caught as Error).message).toContain(resolve(nestedPath));
+    expect((caught as Error).message).toContain("tn db migrate");
+    // The exact silent-directory-creation this issue fixes: today's unconditional `mkdirSync`
+    // would have created "nested" even though the open itself failed.
+    expect(existsSync(join(dir, "nested"))).toBe(false);
+    expect(existsSync(nestedPath)).toBe(false);
+  });
+
+  it("openDb(path, { create: true }) creates a fresh database file and its parent directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-create-db-"));
+    const nestedPath = join(dir, "nested", "fresh.db");
+
+    const { sqlite } = openDb(nestedPath, { create: true });
+    try {
+      expect(existsSync(nestedPath)).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("rethrows the original error when the file exists but the open still fails for an unrelated reason", () => {
+    // A directory at the exact leaf path a database open would use: better-sqlite3's own open
+    // fails (it is not a valid SQLite file), but `existsSync(path)` reports true, so this must NOT
+    // be reclassified as MissingDatabaseError — the two failures are different and the message must
+    // stay the real one, not a misleading "run tn db migrate" pointed at a path that already exists.
+    const dir = mkdtempSync(join(tmpdir(), "tn-not-a-db-"));
+    const notADbFile = join(dir, "not-a-database");
+    mkdirSync(notADbFile);
+
+    let caught: unknown;
+    try {
+      openDb(notADbFile);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).not.toBeInstanceOf(MissingDatabaseError);
+    expect(caught).toBeInstanceOf(Error);
+  });
+
+  it("still rethrows the original error for a create:true open against a path that exists but is not a database", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-not-a-db-create-"));
+    const notADbFile = join(dir, "garbage.db");
+    writeFileSync(notADbFile, "not a sqlite file");
+
+    let caught: unknown;
+    try {
+      openDb(notADbFile, { create: true });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).not.toBeInstanceOf(MissingDatabaseError);
+    expect(caught).toBeInstanceOf(Error);
   });
 });

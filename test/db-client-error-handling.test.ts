@@ -15,7 +15,10 @@ describe("runMigrations() error path", () => {
     // case in cli-db-migrate-command.test.ts, which fails inside openDb()
     // before any handle exists, and so never exercises runMigrations()'s own
     // close-on-error path.
-    const { sqlite: seed } = openDb(dbPath);
+    // Issue #111: `openDb()` now requires the file to already exist by default — this seed call
+    // is deliberately creating a BRAND NEW file, so it opts in with `create: true` (mirroring what
+    // `runMigrations` itself does internally).
+    const { sqlite: seed } = openDb(dbPath, { create: true });
     seed.exec("CREATE TABLE players (id INTEGER PRIMARY KEY)");
     seed.close();
 

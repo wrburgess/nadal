@@ -311,8 +311,10 @@ governs `tn report build`'s records, `tn player show` and `tn team show`; it doe
 
 `tn report build [sectionals|<team>] [event] [--json]` — `<team>` renders that one team's dossier;
 `sectionals`, and bare (no target), render one dossier per team on file plus a top-level
-`index.html`/`index.md`. Output root: `TN_REPORTS_PATH`, defaulting to repo-relative `reports/` —
-mirroring `TN_DB_PATH`/`TN_RAW_PATH` exactly, so this introduces no new flag. Every write is
+`index.html`/`index.md`. Output root: `TN_REPORTS_PATH` when set (resolved against the caller's cwd
+when relative), defaulting otherwise to `reports/` anchored to the `tn` checkout itself (issue
+#111 — the same directory regardless of which directory `tn` was invoked from) — mirroring
+`TN_DB_PATH`/`TN_RAW_PATH` exactly, so this introduces no new flag. Every write is
 checked by the same hardened output-root guard `raw/` uses (`src/fs/output-root.ts`), with
 `"reports"` as the one permitted in-repo directory — a misconfigured `TN_REPORTS_PATH` pointed at
 any other in-repo path (e.g. `src`) is refused, exit 1.

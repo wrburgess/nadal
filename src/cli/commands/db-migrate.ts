@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { Command } from "../router.js";
 import { dbPath, runMigrations } from "../../db/client.js";
 import { globalFlags, parseArgs } from "../args.js";
@@ -39,7 +40,12 @@ export const dbMigrate: Command = {
       emitSummary("db migrate", "error", [["message", errorMessage(err)]], opts);
       return 1;
     }
-    emitSummary("db migrate", "ok", [["path", dbPath()]], opts);
+    // Issue #111 Task 7: resolved, not the raw dbPath() string — dbPath()'s unset default is
+    // already absolute, but an explicit TN_DB_PATH stays cwd-relative by design (the documented
+    // escape hatch), so printing it as typed would show a path the reader can't locate without
+    // first re-deriving the process's own cwd. `resolve()` of an already-absolute path is itself,
+    // so this is a no-op for every existing absolute-path caller/test.
+    emitSummary("db migrate", "ok", [["path", resolve(dbPath())]], opts);
     return 0;
   },
 };

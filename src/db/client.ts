@@ -1,12 +1,18 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { errorMessage } from "../error-message.js";
+import { repoDefault } from "../fs/package-root.js";
 import { backfillNameKeys } from "./name-key.js";
 
+// Stays a BARE directory name — issue #111's anchoring goes in the ACCESSOR (`dbPath()` below),
+// never here. `assertRootSafe`/`assertOutputPathSafe` (src/fs/output-root.ts) take a
+// `permittedDir` argument that they resolve against the package root themselves; the sibling
+// `DEFAULT_RAW_DIR`/`DEFAULT_REPORTS_DIR`/`DEFAULT_SCORECARD_PHOTOS_DIR` constants play exactly
+// that role for their own callers, so keeping this one the same shape means one pattern, not two.
 export const DEFAULT_DB_PATH = "data/nadal.db";
 
 export type OpenDbOptions = {
@@ -15,6 +21,11 @@ export type OpenDbOptions = {
   // observation seam the query-count test uses to assert resolution issues a constant number of
   // statements regardless of table size, rather than one per row.
   verbose?: (message?: unknown, ...args: unknown[]) => void;
+  // Issue #111: `false` by DEFAULT (see `openDb` below). `runMigrations` is the only caller that
+  // passes `true` — every other one of the ~30 `openDb()` call sites is untouched and inherits the
+  // new default, which refuses to silently create (and silently populate with an empty, unmigrated
+  // schema) a database nothing has bootstrapped yet.
+  create?: boolean;
 };
 
 // drizzle-orm's migrator resolves `migrationsFolder` with plain `fs` calls against
@@ -24,13 +35,63 @@ export type OpenDbOptions = {
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = join(MODULE_DIR, "..", "..", "drizzle");
 
+/**
+ * Issue #111: an unset `TN_DB_PATH` used to resolve to the bare relative string `DEFAULT_DB_PATH`,
+ * which every caller then resolved against `process.cwd()` — so `tn player pull …` run from
+ * anywhere other than the repo root silently created (and, on a second run, silently read from) a
+ * DIFFERENT, empty database under that cwd's own `data/` directory rather than the repo's real one.
+ * `repoDefault` anchors the unset case to the package root instead, exactly like
+ * `MIGRATIONS_FOLDER` above already anchors the migrations folder.
+ *
+ * An EXPLICIT `TN_DB_PATH` is returned verbatim, `??` preserved exactly as before — a relative
+ * override is a deliberate escape hatch (documented in the runbooks) and stays resolved against the
+ * caller's cwd, and an empty-string override stays a set-but-empty value rather than becoming
+ * "unset".
+ */
 export function dbPath(): string {
-  return process.env.TN_DB_PATH ?? DEFAULT_DB_PATH;
+  return repoDefault(process.env.TN_DB_PATH, DEFAULT_DB_PATH);
 }
 
+/**
+ * Issue #111: a missing database used to be silently bootstrapped into existence — `mkdirSync`
+ * unconditionally created the parent directory and `new Database(path)` (no `fileMustExist`) then
+ * created an empty, UNMIGRATED file — so a command run before `tn db migrate` reported
+ * `status=ok` against a database with no tables at all, discovered only later as a confusing "no
+ * such table" failure with no mention of the real cause.
+ *
+ * `create` now defaults to `false`: no `mkdirSync` at all (today's unconditional call was itself a
+ * silent directory-creator, so it is gated the same way the file is) and the file must already
+ * exist (`fileMustExist: true` — better-sqlite3's own enforcement at `open(2)`, not a
+ * check-then-act `existsSync` race across a WAL database). `runMigrations` is the only caller that
+ * opts in with `create: true`, which is exactly where creating a fresh database is the intended
+ * behavior.
+ */
+export class MissingDatabaseError extends Error {}
+
 export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
-  mkdirSync(dirname(path), { recursive: true });
-  const sqlite = options.verbose !== undefined ? new Database(path, { verbose: options.verbose }) : new Database(path);
+  if (options.create === true) {
+    mkdirSync(dirname(path), { recursive: true });
+  }
+  let sqlite: Database.Database;
+  try {
+    sqlite =
+      options.verbose !== undefined
+        ? new Database(path, { verbose: options.verbose, fileMustExist: options.create !== true })
+        : new Database(path, { fileMustExist: options.create !== true });
+  } catch (err) {
+    // `existsSync` here is NOT a check-then-act guard — the open has already happened and already
+    // failed; this call only decides which of two already-true error messages to show. A
+    // `fileMustExist` failure means the path was absent AT OPEN TIME, which `existsSync` cannot
+    // have changed since (nothing here creates the file), so re-checking it just distinguishes "the
+    // database is missing" from "some other open failure" for a clearer message — it does not
+    // decide whether to proceed.
+    if (options.create !== true && !existsSync(path)) {
+      throw new MissingDatabaseError(
+        `no database at ${resolve(path)} — run \`tn db migrate\` to create it`,
+      );
+    }
+    throw err;
+  }
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   return { sqlite, db: drizzle(sqlite) };
@@ -145,7 +206,10 @@ function messageChain(err: unknown): string {
 }
 
 export function runMigrations(path: string = dbPath()): void {
-  const { db, sqlite } = openDb(path);
+  // The ONLY caller that opts into `create: true` — bootstrapping a fresh database (or
+  // continuing to migrate an existing one) is exactly this function's job. Every other one of the
+  // ~30 `openDb()` call sites inherits the new `create: false` default (issue #111).
+  const { db, sqlite } = openDb(path, { create: true });
   try {
     try {
       migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });

@@ -350,9 +350,11 @@ describe("src/report/write.ts", () => {
     // per-team lookup an unknown event name was accepted in silence here, because no `getLineupPlan`
     // call ever ran to reject it.
     it("refuses an unknown event name even when no team has any lineup to build", () => {
+      // Issue #111: `openDb()` now requires the file to already exist (`create` defaults to
+      // `false`), so migrations must run BEFORE this test's own `openDb()` call, not after.
+      runMigrations();
       const { db, sqlite } = openDb();
       try {
-        runMigrations();
         expect(() => writeSectionalsDossiers(db, { season: seasonWindow("2026-01-01"), eventName: "No Such Event" })).toThrow(
           UnknownEventError,
         );

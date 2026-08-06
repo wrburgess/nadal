@@ -1,15 +1,19 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { assertOutputPathSafe, writeNewOutputFileSet } from "../fs/output-root.js";
+import { repoDefault } from "../fs/package-root.js";
 
 const DEFAULT_RAW_DIR = "raw";
 
 /**
  * The archive root every raw page and provenance record is written under. Mirrors `dbPath()` in
- * `src/db/client.ts`: an explicit env var when set, a repo-relative default otherwise.
+ * `src/db/client.ts`: an explicit env var when set (used VERBATIM — a relative `TN_RAW_PATH` stays
+ * resolved against the caller's cwd, the documented escape hatch), a package-root-anchored default
+ * otherwise (issue #111 — the bare `"raw"` default used to resolve against `process.cwd()`, so a
+ * caller standing anywhere but the repo root silently wrote/read a different, empty `raw/`).
  */
 export function rawRoot(): string {
-  return process.env.TN_RAW_PATH ?? DEFAULT_RAW_DIR;
+  return repoDefault(process.env.TN_RAW_PATH, DEFAULT_RAW_DIR);
 }
 
 export type ArchivePageInput = {

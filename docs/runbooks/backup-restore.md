@@ -16,8 +16,11 @@ restore it, and confirm `tn db migrate` still accepts the result.
   This is a separate binary from the `better-sqlite3` npm dependency `tn` itself links against —
   this drill talks to the database file directly, never through `tn`, except to re-verify with
   `tn db migrate` at the end.
-- Know the absolute path to the database: `TN_DB_PATH` if set, `data/nadal.db` (repo-root-relative)
-  otherwise — the same resolution `dbPath()` uses (`src/db/client.ts`).
+- Know the absolute path to the database: `TN_DB_PATH` if set (still resolved against **your
+  shell's** cwd when it is a relative path — issue #111 does not change that explicit-override
+  behavior), or `data/nadal.db` **anchored to the `tn` checkout itself** otherwise (issue #111 — the
+  same file regardless of which directory you run `tn` from) — the same resolution `dbPath()` uses
+  (`src/db/client.ts`).
 - `tn` runs every database with `journal_mode = WAL` (`src/db/client.ts`) — every step below is
   written the way it is *because* of that, not despite it. See the callout in step 1.
 

@@ -23,7 +23,10 @@ describe("db-name-key-backfill — an existing local DB survives migration 0004"
     // not drizzle's `.insert(players).values(...)` — drizzle's insert builder always names every
     // column the CURRENT schema.ts declares (including `name_key`, which migration 0004 hasn't
     // added yet at this point), so it would fail against the legacy (pre-0004) table shape.
-    const { sqlite: legacySqlite } = openDb(path);
+    // Issue #111: `openDb()` now requires the file to already exist by default — this call is
+    // deliberately creating a BRAND NEW file to simulate a legacy pre-0004 database, so it opts in
+    // with `create: true`.
+    const { sqlite: legacySqlite } = openDb(path, { create: true });
     migrate(drizzle(legacySqlite), { migrationsFolder: buildLegacyMigrationsFolder(3) });
     legacySqlite.prepare("INSERT INTO players (canonical_name) VALUES (?)").run("Jane Doe");
     const seededPlayerId = legacySqlite

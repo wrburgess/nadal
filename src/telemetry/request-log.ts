@@ -1,4 +1,4 @@
-import { openDb } from "../db/client.js";
+import { MissingDatabaseError, openDb } from "../db/client.js";
 import { requestLog } from "../db/schema.js";
 import { errorClass, errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
@@ -21,6 +21,16 @@ type RequestLogRow = {
  * diagnostic line. The underlying error's message can itself carry attacker-controlled text (e.g.
  * from `TN_DB_PATH`), so it goes through the same `sanitizeValue()` every other CLI-surfaced value
  * does before being printed.
+ *
+ * Issue #111 Task 6: `MissingDatabaseError` is the ONE exception to "always print a diagnostic".
+ * `openDb()` throws it on every command run before `tn db migrate` has ever bootstrapped a
+ * database, and `logRequest`/`logMcpTool` wrap EVERY dispatched command — so without this
+ * carve-out, the very first command a fresh checkout ever runs would print a spurious "telemetry:
+ * request_log write failed" line ahead of (or instead of) the command's own, more useful
+ * diagnostic, for a condition that isn't a telemetry failure at all: there is nothing to log to
+ * yet, and the command's own guard is what reports the missing database. Caught BY CLASS, not by
+ * widening this catch generally, so a genuine telemetry failure against a database that DOES exist
+ * (a dropped table, SQLITE_BUSY, a read-only volume) still prints exactly as before.
  */
 function writeRequestLogRow(row: RequestLogRow): void {
   try {
@@ -31,6 +41,7 @@ function writeRequestLogRow(row: RequestLogRow): void {
       sqlite.close();
     }
   } catch (err) {
+    if (err instanceof MissingDatabaseError) return;
     // `errorMessage`, not `err instanceof Error ? err.message : String(err)`: the latter puts the
     // coercion on the wrong branch, so an Error whose `message` is not a string made
     // `sanitizeValue()` call `.replace()` on a non-string and throw a TypeError from inside THIS

@@ -16,14 +16,7 @@ import {
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
-
-// Anchored to this module's own location (repo root, two levels up from src/fs/) rather than
-// `process.cwd()`, for the same reason `src/db/client.ts` anchors its migrations folder: the
-// answer must not depend on where the caller happened to be standing. This used to live in
-// `src/ingest/archive.ts` directly; it moved here unchanged when the guard it anchors was
-// generalized to cover more than one output directory (`raw/` today, `reports/` next).
-const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+import { PACKAGE_ROOT } from "./package-root.js";
 
 /**
  * The entire privacy control for personal data written outside version control funnels through
