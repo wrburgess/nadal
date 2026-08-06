@@ -293,6 +293,83 @@ describe("silent-trim refusal (issue #110 plan amendment 1)", () => {
   });
 });
 
+// Codex adversarial review of PR #115, finding 2 [medium, class A] — CONFIRMED by probe before
+// fixing, not accepted on assertion.
+describe("a legal table name containing a double quote (Codex finding 2)", () => {
+  it("counts and verifies a table whose name contains a double quote", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const sourcePath = join(dir, "source.db");
+    runMigrations(sourcePath);
+
+    // `CREATE TABLE "odd""name"` is SQLite's own escaping: the resulting table is named with the 8
+    // characters `odd"name`, which is exactly what `sqlite_master` hands back. Before the fix, the
+    // un-escaped interpolation built `... FROM "odd"name"` and SQLite rejected it with
+    // `unrecognized token: """` — so the command could not back up this database at all.
+    const seed = new Database(sourcePath);
+    seed.exec('CREATE TABLE "odd""name" (v)');
+    seed.exec('INSERT INTO "odd""name" VALUES (1), (2)');
+    seed.exec("INSERT INTO teams (name) VALUES ('Norbury')");
+    seed.close();
+
+    const result = await backupDatabase(sourcePath);
+
+    // The table is not merely tolerated — it is actually counted and actually verified, which is the
+    // claim the doc comment makes about structure-derived enumeration.
+    const odd = result.tables.find((t) => t.table === 'odd"name');
+    expect(odd, 'the double-quoted table was not in the verified set').toBeDefined();
+    expect(odd?.source).toBe(2);
+    expect(odd?.backup).toBe(2);
+  });
+});
+
+// Codex adversarial review of PR #115, finding 1 [medium, class A] — REFUTED, and pinned here so the
+// refutation is executable rather than a sentence in a review reply.
+//
+// The finding held that a `.backup()` rejecting mid-copy leaves a partial, unlabelled `.db` in the
+// backups directory. Directly observed instead: better-sqlite3 removes the file it created.
+// `runBackup` (lib/methods/backup.js) wraps the whole transfer loop in one try/catch whose handler
+// calls `backup.close()` before rejecting, and the native close unlinks a destination it created
+// (`isNewFile`). EVERY rejection path — a `transfer()` failure such as the finding's SQLITE_FULL, or
+// a throw from the progress handler — lands in that same catch.
+//
+// This test exists because the refutation depends on a THIRD-PARTY library's behavior. A
+// better-sqlite3 upgrade that stopped cleaning up would silently reintroduce exactly the hazard the
+// finding described, and nothing else in this suite would notice. If this goes red, the finding was
+// right about the newer version and `backupDatabase` needs the cleanup it currently does not.
+describe("better-sqlite3 removes its own partial destination on a failed copy (Codex finding 1)", () => {
+  it("creates the destination during the copy and unlinks it when the copy rejects", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const sourcePath = join(dir, "source.db");
+    const seed = new Database(sourcePath);
+    seed.exec("CREATE TABLE t (v)");
+    const insert = seed.prepare("INSERT INTO t VALUES (?)");
+    // Enough pages that the transfer is genuinely multi-step and the destination is created before
+    // the first `progress` callback fires — without that, the mid-copy observation below proves
+    // nothing, because a single-page copy could complete before anything could interrupt it.
+    seed.transaction(() => {
+      for (let i = 0; i < 20000; i++) insert.run(`row-${i}-${"x".repeat(80)}`);
+    })();
+
+    const destination = join(dir, "interrupted.db");
+    let existedMidCopy: boolean | null = null;
+
+    await expect(
+      seed.backup(destination, {
+        progress() {
+          if (existedMidCopy === null) existedMidCopy = existsSync(destination);
+          throw new Error("simulated mid-copy failure");
+        },
+      }),
+    ).rejects.toThrow("simulated mid-copy failure");
+    seed.close();
+
+    // Both halves are the assertion. Without the first, "the file is absent" would also pass on a
+    // library that never created it, and the test would say nothing about cleanup at all.
+    expect(existedMidCopy, "the destination was never created, so cleanup is untested").toBe(true);
+    expect(existsSync(destination), "better-sqlite3 left a partial destination behind").toBe(false);
+  });
+});
+
 describe("compareTableCounts — pure, exhaustive (issue #110 scenario 6)", () => {
   it("equal maps produce no disagreements", () => {
     const source = new Map([["teams", 3], ["players", 5]]);

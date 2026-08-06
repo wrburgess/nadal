@@ -51,10 +51,20 @@ function tableCounts(sqlite: InstanceType<typeof Database>): Map<string, number>
     .all() as Array<{ name: string }>;
   const counts = new Map<string, number>();
   for (const { name } of names) {
-    // `name` comes from sqlite_master, never from caller input, so it carries no injection
-    // surface — identifiers cannot be bound as `?` parameters, which is why this is interpolated
-    // rather than parameterized.
-    const row = sqlite.prepare(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number };
+    // Identifiers cannot be bound as `?` parameters, so the name is interpolated — and therefore has
+    // to be QUOTED the way SQLite quotes identifiers, by doubling any embedded `"`. Codex
+    // adversarial review of PR #115, finding 2 [medium], confirmed by direct probe rather than
+    // accepted on assertion: a table created as `CREATE TABLE "odd""name" (v)` comes back from
+    // `sqlite_master` as the 8 characters `odd"name`, and the un-escaped interpolation then prepares
+    // `SELECT COUNT(*) AS n FROM "odd"name"`, which SQLite rejects with `unrecognized token: """`.
+    //
+    // The bug this fixes is NOT injection — the comment that used to sit here was right that
+    // `sqlite_master` is not caller input, and then treated "not attacker-controlled" as though it
+    // implied "safe to interpolate raw". It does not: a legal table name is enough. The failure is
+    // that `tn db backup` could not back up a perfectly valid database at all, which falsifies this
+    // function's own doc comment above about covering every future table automatically.
+    const quoted = name.replaceAll('"', '""');
+    const row = sqlite.prepare(`SELECT COUNT(*) AS n FROM "${quoted}"`).get() as { n: number };
     counts.set(name, row.n);
   }
   return counts;
