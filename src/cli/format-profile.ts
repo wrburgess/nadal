@@ -7,10 +7,12 @@
 
 import { sanitizeValue } from "../sanitize.js";
 import { leagueScopeLabel } from "../query/league-scope.js";
+import type { AbsentRosterMember } from "../query/team-profile.js";
 import type {
   DataGapsResult,
   EvidenceScopeSummary,
   PartnerFrequencyEntry,
+  RatingSource,
   RatingTrajectoryResult,
   SlotTendency,
   WindowedRecordResult,
@@ -154,6 +156,46 @@ export function formatRatingTrajectory(trajectory: RatingTrajectoryResult): stri
       return `${label} ${formatRatingValue(entry.latest.value, entry.source)}${typeSuffix}`;
     })
     .join(", ");
+}
+
+/**
+ * The roster-source disclosure line (#113) — `formatEvidenceScopeLine`'s precedent one field over,
+ * shared by `tn team show`, `tn lineup plan` and both dossier renderers so the four surfaces cannot
+ * describe the same roster four different ways. **Both branches always print**, per the #97
+ * precedent this mirrors: a season roster states itself as loudly as a registered one, because a
+ * reader who cannot tell the two apart has learned nothing from either.
+ *
+ * `eventName` is `null` whenever `rosterSource === "season"` because no event was named at all — the
+ * one case genuinely distinct from "an event was named but has no (or no longer any) registered
+ * rows", which still names the event so the fallback reads as informative rather than as a missing
+ * argument. `rosterSource === "registered"` always carries a non-null `eventName` by construction —
+ * `resolveRoster` (src/query/roster.ts) can only reach that branch by resolving an event first.
+ */
+export function formatRosterSourceLine(
+  rosterSource: "registered" | "season",
+  eventName: string | null,
+  registeredCount: number,
+  seasonCount: number,
+): string {
+  if (rosterSource === "registered") {
+    // See the doc comment above: reachable only with a non-null eventName.
+    return `registered: ${registeredCount} of ${seasonCount} season roster (event "${formatName(eventName ?? "")}")`;
+  }
+  if (eventName === null) return "season roster — no event named";
+  return `season roster (event "${formatName(eventName)}") — no registered members`;
+}
+
+/**
+ * One NOT REGISTERED player's compact line (#113, the HC's 2026-08-05 dossier-scope mock): name and
+ * a single rating value, deliberately no record and no tendencies — it exists so a late add is
+ * RECOGNISED, not SCOUTED. `rating === null` (no observation in `source`, or no source was chosen at
+ * all because nobody absent has any rating on file) prints `—` rather than omitting the player —
+ * the same "state the absence, never drop the row" discipline `formatRetainedLeaguesLine` uses for
+ * an unclassified league.
+ */
+export function formatAbsentRosterMember(member: AbsentRosterMember, source: RatingSource | null): string {
+  const rating = member.rating === null || source === null ? "—" : formatRatingValue(member.rating, source);
+  return `${formatName(member.canonicalName)} ${rating}`;
 }
 
 // Human labels for the three `dataGaps` sections — `dataGaps`' keys are the camelCase field names

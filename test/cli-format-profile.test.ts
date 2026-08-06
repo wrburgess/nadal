@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { formatDataGapsLine, formatName, formatPartnerFrequency, formatRatingTrajectory, formatRecord, formatSlotTendencies } from "../src/cli/format-profile.js";
+import {
+  formatAbsentRosterMember,
+  formatDataGapsLine,
+  formatName,
+  formatPartnerFrequency,
+  formatRatingTrajectory,
+  formatRecord,
+  formatRosterSourceLine,
+  formatSlotTendencies,
+} from "../src/cli/format-profile.js";
+import type { AbsentRosterMember } from "../src/query/team-profile.js";
 import type { DataGapsResult, PartnerFrequencyEntry, RatingTrajectoryResult, SlotTendency, WindowedRecordResult } from "../src/query/types.js";
 
 describe("formatRecord", () => {
@@ -150,5 +160,57 @@ describe("formatName — scraped names never reach the terminal with control cha
   it("leaves an ordinary name, including non-ASCII, untouched", () => {
     expect(formatName("Élodie Örström")).toBe("Élodie Örström");
     expect(formatName("JT Martin")).toBe("JT Martin");
+  });
+});
+
+// Task 7 (#113): the roster-source disclosure line, the #97 `formatEvidenceScopeLine` precedent one
+// field over — BOTH branches always print.
+describe("formatRosterSourceLine", () => {
+  it("registered: states the count and the event", () => {
+    expect(formatRosterSourceLine("registered", "Springfield Sectionals 2026", 9, 20)).toBe(
+      'registered: 9 of 20 season roster (event "Springfield Sectionals 2026")',
+    );
+  });
+
+  it("season, no event named: states the fallback plainly", () => {
+    expect(formatRosterSourceLine("season", null, 0, 20)).toBe("season roster — no event named");
+  });
+
+  it("season, event named but nothing registered: names the event AND the fallback", () => {
+    expect(formatRosterSourceLine("season", "Unregistered Event", 0, 20)).toBe(
+      'season roster (event "Unregistered Event") — no registered members',
+    );
+  });
+
+  it("sanitizes a hostile event name", () => {
+    const line = formatRosterSourceLine("registered", "Dan\nKestrel", 1, 1);
+    expect(line).not.toMatch(/[\r\n]/);
+  });
+});
+
+describe("formatAbsentRosterMember", () => {
+  it("prints the name and the rating value at the source's precision", () => {
+    const member: AbsentRosterMember = { playerId: 1, canonicalName: "Jamie Jennings", rating: 4.28 };
+    expect(formatAbsentRosterMember(member, "wtn_singles")).toBe("Jamie Jennings 4.28");
+  });
+
+  it("prints — (never omits the player) when there is no observation in the chosen source", () => {
+    const member: AbsentRosterMember = { playerId: 2, canonicalName: "No Rating Nina", rating: null };
+    expect(formatAbsentRosterMember(member, "wtn_singles")).toBe("No Rating Nina —");
+  });
+
+  it("prints — when there is no chosen source at all (nobody absent has any rating)", () => {
+    const member: AbsentRosterMember = { playerId: 3, canonicalName: "Nobody Rated", rating: null };
+    expect(formatAbsentRosterMember(member, null)).toBe("Nobody Rated —");
+  });
+
+  it("uses NTRP's one-decimal precision, matching formatRatingTrajectory's own rule", () => {
+    const member: AbsentRosterMember = { playerId: 4, canonicalName: "Cam Carver", rating: 4 };
+    expect(formatAbsentRosterMember(member, "ntrp")).toBe("Cam Carver 4.0");
+  });
+
+  it("sanitizes a hostile player name", () => {
+    const member: AbsentRosterMember = { playerId: 5, canonicalName: "Dan\nKestrel", rating: null };
+    expect(formatAbsentRosterMember(member, null)).not.toMatch(/[\r\n]/);
   });
 });

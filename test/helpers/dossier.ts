@@ -76,6 +76,13 @@ export function buildTeamProfile(overrides: Partial<TeamProfile> = {}): TeamProf
         slotTendencies: [{ slot: "S1", count: 4 }],
       },
     ],
+    // #113: "season" — no event registered — is what every pre-#113 fixture implicitly meant, so it
+    // stays the default rather than forcing every existing caller to spell it out.
+    rosterSource: overrides.rosterSource ?? "season",
+    registeredCount: overrides.registeredCount ?? 0,
+    seasonCount: overrides.seasonCount ?? 1,
+    absentRoster: overrides.absentRoster ?? [],
+    absentRatingSource: overrides.absentRatingSource ?? null,
     teamRecord: overrides.teamRecord ?? { wins: 5, losses: 2, undecided: 0, excludedUndated: 0 },
     slotTendencies: overrides.slotTendencies ?? [{ slot: "S1", count: 4 }],
     headToHead: overrides.headToHead ?? null,
@@ -146,6 +153,10 @@ export function buildLineupPlan(
     observedCourtMatches: 12,
     excludedOtherTeamMatches: 0,
     rosterSize: 6,
+    // #113: "season" is what every pre-#113 fixture implicitly meant (no event named).
+    rosterSource: "season",
+    registeredCount: 0,
+    seasonCount: 6,
     ...overrides,
     ...provenance,
   };
@@ -159,6 +170,8 @@ export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier 
     // No event named by default, matching the default evidence scope above — a fixture whose scope
     // says "none applied" must not simultaneously claim an event supplied one.
     event: overrides.event ?? null,
+    // #113: matches the default `team.rosterSource` ("season") — see that field's own comment.
+    rosterSource: overrides.rosterSource ?? "season",
     team: overrides.team ?? buildTeamProfile(),
     players: overrides.players ?? [buildPlayerProfile()],
     lineup: overrides.lineup === undefined ? buildLineupPlan() : overrides.lineup,
@@ -172,6 +185,7 @@ export function buildEmptyDossier(): TeamDossier {
   return {
     season: "2026",
     event: null,
+    rosterSource: "season",
     team: buildTeamProfile({
       evidenceScope: buildEvidenceScope({ considered: 0, retained: 0, retainedLeagues: [] }),
       roster: [],

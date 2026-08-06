@@ -190,7 +190,10 @@ export function buildTeamDossier(
   // `undefined` when no event was named, which `getTeamProfile`/`getPlayerProfile` report as "no
   // scope applied" rather than treating as an absent field.
   const leagueScope = options.event?.leagueScope ?? null;
-  const team = getTeamProfile(db, teamId, { since: season.since, versusTeamId, leagueScope });
+  // #113: the SAME already-resolved event's id scopes the roster — never a second lookup, for the
+  // identical reason `leagueScope` above is taken from it rather than re-read.
+  const eventId = options.event?.event.id ?? null;
+  const team = getTeamProfile(db, teamId, { since: season.since, versusTeamId, leagueScope, eventId });
   const players = team.roster.map((member) =>
     getPlayerProfile(db, member.playerId, { since: season.since, leagueScope }),
   );
@@ -220,6 +223,8 @@ export function buildTeamDossier(
     // Taken from the same resolved value `leagueScope` came from, so the event a dossier names
     // beside its evidence scope is provably the event that scope was read from.
     event: options.event === undefined ? null : { id: options.event.event.id, name: options.event.event.name },
+    // #113: copied from `team.rosterSource`, never re-derived — see `TeamDossier`'s own doc comment.
+    rosterSource: team.rosterSource,
     team,
     players,
     lineup,
@@ -398,12 +403,15 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
 /**
  * `sectionals` (and bare, no target — spec: "Bare (no target) is equivalent to `sectionals`"):
  * one dossier per team present in the DB, plus a top-level `index.html`/`index.md` linking each.
- * "Every team in the DB" is the only available reading of "the field". The reason is narrower than
- * it used to be: #17 PR B added `addEvent`, so `events` rows DO now exist — but nothing associates a
- * TEAM with an event (`team_memberships.event_id` and `team_matches.event_id` are null on every real
- * pull, docs/findings.md #15), so there is still no way to ask "which teams are in this event". The
- * missing piece is the association, not the events table. Scoping this call to an event becomes
- * possible when that lands (TennisLink, #27, is the likely source).
+ * "Every team in the DB" is the only available reading of "the field", and #113 does NOT change
+ * that, even though `team_memberships.event_id` is no longer null on every real row: `tn roster set`
+ * (#113) associates individual PLAYERS with an event, never a TEAM. A team with zero registered
+ * players is not thereby excluded from Sectionals — it may just not have registered anyone yet — and
+ * a team with some players registered for event A says nothing about whether the team ITSELF is in
+ * event B. Answering "which teams are in this event" would need a team-level link this schema still
+ * does not have (`team_matches.event_id` is null on every real `tn team pull`, docs/findings.md #15,
+ * and no writer sets it from a roster registration). Scoping this call to an event becomes possible
+ * when that association lands (TennisLink, #27, is the likely source).
  *
  * The PRECISE guarantee this batch call makes, stated without overclaiming (Codex adversarial
  * review, PR #38 round 3, Finding 2 [high]): every leaf in the WHOLE batch — every team's html+md

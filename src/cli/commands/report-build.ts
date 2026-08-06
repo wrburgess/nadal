@@ -1,15 +1,19 @@
+import { eq } from "drizzle-orm";
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
+import { events } from "../../db/schema.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
 import { InvalidLeagueScopeError } from "../../query/league-scope.js";
 import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
+import { resolveRoster } from "../../query/roster.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
 import { resolveSeasonAnchor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
+import type { SummaryField } from "../emit.js";
 import { seasonWindow } from "../window.js";
 
 const SECTIONALS_TARGET = "sectionals";
@@ -76,6 +80,10 @@ export const reportBuild: Command = {
       const season = seasonWindow(anchor.value);
       let written: string[];
       let teamsCount: number;
+      // #113: only ever set on the SINGLE-team path — a batch mixes registered and season teams,
+      // and one scalar cannot describe both without lying about one of them (see the field's own
+      // comment below).
+      let rosterField: SummaryField | undefined;
       if (target === undefined || target === SECTIONALS_TARGET) {
         written = writeSectionalsDossiers(db, { season, eventName });
         teamsCount = countTeams(db);
@@ -96,6 +104,17 @@ export const reportBuild: Command = {
         }
         written = writeTeamDossier(db, resolution.teamId, { season, eventName });
         teamsCount = 1;
+
+        // A second, LIGHTWEIGHT lookup of the same event by name — not a second `resolveEvent`
+        // (which decodes `format`/`leagueScope`, already validated once inside `writeTeamDossier`
+        // above), just the row's own id, which `resolveRoster` needs. `writeTeamDossier` has
+        // already succeeded by this point, so `eventName` (if given) is known-good; a race against
+        // a concurrent rename in the tiny window between the two reads would affect only this
+        // disclosure field, never what was actually written to disk.
+        const eventRow =
+          eventName === undefined ? undefined : db.select().from(events).where(eq(events.name, eventName)).all()[0];
+        const rosterSource = resolveRoster(db, { teamId: resolution.teamId, eventId: eventRow?.id ?? null }).source;
+        rosterField = ["roster", rosterSource];
       }
 
       // The old shape printed every absolute file path on one line — unreadable at Sectionals
@@ -115,6 +134,7 @@ export const reportBuild: Command = {
           // two indistinguishable, which is the defect this change exists to remove.
           ["season", season.year],
           ["anchoredTo", anchor.anchoredTo],
+          ...(rosterField === undefined ? [] : [rosterField]),
         ],
         opts,
       );

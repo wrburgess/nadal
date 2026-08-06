@@ -322,10 +322,17 @@ export type ResolveRosterPlayerInput = {
    * `resolvePlayerTarget` (src/query/player-profile.ts) uses for a `player show`-style target. */
   name: string;
   teamId: number;
-  /** Accepted for forward compatibility with an event-scoped roster; NOT required to match —
-   * every real `team_memberships` row has a null `event_id` today (docs/findings.md:199), so
-   * scoping this lookup on `eventId` as well would refuse every real roster. Currently unused by
-   * the query below for exactly that reason. */
+  /** Accepted — `src/ingest/roster-set.ts`'s writer passes the real event id it is registering
+   * players for — but still NOT matched against `team_memberships.event_id` below, deliberately.
+   * `isOnRoster` (this module) and the fuzzy/exact tiers both check "does this player have ANY
+   * current (non-retired) row for `teamId`, in any event or the season roster" — the ladder this
+   * function's own doc comment describes. Narrowing that to `eventId` as well would let a payload
+   * register a name only for players ALREADY on that exact event's roster, which is backwards: the
+   * one thing a registration payload does is put a SEASON-roster player onto an event roster for
+   * the FIRST time, so requiring the event-scoped row to already exist would make the writer unable
+   * to register anyone. This is also #18's original constraint, unchanged: narrowing here would
+   * break `tn match add`, which resolves scorecard names against a team's roster the same way and
+   * has no notion of "this court's event" to scope by. */
   eventId?: number | null;
 };
 

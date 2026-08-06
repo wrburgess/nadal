@@ -132,7 +132,7 @@ persist nothing.
 | `players` | `src/ingest/identity.ts`, `src/ingest/upsert.ts`, `src/ingest/disambiguate.ts`, `src/db/name-key.ts` | 4 writers |
 | `player_aliases` | `src/ingest/identity.ts`, `src/ingest/disambiguate.ts`, `src/db/name-key.ts` | 3 writers |
 | `teams` | `src/ingest/upsert.ts`, `src/ingest/identity.ts`, `src/ingest/team-pull.ts`, `src/query/home-team.ts`, `src/db/name-key.ts` | 5 writers |
-| `team_memberships` | `src/ingest/upsert.ts` | |
+| `team_memberships` | `src/ingest/upsert.ts`, `src/ingest/roster-set.ts` | 2 writers |
 | `team_matches` | `src/ingest/upsert.ts`, `src/ingest/match-add.ts` | 2 writers |
 | `court_matches` | `src/ingest/upsert.ts` | |
 | `court_match_players` | `src/ingest/upsert.ts`, `src/ingest/match-add.ts` | 2 writers |
@@ -164,8 +164,8 @@ Each of these is answerable by opening a named path.
    filesystem, it is not a parser. `src/parsers/` reads a document and returns records — nothing else.
 3. **Did the change land on both doors?** `test/mcp-tool-parity.test.ts` guards tool *names* only. A new
    flag, result field, or refusal reaching one door and not the other is guarded by nothing.
-4. **Which module writes this table now, and did that count go up?** Five tables already have more than
-   one writer (§4). Adding a sixth deserves a sentence of justification.
+4. **Which module writes this table now, and did that count go up?** Six tables already have more than
+   one writer (§4). Adding a seventh deserves a sentence of justification.
 5. **Is a derived value being stored?** Records and tendencies are computed at read time so they cannot
    go stale. A new column that could have been derived is a red flag.
 6. **Was the raw page archived before it was parsed?** That ordering is the recoverability guarantee.

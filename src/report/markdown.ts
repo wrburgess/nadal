@@ -7,11 +7,13 @@
 import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamCrossHeadToHead } from "../query/team-profile.js";
 import {
+  formatAbsentRosterMember,
   formatEvidenceScopeLine,
   formatPartnerFrequency,
   formatRatingTrajectory,
   formatRecord,
   formatRetainedLeaguesLine,
+  formatRosterSourceLine,
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
@@ -52,6 +54,45 @@ export function escapeMarkdownCell(value: string): string {
   return sanitizeValue(value)
     .replace(/\\/g, "\\\\")
     .replace(/[|`<>[\]_*]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * The roster-source disclosure line (#113) — `renderEvidenceScopeMarkdown`'s precedent one field
+ * over. **Always rendered, both branches** (#97's discipline, applied to a different disclosure): a
+ * season roster states itself as loudly as a registered one.
+ */
+function renderRosterSourceLineMarkdown(dossier: TeamDossier): string {
+  const line = formatRosterSourceLine(
+    dossier.rosterSource,
+    dossier.event?.name ?? null,
+    dossier.team.registeredCount,
+    dossier.team.seasonCount,
+  );
+  return `**Roster:** ${escapeMarkdownCell(line)}.`;
+}
+
+/**
+ * The NOT REGISTERED block (#113, the HC's 2026-08-05 dossier-scope mock): season-roster players
+ * who did not register for the scoped event, name + rating only — deliberately no record, no
+ * tendencies (a late add should be recognised, not scouted). Renders NOTHING when
+ * `dossier.team.absentRoster` is empty — which is always true on the `season` branch (see
+ * `resolveRoster`'s own doc comment), and may also be true on the `registered` branch when the
+ * entire season roster registered. Either way, an empty absent list means the concept does not
+ * apply here, never "everyone is absent".
+ */
+function renderNotRegisteredSectionMarkdown(dossier: TeamDossier): string {
+  const absent = dossier.team.absentRoster;
+  if (absent.length === 0) return "";
+  const source = dossier.team.absentRatingSource;
+  const sourceNote =
+    source === null ? "no ratings on file for anyone below" : `ratings shown: ${escapeMarkdownCell(ratingSourceLabel(source))}`;
+  const items = absent.map((m) => `- ${escapeMarkdownCell(formatAbsentRosterMember(m, source))}`).join("\n");
+  return (
+    "\n\n## Not registered (watch for adds)\n\n" +
+    `_Name and rating only, ${sourceNote} — no record, no tendencies; a late add should be ` +
+    "recognised, not scouted._\n\n" +
+    items
+  );
 }
 
 function renderRosterTableMarkdown(dossier: TeamDossier): string {
@@ -256,9 +297,12 @@ export function renderDossierMarkdown(dossier: TeamDossier): string {
   return (
     `# ${escapeMarkdownCell(dossier.team.teamName)} — Scouting Dossier _(dossier — v0 layout)_\n\n` +
     "## Roster\n\n" +
+    renderRosterSourceLineMarkdown(dossier) +
+    "\n\n" +
     renderRosterTableMarkdown(dossier) +
     "\n\n" +
     renderTeamRecordMarkdown(dossier) +
+    renderNotRegisteredSectionMarkdown(dossier) +
     "\n\n" +
     // Placed BEFORE everything it qualifies, not appended as a footnote: a scope that a reader meets
     // only after they have already read the records has not scoped their reading of them.

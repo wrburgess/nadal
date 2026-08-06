@@ -658,3 +658,77 @@ describe("getLineupPlan — an event's format overrides the derived slot set", (
     }
   });
 });
+
+// Task 3 (#113): the roster read at the heart of `getLineupPlan` now goes through the shared
+// `resolveRoster` choke point too, not just the slot set — an event's REGISTERED roster restricts
+// who can be predicted onto a court, the same way it restricts `getTeamProfile`'s roster.
+describe("getLineupPlan — event-scoped roster (#113)", () => {
+  useTnDbPath();
+
+  it("predicts only over registered players when the event has a registered roster", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell", "Cy Calder"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 6, ourMatch);
+      playDoubles(db, "D1", [ids["Bo Bramwell"]!, ids["Cy Calder"]!], 5, ourMatch);
+      const event = addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles,D1:doubles",
+      });
+      // Only Ada registers — Bo and Cy stay season-only.
+      db.insert(teamMemberships).values({ playerId: ids["Ada Ashby"]!, teamId, eventId: event.eventId }).run();
+
+      const plan = getLineupPlan(db, teamId, "Springfield Sectionals 2026");
+
+      expect(plan.rosterSource).toBe("registered");
+      expect(plan.rosterSize).toBe(1);
+      const placedIds = plan.slots.flatMap((s) => s.players.map((p) => p.playerId));
+      expect(placedIds).toEqual([ids["Ada Ashby"]]);
+      expect(plan.unplaced).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("an event with no registered rows still predicts the full season roster (registeredCount: 0)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+      addEvent(db, {
+        name: "Unregistered Event",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles",
+      });
+
+      const plan = getLineupPlan(db, teamId, "Unregistered Event");
+
+      expect(plan.rosterSource).toBe("season");
+      expect(plan.registeredCount).toBe(0);
+      expect(plan.rosterSize).toBe(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("no event named -> season roster, matching pre-#113 behavior", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const { teamId, ids, ourMatch } = seedTeam(db, ["Ada Ashby", "Bo Bramwell"]);
+      playSingles(db, "S1", ids["Ada Ashby"]!, 3, ourMatch);
+
+      const plan = getLineupPlan(db, teamId);
+
+      expect(plan.rosterSource).toBe("season");
+      expect(plan.registeredCount).toBe(0);
+      expect(plan.seasonCount).toBe(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+});

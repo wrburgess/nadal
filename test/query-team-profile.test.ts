@@ -13,6 +13,7 @@ import {
 import { upsertTeam } from "../src/ingest/upsert.js";
 import { getTeamProfile, resolveTeamTarget } from "../src/query/team-profile.js";
 import { setHomeTeam } from "../src/query/home-team.js";
+import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -416,6 +417,123 @@ describe("resolveTeamTarget", () => {
 
       const row = db.select().from(teams).where(eq(teams.id, renamed.id)).all()[0];
       expect(row?.name).toBe("Springfield A 4.0");
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Task 3 (#113): `getTeamProfile` gains `eventId` beside the `leagueScope` it already takes, and
+// both its own roster read AND the `versusTeamId` opponent roster now go through the shared
+// `resolveRoster` choke point (src/query/roster.ts) instead of each running its own query.
+describe("getTeamProfile — event-scoped roster (#113)", () => {
+  useTnDbPath();
+
+  it("the issue's own bar: omits a season-roster player who did not register, includes one who did (20 -> 9)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const season = Array.from({ length: 20 }, (_, i) => `Season Player ${String(i + 1).padStart(2, "0")}`);
+      const registered = season.slice(0, 9);
+      const fixture = seedTeamWithRosters(db, {
+        teamName: "OK/Dickason/40&over3.5M",
+        season,
+        registered: { eventName: "Springfield Sectionals 2026", names: registered },
+      });
+
+      const profile = getTeamProfile(db, fixture.teamId, { since: "2026-01-01", eventId: fixture.eventId });
+
+      expect(profile.rosterSource).toBe("registered");
+      expect(profile.roster).toHaveLength(9);
+      expect(profile.roster.map((r) => r.canonicalName).sort()).toEqual([...registered].sort());
+      expect(profile.absentRoster.map((r) => r.canonicalName).sort()).toEqual([...season.slice(9)].sort());
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("an event with no registered memberships renders the full season roster — a second team on the same DB is unaffected", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const registeredTeam = seedTeamWithRosters(db, {
+        teamName: "OK/Dickason/40&over3.5M",
+        season: ["Alice Anders"],
+        registered: { eventName: "Springfield Sectionals 2026", names: ["Alice Anders"] },
+      });
+      const unregisteredTeam = seedTeamWithRosters(db, {
+        teamName: "IA/Versteeg/40&Over3.5M",
+        season: ["Bo Bergstrom", "Cy Castillo"],
+      });
+
+      // The event genuinely exists (registeredTeam.eventId), just carries no registration for THIS
+      // team — the feature must not empty every OTHER team's dossier for the same event.
+      const profile = getTeamProfile(db, unregisteredTeam.teamId, {
+        since: "2026-01-01",
+        eventId: registeredTeam.eventId,
+      });
+
+      expect(profile.rosterSource).toBe("season");
+      expect(profile.roster).toHaveLength(2);
+      expect(profile.absentRoster).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("evidenceScope counts, records and slot tendencies are computed over the SCOPED roster", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedTeamWithRosters(db, {
+        teamName: "Team A",
+        season: ["Registered Rey", "Absent Ada"],
+        registered: { eventName: "Event X", names: ["Registered Rey"] },
+      });
+      const registeredId = fixture.registeredPlayerIds.get("Registered Rey")!;
+      const absentId = fixture.seasonPlayerIds.get("Absent Ada")!;
+      // Absent Ada has a court match, Registered Rey does not — proves the evidence descends from
+      // the SCOPED roster, not the season roster: an unscoped read would pick this match up too.
+      seedCourtMatch(
+        db,
+        { slot: "D1", discipline: "doubles", winnerSide: "home", playedOn: "2026-05-01" },
+        [{ playerId: absentId, side: "home" }],
+      );
+
+      const profile = getTeamProfile(db, fixture.teamId, { since: "2026-01-01", eventId: fixture.eventId });
+
+      expect(profile.roster.map((r) => r.playerId)).toEqual([registeredId]);
+      expect(profile.evidenceScope.considered).toBe(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the head-to-head opponent roster is scoped the same way as our own", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const home = seedTeamWithRosters(db, {
+        teamName: "Home Team",
+        season: ["Home Player"],
+        registered: { eventName: "Shared Event", names: ["Home Player"] },
+      });
+      const away = seedTeamWithRosters(db, {
+        teamName: "Away Team",
+        season: ["Away Registered", "Away Not Registered"],
+      });
+      const awayRegisteredId = away.seasonPlayerIds.get("Away Registered")!;
+      // Registers the AWAY player for the SAME event home is scoped to, without a second `events`
+      // row (`events.name` is unique) — the shape a real registration payload for a different team
+      // would produce.
+      db.insert(teamMemberships)
+        .values({ playerId: awayRegisteredId, teamId: away.teamId, eventId: home.eventId! })
+        .run();
+
+      const profile = getTeamProfile(db, home.teamId, {
+        since: "2026-01-01",
+        eventId: home.eventId,
+        versusTeamId: away.teamId,
+      });
+
+      expect(profile.headToHead).toHaveLength(1);
+      expect(profile.headToHead![0]!.opponentName).toBe("Away Registered");
     } finally {
       sqlite.close();
     }

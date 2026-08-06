@@ -25,6 +25,7 @@ import { getTeamProfile } from "../src/query/team-profile.js";
 import { seasonStart } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { removeRosterRow } from "./helpers/roster-html.js";
+import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
 
@@ -1336,5 +1337,72 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("already belongs to Bob Smith");
+  });
+
+  // Task 6 (#113): `roster_set` mirrors `match_add`'s inline-payload shape — the source is a
+  // login-gated registration page, so the primary door is an agent handing over what it read,
+  // exactly like a scorecard photo.
+  it("roster_set writes the same rows as the CLI — same service, asserted through the tool", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const fixture = seedTeamWithRosters(db, {
+      teamName: "OK/Dickason/40&over3.5M",
+      season: ["Alice Anders", "Bo Bramwell", "Cy Calder"],
+    });
+    db.insert(events).values({ name: "Springfield Sectionals 2026", kind: "tournament" }).returning().get();
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "roster_set",
+      arguments: {
+        team: "OK/Dickason/40&over3.5M",
+        event: "Springfield Sectionals 2026",
+        players: ["Alice Anders", "Bo Bramwell"],
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).toEqual({
+      team: "OK/Dickason/40&over3.5M",
+      event: "Springfield Sectionals 2026",
+      registered: 2,
+      retired: 0,
+    });
+
+    const check = openDb();
+    try {
+      const rows = check.db
+        .select()
+        .from(teamMemberships)
+        .where(eq(teamMemberships.teamId, fixture.teamId))
+        .all();
+      expect(rows.filter((r) => r.eventId !== null)).toHaveLength(2);
+    } finally {
+      check.sqlite.close();
+    }
+  });
+
+  it("roster_set refusal returns the structured message as a tool error, writing nothing", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    seedTeamWithRosters(db, { teamName: "Team A", season: ["Alice Anders"] });
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "roster_set",
+      arguments: { team: "Team A", event: "No Such Event", players: ["Alice Anders"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('unknown event "No Such Event"');
+
+    const check = openDb();
+    try {
+      expect(check.db.select().from(teamMemberships).all().every((r) => r.eventId === null)).toBe(true);
+    } finally {
+      check.sqlite.close();
+    }
   });
 });

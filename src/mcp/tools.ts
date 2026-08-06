@@ -16,6 +16,9 @@ import { ambiguousMessage } from "../ingest/errors.js";
 import { fetchPage } from "../ingest/fetch.js";
 import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../ingest/match-add.js";
 import { pullPlayer } from "../ingest/player-pull.js";
+import { rosterPayloadSchema } from "../ingest/roster-payload.js";
+import type { RosterPayload } from "../ingest/roster-payload.js";
+import { describeSetEventRosterRefusal, setEventRoster } from "../ingest/roster-set.js";
 import { scorecardPayloadSchema } from "../ingest/scorecard.js";
 import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
@@ -394,6 +397,38 @@ export const MCP_TOOLS: McpToolDef[] = [
           // has, matching the CLI summary line's identical "only when non-null" convention.
           ...(result.format !== null ? { format: result.format } : {}),
           ...(result.leagueScope !== null ? { leagueScope: result.leagueScope } : {}),
+        };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "roster_set",
+    cliCommand: "roster set",
+    description: "Replace an event's registered roster from a payload",
+    // The payload INLINE, not a file — the source is a login-gated registration page, so the
+    // primary door is an agent reading it and calling this tool with what it read; `tn roster set
+    // <file>` is the re-runnable, auditable fallback that reads the identical shape from disk.
+    // `rosterPayloadSchema` carries no top-level `.superRefine` — every invariant (team/event/player
+    // resolution, duplicate names, the "replaces, does not accumulate" reconcile) lives in the
+    // SERVICE (`setEventRoster`, called identically by both presenters), so the
+    // spread-drops-a-whole-object-refinement trap documented on `match_add` above does not apply:
+    // `players.min(1)` is a per-field validator and DOES survive `.shape` being spread into
+    // `inputShape`.
+    inputShape: { ...rosterPayloadSchema.shape },
+    handler: async (rawArgs) => {
+      const payload = rawArgs as RosterPayload;
+      const { db, sqlite } = openDb();
+      try {
+        const result = setEventRoster(db, payload);
+        if (!result.ok) throw new McpToolError(describeSetEventRosterRefusal(result));
+        return {
+          team: result.teamName,
+          event: result.eventName,
+          registered: result.registered,
+          retired: result.retired,
         };
       } finally {
         sqlite.close();

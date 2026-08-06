@@ -9,7 +9,7 @@
 // provenance are named, and anyone left over is listed. None of that is decoration — each line is
 // asserted in `test/cli-lineup-plan-command.test.ts`.
 
-import { formatName, ratingSourceLabel } from "./format-profile.js";
+import { formatName, formatRosterSourceLine, ratingSourceLabel } from "./format-profile.js";
 import type { LineupPlan, LineupPlanSlot } from "../query/lineup.js";
 
 /** `basis` and `confidence` answer different questions, so both are printed: "low" from two shared
@@ -81,6 +81,18 @@ export function formatLineupPlan(plan: LineupPlan): string {
     plan.slotSource === "event-format"
       ? `  courts: ${plan.slots.length}, from the format of event "${formatName(plan.slotEvent.name)}"`
       : `  courts: ${plan.slots.length}, from this team's observed match history (not the event format)`,
+  );
+  // #113: the roster-source disclosure — always printed (#97's both-branches discipline). The event
+  // name comes from `slotEvent`, never re-resolved: `rosterSource`/`slotSource` are two separate
+  // reads of the SAME already-resolved event (see `getLineupPlan`'s own doc comment), so naming it
+  // here is restating an identity already established above, not a new lookup.
+  lines.push(
+    `  roster: ${formatRosterSourceLine(
+      plan.rosterSource,
+      plan.slotSource === "event-format" ? plan.slotEvent.name : null,
+      plan.registeredCount,
+      plan.seasonCount,
+    )}`,
   );
   // Only when there is something to say. Without this line a prediction built on 7 matches, for a
   // roster whose members have played 200, reads as missing data rather than as correct scoping.

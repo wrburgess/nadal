@@ -23,6 +23,11 @@ export type TeamDossier = {
    * renderer never has to reach into `lineup.slotEvent` for it, which is a different field about a
    * different thing (which event supplied the COURT SET) and is `null` whenever the lineup is. */
   event: { id: number; name: string } | null;
+  /** `team.rosterSource`, copied onto the VIEW at construction (#113) — the same reason `season`
+   * and `event` sit here rather than being re-derived by each renderer: a renderer reads this
+   * field, not `team.rosterSource` directly, so the two can never be filled in independently and
+   * drift. Set once, in `write.ts`'s `buildTeamDossier`, from the value `team` itself carries. */
+  rosterSource: "registered" | "season";
   team: TeamProfile;
   /** One full profile per `team.roster` member, in the SAME order — a renderer that zips the two
    * arrays by index relies on this, so `write.ts` must preserve `team.roster`'s order when building

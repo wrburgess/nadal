@@ -17,11 +17,13 @@
 import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamCrossHeadToHead } from "../query/team-profile.js";
 import {
+  formatAbsentRosterMember,
   formatEvidenceScopeLine,
   formatPartnerFrequency,
   formatRatingTrajectory,
   formatRecord,
   formatRetainedLeaguesLine,
+  formatRosterSourceLine,
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
@@ -46,6 +48,37 @@ export function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/** The roster-source disclosure line (#113) — the twin of `renderEvidenceScopeHtml`'s precedent,
+ * one field over. **Always rendered, both branches** (#97's discipline). */
+function renderRosterSourceLineHtml(dossier: TeamDossier): string {
+  const line = formatRosterSourceLine(
+    dossier.rosterSource,
+    dossier.event?.name ?? null,
+    dossier.team.registeredCount,
+    dossier.team.seasonCount,
+  );
+  return `<p><strong>Roster:</strong> ${escapeHtml(line)}.</p>`;
+}
+
+/** The NOT REGISTERED block (#113) — the twin of `renderNotRegisteredSectionMarkdown`. Renders
+ * nothing when `dossier.team.absentRoster` is empty (see that function's own doc comment for why an
+ * empty list is never rendered as an empty section). */
+function renderNotRegisteredSectionHtml(dossier: TeamDossier): string {
+  const absent = dossier.team.absentRoster;
+  if (absent.length === 0) return "";
+  const source = dossier.team.absentRatingSource;
+  const sourceNote =
+    source === null ? "no ratings on file for anyone below" : `ratings shown: ${escapeHtml(ratingSourceLabel(source))}`;
+  const items = absent.map((m) => `<li>${escapeHtml(formatAbsentRosterMember(m, source))}</li>`).join("");
+  return (
+    '<section id="not-registered"><h2>Not registered (watch for adds)</h2>' +
+    `<p class="guess-note">Name and rating only, ${sourceNote} — no record, no tendencies; a late ` +
+    "add should be recognised, not scouted.</p>" +
+    `<ul>${items}</ul>` +
+    "</section>"
+  );
 }
 
 function renderRosterTableHtml(dossier: TeamDossier): string {
@@ -328,9 +361,11 @@ export function renderDossier(dossier: TeamDossier): string {
     "<body>" +
     `<h1>${escapeHtml(dossier.team.teamName)} <span class="v0-badge">dossier — v0 layout</span></h1>` +
     '<section id="roster"><h2>Roster</h2>' +
+    renderRosterSourceLineHtml(dossier) +
     renderRosterTableHtml(dossier) +
     renderTeamRecordHtml(dossier) +
     "</section>" +
+    renderNotRegisteredSectionHtml(dossier) +
     // Placed BEFORE everything it qualifies — see the markdown twin's comment.
     renderEvidenceScopeHtml(dossier) +
     renderPredictedLineupHtml(dossier) +
