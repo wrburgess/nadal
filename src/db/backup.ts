@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { errorMessage } from "../error-message.js";
 import { dbPath, losslessPath, UNRENDERABLE } from "./client.js";
 
 // Issue #110, Option B ("compare the counts, and refuse a mismatch"). Thrown for every
@@ -39,7 +40,14 @@ export type BackupResult = {
  */
 function tableCounts(sqlite: InstanceType<typeof Database>): Map<string, number> {
   const names = sqlite
-    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%drizzle%'")
+    // `!= '__drizzle_migrations'` — an EXACT name, not `NOT LIKE '%drizzle%'`. The sibling query in
+    // `test/db-migrate.test.ts` uses the wildcard, and copying it here would have quietly broken the
+    // promise in the doc comment above: any future application table whose name merely CONTAINS
+    // "drizzle" would be dropped from the comparison and so never verified, while this comment went
+    // on claiming every new table is covered automatically. Exact-matching fails in the safe
+    // direction instead — a host that renames drizzle's bookkeeping table gets it INCLUDED in the
+    // comparison, which is harmless (both files carry it identically, so it can only ever agree).
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'")
     .all() as Array<{ name: string }>;
   const counts = new Map<string, number>();
   for (const { name } of names) {
@@ -72,18 +80,39 @@ export function compareTableCounts(source: Map<string, number>, backup: Map<stri
   return disagreements;
 }
 
+// Guarantees two backups issued within the same millisecond still land on distinct destination
+// names (plan amendment 3), mirroring `src/ingest/archive.ts`'s own `nextTimestamp()`/`lastStampMs`
+// pattern rather than reinventing it — not imported directly, since that module is ingest-layer and
+// this one is db-layer, and the whole pattern is four lines. `Date.now()`'s 1ms resolution means two
+// calls close enough together (two rapid MCP `db_backup` calls, or two sequential calls in one
+// process within the same wall-clock millisecond) can read the identical value; without the bump
+// both would derive the identical destination name, and the SECOND to actually invoke `.backup()`
+// would race the first through the exists-check with no name-based signal that anything was wrong.
+// This does not close the TOCTOU window Risk 2 already accepts (`.backup()` runs against a path this
+// module resolved, not one it holds a lock on) — it removes the far more common cause of hitting
+// that window at all: two calls that were never concurrent, only close in time.
+let lastStampMs = 0;
+
+function nextStampMs(): number {
+  let ms = Date.now();
+  if (ms <= lastStampMs) ms = lastStampMs + 1;
+  lastStampMs = ms;
+  return ms;
+}
+
 /**
- * `{dirname(source)}/backups/{basename-without-ext}-YYYYMMDDTHHMMSSZ.db` (step 3). The stamp is
- * `new Date().toISOString()` with the `-`/`:` separators and the fractional seconds stripped, so
- * `2026-08-05T12:34:56.789Z` becomes `20260805T123456Z` — filesystem-safe on every platform (no
- * `:`) and precise to the second, which is what step 4's "second backup inside one second" refusal
- * depends on: two backups issued closer together than that collide on this name and refuse rather
- * than silently overwrite.
+ * `{dirname(source)}/backups/{basename-without-ext}-YYYYMMDDTHHMMSSmmmZ.db` (step 3). The stamp is
+ * `new Date(nextStampMs()).toISOString()` with `-`, `:` and `.` stripped, so
+ * `2026-08-05T12:34:56.789Z` becomes `20260805T123456789Z` — filesystem-safe on every platform (no
+ * `:`) and, via `nextStampMs()` above, unique per call within one process even at millisecond
+ * resolution. The existing-destination refusal (step 4) is the backstop for every collision this
+ * does not prevent — two separate `tn` processes racing on the exact same millisecond — rather than
+ * the primary mechanism the original plan described, which is what plan amendment 3 changed.
  */
 function deriveDestination(source: string): string {
   const ext = extname(source);
   const stem = basename(source, ext);
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const stamp = new Date(nextStampMs()).toISOString().replace(/[-:.]/g, "");
   return join(dirname(source), "backups", `${stem}-${stamp}.db`);
 }
 
@@ -98,18 +127,49 @@ function deriveDestination(source: string): string {
  * direct JS call. Refusing is the same call the rest of this module makes everywhere else: a path
  * that cannot be honored as written is an error, never a value to quietly correct.
  *
- * ONLY the trim is checked, deliberately. The two sibling refusals the driver also raises —
- * empty-after-trim and `:memory:` — are UNREACHABLE here because both paths are `resolve()`d first:
- * `resolve("")` returns the cwd and `resolve(":memory:")` returns `{cwd}/:memory:`, so neither can
- * ever equal the value being guarded against. Adding those branches would satisfy the amendment's
- * letter while leaving two branches no fixture could ever kill, which `rules/testing.md` names as
- * worse than the omission.
+ * Checked on the RESOLVED (absolute) path, deliberately, not the raw candidate: `resolve()` always
+ * returns a string prefixed by the cwd or root, so a LEADING space on the raw input lands mid-string
+ * after resolving and stops being edge whitespace at all — checking the raw value there would refuse
+ * a path the driver would not actually clamp. A TRAILING space survives `resolve()` at the string's
+ * edge either way (verified above), which is the realistic, GRAMMAR.md-promised case this guards.
+ *
+ * This is why `refuseUnusableDestination` below is a SEPARATE function checked on the RAW candidate
+ * instead of being folded in here: `resolve()` is exactly what erases an empty-after-trim or
+ * `:memory:` destination (`resolve("")` is the cwd; `resolve(":memory:")` is `{cwd}/:memory:`), so a
+ * post-resolve check for either can never fire — a branch no fixture could kill (`rules/testing.md`).
+ * Checking them pre-resolve, on the destination-only path, is what plan amendment 1 also asks for.
  */
 function assertNoSilentTrim(label: string, path: string): void {
   if (path !== path.trim()) {
     throw new BackupRefusedError(
       `refusing a ${label} path with leading or trailing whitespace ${namePath(path)} — SQLite would ` +
         `trim it and act on a different file than this message names`,
+    );
+  }
+}
+
+/**
+ * Plan amendment 1, second half. Called on the RAW `destinationPath` a caller supplies — before
+ * `resolve()` — because `resolve()` is exactly what makes both conditions below unreachable
+ * afterward (see `assertNoSilentTrim`'s own comment). `destinationPath` exists only for this
+ * module's own tests, so this is reachable through direct calls, not through `TN_DB_PATH` or any CLI
+ * surface — unlike the trim guard above, which the CLI's own config surface can trigger.
+ *
+ * Both conditions are `TypeError`s better-sqlite3's own `.backup()` throws unprompted
+ * (`lib/methods/backup.js`: `"Backup filename cannot be an empty string"`,
+ * `"Invalid backup filename \":memory:\""`) — bare, undated, and naming neither this command nor
+ * `BackupRefusedError`. Refusing here first is the same call this module makes everywhere else: a
+ * destination that cannot be honored is reported as this module's own refusal, not left to surface
+ * as an unrelated driver exception two calls later.
+ */
+function refuseUnusableDestination(raw: string): void {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    throw new BackupRefusedError("refusing an empty destination path");
+  }
+  if (trimmed === ":memory:") {
+    throw new BackupRefusedError(
+      'refusing ":memory:" as a destination — a backup must be a real file on disk, not SQLite\'s in-memory sentinel',
     );
   }
 }
@@ -171,12 +231,31 @@ export async function backupDatabase(sourcePath?: string, destinationPath?: stri
   let sqlite: InstanceType<typeof Database>;
   try {
     sqlite = new Database(source, { fileMustExist: true });
-  } catch {
-    throw new BackupRefusedError(`no database ${namePath(source)} — nothing to back up`);
+  } catch (err) {
+    // ABSENT and UNREADABLE raise the SAME `SQLITE_CANTOPEN` here — verified against a chmod-000
+    // file and a directory-at-the-path, both of which throw it while `existsSync` reports true. So
+    // the branch below is a DIAGNOSIS, not the guard: `fileMustExist` above is still the only thing
+    // deciding whether this call proceeds, and `existsSync` never gates it. That distinction is the
+    // whole reason this is safe — an `existsSync` used as the guard is the check-then-act shape
+    // step 2 exists to avoid.
+    //
+    // Worth the branch because the two failures call for opposite operator responses: "there is
+    // nothing here" versus "your database is right there and I cannot read it". Telling someone the
+    // second is the first is the most dangerous wrong answer a BACKUP command can give — it reports
+    // nothing to lose at the exact moment there is something to lose.
+    if (!existsSync(source)) {
+      throw new BackupRefusedError(`no database ${namePath(source)} — nothing to back up`);
+    }
+    throw new BackupRefusedError(
+      `cannot open the database ${namePath(source)} — it exists but could not be opened: ${errorMessage(err)}`,
+    );
   }
 
   try {
-    // 3. Derive the destination when the caller did not supply one.
+    // 3. Derive the destination when the caller did not supply one. A SUPPLIED one is screened on
+    // the RAW string first — `resolve()` below is precisely what would make both of those checks
+    // unreachable, so the order here is the whole reason they can fire at all.
+    if (destinationPath !== undefined) refuseUnusableDestination(destinationPath);
     const destination = destinationPath !== undefined ? resolve(destinationPath) : deriveDestination(source);
     assertNoSilentTrim("destination", destination);
 
@@ -223,7 +302,13 @@ export async function backupDatabase(sourcePath?: string, destinationPath?: stri
       );
     }
 
-    const rows = [...sourceCounts.values()].reduce((total, count) => total + count, 0);
+    // Summed from `backupCounts` — the WRITTEN FILE — not from `sourceCounts`. The two are provably
+    // equal by the check immediately above, so this changes no value; it changes what the number
+    // IS. The issue's requirement is that the command "read the counts back out of the finished
+    // file and report them", and a total summed from the source would satisfy that only by way of
+    // an argument, which is the kind of thing that stays true right up until someone reorders the
+    // steps.
+    const rows = [...backupCounts.values()].reduce((total, count) => total + count, 0);
     const tables: TableCount[] = [...sourceCounts.entries()].map(([table, count]) => ({
       table,
       source: count,

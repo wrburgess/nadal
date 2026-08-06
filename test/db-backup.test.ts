@@ -188,6 +188,45 @@ describe("backupDatabase (issue #110)", () => {
 
 // Scenario 6: `compareTableCounts` is pure, so it is tested directly against synthetic maps rather
 // than through a real database — the exhaustive case list the plan calls out, both directions.
+// Verify-stage adversarial finding (issue #110, fail-open lens). `new Database(path, {fileMustExist:
+// true})` raises the SAME `SQLITE_CANTOPEN` for a database that is ABSENT and one that is merely
+// UNREADABLE — verified: a chmod-000 file and a directory-at-the-path both throw it, while
+// `existsSync` is true for the latter two. Reporting "no database — nothing to back up" for all
+// three tells an operator whose database exists but cannot be opened that they have nothing to lose,
+// which is the most dangerous wrong answer a BACKUP command can give.
+//
+// A directory at the source path is the fixture rather than chmod 000, deliberately: permission bits
+// are bypassed when the suite runs as root (a routine CI container configuration), so a chmod-based
+// test would silently stop exercising this on exactly the machine nobody watches.
+describe("an unreadable source is distinguished from an absent one (issue #110, verify stage)", () => {
+  it("does not claim there is nothing to back up when the source exists but cannot be opened", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const sourcePath = join(dir, "iam-a-directory.db");
+    mkdirSync(sourcePath);
+
+    const error = await backupDatabase(sourcePath).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BackupRefusedError);
+    const message = (error as Error).message;
+    // The path is still named — that half was never wrong.
+    expect(message).toContain(sourcePath);
+    // ...but the diagnosis must not be the absent-file one, and must carry the real cause.
+    expect(message).not.toContain("nothing to back up");
+    expect(message.toLowerCase()).toContain("unable to open database file");
+  });
+
+  it("still reports a genuinely absent source as absent", async () => {
+    // The other side of the same branch — without this, the assertion above is satisfied by a
+    // version that simply deleted the absent-source message entirely.
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+
+    const error = await backupDatabase(join(dir, "never-existed.db")).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BackupRefusedError);
+    expect((error as Error).message).toContain("nothing to back up");
+  });
+});
+
 // Plan amendment 1 (issue #110). better-sqlite3 trims the filename it is handed — in BOTH
 // `new Database(filenameGiven)` (lib/database.js:30) and `db.backup(filename)`
 // (lib/methods/backup.js:8) — while `path.resolve` preserves trailing whitespace
@@ -211,6 +250,36 @@ describe("silent-trim refusal (issue #110 plan amendment 1)", () => {
     // refusal and prove nothing about trimming.
     await expect(backupDatabase(`${realPath} `)).rejects.toThrow(BackupRefusedError);
     expect(existsSync(join(dir, "backups"))).toBe(false);
+  });
+
+  // The other half of amendment 1, and the reason it is a SEPARATE guard checked BEFORE `resolve()`:
+  // afterwards neither condition can fire (`resolve("")` returns the cwd, `resolve(":memory:")`
+  // returns `{cwd}/:memory:`), so a post-resolve check would be two branches no fixture could kill.
+  // Pre-resolve, on the raw parameter, both are reachable — which is what makes these tests possible
+  // at all, and is the correction to an earlier reading that called the guard itself unreachable.
+  it("refuses an empty destination rather than letting the driver raise a bare TypeError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const sourcePath = join(dir, "source.db");
+    runMigrations(sourcePath);
+
+    const error = await backupDatabase(sourcePath, "   ").catch((err: unknown) => err);
+
+    // The class matters as much as the refusal: an unguarded call surfaces better-sqlite3's own
+    // `TypeError("Backup filename cannot be an empty string")`, which names neither this command nor
+    // this module's error type, so a caller catching BackupRefusedError would miss it entirely.
+    expect(error).toBeInstanceOf(BackupRefusedError);
+    expect((error as Error).message).toContain("empty destination");
+  });
+
+  it("refuses \":memory:\" as a destination — a backup must be a real file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const sourcePath = join(dir, "source.db");
+    runMigrations(sourcePath);
+
+    const error = await backupDatabase(sourcePath, ":memory:").catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BackupRefusedError);
+    expect((error as Error).message).toContain(":memory:");
   });
 
   it("refuses a destination path whose own trim differs from it", async () => {
