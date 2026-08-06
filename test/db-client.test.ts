@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -142,6 +142,36 @@ describe("openDb() vs. a missing database (issue #111)", () => {
     expect(caught).not.toBeInstanceOf(MissingDatabaseError);
     // The operator must not be told to run a command that cannot fix this.
     expect((caught as Error).message).not.toContain("tn db migrate");
+  });
+
+  // Codex adversarial review, PR #116, fix-verification pass 1, [medium], class A — a defect in the
+  // FIX, not in the original change. A dangling symlink reads as ENOENT through `open(2)` exactly
+  // like a database that has simply never been bootstrapped, so no errno check can separate them,
+  // and `tn db migrate` cannot repair it (it would `mkdirSync` the LINK's directory, which already
+  // exists, and SQLite would still fail to create the target).
+  //
+  // The resolution was to stop the message from PROMISING a remedy rather than to keep sharpening
+  // the predicate — `lstat` fixes this row but breaks a legitimate symlink-to-an-uncreated-database,
+  // and a third revision would have had its own row. So what this test pins is the CLAIM, not the
+  // classification: whatever the message says must be true here too.
+  it("does not promise that `tn db migrate` will fix a dangling symlink", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-dangling-"));
+    const link = join(dir, "db-link");
+    symlinkSync(join(dir, "missing-parent", "nadal.db"), link);
+
+    let caught: unknown;
+    try {
+      openDb(link);
+    } catch (err) {
+      caught = err;
+    }
+
+    const message = (caught as Error).message;
+    // It still names the real path and still offers the remedy — but CONDITIONALLY.
+    expect(message).toContain(resolve(link));
+    expect(message).toContain("if it has not been created yet");
+    // The exact promise the reviewer showed to be false must not be present in any form.
+    expect(message).not.toMatch(/run `tn db migrate` to create it/);
   });
 
   it("rethrows the original error when the file exists but the open still fails for an unrelated reason", () => {

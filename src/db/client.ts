@@ -64,42 +64,53 @@ export function dbPath(): string {
  * exist (`fileMustExist: true` — better-sqlite3's own enforcement at `open(2)`, not a
  * check-then-act pre-check racing across a WAL database). `runMigrations` is the only caller that
  * opts in with `create: true`, which is exactly where creating a fresh database is the intended
- * behavior. When that open fails, `isAbsentPath` below decides — by errno, never by `existsSync` —
- * whether "missing database" is actually the right thing to tell the operator.
+ * behavior. When that open fails, `openFailureCode` below shapes the message — by errno, never by
+ * `existsSync` — and offers `tn db migrate` conditionally rather than promising it.
  */
 export class MissingDatabaseError extends Error {}
 
 /**
- * Is `path` absent, as opposed to present-but-unopenable? Asked ONLY after an open has already
- * failed, purely to pick the error message — it never decides whether to proceed, so it is not a
- * check-then-act guard (`fileMustExist` at `open(2)` is what actually enforces).
+ * Why did an open of `path` fail — because there was nothing there to open, or for some other
+ * reason? Returns the `open(2)` errno, or `null` when the file opens fine (so SQLite objected to
+ * its CONTENT, not its reachability).
  *
- * It has to ask via errno, and `existsSync` is not good enough — this was a Codex adversarial
- * review finding on PR #116, and the reviewer's own recommended fix does not work either.
- * Measured, not assumed:
+ * Asked ONLY after a database open has already failed, purely to shape the error message. It never
+ * decides whether to proceed, so it is not a check-then-act guard — `fileMustExist` at `open(2)` is
+ * what enforces.
  *
- *   | state                        | better-sqlite3 error | existsSync | open(2) errno |
- *   |------------------------------|----------------------|------------|---------------|
- *   | file absent                  | SQLITE_CANTOPEN      | false      | ENOENT        |
- *   | parent directory absent      | SQLITE_CANTOPEN      | false      | ENOENT        |
- *   | parent is a REGULAR FILE     | SQLITE_CANTOPEN      | false      | ENOTDIR       |
- *   | parent not traversable       | SQLITE_CANTOPEN      | false      | EACCES        |
+ * **This predicate answers "is there anything to open", and deliberately does NOT try to answer
+ * "will `tn db migrate` fix it".** That distinction is the whole design, and it was reached by
+ * getting it wrong twice under adversarial review of PR #116:
  *
- * So SQLite flattens all four to one code (which is why "classify by the SQLite error code" cannot
- * work), and `existsSync` answers `false` for all four (which is why the previous version told an
- * operator with a misconfigured `TN_DB_PATH` to run `tn db migrate` — advice that cannot repair
- * ENOTDIR or EACCES — while `writeRequestLogRow`'s `MissingDatabaseError` carve-out silently
- * discarded the genuine storage failure). Only the raw `open(2)` errno separates them.
+ *   | state                       | SQLite          | existsSync | open(2) | lstat  | migrate fixes it? |
+ *   |-----------------------------|-----------------|------------|---------|--------|-------------------|
+ *   | file absent                 | SQLITE_CANTOPEN | false      | ENOENT  | ENOENT | yes               |
+ *   | parent directory absent     | SQLITE_CANTOPEN | false      | ENOENT  | ENOENT | yes               |
+ *   | parent is a REGULAR FILE    | SQLITE_CANTOPEN | false      | ENOTDIR | ENOTDIR| no                |
+ *   | parent not traversable      | SQLITE_CANTOPEN | false      | EACCES  | EACCES | no                |
+ *   | DANGLING SYMLINK at leaf    | SQLITE_CANTOPEN | false      | ENOENT  | ok     | no                |
+ *   | dangling symlink ANCESTOR   | SQLITE_CANTOPEN | false      | ENOENT  | ENOENT | no                |
+ *   | symlink -> absent, dir ok   | SQLITE_CANTOPEN | false      | ENOENT  | ok     | yes               |
  *
- * A successful open means the file is there and readable, so whatever SQLite objected to (a corrupt
- * or non-database file) is NOT absence: return false and let the original error through.
+ * All measured, none assumed. Read the last column against the two before it: **no single-call
+ * predicate matches it.** `existsSync` misses four rows. `open(2)` errno misses the two dangling-
+ * symlink rows (the Codex finding that killed revision two). `lstat` fixes the leaf-symlink row but
+ * breaks the last one — a legitimate symlink to a database that simply has not been created yet —
+ * and still misses the ancestor row. Each revision was locally justified and none converged, which
+ * is the signature of a predicate being asked the wrong question.
+ *
+ * So the question changed instead. The remedy in the message below is offered **conditionally**
+ * ("if it has not been created yet"), never promised, and the message carries the observed errno.
+ * That claim is true on every row above, including the ones this predicate classifies loosely — the
+ * operator is told what was seen and what to try, not what will work. A predicate that only has to
+ * report an observation cannot leak the way one that has to prove a future outcome does.
  */
-function isAbsentPath(path: string): boolean {
+function openFailureCode(path: string): string | null {
   try {
     closeSync(openSync(path, "r"));
-    return false;
+    return null;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ENOENT";
+    return (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
   }
 }
 
@@ -114,9 +125,15 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
         ? new Database(path, { verbose: options.verbose, fileMustExist: options.create !== true })
         : new Database(path, { fileMustExist: options.create !== true });
   } catch (err) {
-    if (options.create !== true && isAbsentPath(path)) {
+    const code = options.create === true ? null : openFailureCode(path);
+    if (code === "ENOENT") {
+      // Conditional, never a promise — see `openFailureCode`. "if it has not been created yet"
+      // stays true even on the paths this cannot tell apart (a dangling symlink reads as ENOENT
+      // exactly like a database that simply has not been bootstrapped), so the operator is told
+      // what was observed and what to try, not what will work.
       throw new MissingDatabaseError(
-        `no database at ${resolve(path)} — run \`tn db migrate\` to create it`,
+        `cannot open database at ${resolve(path)} (ENOENT: nothing to open) — ` +
+          `if it has not been created yet, run \`tn db migrate\``,
       );
     }
     throw err;
