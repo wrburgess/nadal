@@ -165,7 +165,9 @@ export const teamMatches = sqliteTable("team_matches", {
 export const courtMatches = sqliteTable("court_matches", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   teamMatchId: integer("team_match_id").references(() => teamMatches.id),
-  slot: text("slot").notNull(),                   // S1 | D1 | D2 | D3 | D4
+  // EXAMPLES, not an enum: e.g. S1, D1-D4, D3X (mixed), D335. Court-slot format is per-event data
+  // (spec:13) — the archived pages already carry eight shapes an S1/D1-D4 list never named.
+  slot: text("slot").notNull(),
   discipline: text("discipline").notNull(),       // singles | doubles
   winnerSide: text("winner_side"),                // home | visiting
   score: text("score"),                           // e.g. "6-3 1-6 1-0"
