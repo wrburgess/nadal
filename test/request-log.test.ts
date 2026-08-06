@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -252,6 +252,33 @@ describe("request telemetry vs. a database that does not exist yet (issue #111)"
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("telemetry: request_log write failed"));
     } finally {
       errorSpy.mockRestore();
+    }
+  });
+
+  // The OTHER half of the over-swallowing guard, and the half that was actually broken (Codex
+  // adversarial review, PR #116, [medium], class A). The test above proves a failure against an
+  // EXISTING database still prints. This one proves a failure against a path that does not exist —
+  // but is not *absent*, it is unreachable — also still prints, rather than being mistaken for the
+  // benign pre-bootstrap case and discarded. Before `isAbsentPath` classified by errno, a
+  // `TN_DB_PATH` pointing THROUGH a regular file produced a MissingDatabaseError here, so this
+  // silently swallowed a genuine storage misconfiguration and the operator saw nothing at all.
+  it("still prints when the database path is unopenable rather than absent (parent is a regular file)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-request-log-enotdir-"));
+    const blocker = join(dir, "blocker");
+    writeFileSync(blocker, "a regular file, not a directory");
+    const original = process.env.TN_DB_PATH;
+    process.env.TN_DB_PATH = join(blocker, "nadal.db");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await logRequest("cli", "team show", [], async () => 0);
+      expect(code).toBe(0);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("telemetry: request_log write failed"));
+    } finally {
+      errorSpy.mockRestore();
+      if (original === undefined) delete process.env.TN_DB_PATH;
+      else process.env.TN_DB_PATH = original;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

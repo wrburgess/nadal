@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { existsSync, mkdirSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { errorMessage } from "../error-message.js";
@@ -62,11 +62,46 @@ export function dbPath(): string {
  * `create` now defaults to `false`: no `mkdirSync` at all (today's unconditional call was itself a
  * silent directory-creator, so it is gated the same way the file is) and the file must already
  * exist (`fileMustExist: true` — better-sqlite3's own enforcement at `open(2)`, not a
- * check-then-act `existsSync` race across a WAL database). `runMigrations` is the only caller that
+ * check-then-act pre-check racing across a WAL database). `runMigrations` is the only caller that
  * opts in with `create: true`, which is exactly where creating a fresh database is the intended
- * behavior.
+ * behavior. When that open fails, `isAbsentPath` below decides — by errno, never by `existsSync` —
+ * whether "missing database" is actually the right thing to tell the operator.
  */
 export class MissingDatabaseError extends Error {}
+
+/**
+ * Is `path` absent, as opposed to present-but-unopenable? Asked ONLY after an open has already
+ * failed, purely to pick the error message — it never decides whether to proceed, so it is not a
+ * check-then-act guard (`fileMustExist` at `open(2)` is what actually enforces).
+ *
+ * It has to ask via errno, and `existsSync` is not good enough — this was a Codex adversarial
+ * review finding on PR #116, and the reviewer's own recommended fix does not work either.
+ * Measured, not assumed:
+ *
+ *   | state                        | better-sqlite3 error | existsSync | open(2) errno |
+ *   |------------------------------|----------------------|------------|---------------|
+ *   | file absent                  | SQLITE_CANTOPEN      | false      | ENOENT        |
+ *   | parent directory absent      | SQLITE_CANTOPEN      | false      | ENOENT        |
+ *   | parent is a REGULAR FILE     | SQLITE_CANTOPEN      | false      | ENOTDIR       |
+ *   | parent not traversable       | SQLITE_CANTOPEN      | false      | EACCES        |
+ *
+ * So SQLite flattens all four to one code (which is why "classify by the SQLite error code" cannot
+ * work), and `existsSync` answers `false` for all four (which is why the previous version told an
+ * operator with a misconfigured `TN_DB_PATH` to run `tn db migrate` — advice that cannot repair
+ * ENOTDIR or EACCES — while `writeRequestLogRow`'s `MissingDatabaseError` carve-out silently
+ * discarded the genuine storage failure). Only the raw `open(2)` errno separates them.
+ *
+ * A successful open means the file is there and readable, so whatever SQLite objected to (a corrupt
+ * or non-database file) is NOT absence: return false and let the original error through.
+ */
+function isAbsentPath(path: string): boolean {
+  try {
+    closeSync(openSync(path, "r"));
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
 
 export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
   if (options.create === true) {
@@ -79,13 +114,7 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
         ? new Database(path, { verbose: options.verbose, fileMustExist: options.create !== true })
         : new Database(path, { fileMustExist: options.create !== true });
   } catch (err) {
-    // `existsSync` here is NOT a check-then-act guard — the open has already happened and already
-    // failed; this call only decides which of two already-true error messages to show. A
-    // `fileMustExist` failure means the path was absent AT OPEN TIME, which `existsSync` cannot
-    // have changed since (nothing here creates the file), so re-checking it just distinguishes "the
-    // database is missing" from "some other open failure" for a clearer message — it does not
-    // decide whether to proceed.
-    if (options.create !== true && !existsSync(path)) {
+    if (options.create !== true && isAbsentPath(path)) {
       throw new MissingDatabaseError(
         `no database at ${resolve(path)} — run \`tn db migrate\` to create it`,
       );

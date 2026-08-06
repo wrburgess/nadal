@@ -108,6 +108,42 @@ describe("openDb() vs. a missing database (issue #111)", () => {
     }
   });
 
+  // Codex adversarial review, PR #116, [medium], class A. The first version of this guard asked
+  // `!existsSync(path)` and called any false answer "the database is missing". But `existsSync` is
+  // false for a path whose PARENT is a regular file (ENOTDIR) and for one whose parent is not
+  // traversable (EACCES) just as it is for a genuinely absent file — and better-sqlite3 reports the
+  // SAME `SQLITE_CANTOPEN` for all three, so the SQLite error code cannot separate them either
+  // (measured; it is why the reviewer's own suggested "classify by the SQLite errno" fix does not
+  // work). The result was that a misconfigured `TN_DB_PATH` told the operator to run `tn db
+  // migrate` — which cannot repair ENOTDIR — while `writeRequestLogRow`'s MissingDatabaseError
+  // carve-out silently swallowed the real storage failure. Only the raw `open(2)` errno separates
+  // them, which is what `isAbsentPath` now uses.
+  //
+  // ENOTDIR is the case pinned here because it is deterministic for any user. The EACCES sibling is
+  // deliberately not asserted: `chmod 000` does not stop a process running as root, so the test
+  // would silently pass for the wrong reason in a root container.
+  it("does NOT call it a missing database when the path is unopenable for a different reason (parent is a regular file)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-enotdir-"));
+    const blocker = join(dir, "blocker");
+    writeFileSync(blocker, "a regular file, not a directory");
+    const throughAFile = join(blocker, "nadal.db");
+
+    // The precondition that made the old guard wrong: the path does not "exist", yet it is not absent.
+    expect(existsSync(throughAFile)).toBe(false);
+
+    let caught: unknown;
+    try {
+      openDb(throughAFile);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(MissingDatabaseError);
+    // The operator must not be told to run a command that cannot fix this.
+    expect((caught as Error).message).not.toContain("tn db migrate");
+  });
+
   it("rethrows the original error when the file exists but the open still fails for an unrelated reason", () => {
     // A directory at the exact leaf path a database open would use: better-sqlite3's own open
     // fails (it is not a valid SQLite file), but `existsSync(path)` reports true, so this must NOT

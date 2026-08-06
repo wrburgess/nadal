@@ -112,14 +112,25 @@ describe("tn db migrate (end-to-end via dispatch)", () => {
       const code = await dispatch(["db", "migrate"]);
       expect(code).toBe(1);
       expect(logSpy).not.toHaveBeenCalled();
-      // The command's own one-line status=error summary is the ONLY stderr line now (issue #111
-      // Task 6). `runMigrations()`'s own `openDb(path, { create: true })` fails at `mkdirSync`
-      // with ENOTDIR before any file exists, so the path is absent afterward too — telemetry's own
-      // `openDb()` attempt (inside `logRequest`'s wrapper) then sees exactly that missing file and
-      // throws `MissingDatabaseError`, which is swallowed silently rather than printed as a second,
-      // less useful diagnostic ahead of the command's own.
-      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      // TWO stderr lines, and both are correct — this test asserted ONE until the Codex adversarial
+      // review of PR #116 showed that silence was the bug, not the feature.
+      //
+      // `TN_DB_PATH` here points THROUGH a regular file, so `runMigrations`'s own
+      // `openDb(path, { create: true })` dies at `mkdirSync` with ENOTDIR: the command prints its
+      // status=error summary. Telemetry (inside `logRequest`'s wrapper) then tries its own
+      // `openDb()` and fails too. The earlier version classified that failure with `!existsSync`,
+      // which is `true` here — the path genuinely does not exist — and so called it
+      // `MissingDatabaseError` and swallowed it. But the database is not ABSENT, it is
+      // UNREACHABLE, and `tn db migrate` cannot fix ENOTDIR: swallowing it discarded the one
+      // signal pointing at the real, misconfigured `TN_DB_PATH`.
+      //
+      // `isAbsentPath` now classifies by `open(2)` errno, so only ENOENT is silenced and this
+      // ENOTDIR surfaces. Asserted as two DISTINCT lines rather than a bumped count, so the test
+      // fails if either message is lost or if one is printed twice.
+      expect(errorSpy).toHaveBeenCalledTimes(2);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^db migrate status=error message=".+"$/));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("telemetry: request_log write failed"));
     } finally {
       logSpy.mockRestore();
       errorSpy.mockRestore();
