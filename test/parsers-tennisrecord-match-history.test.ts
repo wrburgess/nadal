@@ -669,6 +669,25 @@ describe("parseMatchHistory — the two renderings are correlated by match id, n
     expect(() => parseMatchHistory(twoLinks, fixture.source)).toThrow(/expected exactly 1/);
   });
 
+  it("still parses when the desktop result cell carries an unrelated anchor beside its result link", () => {
+    // The cardinality rule is "exactly one MATCH RESULT link", not "exactly one anchor". Counting
+    // every `<a>` made the desktop guard stricter than the invariant it names and asymmetric with
+    // the mobile one it claimed to mirror — a footnote or details link in that cell would abort a
+    // page that correlates perfectly. (Reviewer finding, Codex round 3.)
+    //
+    // The injected anchor carries NO text on purpose. The reviewer's own trace used a visible one,
+    // and that overstates the impact: any text in this cell becomes a score component, so a
+    // text-bearing anchor already fails `parseSets` on origin/main. A text-less anchor is the only
+    // input where the selector is the sole cause, which is what makes this a test of the guard.
+    const withExtra = fixture.html.replace(
+      '<td style="text-align:center; vertical-align: top;"><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">',
+      '<td style="text-align:center; vertical-align: top;"><a class="link" href="/adult/help.aspx"></a><a class="link" href="/adult/matchresults.aspx?year=2026&mid=20336">',
+    );
+    expect(withExtra).not.toBe(fixture.html);
+
+    expect(parseMatchHistory(withExtra, fixture.source)).toEqual(matches);
+  });
+
   it("throws on a swapped block even when a matching match id is injected ahead of its own", () => {
     // The Reviewer's full bypass: swap two same-date blocks, then prepend the id the correlation
     // is about to look for, so date, slot and id all agree while the opponent TEAM still comes from

@@ -382,7 +382,7 @@ function parseRow(
   // The desktop side of the same cardinality rule. The Reviewer named the mobile instance; applying
   // a finding only where it was reported is the recorded way this class survives a fix, and both
   // sides feed the same comparison. Every archived league row carries exactly one anchor here.
-  const resultLinks = cell(7).find("a");
+  const resultLinks = cell(7).find("a[href*='matchresults.aspx']");
   if (resultLinks.length !== 1) {
     throw new ParseError(
       `court on ${playedOn} links ${resultLinks.length} match results, expected exactly 1`,
