@@ -278,6 +278,33 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
       expect(code).toBe(0);
       const output = logSpy.mock.calls.at(-1)?.[0] as string;
       expect(output).toContain("courts: 4, from this team's observed match history (not the event format)");
+      // #113: the roster-source trailer, printed even with no event named.
+      expect(output).toContain("roster: season roster — no event named");
+    });
+
+    // Task 7 (#113): the SAME roster scoping `getTeamProfile` gets now reaches `getLineupPlan` too.
+    it("an event with a REGISTERED roster restricts the prediction and states so in the trailer", async () => {
+      const ids = seedVersteeg({ withRatings: true });
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const event = addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "S1:singles",
+      });
+      const team = db.select().from(teams).all().find((t) => t.name === "IA/Versteeg/40&Over3.5M")!;
+      // Only Ada registers.
+      db.insert(teamMemberships).values({ playerId: ids["Ada Ashby"]!, teamId: team.id, eventId: event.eventId }).run();
+      sqlite.close();
+
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const code = await dispatch(["lineup", "plan", "IA/Versteeg/40&Over3.5M", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const output = logSpy.mock.calls.at(-1)?.[0] as string;
+      expect(output).toContain('roster: registered 1 for event "Springfield Sectionals 2026" (season roster: 7)');
     });
 
     it("tn lineup plan <team> <event> renders the event's court count and --json carries slotSource/slotEvent", async () => {

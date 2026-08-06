@@ -11,6 +11,7 @@ import { playerNote } from "./commands/player-note.js";
 import { playerPull } from "./commands/player-pull.js";
 import { playerShow } from "./commands/player-show.js";
 import { reportBuild } from "./commands/report-build.js";
+import { rosterSet } from "./commands/roster-set.js";
 import { teamHome } from "./commands/team-home.js";
 import { teamPull } from "./commands/team-pull.js";
 import { teamShow } from "./commands/team-show.js";
@@ -46,6 +47,7 @@ export const COMMANDS: Command[] = [
   playerDistinct,
   playerAlias,
   eventAdd,
+  rosterSet,
   matchAdd,
   lineupPlan,
   reportBuild,

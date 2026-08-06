@@ -3,7 +3,7 @@
 // computation (win/loss, partner counting, rating-trajectory ordering, data-gap classification)
 // lives in `src/query/derive.ts`, not here.
 
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { nameKey } from "../db/name-key.js";
 import {
   availability,
@@ -349,26 +349,34 @@ export function getPlayerProfile(
     evidenceScope: evidence.scope,
     // `hasWriter` is a fact about the CODEBASE — "can anything, anywhere, populate this section for
     // a player?" — and it has to keep tracking that fact rather than freezing at whatever was true
-    // when it was written (docs/findings.md, #15/Task 3 rule 6). `availability` and `captain_notes`
-    // got their writers in #17 PR A (`setAvailability`, `addCaptainNote`), so both are `true` with a
-    // REAL count, which is what lets `dataGaps` distinguish "empty" (a writer exists; nothing
-    // recorded for this player) from "has-data".
+    // when it was written (docs/findings.md, #15/Task 3 rule 6). All three sections are now `true`
+    // with a REAL count, which is what lets `dataGaps` distinguish "empty" (a writer exists; nothing
+    // recorded for this player) from "has-data": `availability` and `captain_notes` got theirs in
+    // #17 PR A (`setAvailability`, `addCaptainNote`), and `events` gets its FIRST one in #113
+    // (`setEventRoster`, the service behind `tn roster set` / the `roster_set` MCP tool) — a
+    // registration payload is exactly a PLAYER-to-EVENT association, the thing every earlier
+    // revision of this comment said nothing wrote.
     //
-    // `events` stays `false`, and the reason is narrower than it used to be. #17 PR B added
-    // `addEvent`, so the `events` TABLE now has a production writer — but this section is about a
-    // PLAYER's events, and the thing that would associate the two is an event-scoped
-    // `team_memberships` row. Nothing writes one: `tn team pull` passes `eventId: null` at both of
-    // its call sites (docs/findings.md, #15), and `addEvent` does not touch memberships at all. So
-    // for every real player this section is not "empty", it is genuinely *not collected*, and
-    // saying otherwise would be the same silent lie in the opposite direction.
+    // `tn team pull` still passes `eventId: null` at both its call sites (docs/findings.md, #15) —
+    // a season/league roster pull is not an event registration, and #113 does not change that — so
+    // most players remain "empty" here in practice, exactly as intended: `events` finally
+    // distinguishes "empty" from "not-collected" instead of being unable to reach either.
     //
-    // An earlier revision of this comment flipped it to `true` on the strength of `addEvent`
-    // existing, counting event-scoped memberships that no production path ever creates — a stale
-    // literal replaced with an unreachable one. Caught by the independent Codex review of PR #47.
-    // Flip this to `true` when a writer populates `team_memberships.event_id` (TennisLink, #27, is
-    // the likely source), not when some adjacent table gains a writer.
+    // An earlier revision of this comment flipped `hasWriter` to `true` while `count` stayed the
+    // literal `0` — turning "nothing can record this" into "nothing was recorded" for every player,
+    // the exact silent lie `docs/findings.md:255` (PR #47 round 3) records. The fix here is the one
+    // that finding calls for: `hasWriter` and `count` change together, verified end to end (Task 8's
+    // own test drives the real `setEventRoster` writer, never a hand-inserted row) rather than
+    // trusted separately.
     dataGaps: dataGaps({
-      events: { count: 0, hasWriter: false },
+      events: {
+        count: db
+          .select({ id: teamMemberships.id })
+          .from(teamMemberships)
+          .where(and(eq(teamMemberships.playerId, playerId), isNotNull(teamMemberships.eventId)))
+          .all().length,
+        hasWriter: true,
+      },
       availability: {
         count: db.select({ id: availability.id }).from(availability).where(eq(availability.playerId, playerId)).all()
           .length,

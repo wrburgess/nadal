@@ -246,9 +246,14 @@ export function upsertMembership(
  *    timestamp — a repeated pull that still doesn't observe the player does not keep rewriting when
  *    their departure was first noticed.
  *
- * Scoped to `event_id IS NULL`: a team pull observes the league roster, never an event roster
- * (nothing writes an event-scoped membership in production today —
- * src/query/player-profile.ts's `dataGaps.events.hasWriter: false`), so it must not retire one.
+ * Scoped to `event_id IS NULL`, and this stays true even though `event_id` now HAS a production
+ * writer (#113: `tn roster set` / `src/ingest/roster-set.ts`). A team pull observes the LEAGUE
+ * roster, never an event registration, so it must not retire an event-scoped row it never observed
+ * in the first place — widening this predicate would let an ordinary `tn team pull` silently drop
+ * players from an event roster a captain just registered. `roster-set.ts` owns its OWN event-scoped
+ * reconcile for exactly that reason, rather than reusing or widening this one; the `event_id IS
+ * NULL` predicate here is mutation-tested to stay put
+ * (`test/ingest-upsert-membership-retirement.test.ts`).
  */
 export function retireAbsentMemberships(
   db: Db,

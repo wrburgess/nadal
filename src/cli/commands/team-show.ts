@@ -9,11 +9,14 @@ import { UnknownEventError, resolveEvent } from "../../query/lineup.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitJson, emitSummary } from "../emit.js";
 import {
+  formatAbsentRosterMember,
   formatEvidenceScopeLine,
   formatName,
   formatRecord,
   formatRetainedLeaguesLine,
+  formatRosterSourceLine,
   formatSlotTendencies,
+  ratingSourceLabel,
 } from "../format-profile.js";
 import { seasonLabel, seasonStart } from "../window.js";
 
@@ -50,7 +53,9 @@ function formatTeamProfileText(profile: TeamProfile, season: string, eventName: 
     // fixtures, which carry no league context at all.
     `  evidence: ${formatEvidenceScopeLine(profile.evidenceScope, eventName)} (the team record above is from team fixtures, not scoped by this)`,
     `  leagues counted: ${formatRetainedLeaguesLine(profile.evidenceScope)}`,
-    "  roster:",
+    // #113: the roster-source disclosure line — always printed, both branches (the #97 precedent
+    // above, applied to a different disclosure).
+    `  roster: ${formatRosterSourceLine(profile.rosterSource, eventName, profile.registeredCount, profile.seasonCount)}`,
   ];
   for (const member of profile.roster) {
     lines.push(
@@ -61,6 +66,21 @@ function formatTeamProfileText(profile: TeamProfile, season: string, eventName: 
     );
   }
   if (profile.roster.length === 0) lines.push("    (no roster on file)");
+
+  // #113, the HC's 2026-08-05 dossier-scope mock: name + rating only, no record, no tendencies.
+  // Never rendered when empty (`resolveRoster`'s own doc comment) — a second `console.log` call is
+  // never needed since this joins the SAME string.
+  if (profile.absentRoster.length > 0) {
+    const sourceNote =
+      profile.absentRatingSource === null
+        ? "no ratings on file for anyone below"
+        : `ratings shown: ${ratingSourceLabel(profile.absentRatingSource)}`;
+    lines.push(`  not registered (watch for adds) — ${sourceNote}:`);
+    for (const member of profile.absentRoster) {
+      lines.push(`    ${formatAbsentRosterMember(member, profile.absentRatingSource)}`);
+    }
+  }
+
   return lines.join("\n");
 }
 
@@ -102,8 +122,14 @@ export const teamShow: Command = {
 
       // ONE anchor for both the boundary and the label below.
       const anchor = new Date();
-      const leagueScope = eventName === undefined ? null : resolveEvent(db, eventName).leagueScope;
-      const profile = getTeamProfile(db, resolution.teamId, { since: seasonStart(anchor), leagueScope });
+      // #113: resolved ONCE (never a second lookup) — `eventId` scopes the roster the same read
+      // already scopes by `leagueScope`.
+      const resolvedEvent = eventName === undefined ? undefined : resolveEvent(db, eventName);
+      const profile = getTeamProfile(db, resolution.teamId, {
+        since: seasonStart(anchor),
+        leagueScope: resolvedEvent?.leagueScope ?? null,
+        eventId: resolvedEvent?.event.id ?? null,
+      });
 
       if (!opts.quiet) {
         console.log(

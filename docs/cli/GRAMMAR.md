@@ -151,6 +151,7 @@ looks for `--help` then depends on whether that resolved:
 | `tn player distinct` | Declare a name a different person from its near-matches, creating that player |
 | `tn player alias` | Record a second spelling as the same person as a known player |
 | `tn event add` | Create or update an event and its inclusive date range |
+| `tn roster set` | Replace an event's registered roster from a payload file |
 | `tn match add` | Record a scorecard's results from an agent-extracted payload |
 | `tn lineup plan` | Predict an opponent's lineup from court-assignment history and ratings |
 | `tn report build` | Render per-opponent scouting dossiers (HTML + markdown) to disk |
@@ -259,6 +260,29 @@ ordered positionals. That is stated rather than worked around, and it is unreach
 the one command that READS a scope is `tn report build`, which already refuses an event with no
 format on file, so an event worth scoping necessarily has a format to re-state. The `event_add` MCP
 tool takes keyed arguments and has no such ordering, so `leagueScope` is nameable there alone.
+
+`tn roster set <payload-file>` (#113) — a positional target that is a FILE PATH, `tn match add`'s
+shape rather than payload positionals: the source is a login-gated registration page, so the primary
+door is an agent reading it and calling the `roster_set` MCP tool inline; this CLI surface is the
+re-runnable, auditable fallback that reads a payload an agent already wrote to disk. The file is JSON
+matching `{ team, event, players }` — both `team` and `event` must already exist (never-create, like
+every other target resolution in this grammar), and every name in `players` resolves through the same
+roster-scoped, never-create ladder `tn match add` uses — then must **additionally** hold a current
+membership on that team's **season** roster. A name that is unresolved, ambiguous, on a different
+team, or on this team for some **other event but no longer on its season roster** is flagged rather
+than guessed, and the whole write refuses: nothing is registered until every name is fixed. That last
+case is why the season check is stated separately from the ladder — the shared resolver's roster
+boundary accepts any current membership for the team, event-scoped rows included, which is right for
+`tn match add` and too wide for a registration. If a player has rejoined, pull the team first.
+
+**Replaces, does not accumulate.** A registration page is a snapshot, so each run sets the named
+event's roster to EXACTLY the given `players` list: a name missing from a re-run is retired at EVENT
+scope only (the team's season roster, and any OTHER event's roster for the same team, is untouched),
+and a re-added name un-retires rather than duplicating. Re-running the identical payload is a no-op.
+An empty `players` list is refused at the payload boundary rather than read as "clear the roster" —
+clearing a roster to nothing is not a capability this command offers. On success, one summary line
+carries `team=`, `event=`, `registered=` (names written this run) and `retired=` (memberships this
+run un-registered).
 
 `tn player distinct <name>` and `tn player alias <known> <other>` (#94) — the two rulings a human can
 make about an ambiguous identity, and the **only** commands that write `players` / `player_aliases`

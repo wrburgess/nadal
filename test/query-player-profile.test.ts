@@ -14,7 +14,9 @@ import {
   teamMemberships,
   teams,
 } from "../src/db/schema.js";
+import { setEventRoster } from "../src/ingest/roster-set.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../src/query/player-profile.js";
+import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -195,13 +197,10 @@ describe("getPlayerProfile", () => {
       expect(profile.partnerFrequency).toEqual([]);
       expect(profile.ratingTrajectory).toEqual([]);
       expect(profile.teamMemberships).toEqual([]);
-      // dataGaps still reports even with nothing else on file. `availability`/`captainNotes` have
-      // writers (#17 PR A), so an empty table for THIS player reads as "empty". `events` does NOT:
-      // #17 PR B's `addEvent` writes the events table, but nothing writes the event-scoped
-      // `team_memberships` row that would associate a PLAYER with an event, so the section is
-      // genuinely not collected. Both directions of that distinction are the silent-lie risk
-      // docs/findings.md records.
-      expect(profile.dataGaps.events).toBe("not-collected");
+      // dataGaps still reports even with nothing else on file. All three sections now have writers
+      // (#113 gave `events` one — `tn roster set` — joining `availability`/`captainNotes` from #17
+      // PR A), so a player with nothing on file reads as "empty" everywhere, never "not-collected".
+      expect(profile.dataGaps.events).toBe("empty");
       expect(profile.dataGaps.availability).toBe("empty");
       expect(profile.dataGaps.captainNotes).toBe("empty");
     } finally {
@@ -209,13 +208,13 @@ describe("getPlayerProfile", () => {
     }
   });
 
-  it("dataGaps separates the two sections with writers from events, which still has no player-scoped one", () => {
+  it("dataGaps reports all three sections as empty (never not-collected) once every section has a writer (#113)", () => {
     const { db, sqlite } = freshDb();
     try {
       const player = seedPlayer(db, { canonicalName: "Casey Calder" });
       const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
       expect(profile.dataGaps).toEqual({
-        events: "not-collected",
+        events: "empty",
         availability: "empty",
         captainNotes: "empty",
       });
@@ -251,22 +250,22 @@ describe("getPlayerProfile", () => {
       const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
       expect(profile.dataGaps.availability).toBe("has-data");
       expect(profile.dataGaps.captainNotes).toBe("has-data");
-      // `events` does NOT join them, even though this fixture inserted an event-scoped membership
-      // by hand: no production path writes one, so reporting anything but "not-collected" would
-      // claim collection support the codebase does not have. This assertion is deliberately about
-      // the CODEBASE, not about the rows this test happens to have created — the distinction the
-      // review of PR #47 caught an earlier revision getting backwards.
-      expect(profile.dataGaps.events).toBe("not-collected");
+      // #113: `tn roster set` is now a real production writer for an event-scoped membership, so a
+      // real row here (however it was inserted) reads as "has-data" too — the count is a genuine
+      // query, not a literal. The dedicated end-to-end test below drives this through the ACTUAL
+      // `setEventRoster` writer rather than a hand insert, which is what proves the production path
+      // reaches this flag (never hand-insert the state a test is asserting is reachable).
+      expect(profile.dataGaps.events).toBe("has-data");
     } finally {
       sqlite.close();
     }
   });
 
-  // The realistic case, and the reason `events` cannot claim a writer: a roster pulled outside an
-  // event writes `event_id: null` (docs/findings.md, #15 — the normal path for every real
-  // `tn team pull`), so no production player ever acquires an event association at all, however
-  // many events `tn event add` has created.
-  it("dataGaps reports events as not-collected for a player whose only membership is not event-scoped", () => {
+  // #113: `tn team pull` still writes `event_id: null` at both its call sites (a season/league
+  // roster pull, never an event registration), so this remains the common case for most players —
+  // but `events` now HAS a writer (`tn roster set`), so a player with zero event-scoped rows reads
+  // as "empty" (a writer exists; nothing recorded for THIS player), never "not-collected".
+  it("dataGaps reports events as empty (not not-collected) for a player whose only membership is season-scoped", () => {
     const { db, sqlite } = freshDb();
     try {
       const team = db.insert(teams).values({ name: "Some Team" }).returning().get();
@@ -277,7 +276,41 @@ describe("getPlayerProfile", () => {
       db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
 
       const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
-      expect(profile.dataGaps.events).toBe("not-collected");
+      expect(profile.dataGaps.events).toBe("empty");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Task 8 (#113): the end-to-end proof — driven through the REAL `setEventRoster` writer
+  // (`tn roster set`'s own service), never a hand-inserted row, per the standing rule that the
+  // `hasWriter`/count assertion must run through the production path. `docs/findings.md:255`
+  // records the exact defect a hand-inserted-state test would have hidden: flipping `hasWriter` to
+  // `true` while leaving `count` a stale literal.
+  it("end-to-end: tn roster set makes a registered player's events section has-data with a REAL count; an unregistered player stays empty", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedTeamWithRosters(db, {
+        teamName: "OK/Dickason/40&over3.5M",
+        season: ["Registered Rey", "Unregistered Uma"],
+      });
+      db.insert(events).values({ name: "Springfield Sectionals 2026", kind: "tournament" }).returning().get();
+
+      const result = setEventRoster(db, {
+        team: "OK/Dickason/40&over3.5M",
+        event: "Springfield Sectionals 2026",
+        players: ["Registered Rey"],
+      });
+      expect(result.ok).toBe(true);
+
+      const reyId = fixture.seasonPlayerIds.get("Registered Rey")!;
+      const umaId = fixture.seasonPlayerIds.get("Unregistered Uma")!;
+
+      const reyProfile = getPlayerProfile(db, reyId, { since: "2026-01-01" });
+      expect(reyProfile.dataGaps.events).toBe("has-data");
+
+      const umaProfile = getPlayerProfile(db, umaId, { since: "2026-01-01" });
+      expect(umaProfile.dataGaps.events).toBe("empty");
     } finally {
       sqlite.close();
     }

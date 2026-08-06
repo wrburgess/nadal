@@ -385,4 +385,98 @@ describe("tn report build (end-to-end via dispatch)", () => {
       expect(md).toContain("taken from this team's observed match history — not from the event format.");
     });
   });
+
+  // Task 7 (#113): the single-team build's summary line names which roster the dossier just written
+  // actually drew on.
+  describe("the roster= summary field (#113)", () => {
+    it("a single-team build against a REGISTERED event prints roster=\"registered\"", async () => {
+      const { team, playerIds } = seedTeamWithHistory("Team Roster Registered");
+      const { db, sqlite } = openDb();
+      const event = addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+      db.insert(teamMemberships).values({ playerId: playerIds[0]!, teamId: team.id, eventId: event.eventId }).run();
+      sqlite.close();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "Team Roster Registered", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toContain('roster="registered"');
+    });
+
+    // The invariant the field exists to satisfy, and the one an earlier revision could break: the
+    // summary is read out of the WRITE, so it cannot describe a different roster than the files it
+    // just produced. Previously it came from a second database read AFTER the write had landed —
+    // a window a concurrent `tn roster set` could slip inside, leaving the summary saying
+    // `roster="registered"` about files that say season roster. Asserted by comparing the two
+    // artifacts rather than by racing them, since the fix is that there is only one source now.
+    // (Codex adversarial review of PR #121, round 1, finding 3 [medium].)
+    it("the summary's roster= agrees with the Roster: line in the markdown it just wrote", async () => {
+      const { team, playerIds } = seedTeamWithHistory("Team Roster Agreement");
+      const { db, sqlite } = openDb();
+      const event = addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+      db.insert(teamMemberships).values({ playerId: playerIds[0]!, teamId: team.id, eventId: event.eventId }).run();
+      sqlite.close();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "Team Roster Agreement", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      const summarySaysRegistered = printed.includes('roster="registered"');
+
+      const teamDir = readdirSync(reportsDir).find((d) => d.startsWith("team-roster-agreement"))!;
+      const md = readFileSync(join(reportsDir, teamDir, "index.md"), "utf8");
+      const rosterLine = md.split("\n").find((l) => l.startsWith("**Roster:**"))!;
+      const fileSaysRegistered = rosterLine.includes("registered ");
+
+      expect(rosterLine, "the dossier must state a roster source at all").toBeDefined();
+      expect(summarySaysRegistered, `summary: ${printed}\nfile: ${rosterLine}`).toBe(fileSaysRegistered);
+      // And both must say the registered thing, not merely agree on "season" vacuously.
+      expect(summarySaysRegistered).toBe(true);
+    });
+
+    it("a single-team build against an event with NO registered rows prints roster=\"season\"", async () => {
+      seedTeamWithHistory("Team Roster Season");
+      const { db, sqlite } = openDb();
+      addEvent(db, {
+        name: "Unregistered Event",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+      sqlite.close();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "Team Roster Season", "Unregistered Event"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toContain('roster="season"');
+    });
+
+    it("the sectionals BATCH path carries no roster= field — a single scalar cannot describe mixed teams", async () => {
+      seedTeamWithHistory("Team Roster Batch");
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "sectionals"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).not.toContain("roster=");
+    });
+  });
 });

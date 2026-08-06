@@ -8,8 +8,8 @@
 // module resolves exists so a presenter can print a person rather than a database id — the exact
 // defect #16 shipped and #17 PR A fixed one layer over.
 
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
-import { courtMatches, events, players, ratingObservations, teamMatches, teamMemberships, teams } from "../db/schema.js";
+import { eq, inArray, or } from "drizzle-orm";
+import { courtMatches, events, ratingObservations, teamMatches, teams } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoCourtMatchHistoryError, predictedLineup } from "./derive.js";
 import type { EventCourt } from "./event-format.js";
@@ -17,6 +17,7 @@ import { readEventFormat } from "./event-format.js";
 import type { LeagueScope } from "./league-scope.js";
 import { readLeagueScope } from "./league-scope.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
+import { resolveRoster } from "./roster.js";
 import type { LineupBasis, LineupConfidence, RatingSource } from "./types.js";
 
 export { NoCourtMatchHistoryError };
@@ -226,6 +227,12 @@ export type LineupPlan = LineupSlotProvenance & {
    * and this number is the explanation. */
   excludedOtherTeamMatches: number;
   rosterSize: number;
+  /** `resolveRoster`'s own discriminant (#113), carried through unchanged: `"registered"` when the
+   * named event has a registered roster, `"season"` otherwise — including when no event was named
+   * at all. Lets `format-lineup.ts`'s trailer state which roster the prediction actually drew on. */
+  rosterSource: "registered" | "season";
+  registeredCount: number;
+  seasonCount: number;
 };
 
 /**
@@ -247,9 +254,14 @@ export type LineupPlan = LineupSlotProvenance & {
  * `UnknownEventError` / `EventHasNoFormatError` / `InvalidEventFormatError` for a bad `eventName` —
  * see each class's own doc comment.
  *
- * A player on the roster more than once (one `team_memberships` row per event — the schema allows
- * it, and a district roster plus a travel roster is the normal case) is counted ONCE here: the
- * roster is a set of people, and a duplicate id would let the same player be placed on two courts.
+ * The roster itself now goes through `resolveRoster` (#113), the same choke point
+ * `getTeamProfile` reads through: a named event with a REGISTERED roster (`tn roster set`, or a
+ * hand-seeded event membership) restricts prediction to the players who registered, falling back to
+ * the full season roster when the event has none — never a union of every event-scoped row a player
+ * happens to carry. A player is therefore counted ONCE here regardless of how many
+ * `team_memberships` rows they hold: the roster this function predicts across is a SET of people
+ * drawn from exactly one scope, and a duplicate id would let the same player be placed on two
+ * courts.
  *
  * **#97's evidence scope is deliberately NOT applied here, and this is the one reader that must not
  * change.** The obvious assumption is the opposite, so it is stated rather than left to be inferred:
@@ -291,15 +303,12 @@ export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedE
       : { slotSource: "event-format", slotEvent: { id: resolved.event.id, name: resolved.event.name } };
 
   // Issue #49: a retired member must never be predicted onto a court — the headline symptom the
-  // issue was filed for. Filtered here, at the roster read, rather than after the fact: the pure
-  // heuristic in derive.ts's `predictedLineup` only ever sees the players this query hands it, so
-  // a retired player excluded here can never surface in a slot, an unplaced list, or a rating rank.
-  const rosterRows = db
-    .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName })
-    .from(teamMemberships)
-    .innerJoin(players, eq(teamMemberships.playerId, players.id))
-    .where(and(eq(teamMemberships.teamId, teamId), isNull(teamMemberships.retiredAt)))
-    .all();
+  // issue was filed for. `resolveRoster` already excludes a retired row (#113); a retired player
+  // excluded here can never surface in a slot, an unplaced list, or a rating rank. `eventId` is the
+  // ALREADY-RESOLVED event's own identity, never a name looked up again — the same "resolve once,
+  // thread it down" discipline `slotSet`/`provenance` above follow.
+  const rosterResolution = resolveRoster(db, { teamId, eventId: resolved?.event.id ?? null });
+  const rosterRows = rosterResolution.members;
 
   const nameById = new Map<number, string>();
   for (const r of rosterRows) nameById.set(r.playerId, r.canonicalName);
@@ -407,5 +416,8 @@ export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedE
     observedCourtMatches: prediction.observedCourtMatches,
     excludedOtherTeamMatches,
     rosterSize: rosterPlayerIds.length,
+    rosterSource: rosterResolution.source,
+    registeredCount: rosterResolution.registeredCount,
+    seasonCount: rosterResolution.seasonCount,
   };
 }

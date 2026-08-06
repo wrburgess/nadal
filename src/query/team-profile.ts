@@ -1,17 +1,19 @@
 // DB assembly for a team's dossier (Task 4) — the twin of player-profile.ts. Fetches rows with
 // drizzle, hands them to `derive.ts`, and returns a typed profile; kept thin for the same reason.
 
-import { and, eq, isNull, or } from "drizzle-orm";
-import { players, teamMatches, teamMemberships, teams } from "../db/schema.js";
+import { eq, inArray, or } from "drizzle-orm";
+import { ratingObservations, teamMatches, teams } from "../db/schema.js";
 import { findTeamByName } from "../ingest/identity.js";
 import type { Db } from "../ingest/db-types.js";
+import { headToHead, selectRosterRatingSource, slotTendencies, teamMatchRecord, windowedRecord } from "./derive.js";
 import { resolveHomeTeam } from "./home-team.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
-import { headToHead, slotTendencies, teamMatchRecord, windowedRecord } from "./derive.js";
+import { resolveRoster } from "./roster.js";
 import type { LeagueScope } from "./league-scope.js";
 import type {
   EvidenceScopeSummary,
   HeadToHeadResult,
+  RatingSource,
   SlotTendency,
   TeamMatchRecordResult,
   TeamMatchRow,
@@ -72,6 +74,17 @@ export type TeamCrossHeadToHead = HeadToHeadResult & {
   opponentName: string;
 };
 
+/** One NOT REGISTERED player (#113, the HC's 2026-08-05 dossier mock): name and a single rating
+ * value only — deliberately no record, no tendencies. It exists so a late add is RECOGNISED, not
+ * SCOUTED; full detail for a non-traveling player is exactly the noise issues #97/#108 removed. */
+export type AbsentRosterMember = {
+  playerId: number;
+  canonicalName: string;
+  /** This player's latest observation in `TeamProfile.absentRatingSource`, or `null` when they have
+   * none there — printed as `—`, never omitted, per the mock. */
+  rating: number | null;
+};
+
 export type TeamProfile = {
   teamId: number;
   teamName: string;
@@ -86,8 +99,27 @@ export type TeamProfile = {
    * missing one, since a departed player must read the same as an absent one on every roster read
    * — the roster is that query filtered to `retired_at IS NULL`, not merely that query. Their
    * history is NOT similarly hidden: `getPlayerProfile`'s `teamMemberships` still lists a retired
-   * team, and this team's own `teamRecord`/court-match history is untouched by a retirement. */
+   * team, and this team's own `teamRecord`/court-match history is untouched by a retirement.
+   *
+   * #113: drawn from `resolveRoster` (src/query/roster.ts) rather than a raw `team_memberships`
+   * query run here — the REGISTERED roster when `rosterSource === "registered"`, the full season
+   * roster otherwise. `rosterSource`/`absentRoster` below are the discriminated pair this reads as;
+   * see `resolveRoster`'s own doc comment for the fallback rule. */
   roster: RosterMemberProfile[];
+  /** Which roster `roster` above actually is — `resolveRoster`'s own discriminant, carried through
+   * unchanged so the roster used and the roster claimed cannot disagree (#113). */
+  rosterSource: "registered" | "season";
+  registeredCount: number;
+  seasonCount: number;
+  /** Season-roster players who did NOT register for the scoped event — populated ONLY when
+   * `rosterSource === "registered"`. An empty array in the `season` branch means "the concept does
+   * not apply here", never "everyone is absent" — the HC's "an event with no registered memberships
+   * renders exactly as today" rule (#113). */
+  absentRoster: AbsentRosterMember[];
+  /** The single rating source `absentRoster`'s values were drawn from (`derive.ts`'s
+   * `selectRosterRatingSource` — the same single-source discipline `getLineupPlan` uses to rank the
+   * traveling roster) — `null` when `absentRoster` is empty or nobody in it has any rating on file. */
+  absentRatingSource: RatingSource | null;
   teamRecord: TeamMatchRecordResult;
   /** Per-slot counts aggregated across the whole roster. */
   slotTendencies: SlotTendency[];
@@ -110,34 +142,27 @@ export type TeamProfile = {
  *
  * Omitted, every league counts, byte-identical to the pre-#97 behavior — and `evidenceScope` says so
  * explicitly rather than leaving a reader to infer it from the absence of a filter line.
+ *
+ * `options.eventId` (#113) — the ALREADY-RESOLVED event's id, never a name looked up again here —
+ * scopes the roster itself (and the `versusTeamId` opponent roster the same way, or a dossier would
+ * scope itself and not its opponent) via `resolveRoster`. Omitted or `null`, this is byte-identical
+ * to the pre-#113 behavior: the full season roster, `rosterSource: "season"`.
  */
 export function getTeamProfile(
   db: Db,
   teamId: number,
-  options: { since: string; versusTeamId?: number; leagueScope?: LeagueScope | null },
+  options: { since: string; versusTeamId?: number; leagueScope?: LeagueScope | null; eventId?: number | null },
 ): TeamProfile {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getTeamProfile: no team with id ${teamId}`);
 
-  const rosterPlayerRows = db
-    .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName, ageRange: players.ageRange })
-    .from(teamMemberships)
-    .innerJoin(players, eq(teamMemberships.playerId, players.id))
-    .where(and(eq(teamMemberships.teamId, teamId), isNull(teamMemberships.retiredAt)))
-    .all()
-    .sort(
-      (a, b) => a.canonicalName.toLowerCase().localeCompare(b.canonicalName.toLowerCase()) || a.playerId - b.playerId,
-    );
+  const resolved = resolveRoster(db, { teamId, eventId: options.eventId });
+  const rosterPlayerRows = resolved.members;
 
   const versusPlayerRows =
     options.versusTeamId === undefined
       ? []
-      : db
-          .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName })
-          .from(teamMemberships)
-          .innerJoin(players, eq(teamMemberships.playerId, players.id))
-          .where(and(eq(teamMemberships.teamId, options.versusTeamId), isNull(teamMemberships.retiredAt)))
-          .all();
+      : resolveRoster(db, { teamId: options.versusTeamId, eventId: options.eventId }).members;
   const versusPlayerIds = versusPlayerRows.map((r) => r.playerId);
   // Resolved once here (DB access lives in this assembly layer, not in derive.ts's pure
   // `headToHead`) so every cross-pair row below can carry the opponent's NAME, not just their id —
@@ -203,11 +228,46 @@ export function getTeamProfile(
           })),
         );
 
+  // #113: the NOT REGISTERED block's ratings, drawn ONLY when there is an absent list to draw them
+  // for — `resolved.absent` is already `[]` in the `season` branch (see `resolveRoster`'s doc
+  // comment), so this is a no-op query there rather than a wasted fetch guarded by a second check.
+  const absentPlayerIds = resolved.absent.map((m) => m.playerId);
+  const absentObservationRows =
+    absentPlayerIds.length === 0
+      ? []
+      : db.select().from(ratingObservations).where(inArray(ratingObservations.playerId, absentPlayerIds)).all();
+  const absentObservationsByPlayer = new Map<number, typeof absentObservationRows>();
+  for (const obs of absentObservationRows) {
+    const list = absentObservationsByPlayer.get(obs.playerId) ?? [];
+    list.push(obs);
+    absentObservationsByPlayer.set(obs.playerId, list);
+  }
+  // The single-source discipline `getLineupPlan` already enforces for the TRAVELING roster
+  // (`derive.ts`: ranking/presenting across sources is not sound) — chosen over the ABSENT players
+  // themselves, since they are who the printed rating actually describes.
+  const absentRating = selectRosterRatingSource({
+    rosterPlayerIds: absentPlayerIds,
+    ratings: absentPlayerIds.map((playerId) => ({
+      playerId,
+      observations: absentObservationsByPlayer.get(playerId) ?? [],
+    })),
+  });
+  const absentRoster: AbsentRosterMember[] = resolved.absent.map((m) => ({
+    playerId: m.playerId,
+    canonicalName: m.canonicalName,
+    rating: absentRating.latestBySource.get(m.playerId)?.value ?? null,
+  }));
+
   return {
     teamId: teamRow.id,
     teamName: teamRow.name,
     isHome: resolveHomeTeam(db)?.id === teamRow.id,
     roster,
+    rosterSource: resolved.source,
+    registeredCount: resolved.registeredCount,
+    seasonCount: resolved.seasonCount,
+    absentRoster,
+    absentRatingSource: absentRating.source,
     teamRecord: teamMatchRecord(teamMatchRows, teamId, { since: options.since }),
     slotTendencies: aggregatedSlotTendencies,
     headToHead: headToHeadRows,

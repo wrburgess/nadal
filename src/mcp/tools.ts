@@ -16,6 +16,9 @@ import { ambiguousMessage } from "../ingest/errors.js";
 import { fetchPage } from "../ingest/fetch.js";
 import { addMatchFromScorecardWithArchive, describeMatchAddRefusal } from "../ingest/match-add.js";
 import { pullPlayer } from "../ingest/player-pull.js";
+import { rosterPayloadSchema } from "../ingest/roster-payload.js";
+import type { RosterPayload } from "../ingest/roster-payload.js";
+import { describeSetEventRosterRefusal, setEventRoster } from "../ingest/roster-set.js";
 import { scorecardPayloadSchema } from "../ingest/scorecard.js";
 import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
@@ -411,6 +414,38 @@ export const MCP_TOOLS: McpToolDef[] = [
   },
 
   {
+    name: "roster_set",
+    cliCommand: "roster set",
+    description: "Replace an event's registered roster from a payload",
+    // The payload INLINE, not a file — the source is a login-gated registration page, so the
+    // primary door is an agent reading it and calling this tool with what it read; `tn roster set
+    // <file>` is the re-runnable, auditable fallback that reads the identical shape from disk.
+    // `rosterPayloadSchema` carries no top-level `.superRefine` — every invariant (team/event/player
+    // resolution, duplicate names, the "replaces, does not accumulate" reconcile) lives in the
+    // SERVICE (`setEventRoster`, called identically by both presenters), so the
+    // spread-drops-a-whole-object-refinement trap documented on `match_add` above does not apply:
+    // `players.min(1)` is a per-field validator and DOES survive `.shape` being spread into
+    // `inputShape`.
+    inputShape: { ...rosterPayloadSchema.shape },
+    handler: async (rawArgs) => {
+      const payload = rawArgs as RosterPayload;
+      const { db, sqlite } = openDb();
+      try {
+        const result = setEventRoster(db, payload);
+        if (!result.ok) throw new McpToolError(describeSetEventRosterRefusal(result));
+        return {
+          team: result.teamName,
+          event: result.eventName,
+          registered: result.registered,
+          retired: result.retired,
+        };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
     name: "match_add",
     cliCommand: "match add",
     description: "Record a scorecard's results from an agent-extracted payload",
@@ -565,12 +600,19 @@ export const MCP_TOOLS: McpToolDef[] = [
         const season = seasonWindow(anchor.value);
         let written: string[];
         let teamsCount: number;
+        // #113: single-team only, and carried out of the write rather than re-read — the same
+        // value, on the same terms, as the CLI's `roster=` field. A result field reaching one door
+        // and not the other is guarded by nothing (ARCHITECTURE.md §5 question 3), and a batch
+        // cannot honestly carry one scalar for a mix of registered and season teams.
+        let rosterSource: "registered" | "season" | undefined;
         if (target === undefined || target === "sectionals") {
           written = writeSectionalsDossiers(db, { season, eventName: event });
           teamsCount = countTeams(db);
         } else {
           const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-          written = writeTeamDossier(db, resolution.teamId, { season, eventName: event });
+          const result = writeTeamDossier(db, resolution.teamId, { season, eventName: event });
+          written = result.files;
+          rosterSource = result.rosterSource;
           teamsCount = 1;
         }
         // `season` and `anchoredTo` are returned for the same reason `tn report build` prints them
@@ -586,6 +628,7 @@ export const MCP_TOOLS: McpToolDef[] = [
           root: resolvedReportsRoot(),
           season: season.year,
           anchoredTo: anchor.anchoredTo,
+          ...(rosterSource === undefined ? {} : { roster: rosterSource }),
         };
       } finally {
         sqlite.close();

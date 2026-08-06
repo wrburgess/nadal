@@ -313,21 +313,33 @@ type PairCandidate = {
   bySlot: { slot: string; count: number }[];
 };
 
-/**
- * Ranks the roster within a SINGLE rating source — the one covering the most roster players, ties
- * broken by `RATING_SOURCE_PRECEDENCE`.
- *
- * Ranking across sources is not sound: a `tr_dynamic` of 3.67 and an `ntrp` of 4.0 are not points
- * on the same axis, and mixing them would silently order players by which source happened to be
- * scraped for them. Players with no observation in the chosen source are not guessed at — they all
- * share the rank immediately after the ranked players, and are named in `unrankedPlayerIds`.
- */
-function rankRoster(input: PredictedLineupInput): {
+/** What `selectRosterRatingSource` returns: the ONE source chosen (never a mix — see that
+ * function's doc comment), and each covered player's LATEST observation in it. `rankRoster` below
+ * derives ranks from this; the NOT REGISTERED dossier block (#113) uses it directly — a name and a
+ * raw rating value, no ranking needed. */
+export type RosterRatingSelection = {
   source: RatingSource | null;
-  rankOf: Map<number, number>;
-  ranked: number[];
-  unranked: number[];
-} {
+  /** playerId -> that player's latest observation in `source`. A player absent from this map has no
+   * observation in the chosen source — never a placeholder entry. Empty (along with `source: null`)
+   * when nobody in `rosterPlayerIds` has any rating on file at all. */
+  latestBySource: Map<number, RatingObservationRow>;
+};
+
+/**
+ * Picks the SINGLE rating source covering the most of `rosterPlayerIds` — ties broken by
+ * `RATING_SOURCE_PRECEDENCE` — and each covered player's latest observation in it.
+ *
+ * Ranking (or printing) across sources is not sound: a `tr_dynamic` of 3.67 and an `ntrp` of 4.0 are
+ * not points on the same axis, and mixing them would silently present players by which source
+ * happened to be scraped for them. Extracted out of `rankRoster` (#113) so a caller that wants the
+ * chosen source and its values WITHOUT a ranking — the NOT REGISTERED block's name + rating, which
+ * has no "who's ahead of whom" to compute — does not have to run the ranking machinery just to throw
+ * the order away. Pure, like every other function in this module: no db, no clock.
+ */
+export function selectRosterRatingSource(input: {
+  rosterPlayerIds: number[];
+  ratings: { playerId: number; observations: RatingObservationRow[] }[];
+}): RosterRatingSelection {
   const roster = new Set(input.rosterPlayerIds);
   /** playerId -> source -> the latest observation's value. */
   const latest = new Map<number, Map<RatingSource, RatingObservationRow>>();
@@ -365,6 +377,32 @@ function rankRoster(input: PredictedLineupInput): {
   });
 
   const source = sources[0]?.[0] ?? null;
+  if (source === null) return { source: null, latestBySource: new Map() };
+
+  const latestBySource = new Map<number, RatingObservationRow>();
+  for (const [playerId, bySource] of latest) {
+    const obs = bySource.get(source);
+    if (obs !== undefined) latestBySource.set(playerId, obs);
+  }
+  return { source, latestBySource };
+}
+
+/**
+ * Ranks the roster within a SINGLE rating source — the one covering the most roster players, ties
+ * broken by `RATING_SOURCE_PRECEDENCE`.
+ *
+ * Ranking across sources is not sound: a `tr_dynamic` of 3.67 and an `ntrp` of 4.0 are not points
+ * on the same axis, and mixing them would silently order players by which source happened to be
+ * scraped for them. Players with no observation in the chosen source are not guessed at — they all
+ * share the rank immediately after the ranked players, and are named in `unrankedPlayerIds`.
+ */
+function rankRoster(input: PredictedLineupInput): {
+  source: RatingSource | null;
+  rankOf: Map<number, number>;
+  ranked: number[];
+  unranked: number[];
+} {
+  const { source, latestBySource } = selectRosterRatingSource(input);
   const sortedRoster = [...input.rosterPlayerIds].sort((a, b) => a - b);
   if (source === null) {
     // Nobody is rated: everyone shares one rank, so every downstream comparison falls through to
@@ -373,12 +411,12 @@ function rankRoster(input: PredictedLineupInput): {
   }
 
   const inverted = INVERTED_RATING_SOURCES.has(source);
-  const rated = sortedRoster.filter((id) => latest.get(id)?.has(source) === true);
-  const unranked = sortedRoster.filter((id) => latest.get(id)?.has(source) !== true);
+  const rated = sortedRoster.filter((id) => latestBySource.has(id));
+  const unranked = sortedRoster.filter((id) => !latestBySource.has(id));
 
   const ranked = [...rated].sort((a, b) => {
-    const av = latest.get(a)!.get(source)!.value;
-    const bv = latest.get(b)!.get(source)!.value;
+    const av = latestBySource.get(a)!.value;
+    const bv = latestBySource.get(b)!.value;
     if (av !== bv) return inverted ? av - bv : bv - av;
     return a - b;
   });

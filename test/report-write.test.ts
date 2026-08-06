@@ -7,8 +7,10 @@ import { openDb, runMigrations } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
 import { OutputPathError } from "../src/fs/output-root.js";
 import { addEvent } from "../src/query/events.js";
-import { UnknownEventError } from "../src/query/lineup.js";
+import { UnknownEventError, resolveEvent } from "../src/query/lineup.js";
 import { setHomeTeam } from "../src/query/home-team.js";
+import { renderDossier } from "../src/report/html.js";
+import { renderDossierMarkdown } from "../src/report/markdown.js";
 import {
   buildTeamDossier,
   slugify,
@@ -16,6 +18,7 @@ import {
   writeTeamDossier,
   writeSectionalsDossiers,
 } from "../src/report/write.js";
+import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 describe("src/report/write.ts", () => {
@@ -56,6 +59,86 @@ describe("src/report/write.ts", () => {
         expect(dossier.players.map((p) => p.identity.canonicalName)).toEqual(
           dossier.team.roster.map((r) => r.canonicalName),
         );
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Task 8 (#113): the downstream consequence of flipping `events`' `hasWriter`. Every real
+    // dossier used to report `events` as "not-collected" for every player unconditionally (nothing
+    // could ever populate it), so the "## Not collected yet" section always rendered. With all
+    // three sections now written (`availability`/`captainNotes` since #17 PR A, `events` since
+    // #113), a REAL dossier for a player with none of the three recorded reports all three as
+    // "empty" instead — and the whole section disappears. Built through `buildTeamDossier`
+    // (real DB rows), not a hand-built fixture — the report-html/markdown suites hand-build
+    // `dataGaps` directly and would not redden for this.
+    it("the '## Not collected yet' section is ABSENT from a real dossier now that events has a writer too", () => {
+      const team = seedTeamWithRoster("Team No Gaps", ["Nova Norbury"]);
+      const { db, sqlite } = openDb();
+      try {
+        const dossier = buildTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        expect(dossier.players[0]!.dataGaps).toEqual({
+          events: "empty",
+          availability: "empty",
+          captainNotes: "empty",
+        });
+
+        const md = renderDossierMarkdown(dossier);
+        const html = renderDossier(dossier);
+        expect(md).not.toContain("Not collected yet");
+        expect(html).not.toContain("Not collected yet");
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  // Task 3 (#113): `options.event` already threads through to `getLineupPlan`; this pins the SAME
+  // resolved value now also scoping `getTeamProfile`'s roster, and that two teams sharing one
+  // resolved event each scope independently — a registered roster for one team must not leak into,
+  // or be assumed for, a team that never registered.
+  describe("buildTeamDossier — event-scoped roster (#113)", () => {
+    it("each team scopes its OWN roster against the same resolved event", () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      try {
+        const registeredTeam = seedTeamWithRosters(db, {
+          teamName: "OK/Dickason/40&over3.5M",
+          season: ["Alice Anders", "Bo Bramwell"],
+          registered: { eventName: "Springfield Sectionals 2026", names: ["Alice Anders"] },
+        });
+        const unregisteredTeam = seedTeamWithRosters(db, {
+          teamName: "IA/Versteeg/40&Over3.5M",
+          season: ["Cy Calder", "Del Duxbury"],
+        });
+        // `buildTeamDossier` threads `options.event` straight into `getLineupPlan`, which refuses an
+        // event with no format on file — a format is added here purely so the dossier build reaches
+        // the roster assertions below, not because this test is about the predicted lineup.
+        addEvent(db, {
+          name: "Springfield Sectionals 2026",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          format: "S1:singles",
+        });
+        const event = resolveEvent(db, "Springfield Sectionals 2026");
+
+        const registeredDossier = buildTeamDossier(db, registeredTeam.teamId, {
+          season: seasonWindow("2026-01-01"),
+          event,
+        });
+        const unregisteredDossier = buildTeamDossier(db, unregisteredTeam.teamId, {
+          season: seasonWindow("2026-01-01"),
+          event,
+        });
+
+        expect(registeredDossier.team.rosterSource).toBe("registered");
+        expect(registeredDossier.team.roster.map((r) => r.canonicalName)).toEqual(["Alice Anders"]);
+        expect(unregisteredDossier.team.rosterSource).toBe("season");
+        expect(unregisteredDossier.team.roster.map((r) => r.canonicalName).sort()).toEqual([
+          "Cy Calder",
+          "Del Duxbury",
+        ]);
       } finally {
         sqlite.close();
       }
@@ -107,7 +190,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team B", ["Player One"]);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         expect(written.length).toBe(2);
         for (const path of written) {
           expect(existsSync(path)).toBe(true);
@@ -123,9 +206,9 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team C", ["Player One"]);
       const { db, sqlite } = openDb();
       try {
-        const firstRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const firstRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         const firstContents = firstRun.map((p) => readFileSync(p, "utf8"));
-        const secondRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const secondRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         const secondContents = secondRun.map((p) => readFileSync(p, "utf8"));
         expect(secondContents).toEqual(firstContents);
       } finally {
@@ -148,7 +231,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("IA/Versteeg/40&Over3.5M", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         expect(written.every((p) => p.includes(join(reportsDir, "ia-versteeg-40-over3-5m")))).toBe(true);
         expect(written.some((p) => p.includes(`team-${team.id}`))).toBe(false);
       } finally {
@@ -160,7 +243,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("!!!", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         expect(written.every((p) => p.includes(join(reportsDir, `team-${team.id}`)))).toBe(true);
       } finally {
         sqlite.close();
@@ -171,7 +254,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("../../etc/passwd", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         for (const p of written) {
           expect(p.startsWith(reportsDir)).toBe(true);
           expect(p).not.toContain("..");
@@ -241,10 +324,10 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team Rerun", []);
       const { db, sqlite } = openDb();
       try {
-        const first = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const first = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         let second: string[] = [];
         expect(() => {
-          second = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+          second = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         }).not.toThrow();
         expect(second).toEqual(first);
         for (const p of second) {
@@ -613,7 +696,7 @@ describe("src/report/write.ts", () => {
       single.sqlite.pragma("reverse_unordered_selects = ON");
       let singleWritten: string[];
       try {
-        singleWritten = writeTeamDossier(single.db, teamTwo.id, { season: seasonWindow("2026-01-01") });
+        singleWritten = writeTeamDossier(single.db, teamTwo.id, { season: seasonWindow("2026-01-01") }).files;
       } finally {
         single.sqlite.close();
       }

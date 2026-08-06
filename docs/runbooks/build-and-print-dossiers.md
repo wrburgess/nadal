@@ -168,8 +168,34 @@ about an opponent since last time (useful mid-event).
   how to read it critically, is in [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md).
 - **A team with no court matches of its own renders the lineup section as an explicit absence**
   rather than an empty table. Pull it (the prompt form in *Before you start*) and rebuild.
-- **`events` has no player-scoped writer yet** — hence the "Not collected yet" block for that
-  section. `tn event add` (#17 PR B) creates events, but nothing yet associates a *player* with one
-  (`tn team pull` writes a null `event_id`), so a dossier cannot say which events a player is on.
-  Availability and captain notes DO have writers (`tn player avail`, `tn player note` — see
-  [agent-chat-over-mcp.md](agent-chat-over-mcp.md)), scoped to the designated home team only.
+- **A registered roster scopes the dossier to who is actually traveling** (#113). `tn team pull`
+  still writes every player's roster row with a null `event_id` — that is the season roster, not a
+  registration — but `tn roster set` (below) records the SEPARATE, event-scoped fact of who
+  registered for a specific event. When at least one player has, the dossier splits into the full
+  detail you already know for the TRAVELING roster and a compact name-and-rating-only NOT REGISTERED
+  block for everyone else on the season roster who didn't register — so a late substitution is still
+  recognized, never invisible. An event with no registered players renders exactly as it always has,
+  full season roster, no split. Either way the dossier's own `Roster:` line states which one you are
+  looking at, and `tn report build`'s summary line carries `roster="registered"` or `roster="season"`
+  for a single-team build.
+
+  Author the payload by hand or from an agent that just read a registration page — either way it is
+  the same JSON `tn roster set` and the `roster_set` MCP tool both read:
+  ```json
+  { "team": "IA/Versteeg/40&Over3.5M", "event": "Springfield Sectionals 2026",
+    "players": ["Ada Ashby", "Bo Bramwell"] }
+  ```
+  ```sh
+  tn roster set roster.json
+  ```
+  It **replaces** the event's roster on every run rather than accumulating: a name missing from a
+  re-run is retired from that event (never from the season roster), and a re-added name is restored
+  rather than duplicated — the registration page is a snapshot, so re-running the SAME payload is a
+  safe no-op and re-running an UPDATED one is exactly how you keep the dossier current as a late
+  roster change comes in. Both `team` and `event` must already be on file (`tn team pull` / `tn event
+  add`), and every name must be on that team's **current season roster** — flagged rather than
+  guessed if it is not, with the whole run refusing so nothing is half-registered. If someone has
+  rejoined the team since your last pull, run `tn team pull` first and then register them.
+
+  Availability and captain notes have their own writers too (`tn player avail`, `tn player note` —
+  see [agent-chat-over-mcp.md](agent-chat-over-mcp.md)), scoped to the designated home team only.

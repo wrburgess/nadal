@@ -10,6 +10,7 @@ import { resolveSeasonAnchor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
+import type { SummaryField } from "../emit.js";
 import { seasonWindow } from "../window.js";
 
 const SECTIONALS_TARGET = "sectionals";
@@ -76,6 +77,10 @@ export const reportBuild: Command = {
       const season = seasonWindow(anchor.value);
       let written: string[];
       let teamsCount: number;
+      // #113: only ever set on the SINGLE-team path — a batch mixes registered and season teams,
+      // and one scalar cannot describe both without lying about one of them (see the field's own
+      // comment below).
+      let rosterField: SummaryField | undefined;
       if (target === undefined || target === SECTIONALS_TARGET) {
         written = writeSectionalsDossiers(db, { season, eventName });
         teamsCount = countTeams(db);
@@ -94,8 +99,14 @@ export const reportBuild: Command = {
           );
           return 1;
         }
-        written = writeTeamDossier(db, resolution.teamId, { season, eventName });
+        // The roster source comes back FROM the write, never from a second read. An earlier
+        // revision re-queried the database after the files had landed, which a concurrent
+        // `tn roster set` could slip inside — the summary would then say `roster=registered` about
+        // files that say season roster. (Codex adversarial review, round 1, finding 3 [medium].)
+        const result = writeTeamDossier(db, resolution.teamId, { season, eventName });
+        written = result.files;
         teamsCount = 1;
+        rosterField = ["roster", result.rosterSource];
       }
 
       // The old shape printed every absolute file path on one line — unreadable at Sectionals
@@ -115,6 +126,7 @@ export const reportBuild: Command = {
           // two indistinguishable, which is the defect this change exists to remove.
           ["season", season.year],
           ["anchoredTo", anchor.anchoredTo],
+          ...(rosterField === undefined ? [] : [rosterField]),
         ],
         opts,
       );

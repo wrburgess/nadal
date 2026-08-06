@@ -19,13 +19,14 @@ import { dispatch } from "../src/cli/router.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
-import { upsertCourtMatch, upsertCourtMatchPlayers } from "../src/ingest/upsert.js";
+import { upsertCourtMatch, upsertCourtMatchPlayers, upsertRatingObservation } from "../src/ingest/upsert.js";
 import { addEvent } from "../src/query/events.js";
 import { resolveEvent } from "../src/query/lineup.js";
 import { buildTeamDossier } from "../src/report/write.js";
 import { renderDossier } from "../src/report/html.js";
 import { renderDossierMarkdown } from "../src/report/markdown.js";
 import { seasonWindow } from "../src/cli/window.js";
+import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 type Db = ReturnType<typeof openDb>["db"];
@@ -304,5 +305,171 @@ describe("the dossier, both renderings", () => {
     } finally {
       sqlite.close();
     }
+  });
+});
+
+// Task 7 (#113): the roster-source line and the NOT REGISTERED block, on all three surfaces — CLI
+// text (`tn team show`), markdown, and HTML — the same #97 "both branches always print" discipline
+// applied to a different disclosure.
+describe("roster disclosure (#113)", () => {
+  useTnDbPath();
+
+  function seedRegisteredEvent() {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const fixture = seedTeamWithRosters(db, {
+      teamName: "OK/Dickason/40&over3.5M",
+      season: ["Registered Rey", "Absent Ada", "Absent Zed"],
+      registered: { eventName: "Springfield Sectionals 2026", names: ["Registered Rey"] },
+    });
+    const adaId = fixture.seasonPlayerIds.get("Absent Ada")!;
+    upsertRatingObservation(db, { playerId: adaId, source: "wtn_singles", value: 4.28, observedOn: "2026-01-01" });
+    // Absent Zed carries NO rating on file at all — must still print, as "—".
+    // `buildTeamDossier` threads its `event` option straight into `getLineupPlan`, which refuses an
+    // event with no format on file — a format is added here purely so the dossier-level tests below
+    // reach the roster assertions, not because they are about the predicted lineup.
+    addEvent(db, {
+      name: "Springfield Sectionals 2026",
+      kind: "tournament",
+      startsOn: "2026-08-28",
+      endsOn: "2026-08-30",
+      format: "S1:singles",
+    });
+    sqlite.close();
+    return fixture;
+  }
+
+  describe("tn team show", () => {
+    it("registered branch: states the count, the event, and the NOT REGISTERED block, all in ONE console.log", async () => {
+      seedRegisteredEvent();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch([
+        "team", "show", "OK/Dickason/40&over3.5M", "Springfield Sectionals 2026",
+      ]);
+
+      expect(code).toBe(0);
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toContain('registered 1 for event "Springfield Sectionals 2026" (season roster: 3)');
+      expect(printed).toContain("Registered Rey");
+      // The NOT REGISTERED block: name + rating, both absent players present.
+      expect(printed).toContain("Absent Ada");
+      expect(printed).toContain("4.28");
+      expect(printed).toContain("Absent Zed");
+      expect(printed).toContain("—");
+      expect(printed).toContain("WTN-S");
+    });
+
+    it("season branch (no event named): states the fallback, with NO NOT REGISTERED block", async () => {
+      seedRegisteredEvent();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["team", "show", "OK/Dickason/40&over3.5M"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toContain("season roster — no event named");
+      // "Absent Ada" legitimately appears in the ordinary roster listing (the season branch shows
+      // the full roster, Ada included) — what must NOT appear is the compact block itself.
+      expect(printed).not.toContain("not registered (watch for adds)");
+    });
+
+    it("season branch (event named, nothing registered): still renders the full roster, no absent block", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      seedTeamWithRosters(db, { teamName: "Team A", season: ["Player One", "Player Two"] });
+      addEvent(db, { name: "Unregistered Event", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" });
+      sqlite.close();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["team", "show", "Team A", "Unregistered Event"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toContain('season roster (event "Unregistered Event") — no registered members');
+      expect(printed).toContain("Player One");
+      expect(printed).toContain("Player Two");
+    });
+  });
+
+  describe("the dossier, both renderings", () => {
+    it("registered branch: names the roster source and renders a NOT REGISTERED section on both media", () => {
+      const fixture = seedRegisteredEvent();
+      const { db, sqlite } = openDb();
+      try {
+        const dossier = buildTeamDossier(db, fixture.teamId, {
+          season: seasonWindow("2026-08-28"),
+          event: resolveEvent(db, "Springfield Sectionals 2026"),
+        });
+
+        const md = renderDossierMarkdown(dossier);
+        const html = renderDossier(dossier);
+
+        // Markdown does not escape a plain double quote; HTML does (`&quot;`) — asserted per-medium
+        // rather than as one shared substring.
+        expect(md).toContain('registered 1 for event "Springfield Sectionals 2026" (season roster: 3)');
+        expect(html).toContain("registered 1 for event &quot;Springfield Sectionals 2026&quot; (season roster: 3)");
+
+        for (const [label, rendered] of [
+          ["markdown", md],
+          ["html", html],
+        ] as const) {
+          expect(rendered, label).toContain("Absent Ada");
+          expect(rendered, label).toContain("4.28");
+          expect(rendered, label).toContain("Absent Zed");
+          expect(rendered, label).toContain("WTN-S");
+          // Registered Rey gets the FULL detail block (Player detail section), never the compact one.
+          expect(rendered, label).toContain("Registered Rey");
+        }
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("season branch: renders exactly as an unscoped dossier always has — no NOT REGISTERED section", () => {
+      const fixture = seedRegisteredEvent();
+      const { db, sqlite } = openDb();
+      try {
+        const dossier = buildTeamDossier(db, fixture.teamId, { season: seasonWindow("2026-08-28") });
+
+        for (const rendered of [renderDossierMarkdown(dossier), renderDossier(dossier)]) {
+          expect(rendered).toContain("season roster — no event named");
+          // "4.28" (Ada's rating) legitimately still appears in the ordinary roster table's Ratings
+          // column — every season member gets the FULL player-detail block here, Ada included. What
+          // must NOT appear is the compact NOT REGISTERED section itself.
+          expect(rendered).not.toContain("Not registered (watch for adds)");
+        }
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    it("escapes a hostile absent player name on both media", () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      try {
+        const fixture = seedTeamWithRosters(db, {
+          teamName: "Team A",
+          season: ["Registered Rey", "Dan<script>alert(1)</script>Kestrel"],
+          registered: { eventName: "Event X", names: ["Registered Rey"] },
+        });
+        addEvent(db, { name: "Event X", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30", format: "S1:singles" });
+        const dossier = buildTeamDossier(db, fixture.teamId, {
+          season: seasonWindow("2026-08-28"),
+          event: resolveEvent(db, "Event X"),
+        });
+
+        const html = renderDossier(dossier);
+        expect(html).not.toContain("<script>alert(1)</script>");
+        expect(html).toContain("&lt;script&gt;");
+
+        const md = renderDossierMarkdown(dossier);
+        expect(md).not.toContain("<script>alert(1)</script>");
+        expect(md).toContain("\\<script\\>");
+      } finally {
+        sqlite.close();
+      }
+    });
   });
 });
