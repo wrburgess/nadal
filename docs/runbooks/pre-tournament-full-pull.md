@@ -250,10 +250,15 @@ cause; each one names the identity that actually failed **and why** (#96). Every
   command that answers `unknown player target` every time.)
 - *A fetch or parse failure* — the warning reads
   `cascading "<roster player>" failed (error) — <reason>`. The disposition already sorts these two:
-  - `[retryable]` — `fetch failed with status <5xx>: <url>`, a timeout, or a socket error.
-  - `[permanent]` — a `4xx` status, or a parse failure naming a missing element. The page changed
-    shape, or that player's profile is gone; nothing in this runbook fixes it and the team is
-    refreshed without them.
+  - `[retryable]` — `fetch failed with status <5xx>: <url>`, an HTTP 408/425/429, a timeout, or one
+    of the **enumerated** connection codes (the list is in the table above, and in
+    `docs/cli/GRAMMAR.md`).
+  - `[permanent]` — a `4xx` status other than those three, or a parse failure naming a missing
+    element. The page changed shape, or that player's profile is gone; nothing in this runbook fixes
+    it and the team is refreshed without them.
+  - `[unclassified]` — **a connection failure is not automatically retryable.** A code outside the
+    enumeration (`ENOTFOUND`, `ENETUNREACH`, `EHOSTUNREACH`, …) lands here, and the reason names the
+    code so you can judge it. Do not read "it looks like a network error" as "re-run it".
 
   The reason is still worth reading on a `[permanent]` one, because *which* of those two it is
   decides whether to look at the page or at the parser.
