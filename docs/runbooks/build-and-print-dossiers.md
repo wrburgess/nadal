@@ -193,8 +193,9 @@ about an opponent since last time (useful mid-event).
   rather than duplicated — the registration page is a snapshot, so re-running the SAME payload is a
   safe no-op and re-running an UPDATED one is exactly how you keep the dossier current as a late
   roster change comes in. Both `team` and `event` must already be on file (`tn team pull` / `tn event
-  add`); every name resolves against that team's own season roster only, flagged rather than guessed
-  if it does not.
+  add`), and every name must be on that team's **current season roster** — flagged rather than
+  guessed if it is not, with the whole run refusing so nothing is half-registered. If someone has
+  rejoined the team since your last pull, run `tn team pull` first and then register them.
 
   Availability and captain notes have their own writers too (`tn player avail`, `tn player note` —
   see [agent-chat-over-mcp.md](agent-chat-over-mcp.md)), scoped to the designated home team only.

@@ -2,7 +2,7 @@
 // `tn roster set` and the `roster_set` MCP tool call — proven here directly, against a real
 // on-disk database, so Task 5/6's presenters can stay thin wrappers around it.
 
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
@@ -381,6 +381,54 @@ describe("setEventRoster", () => {
         sqlite.close();
       }
     });
+  });
+
+  // `resolveRosterPlayer`'s roster boundary accepts ANY current membership for the team, an
+  // event-scoped row included — right for `tn match add`, too wide for a registration. Without the
+  // writer's own season check, a player whose season row was retired by a later `tn team pull` but
+  // who still holds Event A's registration would satisfy it, so Event B could register someone no
+  // longer on the team at all. (Codex adversarial review of PR #121, round 1, finding 1 [medium].)
+  it("refuses a player whose only current membership is ANOTHER event's registration", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedTeamWithRosters(db, { teamName: "Team A", season: ["Alice Anders", "Bob Bramwell"] });
+      db.insert(events).values({ name: "Event A", kind: "tournament" }).returning().get();
+      db.insert(events).values({ name: "Event B", kind: "tournament" }).returning().get();
+
+      // Alice registers for Event A while she is still on the season roster — the only way the
+      // writer permits it.
+      expect(ok(setEventRoster(db, { team: "Team A", event: "Event A", players: ["Alice Anders"] })).registered).toBe(1);
+
+      // A later team pull no longer sees Alice: her SEASON row retires, her Event A row stands.
+      const aliceId = fixture.seasonPlayerIds.get("Alice Anders")!;
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-08-06T00:00:00.000Z" })
+        .where(
+          and(
+            eq(teamMemberships.playerId, aliceId),
+            eq(teamMemberships.teamId, fixture.teamId),
+            isNull(teamMemberships.eventId),
+          ),
+        )
+        .run();
+
+      const result = setEventRoster(db, { team: "Team A", event: "Event B", players: ["Alice Anders"] });
+
+      expect(result).toMatchObject({
+        ok: false,
+        kind: "unresolved-players",
+        flags: [{ name: "Alice Anders", reason: "not-on-season-roster" }],
+      });
+      // Nothing written for Event B, and Event A's standing registration is untouched.
+      const eventBId = db.select().from(events).where(eq(events.name, "Event B")).all()[0]!.id;
+      expect(db.select().from(teamMemberships).all().filter((r) => r.eventId === eventBId)).toHaveLength(0);
+      const eventAId = db.select().from(events).where(eq(events.name, "Event A")).all()[0]!.id;
+      const eventARows = db.select().from(teamMemberships).all().filter((r) => r.eventId === eventAId);
+      expect(eventARows).toHaveLength(1);
+      expect(eventARows[0]!.retiredAt).toBeNull();
+    } finally {
+      sqlite.close();
+    }
   });
 
   // Registering a roster needs the event's IDENTITY and nothing else — not its court format, not

@@ -351,7 +351,7 @@ describe("roster disclosure (#113)", () => {
       expect(code).toBe(0);
       expect(logSpy).toHaveBeenCalledTimes(1);
       const printed = logSpy.mock.calls[0]?.[0] as string;
-      expect(printed).toContain('registered: 1 of 3 season roster (event "Springfield Sectionals 2026")');
+      expect(printed).toContain('registered 1 for event "Springfield Sectionals 2026" (season roster: 3)');
       expect(printed).toContain("Registered Rey");
       // The NOT REGISTERED block: name + rating, both absent players present.
       expect(printed).toContain("Absent Ada");
@@ -408,8 +408,8 @@ describe("roster disclosure (#113)", () => {
 
         // Markdown does not escape a plain double quote; HTML does (`&quot;`) — asserted per-medium
         // rather than as one shared substring.
-        expect(md).toContain('registered: 1 of 3 season roster (event "Springfield Sectionals 2026")');
-        expect(html).toContain("registered: 1 of 3 season roster (event &quot;Springfield Sectionals 2026&quot;)");
+        expect(md).toContain('registered 1 for event "Springfield Sectionals 2026" (season roster: 3)');
+        expect(html).toContain("registered 1 for event &quot;Springfield Sectionals 2026&quot; (season roster: 3)");
 
         for (const [label, rendered] of [
           ["markdown", md],

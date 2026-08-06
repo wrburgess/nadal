@@ -44,20 +44,46 @@ function orderedMembers(rows: RosterMember[]): RosterMember[] {
   );
 }
 
-function queryMembers(db: Db, teamId: number, eventId: number | null): RosterMember[] {
+/**
+ * BOTH scopes in ONE statement, then partitioned in memory — deliberately not two queries.
+ *
+ * Two reads are two SNAPSHOTS. `tn mcp serve` runs beside a CLI against one WAL database, so a
+ * `tn team pull` landing between a season read and an event read retires a season membership the
+ * first query already returned: the roster would then report a `seasonCount` and an `absent` list
+ * drawn from a state the registered set was never compared against, and a dossier would print a
+ * departed player under NOT REGISTERED. One statement is one implicit read transaction, so the two
+ * scopes are necessarily consistent with each other. (Codex adversarial review of PR #121, round 1,
+ * finding 2 [medium].)
+ *
+ * Rows for OTHER events are read and then dropped here rather than excluded in SQL — the filter has
+ * to be applied to a snapshot that already contains them, since "which event is this row for" is
+ * exactly the partition being made.
+ */
+function queryBothScopes(
+  db: Db,
+  teamId: number,
+  eventId: number | null,
+): { season: RosterMember[]; registered: RosterMember[] } {
   const rows = db
-    .select({ playerId: teamMemberships.playerId, canonicalName: players.canonicalName, ageRange: players.ageRange })
+    .select({
+      playerId: teamMemberships.playerId,
+      eventId: teamMemberships.eventId,
+      canonicalName: players.canonicalName,
+      ageRange: players.ageRange,
+    })
     .from(teamMemberships)
     .innerJoin(players, eq(teamMemberships.playerId, players.id))
-    .where(
-      and(
-        eq(teamMemberships.teamId, teamId),
-        eventId === null ? isNull(teamMemberships.eventId) : eq(teamMemberships.eventId, eventId),
-        isNull(teamMemberships.retiredAt),
-      ),
-    )
+    .where(and(eq(teamMemberships.teamId, teamId), isNull(teamMemberships.retiredAt)))
     .all();
-  return orderedMembers(rows);
+
+  const season: RosterMember[] = [];
+  const registered: RosterMember[] = [];
+  for (const row of rows) {
+    const member = { playerId: row.playerId, canonicalName: row.canonicalName, ageRange: row.ageRange };
+    if (row.eventId === null) season.push(member);
+    else if (eventId !== null && row.eventId === eventId) registered.push(member);
+  }
+  return { season: orderedMembers(season), registered: orderedMembers(registered) };
 }
 
 /**
@@ -71,14 +97,13 @@ export function resolveRoster(db: Db, options: { teamId: number; eventId?: numbe
   const { teamId } = options;
   const eventId = options.eventId ?? null;
 
-  const seasonMembers = queryMembers(db, teamId, null);
+  const { season: seasonMembers, registered: registeredMembers } = queryBothScopes(db, teamId, eventId);
   const seasonCount = seasonMembers.length;
 
   if (eventId === null) {
     return { source: "season", members: seasonMembers, absent: [], registeredCount: 0, seasonCount };
   }
 
-  const registeredMembers = queryMembers(db, teamId, eventId);
   const registeredCount = registeredMembers.length;
 
   if (registeredCount === 0) {

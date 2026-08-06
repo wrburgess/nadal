@@ -243,6 +243,9 @@ type PreparedDossierWrite = {
   realMdPath: string;
   htmlContent: string;
   mdContent: string;
+  /** Carried out of the render (#113) so a caller reporting which roster was used reads the value
+   * this dossier was actually built from, rather than asking the database again after the write. */
+  rosterSource: "registered" | "season";
 };
 
 /** Assembles one team's dossier and validates both of its leaves — `assertReportPathSafe`,
@@ -297,6 +300,7 @@ function prepareTeamDossierWrite(
     realMdPath,
     htmlContent: renderDossier(dossier),
     mdContent: renderDossierMarkdown(dossier),
+    rosterSource: dossier.rosterSource,
   };
 }
 
@@ -355,12 +359,31 @@ function commitDossierWrite(prepared: PreparedDossierWrite): string[] {
  * `writeTeamDossier` call; it does NOT by itself extend across a whole batch of teams — see
  * `writeSectionalsDossiers` below, which is why `prepareTeamDossierWrite`/`commitDossierWrite` are
  * split out as their own functions rather than inlined here. */
+/**
+ * The roster source of the dossier this call actually wrote, returned alongside the paths rather
+ * than re-derived by the caller (#113). `tn report build`'s summary line reports it, and an earlier
+ * revision read it back from the database after the write had already landed — a check-then-act
+ * window a concurrent `tn roster set` could land inside, so the summary could say
+ * `roster=registered` about files that say season roster. Returning the value the render actually
+ * used closes it by construction: there is nothing to re-read and therefore nothing to disagree
+ * with. (Codex adversarial review of PR #121, round 1, finding 3 [medium].)
+ *
+ * `writeSectionalsDossiers` below deliberately does NOT carry this field. A batch mixes registered
+ * and season teams, so one scalar cannot describe it without lying about some of them — the same
+ * reason the CLI only emits `roster=` on the single-team path.
+ */
+export type TeamDossierWriteResult = {
+  /** The paths written (2: `index.html`, `index.md`). */
+  files: string[];
+  rosterSource: "registered" | "season";
+};
+
 export function writeTeamDossier(
   db: Db,
   teamId: number,
   options: { season: SeasonWindow; eventName?: string },
   dirName?: string,
-): string[] {
+): TeamDossierWriteResult {
   // Resolved once, before anything is prepared — the same shape as the batch path below, so both
   // entry points refuse a bad event name before touching the filesystem rather than partway through.
   // `requireSlotSet` carries the "no format on file" refusal that `resolveEventFormat` used to throw
@@ -369,7 +392,8 @@ export function writeTeamDossier(
   // therefore with nothing written.
   const event = options.eventName === undefined ? undefined : resolveEvent(db, options.eventName);
   if (event !== undefined) requireSlotSet(event);
-  return commitDossierWrite(prepareTeamDossierWrite(db, teamId, { season: options.season, event }, dirName));
+  const prepared = prepareTeamDossierWrite(db, teamId, { season: options.season, event }, dirName);
+  return { files: commitDossierWrite(prepared), rosterSource: prepared.rosterSource };
 }
 
 type TeamIndexEntry = { teamId: number; teamName: string; dirName: string };

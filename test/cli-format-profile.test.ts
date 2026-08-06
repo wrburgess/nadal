@@ -168,7 +168,7 @@ describe("formatName — scraped names never reach the terminal with control cha
 describe("formatRosterSourceLine", () => {
   it("registered: states the count and the event", () => {
     expect(formatRosterSourceLine("registered", "Springfield Sectionals 2026", 9, 20)).toBe(
-      'registered: 9 of 20 season roster (event "Springfield Sectionals 2026")',
+      'registered 9 for event "Springfield Sectionals 2026" (season roster: 20)',
     );
   });
 

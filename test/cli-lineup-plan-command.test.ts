@@ -304,7 +304,7 @@ describe("tn lineup plan (end-to-end via dispatch)", () => {
 
       expect(code).toBe(0);
       const output = logSpy.mock.calls.at(-1)?.[0] as string;
-      expect(output).toContain('roster: registered: 1 of 7 season roster (event "Springfield Sectionals 2026")');
+      expect(output).toContain('roster: registered 1 for event "Springfield Sectionals 2026" (season roster: 7)');
     });
 
     it("tn lineup plan <team> <event> renders the event's court count and --json carries slotSource/slotEvent", async () => {

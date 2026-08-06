@@ -1,13 +1,10 @@
-import { eq } from "drizzle-orm";
 import type { Command } from "../router.js";
 import { openDb } from "../../db/client.js";
-import { events } from "../../db/schema.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
 import { InvalidLeagueScopeError } from "../../query/league-scope.js";
 import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
-import { resolveRoster } from "../../query/roster.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
 import { resolveSeasonAnchor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
@@ -102,19 +99,14 @@ export const reportBuild: Command = {
           );
           return 1;
         }
-        written = writeTeamDossier(db, resolution.teamId, { season, eventName });
+        // The roster source comes back FROM the write, never from a second read. An earlier
+        // revision re-queried the database after the files had landed, which a concurrent
+        // `tn roster set` could slip inside — the summary would then say `roster=registered` about
+        // files that say season roster. (Codex adversarial review, round 1, finding 3 [medium].)
+        const result = writeTeamDossier(db, resolution.teamId, { season, eventName });
+        written = result.files;
         teamsCount = 1;
-
-        // A second, LIGHTWEIGHT lookup of the same event by name — not a second `resolveEvent`
-        // (which decodes `format`/`leagueScope`, already validated once inside `writeTeamDossier`
-        // above), just the row's own id, which `resolveRoster` needs. `writeTeamDossier` has
-        // already succeeded by this point, so `eventName` (if given) is known-good; a race against
-        // a concurrent rename in the tiny window between the two reads would affect only this
-        // disclosure field, never what was actually written to disk.
-        const eventRow =
-          eventName === undefined ? undefined : db.select().from(events).where(eq(events.name, eventName)).all()[0];
-        const rosterSource = resolveRoster(db, { teamId: resolution.teamId, eventId: eventRow?.id ?? null }).source;
-        rosterField = ["roster", rosterSource];
+        rosterField = ["roster", result.rosterSource];
       }
 
       // The old shape printed every absolute file path on one line — unreadable at Sectionals

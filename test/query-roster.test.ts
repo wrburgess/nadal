@@ -23,7 +23,7 @@ const SEASON_20 = Array.from({ length: 20 }, (_, i) => `Season Player ${String(i
 const REGISTERED_9 = SEASON_20.slice(0, 9);
 
 describe("resolveRoster", () => {
-  useTnDbPath();
+  const tnDb = useTnDbPath();
 
   it("a registered roster present -> source: registered, members are the 9, absent is the other 11", () => {
     const { db, sqlite } = freshDb();
@@ -177,23 +177,74 @@ describe("resolveRoster", () => {
     }
   });
 
-  it("a player registered for the event but never on the season roster is included and not double-counted", () => {
+  // The REACHABLE way a registered player ends up with no current season row: they registered
+  // while on the season roster (the only way `setEventRoster` permits — it requires a current
+  // `event_id IS NULL` membership), and a LATER `tn team pull` retired that season row. Their
+  // registration correctly stands. An earlier revision of this test seeded a player who had ONLY
+  // ever had an event row, called it a "late add", and thereby asserted reader behavior on a state
+  // no writer can produce (Codex adversarial review of PR #121, round 1, finding 4 [low]).
+  it("a registered player whose season row was later retired stays in members, and is not also listed as absent", () => {
     const { db, sqlite } = freshDb();
     try {
       const fixture = seedTeamWithRosters(db, {
         teamName: "OK/Dickason/40&over3.5M",
         season: SEASON_20,
-        registered: { eventName: "Springfield Sectionals 2026", names: [...REGISTERED_9, "Late Add Lindqvist"] },
+        registered: { eventName: "Springfield Sectionals 2026", names: REGISTERED_9 },
       });
+
+      // The team pull: this player is no longer on the roster page, so their SEASON row retires.
+      // Their event registration is untouched — `retireAbsentMemberships` is `event_id IS NULL`.
+      const departedId = fixture.seasonPlayerIds.get(REGISTERED_9[0]!)!;
+      db.update(teamMemberships)
+        .set({ retiredAt: "2026-08-06T00:00:00.000Z" })
+        .where(
+          and(
+            eq(teamMemberships.playerId, departedId),
+            eq(teamMemberships.teamId, fixture.teamId),
+            isNull(teamMemberships.eventId),
+          ),
+        )
+        .run();
 
       const roster = resolveRoster(db, { teamId: fixture.teamId, eventId: fixture.eventId });
 
       expect(roster.source).toBe("registered");
-      expect(roster.registeredCount).toBe(10);
-      expect(roster.members.map((m) => m.canonicalName)).toContain("Late Add Lindqvist");
-      expect(roster.members.filter((m) => m.canonicalName === "Late Add Lindqvist")).toHaveLength(1);
-      // They never had a season row, so they must not also appear in `absent`.
-      expect(roster.absent.some((m) => m.canonicalName === "Late Add Lindqvist")).toBe(false);
+      // Still registered — 9 of them — even though only 19 season rows remain current.
+      expect(roster.registeredCount).toBe(9);
+      expect(roster.seasonCount).toBe(19);
+      expect(roster.members.map((m) => m.canonicalName)).toContain(REGISTERED_9[0]);
+      expect(roster.members.filter((m) => m.canonicalName === REGISTERED_9[0])).toHaveLength(1);
+      // No current season row, so they cannot also be reported as a season player who did not
+      // register — the two lists must stay disjoint however the counts move.
+      expect(roster.absent.some((m) => m.canonicalName === REGISTERED_9[0])).toBe(false);
+      expect(roster.absent).toHaveLength(11);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // `resolveRoster` reads BOTH scopes in ONE statement so they cannot come from two different
+  // database snapshots (finding 2). Asserted by COUNTING the membership selects through `openDb`'s
+  // `verbose` seam — the same observation seam #32 added and #117 reused — because the defect is an
+  // interleaving no single-process test can stage: two queries would still return the right answer
+  // here, and only the count distinguishes them.
+  it("reads both scopes in ONE statement, so the two cannot come from different snapshots", () => {
+    runMigrations();
+    const statements: string[] = [];
+    const { db, sqlite } = openDb(tnDb.path(), { verbose: (message) => statements.push(String(message)) });
+    try {
+      const fixture = seedTeamWithRosters(db, {
+        teamName: "OK/Dickason/40&over3.5M",
+        season: SEASON_20,
+        registered: { eventName: "Springfield Sectionals 2026", names: REGISTERED_9 },
+      });
+
+      statements.length = 0;
+      const roster = resolveRoster(db, { teamId: fixture.teamId, eventId: fixture.eventId });
+
+      expect(roster.source).toBe("registered");
+      const membershipSelects = statements.filter((s) => /select/i.test(s) && /team_memberships/i.test(s));
+      expect(membershipSelects).toHaveLength(1);
     } finally {
       sqlite.close();
     }

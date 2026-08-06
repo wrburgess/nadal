@@ -25,7 +25,7 @@ import { upsertMembership } from "./upsert.js";
  * `resolveRosterPlayer`'s never-create ladder can fail to name a single player. */
 export type RosterPlayerFlag = {
   name: string;
-  reason: "unresolved" | "ambiguous" | "off-roster";
+  reason: "unresolved" | "ambiguous" | "off-roster" | "not-on-season-roster";
   candidates: string[];
 };
 
@@ -81,6 +81,27 @@ class UnresolvedPlayersRefusal extends Error {
   constructor(readonly flags: RosterPlayerFlag[]) {
     super(`unresolved player name(s): ${flags.map((f) => f.name).join(", ")}`);
   }
+}
+
+/** True when `playerId` holds a CURRENT (non-retired) SEASON membership — `event_id IS NULL` — for
+ * `teamId`. Narrower than `identity.ts`'s `isOnRoster`, deliberately and only here: see the call
+ * site's comment for why the shared resolver's wider boundary is right for `tn match add` and wrong
+ * for a registration. */
+function hasCurrentSeasonMembership(db: Db, playerId: number, teamId: number): boolean {
+  return (
+    db
+      .select({ id: teamMemberships.id })
+      .from(teamMemberships)
+      .where(
+        and(
+          eq(teamMemberships.playerId, playerId),
+          eq(teamMemberships.teamId, teamId),
+          isNull(teamMemberships.eventId),
+          isNull(teamMemberships.retiredAt),
+        ),
+      )
+      .all().length > 0
+  );
 }
 
 /**
@@ -179,6 +200,20 @@ export function setEventRoster(db: Db, payload: RosterPayload): SetEventRosterRe
       for (const name of payload.players) {
         const resolution = resolveRosterPlayer(tx, { name, teamId, eventId });
         if (resolution.kind === "matched") {
+          // `resolveRosterPlayer`'s roster boundary (`isOnRoster`) accepts ANY current membership
+          // for this team, event-scoped rows included — correct for `tn match add`, which has no
+          // notion of "this court's event" and must not be narrowed. It is too WIDE here: a player
+          // whose season row was retired by a later `tn team pull` but who still holds another
+          // event's registration would satisfy it, so Event B could register someone no longer on
+          // the team's season roster at all. That contradicts this command's stated contract
+          // ("every name resolves against that team's own season roster") and is how the
+          // "N of M season roster" denominator could be outgrown by the writer itself rather than
+          // only by the passage of time. Checked HERE, in the writer, rather than by narrowing the
+          // shared resolver. (Codex adversarial review of PR #121, round 1, finding 1 [medium].)
+          if (!hasCurrentSeasonMembership(tx, resolution.row.id, teamId)) {
+            flags.push({ name, reason: "not-on-season-roster", candidates: [resolution.row.canonicalName] });
+            continue;
+          }
           resolvedPlayerIds.push(resolution.row.id);
           resolvedRowsById.set(resolution.row.id, { canonicalName: resolution.row.canonicalName });
         } else if (resolution.kind === "off-roster") {
@@ -279,6 +314,12 @@ export function describeSetEventRosterRefusal(result: Extract<SetEventRosterResu
       if (f.reason === "ambiguous") return `"${f.name}" ambiguous (${f.candidates.join(", ")})`;
       if (f.reason === "off-roster") {
         return `"${f.name}" resolved to ${f.candidates[0]}, who is not on this team's roster`;
+      }
+      if (f.reason === "not-on-season-roster") {
+        return (
+          `"${f.name}" resolved to ${f.candidates[0]}, who is not on this team's current season ` +
+          `roster (pull the team first if they have rejoined)`
+        );
       }
       return `"${f.name}" unresolved`;
     })

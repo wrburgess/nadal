@@ -600,12 +600,19 @@ export const MCP_TOOLS: McpToolDef[] = [
         const season = seasonWindow(anchor.value);
         let written: string[];
         let teamsCount: number;
+        // #113: single-team only, and carried out of the write rather than re-read — the same
+        // value, on the same terms, as the CLI's `roster=` field. A result field reaching one door
+        // and not the other is guarded by nothing (ARCHITECTURE.md §5 question 3), and a batch
+        // cannot honestly carry one scalar for a mix of registered and season teams.
+        let rosterSource: "registered" | "season" | undefined;
         if (target === undefined || target === "sectionals") {
           written = writeSectionalsDossiers(db, { season, eventName: event });
           teamsCount = countTeams(db);
         } else {
           const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-          written = writeTeamDossier(db, resolution.teamId, { season, eventName: event });
+          const result = writeTeamDossier(db, resolution.teamId, { season, eventName: event });
+          written = result.files;
+          rosterSource = result.rosterSource;
           teamsCount = 1;
         }
         // `season` and `anchoredTo` are returned for the same reason `tn report build` prints them
@@ -621,6 +628,7 @@ export const MCP_TOOLS: McpToolDef[] = [
           root: resolvedReportsRoot(),
           season: season.year,
           anchoredTo: anchor.anchoredTo,
+          ...(rosterSource === undefined ? {} : { roster: rosterSource }),
         };
       } finally {
         sqlite.close();

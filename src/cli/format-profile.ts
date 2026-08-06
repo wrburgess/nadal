@@ -178,8 +178,17 @@ export function formatRosterSourceLine(
   seasonCount: number,
 ): string {
   if (rosterSource === "registered") {
+    // TWO FACTS, not one ratio. "N of M season roster" reads as a subset claim, and the code does
+    // not preserve one: the writer now requires a current season membership, so the subset holds at
+    // registration — but a later `tn team pull` that retires a season member correctly leaves their
+    // registration standing, so M can fall below N and the line would render "2 of 1". Stating the
+    // two counts separately is true in every reachable state, which a ratio is not. (Codex
+    // adversarial review of PR #121, round 1, finding 5 [low].)
     // See the doc comment above: reachable only with a non-null eventName.
-    return `registered: ${registeredCount} of ${seasonCount} season roster (event "${formatName(eventName ?? "")}")`;
+    return (
+      `registered ${registeredCount} for event "${formatName(eventName ?? "")}" ` +
+      `(season roster: ${seasonCount})`
+    );
   }
   if (eventName === null) return "season roster — no event named";
   return `season roster (event "${formatName(eventName)}") — no registered members`;

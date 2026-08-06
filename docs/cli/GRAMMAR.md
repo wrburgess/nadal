@@ -266,10 +266,14 @@ shape rather than payload positionals: the source is a login-gated registration 
 door is an agent reading it and calling the `roster_set` MCP tool inline; this CLI surface is the
 re-runnable, auditable fallback that reads a payload an agent already wrote to disk. The file is JSON
 matching `{ team, event, players }` — both `team` and `event` must already exist (never-create, like
-every other target resolution in this grammar), and every name in `players` resolves against the
-named TEAM's own season roster only, the identical roster-scoped, never-create ladder `tn match add`
-uses (a name unresolved, ambiguous, or belonging to a different team's roster is flagged, never
-guessed, and the whole write refuses — nothing is registered until every name is fixed).
+every other target resolution in this grammar), and every name in `players` resolves through the same
+roster-scoped, never-create ladder `tn match add` uses — then must **additionally** hold a current
+membership on that team's **season** roster. A name that is unresolved, ambiguous, on a different
+team, or on this team for some **other event but no longer on its season roster** is flagged rather
+than guessed, and the whole write refuses: nothing is registered until every name is fixed. That last
+case is why the season check is stated separately from the ladder — the shared resolver's roster
+boundary accepts any current membership for the team, event-scoped rows included, which is right for
+`tn match add` and too wide for a registration. If a player has rejoined, pull the team first.
 
 **Replaces, does not accumulate.** A registration page is a snapshot, so each run sets the named
 event's roster to EXACTLY the given `players` list: a name missing from a re-run is retired at EVENT

@@ -19,6 +19,7 @@ import { courtMatchPlayers, courtMatches, events, players, teamMatches, teamMemb
 import * as fetchModule from "../src/ingest/fetch.js";
 import * as teamPullModule from "../src/ingest/team-pull.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
+import { setEventRoster } from "../src/ingest/roster-set.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
 import { addEvent } from "../src/query/events.js";
@@ -1057,6 +1058,10 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     // event-anchored binder from one that fell back to the clock. Asserted exactly (`toEqual`, not
     // `toMatchObject`) — this pin is what caught the two fields arriving, which is its whole job.
     // No event was named here, so the honest answer is the current season, anchored to today.
+    //
+    // #113 adds `roster` on the SINGLE-TEAM path, matching the CLI's `roster=` field — a result
+    // field reaching one door and not the other is guarded by nothing (ARCHITECTURE.md §5 Q3). With
+    // no event named there is no registration to scope by, so the honest answer is "season".
     expect(payload).toEqual({
       target: team.name,
       teams: 1,
@@ -1064,7 +1069,59 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       root: payload.root,
       season: String(new Date().getUTCFullYear()),
       anchoredTo: "today",
+      roster: "season",
     });
+  });
+
+  // Door parity for #113's disclosure: the same fact, on the same terms, as `tn report build`'s
+  // `roster=`. Driven through the REAL `roster_set` service so the registered state is one the
+  // production writer actually produces.
+  it("report_build over MCP reports roster=registered once an event has a registered roster", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Team Registered" }).returning().get();
+    const alice = db.insert(players).values({ canonicalName: "Alice Anders" }).returning().get();
+    db.insert(players).values({ canonicalName: "Bo Bramwell" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: alice.id, teamId: team.id, eventId: null }).run();
+    db.insert(events)
+      .values({
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        format: JSON.stringify([{ slot: "S1", discipline: "singles" }]),
+      })
+      .run();
+    backfillNameKeys(db);
+    const written = setEventRoster(db, {
+      team: "Team Registered",
+      event: "Springfield Sectionals 2026",
+      players: ["Alice Anders"],
+    });
+    expect(written.ok).toBe(true);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "report_build",
+      arguments: { target: team.name, event: "Springfield Sectionals 2026" },
+    });
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(result)) as { roster: string };
+    expect(payload.roster).toBe("registered");
+  });
+
+  // The batch path carries NO `roster` field, deliberately: a run over every team mixes registered
+  // and season teams, and one scalar cannot describe that without lying about some of them.
+  it("report_build over MCP omits roster entirely on the sectionals batch path", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    db.insert(teams).values({ name: "Team Batch" }).returning().get();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "report_build", arguments: {} });
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).not.toHaveProperty("roster");
   });
 
   it("an ambiguous target returns a structured error result listing candidates", async () => {

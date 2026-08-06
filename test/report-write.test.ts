@@ -190,7 +190,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team B", ["Player One"]);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         expect(written.length).toBe(2);
         for (const path of written) {
           expect(existsSync(path)).toBe(true);
@@ -206,9 +206,9 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team C", ["Player One"]);
       const { db, sqlite } = openDb();
       try {
-        const firstRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const firstRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         const firstContents = firstRun.map((p) => readFileSync(p, "utf8"));
-        const secondRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const secondRun = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         const secondContents = secondRun.map((p) => readFileSync(p, "utf8"));
         expect(secondContents).toEqual(firstContents);
       } finally {
@@ -231,7 +231,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("IA/Versteeg/40&Over3.5M", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         expect(written.every((p) => p.includes(join(reportsDir, "ia-versteeg-40-over3-5m")))).toBe(true);
         expect(written.some((p) => p.includes(`team-${team.id}`))).toBe(false);
       } finally {
@@ -243,7 +243,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("!!!", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         expect(written.every((p) => p.includes(join(reportsDir, `team-${team.id}`)))).toBe(true);
       } finally {
         sqlite.close();
@@ -254,7 +254,7 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("../../etc/passwd", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const written = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         for (const p of written) {
           expect(p.startsWith(reportsDir)).toBe(true);
           expect(p).not.toContain("..");
@@ -324,10 +324,10 @@ describe("src/report/write.ts", () => {
       const team = seedTeamWithRoster("Team Rerun", []);
       const { db, sqlite } = openDb();
       try {
-        const first = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+        const first = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         let second: string[] = [];
         expect(() => {
-          second = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") });
+          second = writeTeamDossier(db, team.id, { season: seasonWindow("2026-01-01") }).files;
         }).not.toThrow();
         expect(second).toEqual(first);
         for (const p of second) {
@@ -696,7 +696,7 @@ describe("src/report/write.ts", () => {
       single.sqlite.pragma("reverse_unordered_selects = ON");
       let singleWritten: string[];
       try {
-        singleWritten = writeTeamDossier(single.db, teamTwo.id, { season: seasonWindow("2026-01-01") });
+        singleWritten = writeTeamDossier(single.db, teamTwo.id, { season: seasonWindow("2026-01-01") }).files;
       } finally {
         single.sqlite.close();
       }
