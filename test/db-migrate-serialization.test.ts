@@ -163,9 +163,14 @@ describe("applying migrations locally is equivalent to drizzle's own migrator (#
 
 /**
  * Both cases here came from the independent Reviewer on PR #120, and both were confirmed by running
- * the traces it supplied rather than by agreeing with them. Neither is reachable through the twelve
- * migrations in `drizzle/`, which is exactly why they needed a purpose-built folder and a capped
- * database — the equivalence test above cannot see either one.
+ * the traces it supplied rather than by agreeing with them.
+ *
+ * They need a purpose-built migrations folder and a capped database for **different** reasons, and an
+ * earlier version of this comment flattened the two into "neither is reachable through the real
+ * migrations" — which the Reviewer corrected, rightly. A malformed multi-statement chunk genuinely
+ * cannot occur in `drizzle/` today; `SQLITE_FULL` plainly *can*, on any of the twelve, the moment a
+ * disk fills. The fixtures are here to make that second failure **deterministic and late enough in
+ * the transaction to matter**, not to reach something otherwise unreachable.
  */
 describe("applyMigrations fails loudly rather than quietly (#117, Reviewer round 1)", () => {
   it("refuses a migration chunk holding more than one statement", () => {
@@ -210,8 +215,22 @@ describe("applyMigrations fails loudly rather than quietly (#117, Reviewer round
     const path = freshDbPath();
     const sqlite = new Database(path);
     try {
+      // **Pin the page size, or this test quietly stops testing anything** — the Reviewer's round-2
+      // finding, confirmed by replaying the shape across six page sizes. `max_page_count + 20` is a
+      // budget in PAGES, so it is 80 KiB at 4 KiB pages but 640 KiB at 32 KiB — and at 32 KiB and
+      // 64 KiB all 2000 inserts fit, no `SQLITE_FULL` occurs, and the case fails at "the capped
+      // migration did not fail at all" instead of exercising the guard. Measured: 512 B → 40
+      // statements before the cap, 4 KiB → 380, 8 KiB → 764, 16 KiB → 1542, 32 KiB and 64 KiB →
+      // never. Pinned, it is 380 on every one of them.
+      //
+      // `page_size` must be set before any content AND before WAL (changing it under WAL needs a
+      // VACUUM), so the order of these three lines is load-bearing.
+      sqlite.pragma("page_size = 4096");
       sqlite.pragma("journal_mode = WAL");
       sqlite.exec("CREATE TABLE ballast (id integer primary key, pad text)");
+      // Assert the pin TOOK, rather than trusting it: if a future SQLite ignored it, the case would
+      // go back to silently passing for the wrong reason, which is precisely what it just did.
+      expect(sqlite.pragma("page_size", { simple: true }), "page_size pin did not take").toBe(4096);
       // Enough headroom for the bookkeeping table and the early inserts to land, little enough that
       // the cap is hit long before the migration runs out of statements.
       const pages = sqlite.pragma("page_count", { simple: true }) as number;
