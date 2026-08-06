@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
-import { events, players, teamMemberships, teams } from "../src/db/schema.js";
+import { events, playerAliases, players, teamMemberships, teams } from "../src/db/schema.js";
 import { rosterPayloadSchema } from "../src/ingest/roster-payload.js";
 import { setEventRoster } from "../src/ingest/roster-set.js";
 import type { SetEventRosterResult } from "../src/ingest/roster-set.js";
@@ -343,5 +343,66 @@ describe("setEventRoster", () => {
       const parsed = rosterPayloadSchema.safeParse({ team: "Team A", event: "Event X", players: [] });
       expect(parsed.success).toBe(false);
     });
+
+    // The raw-string duplicate check above cannot see this one: two DIFFERENT strings that resolve
+    // to one person. `addMatchFromScorecard` compares by RESOLVED ID for exactly this reason
+    // ("two spellings or an alias of the SAME team must refuse just as readily as an identical
+    // string would", PR #54 finding 2, src/ingest/match-add.ts) — and an agent transcribing a
+    // registration screenshot is precisely where a canonical name and an alias arrive side by side.
+    // Left unchecked the write still produces ONE membership row (`upsertMembership` is
+    // idempotent), so the damage is not the database — it is `registered=`, which would report 3
+    // when 2 people registered.
+    it("two spellings of the SAME player refuse rather than over-reporting the registration", () => {
+      const { db, sqlite } = freshDb();
+      try {
+        const fixture = seedTeamWithRosters(db, {
+          teamName: "Team A",
+          season: ["Alice Anders", "Bob Bramwell"],
+        });
+        db.insert(events).values({ name: "Event X", kind: "tournament" }).returning().get();
+        db.insert(playerAliases)
+          .values({ playerId: fixture.seasonPlayerIds.get("Alice Anders")!, alias: "Ally Andersonn" })
+          .run();
+        backfillNameKeys(db);
+
+        const result = setEventRoster(db, {
+          team: "Team A",
+          event: "Event X",
+          players: ["Alice Anders", "Ally Andersonn", "Bob Bramwell"],
+        });
+
+        expect(result).toMatchObject({
+          ok: false,
+          kind: "duplicate-players",
+          duplicates: [{ canonicalName: "Alice Anders", names: ["Alice Anders", "Ally Andersonn"] }],
+        });
+        expect(db.select().from(teamMemberships).all().every((r) => r.eventId === null)).toBe(true);
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  // Registering a roster needs the event's IDENTITY and nothing else — not its court format, not
+  // its league scope. Going through `resolveEvent` (which decodes both) would import two refusal
+  // classes this operation has no use for and no presenter here catches, so a corrupt `format`
+  // would surface as an uncaught throw instead of a refusal. `addMatchFromScorecard` — the sibling
+  // this writer mirrors — looks the row up directly for the same reason.
+  it("an event whose stored format is corrupt still registers: the writer reads only the event's id", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedTeamWithRosters(db, { teamName: "Team A", season: ["Alice Anders"] });
+      db.insert(events)
+        .values({ name: "Event X", kind: "tournament", format: "{not valid json", leagueScope: "{also not" })
+        .returning()
+        .get();
+
+      const result = setEventRoster(db, { team: "Team A", event: "Event X", players: ["Alice Anders"] });
+
+      expect(ok(result).registered).toBe(1);
+      expect(db.select().from(teamMemberships).all().filter((r) => r.eventId !== null)).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
   });
 });

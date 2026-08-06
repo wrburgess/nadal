@@ -13,8 +13,7 @@
 // `tn team pull` retire an EVENT roster it never observed.
 
 import { and, eq, isNull, notInArray } from "drizzle-orm";
-import { teamMemberships, teams } from "../db/schema.js";
-import { UnknownEventError, resolveEvent } from "../query/lineup.js";
+import { events, teamMemberships, teams } from "../db/schema.js";
 import { resolveTeamTarget } from "../query/team-profile.js";
 import type { Db } from "./db-types.js";
 import { resolveRosterPlayer } from "./identity.js";
@@ -43,7 +42,14 @@ export type SetEventRosterResult =
   | { ok: false; kind: "unknown-team"; team: string; candidates: string[] }
   | { ok: false; kind: "unknown-event"; event: string }
   | { ok: false; kind: "duplicate-names"; names: string[] }
+  | { ok: false; kind: "duplicate-players"; duplicates: DuplicateRosterPlayer[] }
   | { ok: false; kind: "unresolved-players"; flags: RosterPlayerFlag[] };
+
+/** Two or more DIFFERENT payload strings that resolved to one person — an alias beside a canonical
+ * name, or a prefix-ID beside the name it names. Distinct from `duplicate-names` (the same string
+ * twice), which is a pure payload-shape fault needing no database at all: this one is only
+ * knowable after resolution, and its message has to name both spellings for the operator to fix. */
+export type DuplicateRosterPlayer = { canonicalName: string; names: string[] };
 
 /** Thrown inside the transaction to abort it — better-sqlite3/drizzle roll back automatically on a
  * thrown error, the same `addMatchFromScorecard` precedent. Caught right outside `db.transaction`,
@@ -64,6 +70,11 @@ class UnknownEventRefusal extends Error {
 class DuplicateNamesRefusal extends Error {
   constructor(readonly names: string[]) {
     super(`duplicate name(s) in one payload: ${names.join(", ")}`);
+  }
+}
+class DuplicatePlayersRefusal extends Error {
+  constructor(readonly duplicates: DuplicateRosterPlayer[]) {
+    super(`one player named more than once: ${duplicates.map((d) => d.canonicalName).join(", ")}`);
   }
 }
 class UnresolvedPlayersRefusal extends Error {
@@ -148,23 +159,28 @@ export function setEventRoster(db: Db, payload: RosterPayload): SetEventRosterRe
       }
       const teamId = teamResolution.teamId;
 
-      let resolvedEvent;
-      try {
-        resolvedEvent = resolveEvent(tx, payload.event);
-      } catch (err) {
-        if (err instanceof UnknownEventError) throw new UnknownEventRefusal(payload.event);
-        throw err;
-      }
-      const eventId = resolvedEvent.event.id;
+      // The event row read DIRECTLY by name, not through `resolveEvent` — the same lookup
+      // `addMatchFromScorecard` does (src/ingest/match-add.ts), for the same reason. Registering a
+      // roster needs the event's IDENTITY and nothing else: `resolveEvent` additionally decodes
+      // `format` and `leagueScope`, so it throws `InvalidEventFormatError` /
+      // `InvalidLeagueScopeError` on a corrupted stored value — two refusal classes this operation
+      // has no use for, that no presenter here catches, and that would therefore surface as an
+      // uncaught throw rather than a refusal. A corrupt court format is a real problem for
+      // `tn lineup plan`; it is none of this writer's business.
+      const eventRow = tx.select().from(events).where(eq(events.name, payload.event)).all()[0];
+      if (eventRow === undefined) throw new UnknownEventRefusal(payload.event);
+      const eventId = eventRow.id;
 
       // Every name resolved BEFORE anything is written, collecting every failure — the same
       // "one round trip reports everything" discipline `addMatchFromScorecard` uses.
       const resolvedPlayerIds: number[] = [];
+      const resolvedRowsById = new Map<number, { canonicalName: string }>();
       const flags: RosterPlayerFlag[] = [];
       for (const name of payload.players) {
         const resolution = resolveRosterPlayer(tx, { name, teamId, eventId });
         if (resolution.kind === "matched") {
           resolvedPlayerIds.push(resolution.row.id);
+          resolvedRowsById.set(resolution.row.id, { canonicalName: resolution.row.canonicalName });
         } else if (resolution.kind === "off-roster") {
           // The name resolved to a REAL player — just not one on THIS team's (season) roster.
           flags.push({ name, reason: "off-roster", candidates: [resolution.row.canonicalName] });
@@ -177,6 +193,28 @@ export function setEventRoster(db: Db, payload: RosterPayload): SetEventRosterRe
         }
       }
       if (flags.length > 0) throw new UnresolvedPlayersRefusal(flags);
+
+      // Duplicates again, now by RESOLVED ID — the string check above cannot see two DIFFERENT
+      // spellings of one person (a canonical name beside an alias, or a prefix-ID beside the name
+      // it names), which is exactly what an agent transcribing a registration screenshot produces.
+      // `addMatchFromScorecard` compares by resolved id for the identical reason (PR #54 finding
+      // 2). Left unchecked the write is still correct in the DATABASE — `upsertMembership` is
+      // idempotent, so one person yields one row — but `registered` counts payload entries, so it
+      // would report more people than registered. A count that does not describe what happened is
+      // the same silent misstatement class the disclosure work in this issue exists to remove.
+      const namesByPlayerId = new Map<number, string[]>();
+      resolvedPlayerIds.forEach((playerId, index) => {
+        const list = namesByPlayerId.get(playerId) ?? [];
+        list.push(payload.players[index]!);
+        namesByPlayerId.set(playerId, list);
+      });
+      const duplicatePlayers = [...namesByPlayerId.entries()]
+        .filter(([, names]) => names.length > 1)
+        .map(([playerId, names]) => ({
+          canonicalName: resolvedRowsById.get(playerId)!.canonicalName,
+          names,
+        }));
+      if (duplicatePlayers.length > 0) throw new DuplicatePlayersRefusal(duplicatePlayers);
 
       for (const playerId of resolvedPlayerIds) {
         upsertMembership(tx, { playerId, teamId, eventId });
@@ -197,7 +235,7 @@ export function setEventRoster(db: Db, payload: RosterPayload): SetEventRosterRe
         teamId,
         teamName: teamRow.name,
         eventId,
-        eventName: resolvedEvent.event.name,
+        eventName: eventRow.name,
         registered: resolvedPlayerIds.length,
         retired,
       };
@@ -208,6 +246,9 @@ export function setEventRoster(db: Db, payload: RosterPayload): SetEventRosterRe
     }
     if (err instanceof UnknownEventRefusal) return { ok: false, kind: "unknown-event", event: err.event };
     if (err instanceof DuplicateNamesRefusal) return { ok: false, kind: "duplicate-names", names: err.names };
+    if (err instanceof DuplicatePlayersRefusal) {
+      return { ok: false, kind: "duplicate-players", duplicates: err.duplicates };
+    }
     if (err instanceof UnresolvedPlayersRefusal) {
       return { ok: false, kind: "unresolved-players", flags: err.flags };
     }
@@ -227,6 +268,11 @@ export function describeSetEventRosterRefusal(result: Extract<SetEventRosterResu
   if (result.kind === "unknown-event") return `unknown event "${result.event}"`;
   if (result.kind === "duplicate-names") {
     return `duplicate name(s) in one payload: ${result.names.join(", ")}`;
+  }
+  if (result.kind === "duplicate-players") {
+    return `one player named more than once: ${result.duplicates
+      .map((d) => `${d.canonicalName} (as ${d.names.map((n) => `"${n}"`).join(", ")})`)
+      .join("; ")}`;
   }
   return `unresolved player name(s): ${result.flags
     .map((f) => {
