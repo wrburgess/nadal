@@ -60,6 +60,23 @@ function seedCourtMatch(
 describe("getTeamProfile", () => {
   useTnDbPath();
 
+  // #122 round 2 — twin of getPlayerProfile's refusal: the disclosure triple is validated at
+  // entry, so a hand-assembled triple cannot make the team page filter by one bound while
+  // disclosing another.
+  it("refuses a window disclosure whose fields do not derive from their own anchorDay", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Team A");
+      expect(() =>
+        getTeamProfile(db, team.id, {
+          window: { anchorDay: "2026-08-28", since: "0000-01-01", label: "12mo to 2026-08-28" },
+        }),
+      ).toThrow(/inconsistent evidence window disclosure/i);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("roster ordering is deterministic (alphabetical by canonical name)", () => {
     const { db, sqlite } = freshDb();
     try {

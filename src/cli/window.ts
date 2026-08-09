@@ -180,3 +180,43 @@ export function windowLabel(anchor: WindowAnchor = new Date()): string {
 export function windowSince(window: EvidenceWindow): string {
   return windowSnapshot(window).since;
 }
+
+/** A caller-supplied window disclosure: the three primitives a profile filters by and repeats
+ * verbatim on its output. Structurally identical to `WindowSnapshot` — but structural identity is
+ * exactly what `verifiedWindow` below refuses to trust. */
+export type WindowDisclosure = {
+  readonly anchorDay: string;
+  readonly since: string;
+  readonly label: string;
+};
+
+/**
+ * Validate a caller-supplied disclosure triple against this seam's own derivation, and hand back
+ * the FROZEN recomputed snapshot — never the caller's object.
+ *
+ * **"Every caller builds it with `windowSnapshot`" is a convention, not an invariant** (Codex
+ * fix-verification round 2, PR #123): `getPlayerProfile`/`getTeamProfile` are a public API, and a
+ * hand-assembled triple whose `since` does not derive from its `anchorDay` would filter by one
+ * bound while the page disclosed another — the same forged-window class PR #91's review closed by
+ * removing the second field, re-opened one layer down by a parameter that carries three. The triple
+ * has ONE degree of freedom (`anchorDay`); the other two fields are redundant copies, so they are
+ * CHECKED against their own derivation and any disagreement refuses (fail closed).
+ *
+ * Each field is read exactly once (the same accessor discipline as `windowSnapshot`), and the
+ * returned object is the seam's own frozen derivation — so a getter that answers honestly during
+ * validation has nothing left to lie to: every consumer downstream holds plain recomputed strings.
+ */
+export function verifiedWindow(window: WindowDisclosure): WindowSnapshot {
+  const anchorDay = window.anchorDay; // each field read ONCE
+  const since = window.since;
+  const label = window.label;
+  const snapshot = windowSnapshot({ anchorDay });
+  if (since !== snapshot.since || label !== snapshot.label) {
+    throw new Error(
+      `inconsistent evidence window disclosure: ${JSON.stringify({ anchorDay, since, label })} ` +
+        `does not derive from its own anchorDay (expected since ${JSON.stringify(snapshot.since)}, ` +
+        `label ${JSON.stringify(snapshot.label)})`,
+    );
+  }
+  return snapshot;
+}

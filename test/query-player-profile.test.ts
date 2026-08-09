@@ -55,6 +55,24 @@ function seedCourtMatch(
 describe("getPlayerProfile", () => {
   useTnDbPath();
 
+  // #122 round 2 (Codex fix-verification): the disclosure triple is VALIDATED at entry, not
+  // trusted — a hand-assembled triple whose `since` does not derive from its `anchorDay` must
+  // refuse, because the profile would otherwise filter by one bound while disclosing another
+  // (the reviewer's exact trace: all history admitted, page claims a 12-month window).
+  it("refuses a window disclosure whose fields do not derive from their own anchorDay", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Nova Norbury" });
+      expect(() =>
+        getPlayerProfile(db, player.id, {
+          window: { anchorDay: "2026-08-28", since: "0000-01-01", label: "12mo to 2026-08-28" },
+        }),
+      ).toThrow(/inconsistent evidence window disclosure/i);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("full data across all four rating sources renders every section", () => {
     const { db, sqlite } = freshDb();
     try {

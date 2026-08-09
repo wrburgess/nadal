@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   type EvidenceWindow,
   evidenceWindow,
+  verifiedWindow,
   windowLabel,
   windowSince,
   windowSnapshot,
@@ -211,5 +212,64 @@ describe("windowSince (window-based convenience)", () => {
   it("matches windowSnapshot(window).since", () => {
     const window = evidenceWindow("2026-08-28");
     expect(windowSince(window)).toBe(windowSnapshot(window).since);
+  });
+});
+
+// #122 round 2 (Codex fix-verification): the profile services accept a structural disclosure
+// triple, and "every current caller builds it with windowSnapshot" is a convention, not an
+// invariant — a hand-assembled triple could filter by one bound while disclosing another. This
+// guard is what turns the convention back into an invariant: the redundant fields must derive
+// from their one degree of freedom, or the whole triple refuses.
+describe("verifiedWindow — the disclosure triple cannot lie", () => {
+  it("accepts windowSnapshot output and returns the recomputed frozen snapshot", () => {
+    const snap = windowSnapshot(evidenceWindow("2026-08-28"));
+    const verified = verifiedWindow(snap);
+    expect(verified).toEqual(snap);
+    expect(Object.isFrozen(verified)).toBe(true);
+  });
+
+  it("refuses a triple whose `since` does not derive from its anchorDay — the round-2 trace", () => {
+    // The reviewer's exact forgery: filter would admit ALL history while the label claims a
+    // 12-month 2026 window.
+    expect(() =>
+      verifiedWindow({ anchorDay: "2026-08-28", since: "0000-01-01", label: "12mo to 2026-08-28" }),
+    ).toThrow(/inconsistent evidence window disclosure/i);
+  });
+
+  it("refuses a triple whose label does not derive from its anchorDay", () => {
+    expect(() =>
+      verifiedWindow({ anchorDay: "2026-08-28", since: "2025-08-28", label: "2026" }),
+    ).toThrow(/inconsistent evidence window disclosure/i);
+  });
+
+  it("delegates anchorDay validation — a year-0000 or malformed anchor refuses the same way windowSnapshot does", () => {
+    expect(() =>
+      verifiedWindow({ anchorDay: "0000-06-15", since: "-001-06-15", label: "12mo to 0000-06-15" }),
+    ).toThrow(/unusable evidence window anchor/i);
+    expect(() =>
+      verifiedWindow({ anchorDay: "not-a-date", since: "2025-08-28", label: "12mo to not-a-date" }),
+    ).toThrow(/unusable evidence window anchor/i);
+  });
+
+  it("returns the recomputed snapshot, never the caller's object — an accessor triple cannot answer differently to later consumers", () => {
+    // Each field is read exactly ONCE; the returned object is the seam's own frozen derivation, so
+    // a getter that answers correctly during validation and differently afterwards has nothing
+    // left to lie to — consumers hold plain recomputed strings.
+    let sinceReads = 0;
+    const shifty = {
+      anchorDay: "2026-08-28",
+      get since() {
+        sinceReads += 1;
+        return sinceReads === 1 ? "2025-08-28" : "0000-01-01";
+      },
+      label: "12mo to 2026-08-28",
+    };
+
+    const verified = verifiedWindow(shifty);
+
+    expect(sinceReads).toBe(1);
+    expect(verified).not.toBe(shifty);
+    expect(verified.since).toBe("2025-08-28");
+    expect(Object.isFrozen(verified)).toBe(true);
   });
 });

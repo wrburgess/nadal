@@ -195,6 +195,11 @@ reviewer is not misled by a clean table — none is a bug in itself, and several
   arithmetic from `src/cli/window.ts`. Shared rather than duplicated — but the shared home is `src/cli/`.
 - **One front door imports from the other's directory.** `src/mcp/tools.ts` also uses
   `src/cli/window.ts`.
+- **The Model validates against Controller arithmetic.** `src/query/player-profile.ts` and
+  `src/query/team-profile.ts` import `verifiedWindow` from `src/cli/window.ts` (#122 round 2) —
+  the profile services refuse a window disclosure that does not derive from its own anchor day,
+  and the validator lives beside the derivation it checks, whose shared-but-misplaced home is
+  still `src/cli/` (the first bullet's wart, one edge wider).
 - **The View runs its own queries.** `src/report/write.ts` reads the `teams` table directly; no
   `src/query/` function owns "list all teams".
 - **Both controllers run the same one-line query.** `src/cli/commands/team-home.ts` and
