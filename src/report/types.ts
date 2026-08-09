@@ -13,17 +13,18 @@ import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamProfile } from "../query/team-profile.js";
 
 export type TeamDossier = {
-  /** The season every windowed record in this dossier was filtered to, as a display label
-   * ("2026") — issue #90. It rides on the VIEW rather than being recomputed per renderer, so the
-   * HTML and the markdown can never label the same numbers with different seasons, and so
-   * `src/report/*` stays clock-free (the anchor is chosen once, by `report build`). */
-  season: string;
+  /** The 12-month evidence window every windowed record in this dossier was filtered to, as a
+   * display label ("12mo to 2026-08-28") — issue #122, superseding #90's bare calendar-year label.
+   * It rides on the VIEW rather than being recomputed per renderer, so the HTML and the markdown can
+   * never label the same numbers with different windows, and so `src/report/*` stays clock-free (the
+   * anchor is chosen once, by `report build`). */
+  window: string;
   /** The event this build was scoped to, or `null` when none was named (#97). Carried on the VIEW,
-   * like `season`, so both renderers name the same event beside the same evidence scope — and so a
+   * like `window`, so both renderers name the same event beside the same evidence scope — and so a
    * renderer never has to reach into `lineup.slotEvent` for it, which is a different field about a
    * different thing (which event supplied the COURT SET) and is `null` whenever the lineup is. */
   event: { id: number; name: string } | null;
-  /** `team.rosterSource`, copied onto the VIEW at construction (#113) — the same reason `season`
+  /** `team.rosterSource`, copied onto the VIEW at construction (#113) — the same reason `window`
    * and `event` sit here rather than being re-derived by each renderer: a renderer reads this
    * field, not `team.rosterSource` directly, so the two can never be filled in independently and
    * drift. Set once, in `write.ts`'s `buildTeamDossier`, from the value `team` itself carries. */

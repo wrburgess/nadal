@@ -229,4 +229,30 @@ describe("renderDossier", () => {
     const html = renderDossier(buildDossier());
     expect(html).toMatch(/<section id="prior-meetings">/);
   });
+
+  // Issue #122, Task 4/7: the twin of markdown's heading pin — the heading now names the exemption
+  // explicitly, since this section is NOT filtered by the page's 12-month window.
+  it("the prior-meetings heading names the exemption: 'all meetings on file'", () => {
+    const html = renderDossier(buildDossier());
+    expect(html).toContain("<h2>Prior meetings vs our players (all meetings on file)</h2>");
+  });
+
+  // Issue #122, Task 4: the twin of markdown's record-line pin — this line used to read
+  // `<strong>2026 record:</strong>`; it now names the actual 12-month window rather than a bare
+  // year, and reads from the renamed `.windowed` key.
+  it("renders each player's record line with the window label, not a bare year", () => {
+    const dossier = buildDossier({ window: "12mo to 2026-08-28" });
+    const html = renderDossier(dossier);
+    expect(html).toContain("<strong>Record (12mo to 2026-08-28):</strong> singles 3-1,");
+    expect(html).toContain("doubles 1-2</p>");
+    expect(html).not.toContain("<strong>2026 record:</strong>");
+  });
+
+  // Issue #122, Task 7: the twin of markdown's evidence-scope-sentence pin.
+  it("the evidence-scope sentence no longer claims prior meetings share the same scope as records and tendencies", () => {
+    const html = renderDossier(buildDossier());
+    expect(html).toContain("<strong>Records and court-slot tendencies below were computed over:</strong>");
+    expect(html).not.toContain("Records, court-slot tendencies and prior meetings");
+    expect(html).toContain("Prior meetings below draws on the same leagues but every date on file, not the 12-month window above.");
+  });
 });

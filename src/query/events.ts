@@ -19,10 +19,10 @@ import type { Db } from "../ingest/db-types.js";
 import { type EventCourt, encodeEventFormat, parseEventFormat, readEventFormat } from "./event-format.js";
 import { isIsoDay } from "./iso-day.js";
 import { type LeagueScope, encodeLeagueScope, parseLeagueScope, readLeagueScope } from "./league-scope.js";
-// Reused, not redeclared: `report build` already surfaces THIS class when an event name does not
-// resolve, and a second identically-named error on the same command path would be indistinguishable
-// to a caller while being a different type to a `catch`.
-import { UnknownEventError } from "./lineup.js";
+// `ResolvedEvent` only — a type-only import, so it carries no runtime edge back to `lineup.ts` (which
+// itself imports from `player-profile.ts`/`roster.ts`, not from this module, so there is no cycle
+// either way; this is just the narrower, always-safe form).
+import type { ResolvedEvent } from "./lineup.js";
 
 export class MissingEventNameError extends Error {}
 export class InvalidEventKindError extends Error {}
@@ -252,25 +252,38 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
 }
 
 /**
- * The season anchor for a report: the event's own start date when it has one, otherwise the
- * caller's clock (issue #90).
+ * The evidence-window anchor for a report: the event's own start date when it has one, otherwise the
+ * caller's clock (issue #90, generalized by #122 from a calendar-year season to a 12-month lookback —
+ * the anchor-resolution mechanism itself is unchanged).
  *
  * `anchoredTo` is RETURNED, not inferred by the caller, because the two cases must not look alike
  * in the output. A dossier built against an event with no `starts_on` that silently fell back to
  * today is the exact failure this issue is about — a boundary that reads as anchored to the event
  * and is not — so the command prints which one it used and a reader can tell them apart.
  *
- * An unknown event name is NOT a fallback but a refusal, so a typo cannot quietly produce a whole
- * binder filtered to the wrong season.
+ * **A PURE function over an ALREADY-RESOLVED event, not a second lookup by name.** The predecessor
+ * here, `resolveWindowAnchor`, read the `events` row itself — a SECOND, independent read of the same
+ * name `resolveEvent` (src/query/lineup.ts) already reads for the format/scope/roster every dossier
+ * also needs. Two reads meant a concurrent `tn event add` committing between them could hand one
+ * `report build` run the OLD event's window and the NEW event's format/scope/roster — the same
+ * cross-process race Codex rated high on PR #82 (Finding 1) and #97 (one column over), reopened here
+ * on the window (round-1 review of #122, Finding 3). `resolveEvent`'s unknown-event refusal — this
+ * function no longer throws it, since it never looks anything up — now covers this case too: a bad
+ * name refuses at the ONE resolution both the window and the format/scope/roster derive from,
+ * before either is built.
+ *
+ * `event` is typed as `ResolvedEvent | undefined` rather than the caller's raw `db`/name — the
+ * signature itself is what makes a second lookup impossible to reintroduce by accident.
+ *
+ * Used only by `report build`'s two entry points (CLI and MCP), which have no other reason to resolve
+ * the named event. `team show`/`player show` do NOT call this: #122 anchors them to their
+ * ALREADY-RESOLVED event's `starts_on` directly, so as not to look the same row up twice.
  */
-export function resolveSeasonAnchor(
-  db: Db,
-  eventName: string | undefined,
+export function windowAnchorFor(
+  event: ResolvedEvent | undefined,
   now: Date = new Date(),
 ): { value: Date | string; anchoredTo: "event" | "today" } {
-  if (eventName === undefined) return { value: now, anchoredTo: "today" };
-  const row = db.select().from(events).where(eq(events.name, eventName)).all()[0];
-  if (row === undefined) throw new UnknownEventError(`unknown event "${eventName}"`);
-  if (row.startsOn === null) return { value: now, anchoredTo: "today" };
-  return { value: row.startsOn, anchoredTo: "event" };
+  const startsOn = event?.recordedAs.startsOn ?? null;
+  if (startsOn === null) return { value: now, anchoredTo: "today" };
+  return { value: startsOn, anchoredTo: "event" };
 }

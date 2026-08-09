@@ -3,15 +3,15 @@ import { openDb } from "../../db/client.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
 import { InvalidLeagueScopeError } from "../../query/league-scope.js";
-import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
+import { EventHasNoFormatError, UnknownEventError, resolveEvent } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
-import { resolveSeasonAnchor } from "../../query/events.js";
+import { windowAnchorFor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
 import type { SummaryField } from "../emit.js";
-import { seasonWindow } from "../window.js";
+import { evidenceWindow, windowSnapshot } from "../window.js";
 
 const SECTIONALS_TARGET = "sectionals";
 
@@ -68,13 +68,23 @@ export const reportBuild: Command = {
 
     const { db, sqlite } = openDb();
     try {
-      // Issue #90: the binder is anchored to the EVENT'S season, not to the day it is printed, so
-      // the same database renders the same records in August as in December. `anchoredTo` is
-      // reported in the summary below because an event with no `starts_on` falls back to today,
-      // and a fallback that looked identical to a real anchor would reproduce the defect this
-      // fixes — a boundary that reads as anchored and is not.
-      const anchor = resolveSeasonAnchor(db, eventName);
-      const season = seasonWindow(anchor.value);
+      // Issue #122 (generalizes #90): the binder is anchored to the EVENT'S 12-month evidence
+      // window, not to the day it is printed, so the same database renders the same records in
+      // August as in December. `anchoredTo` is reported in the summary below because an event with
+      // no `starts_on` falls back to today, and a fallback that looked identical to a real anchor
+      // would reproduce the defect this fixes — a boundary that reads as anchored and is not.
+      //
+      // #122 round-1 Finding 3: the named event is resolved EXACTLY ONCE, right here — never again
+      // by `windowAnchorFor` (a pure function over this already-resolved value) or by
+      // `writeSectionalsDossiers`/`writeTeamDossier` below (which take the resolved event as a
+      // parameter and never look it up themselves). Before this fix, the window came from its own
+      // separate `resolveWindowAnchor` read while the format/scope/roster came from a SECOND,
+      // independent `resolveEvent` read inside the write — a concurrent `tn event add` between the
+      // two could hand one build the old event's window and the new event's everything else. One
+      // read here removes the second read to disagree with it.
+      const event = eventName === undefined ? undefined : resolveEvent(db, eventName);
+      const anchor = windowAnchorFor(event);
+      const window = evidenceWindow(anchor.value);
       let written: string[];
       let teamsCount: number;
       // #113: only ever set on the SINGLE-team path — a batch mixes registered and season teams,
@@ -82,7 +92,7 @@ export const reportBuild: Command = {
       // comment below).
       let rosterField: SummaryField | undefined;
       if (target === undefined || target === SECTIONALS_TARGET) {
-        written = writeSectionalsDossiers(db, { season, eventName });
+        written = writeSectionalsDossiers(db, { window, event });
         teamsCount = countTeams(db);
       } else {
         const resolution = resolveTeamTarget(db, target);
@@ -103,7 +113,7 @@ export const reportBuild: Command = {
         // revision re-queried the database after the files had landed, which a concurrent
         // `tn roster set` could slip inside — the summary would then say `roster=registered` about
         // files that say season roster. (Codex adversarial review, round 1, finding 3 [medium].)
-        const result = writeTeamDossier(db, resolution.teamId, { season, eventName });
+        const result = writeTeamDossier(db, resolution.teamId, { window, event });
         written = result.files;
         teamsCount = 1;
         rosterField = ["roster", result.rosterSource];
@@ -120,11 +130,12 @@ export const reportBuild: Command = {
           ["teams", teamsCount],
           ["files", written.length],
           ["root", resolvedReportsRoot()],
-          // Issue #90. `season` says what the binder actually covers, and `anchoredTo` says where
-          // that came from: `event` means the event's own `starts_on`, `today` means it had none
-          // (or none was named) and the clock was used. Printing only `season` would make those
+          // Issue #122: `since` is the ISO lower bound the binder actually filtered to (machine-
+          // usable, no spaces — superseding #90's bare `season=` year), and `anchoredTo` says where
+          // the anchor came from: `event` means the event's own `starts_on`, `today` means it had
+          // none (or none was named) and the clock was used. Printing only `since` would make those
           // two indistinguishable, which is the defect this change exists to remove.
-          ["season", season.year],
+          ["since", windowSnapshot(window).since],
           ["anchoredTo", anchor.anchoredTo],
           ...(rosterField === undefined ? [] : [rosterField]),
         ],

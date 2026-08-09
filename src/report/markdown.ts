@@ -140,6 +140,11 @@ function renderPlayerPriorMeetingsRowMarkdown(player: PlayerProfile, headToHead:
  * dossier. The two-reason split below is `html.ts`'s twin too — see that comment for why one
  * sentence for both was wrong; the pair must stay in step so the printed and the readable dossier
  * never disagree about why a section is empty.
+ *
+ * Issue #122, Task 7's explicit exemption: unlike the records and tendencies above it, this section
+ * is NOT filtered by the page's 12-month window — a prior meeting is evidence about an opponent
+ * regardless of when it happened. The heading says so, so a reader comparing this section's count
+ * against the windowed sections above it is not left to guess why they differ.
  */
 function renderPriorMeetingsSectionMarkdown(dossier: TeamDossier): string {
   const headToHead = dossier.team.headToHead;
@@ -150,21 +155,23 @@ function renderPriorMeetingsSectionMarkdown(dossier: TeamDossier): string {
     headToHead === null
       ? unavailable
       : dossier.players.map((p) => renderPlayerPriorMeetingsRowMarkdown(p, headToHead)).join("\n\n");
-  return `## Prior meetings vs our players\n\n${body}`;
+  return `## Prior meetings vs our players (all meetings on file)\n\n${body}`;
 }
 
 /**
- * #97's non-optional disclosure: what the records, slot tendencies and prior meetings in this
- * dossier were actually computed over. Rendered as its own section, ALWAYS — an unscoped dossier
- * says so as plainly as a scoped one does, because a reader who cannot tell those two apart is back
- * at the defect this issue was opened for.
+ * #97's non-optional disclosure: what the records and court-slot tendencies in this dossier were
+ * actually computed over. Rendered as its own section, ALWAYS — an unscoped dossier says so as
+ * plainly as a scoped one does, because a reader who cannot tell those two apart is back at the
+ * defect this issue was opened for.
  *
  * The closing sentence is what keeps the section from over-claiming, and it is the reason this is a
- * section rather than a footnote. The scope does not govern everything on the page: the team record
- * is derived from `team_matches` and carries no league context at all, and the predicted lineup is
- * scoped by something stronger and different (this team's own schedule — see `getLineupPlan`).
- * Printing a scope immediately above a lineup it does not govern, without saying so, would be a new
- * silent lie of the same shape as the one being fixed.
+ * section rather than a footnote. The league scope named above does not govern everything on the
+ * page: the team record is derived from `team_matches` and carries no league context at all, the
+ * predicted lineup is scoped by something stronger and different (this team's own schedule — see
+ * `getLineupPlan`), and prior meetings below draws on the same leagues but is NOT limited to the
+ * 12-month window this section's records are (issue #122, Task 7 — see that section's own heading).
+ * Printing a scope immediately above sections it does not fully govern, without saying so, would be
+ * a new silent lie of the same shape as the one being fixed.
  */
 function renderEvidenceScopeMarkdown(dossier: TeamDossier): string {
   const summary = dossier.team.evidenceScope;
@@ -172,14 +179,15 @@ function renderEvidenceScopeMarkdown(dossier: TeamDossier): string {
   return [
     "## Evidence scope",
     "",
-    `**Records, court-slot tendencies and prior meetings below were computed over:** ` +
+    `**Records and court-slot tendencies below were computed over:** ` +
       `${escapeMarkdownCell(formatEvidenceScopeLine(summary, eventName))}.`,
     "",
     `**Leagues counted:** ${escapeMarkdownCell(formatRetainedLeaguesLine(summary))}.`,
     "",
     "_The team record above is derived from team fixtures rather than court matches, and the " +
       "predicted lineup below is restricted to this team's own schedule instead — neither is filtered " +
-      "by this scope._",
+      "by this scope. Prior meetings below draws on the same leagues but every date on file, not the " +
+      "12-month window above._",
   ].join("\n");
 }
 
@@ -254,11 +262,11 @@ function renderPredictedLineupMarkdown(dossier: TeamDossier): string {
   ].join("\n");
 }
 
-function renderPlayerBlockMarkdown(player: PlayerProfile, season: string): string {
+function renderPlayerBlockMarkdown(player: PlayerProfile, windowLabel: string): string {
   return [
     `### ${escapeMarkdownCell(player.identity.canonicalName)}`,
     "",
-    `**${season} record:** singles ${formatRecord(player.singlesRecord.season)}, doubles ${formatRecord(player.doublesRecord.season)}`,
+    `**Record (${windowLabel}):** singles ${formatRecord(player.singlesRecord.windowed)}, doubles ${formatRecord(player.doublesRecord.windowed)}`,
     "",
     `**Court-slot tendencies:** ${formatSlotTendencies(player.slotTendencies)}`,
     "",
@@ -267,7 +275,7 @@ function renderPlayerBlockMarkdown(player: PlayerProfile, season: string): strin
 }
 
 function renderPlayersSectionMarkdown(dossier: TeamDossier): string {
-  return dossier.players.map((p) => renderPlayerBlockMarkdown(p, dossier.season)).join("\n\n");
+  return dossier.players.map((p) => renderPlayerBlockMarkdown(p, dossier.window)).join("\n\n");
 }
 
 const DATA_GAP_LABELS: Record<string, string> = {

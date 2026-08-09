@@ -192,9 +192,32 @@ describe("renderDossierMarkdown", () => {
     expect(occurrences).toBe(1);
   });
 
-  it("renders a dedicated 'Prior meetings vs our players' section heading, separate from the per-player blocks", () => {
+  // Issue #122, Task 4/7: the heading now names the exemption explicitly — this section is NOT
+  // filtered by the page's 12-month window, unlike the records and tendencies above it.
+  it("renders a dedicated 'Prior meetings vs our players (all meetings on file)' section heading, separate from the per-player blocks", () => {
     const md = renderDossierMarkdown(buildDossier());
-    expect(md).toMatch(/^## Prior meetings vs our players$/m);
+    expect(md).toMatch(/^## Prior meetings vs our players \(all meetings on file\)$/m);
+  });
+
+  // Issue #122, Task 4: the currently-missing player-block record-line pin — this line used to read
+  // `**2026 record:**`; it now names the actual 12-month window rather than a bare year, and reads
+  // from the renamed `.windowed` key.
+  it("renders each player's record line with the window label, not a bare year", () => {
+    const dossier = buildDossier({ window: "12mo to 2026-08-28" });
+    const md = renderDossierMarkdown(dossier);
+    expect(md).toContain("**Record (12mo to 2026-08-28):** singles 3-1, doubles 1-2");
+    expect(md).not.toContain("**2026 record:**");
+  });
+
+  // Issue #122, Task 7: the evidence-scope sentence no longer lists prior meetings among the
+  // sections it describes (records + tendencies are windowed, prior meetings is not) — and the
+  // closing disclaimer names prior meetings' own, different exemption rather than staying silent
+  // about it.
+  it("the evidence-scope sentence no longer claims prior meetings share the same scope as records and tendencies", () => {
+    const md = renderDossierMarkdown(buildDossier());
+    expect(md).toContain("**Records and court-slot tendencies below were computed over:**");
+    expect(md).not.toContain("Records, court-slot tendencies and prior meetings");
+    expect(md).toContain("Prior meetings below draws on the same leagues but every date on file, not the 12-month window above.");
   });
 
   // #19: twin of the html.ts case — see that suite's comment. The two renderers must not drift on

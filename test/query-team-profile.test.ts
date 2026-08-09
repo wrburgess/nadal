@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { evidenceWindow, windowSnapshot } from "../src/cli/window.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
 import {
@@ -15,6 +16,15 @@ import { getTeamProfile, resolveTeamTarget } from "../src/query/team-profile.js"
 import { setHomeTeam } from "../src/query/home-team.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
+
+/** #122 round-1 Finding 1: `getTeamProfile` takes a `window` (an `EvidenceWindowDisclosure`), not a
+ * bare `since` — constructed via `windowSnapshot(evidenceWindow(anchorDay))`, never a hand-assembled
+ * triple. `anchorDay` is one year after the fixture's intended `since` bound (the textual 12-month
+ * subtraction this module documents in `src/cli/window.ts`), so each existing fixture's `since` value
+ * is preserved exactly. */
+function windowSince(anchorDay: string) {
+  return windowSnapshot(evidenceWindow(anchorDay));
+}
 
 type Db = ReturnType<typeof openDb>["db"];
 
@@ -50,6 +60,23 @@ function seedCourtMatch(
 describe("getTeamProfile", () => {
   useTnDbPath();
 
+  // #122 round 2 — twin of getPlayerProfile's refusal: the disclosure triple is validated at
+  // entry, so a hand-assembled triple cannot make the team page filter by one bound while
+  // disclosing another.
+  it("refuses a window disclosure whose fields do not derive from their own anchorDay", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Team A");
+      expect(() =>
+        getTeamProfile(db, team.id, {
+          window: { anchorDay: "2026-08-28", since: "0000-01-01", label: "12mo to 2026-08-28" },
+        }),
+      ).toThrow(/inconsistent evidence window disclosure/i);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("roster ordering is deterministic (alphabetical by canonical name)", () => {
     const { db, sqlite } = freshDb();
     try {
@@ -62,11 +89,11 @@ describe("getTeamProfile", () => {
       seedMembership(db, alice.id, team.id);
       seedMembership(db, mia.id, team.id);
 
-      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
 
       expect(profile.roster.map((r) => r.canonicalName)).toEqual(["Alice Anders", "Mia Marlowe", "Zed Zephyr"]);
       // Re-running produces the identical order (no dependency on insertion/query order).
-      const again = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const again = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
       expect(again.roster.map((r) => r.canonicalName)).toEqual(profile.roster.map((r) => r.canonicalName));
     } finally {
       sqlite.close();
@@ -81,7 +108,7 @@ describe("getTeamProfile", () => {
       seedPlayer(db, "Not On This Team"); // exists, never joined
       seedMembership(db, member.id, team.id);
 
-      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
 
       expect(profile.roster).toHaveLength(1);
       expect(profile.roster[0]!.canonicalName).toBe("Ellis Eastwick");
@@ -105,7 +132,7 @@ describe("getTeamProfile", () => {
         .where(eq(teamMemberships.playerId, retired.id))
         .run();
 
-      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
 
       expect(profile.roster.map((r) => r.canonicalName)).toEqual(["Current Player"]);
     } finally {
@@ -126,7 +153,7 @@ describe("getTeamProfile", () => {
         .values({ homeTeamId: teamA.id, visitingTeamId: teamB.id, homeCourtsWon: 3, visitingCourtsWon: 2, playedOn: "2026-06-01" })
         .run();
 
-      const before = getTeamProfile(db, teamA.id, { since: "2026-01-01" });
+      const before = getTeamProfile(db, teamA.id, { window: windowSince("2027-01-01") });
       expect(before.teamRecord).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
 
       db.update(teamMemberships)
@@ -134,7 +161,7 @@ describe("getTeamProfile", () => {
         .where(eq(teamMemberships.playerId, retired.id))
         .run();
 
-      const after = getTeamProfile(db, teamA.id, { since: "2026-01-01" });
+      const after = getTeamProfile(db, teamA.id, { window: windowSince("2027-01-01") });
       expect(after.teamRecord).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
       expect(after.roster, "filtering the CURRENT roster must not filter the team's history").toHaveLength(0);
     } finally {
@@ -171,7 +198,7 @@ describe("getTeamProfile", () => {
         })
         .run();
 
-      const profile = getTeamProfile(db, teamA.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, teamA.id, { window: windowSince("2027-01-01") });
       expect(profile.teamRecord).toEqual({ wins: 2, losses: 0, undecided: 0, excludedUndated: 0 });
     } finally {
       sqlite.close();
@@ -197,7 +224,7 @@ describe("getTeamProfile", () => {
         [{ playerId: a1.id, side: "home" }, { playerId: b1.id, side: "visiting" }],
       );
 
-      const profile = getTeamProfile(db, teamA.id, { since: "2026-01-01", versusTeamId: teamB.id });
+      const profile = getTeamProfile(db, teamA.id, { window: windowSince("2027-01-01"), versusTeamId: teamB.id });
 
       expect(profile.headToHead).not.toBeNull();
       const rows = profile.headToHead!;
@@ -243,7 +270,7 @@ describe("getTeamProfile", () => {
         [{ playerId: a1.id, side: "home" }, { playerId: bRetired.id, side: "visiting" }],
       );
 
-      const profile = getTeamProfile(db, teamA.id, { since: "2026-01-01", versusTeamId: teamB.id });
+      const profile = getTeamProfile(db, teamA.id, { window: windowSince("2027-01-01"), versusTeamId: teamB.id });
 
       const rows = profile.headToHead!;
       // Only 1 team-A player x 1 CURRENT team-B player = 1 row, never one for the retired opponent.
@@ -259,8 +286,42 @@ describe("getTeamProfile", () => {
     const { db, sqlite } = freshDb();
     try {
       const team = seedTeam(db, "Team A");
-      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
       expect(profile.headToHead).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #122, Task 3's explicit exemption: `headToHead` stays all-meetings by documented intent —
+  // unlike the records and tendencies above it on the same page, a prior meeting is evidence about
+  // an opponent regardless of when it happened, so it stays UNWINDOWED even though `options.since`
+  // is passed for everything else `getTeamProfile` derives.
+  it("headToHead counts a meeting OUTSIDE the window — it is not filtered by `since`, unlike every other section", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const teamA = seedTeam(db, "Team A");
+      const teamB = seedTeam(db, "Team B");
+      const a1 = seedPlayer(db, "A One");
+      const b1 = seedPlayer(db, "B One");
+      seedMembership(db, a1.id, teamA.id);
+      seedMembership(db, b1.id, teamB.id);
+
+      // Played well before `since` — excluded from every windowed section, but a real prior meeting.
+      seedCourtMatch(
+        db,
+        { slot: "S1", discipline: "singles", winnerSide: "home", playedOn: "2025-09-02" },
+        [{ playerId: a1.id, side: "home" }, { playerId: b1.id, side: "visiting" }],
+      );
+
+      const profile = getTeamProfile(db, teamA.id, { window: windowSince("2027-06-01"), versusTeamId: teamB.id });
+
+      const rows = profile.headToHead!;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ playerId: a1.id, opponentId: b1.id, wins: 1, losses: 0, matches: 1 });
+      // The windowed record for the same player, over the same match, correctly reads 0-0 — proving
+      // the two sections are genuinely computed differently, not merely asserted to be.
+      expect(profile.roster[0]!.singlesRecord).toEqual({ wins: 0, losses: 0, undecided: 0, excludedUndated: 0 });
     } finally {
       sqlite.close();
     }
@@ -285,8 +346,40 @@ describe("getTeamProfile", () => {
         { playerId: opponent.id, side: "visiting" },
       ]);
 
-      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
       expect(profile.slotTendencies).toEqual([{ slot: "S1", count: 2 }]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #122, Task 3: roster-member `slotTendencies` used to be computed over every court match on
+  // file, unwindowed — the same "second failure" shape as the player path, one field over. Both the
+  // per-member entry AND the roster-wide aggregate (which sums the per-member entries) must reflect
+  // only in-window rows.
+  it("roster-member slotTendencies (and the aggregate that sums them) count only in-window rows", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Team A");
+      const p1 = seedPlayer(db, "Player One");
+      const opponent = seedPlayer(db, "Opponent");
+      seedMembership(db, p1.id, team.id);
+
+      // Out-of-window: real evidence, must not reach the member's OR the aggregate's tendencies.
+      seedCourtMatch(db, { slot: "D4", discipline: "doubles", playedOn: "2025-09-02" }, [
+        { playerId: p1.id, side: "home" },
+        { playerId: opponent.id, side: "visiting" },
+      ]);
+      // In-window.
+      seedCourtMatch(db, { slot: "S1", discipline: "singles", playedOn: "2026-06-15" }, [
+        { playerId: p1.id, side: "home" },
+        { playerId: opponent.id, side: "visiting" },
+      ]);
+
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-06-01") });
+
+      expect(profile.roster[0]!.slotTendencies).toEqual([{ slot: "S1", count: 1 }]);
+      expect(profile.slotTendencies).toEqual([{ slot: "S1", count: 1 }]);
     } finally {
       sqlite.close();
     }
@@ -301,7 +394,7 @@ describe("getTeamProfile isHome", () => {
     try {
       const team = seedTeam(db, "Home Team");
       setHomeTeam(db, team.id);
-      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
       expect(profile.isHome).toBe(true);
     } finally {
       sqlite.close();
@@ -314,7 +407,7 @@ describe("getTeamProfile isHome", () => {
       const home = seedTeam(db, "Home Team");
       const other = seedTeam(db, "Other Team");
       setHomeTeam(db, home.id);
-      const profile = getTeamProfile(db, other.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, other.id, { window: windowSince("2027-01-01") });
       expect(profile.isHome).toBe(false);
     } finally {
       sqlite.close();
@@ -325,7 +418,7 @@ describe("getTeamProfile isHome", () => {
     const { db, sqlite } = freshDb();
     try {
       const team = seedTeam(db, "Team A");
-      const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
       expect(profile.isHome).toBe(false);
     } finally {
       sqlite.close();
@@ -440,7 +533,7 @@ describe("getTeamProfile — event-scoped roster (#113)", () => {
         registered: { eventName: "Springfield Sectionals 2026", names: registered },
       });
 
-      const profile = getTeamProfile(db, fixture.teamId, { since: "2026-01-01", eventId: fixture.eventId });
+      const profile = getTeamProfile(db, fixture.teamId, { window: windowSince("2027-01-01"), eventId: fixture.eventId });
 
       expect(profile.rosterSource).toBe("registered");
       expect(profile.roster).toHaveLength(9);
@@ -467,7 +560,7 @@ describe("getTeamProfile — event-scoped roster (#113)", () => {
       // The event genuinely exists (registeredTeam.eventId), just carries no registration for THIS
       // team — the feature must not empty every OTHER team's dossier for the same event.
       const profile = getTeamProfile(db, unregisteredTeam.teamId, {
-        since: "2026-01-01",
+        window: windowSince("2027-01-01"),
         eventId: registeredTeam.eventId,
       });
 
@@ -497,7 +590,7 @@ describe("getTeamProfile — event-scoped roster (#113)", () => {
         [{ playerId: absentId, side: "home" }],
       );
 
-      const profile = getTeamProfile(db, fixture.teamId, { since: "2026-01-01", eventId: fixture.eventId });
+      const profile = getTeamProfile(db, fixture.teamId, { window: windowSince("2027-01-01"), eventId: fixture.eventId });
 
       expect(profile.roster.map((r) => r.playerId)).toEqual([registeredId]);
       expect(profile.evidenceScope.considered).toBe(0);
@@ -527,7 +620,7 @@ describe("getTeamProfile — event-scoped roster (#113)", () => {
         .run();
 
       const profile = getTeamProfile(db, home.teamId, {
-        since: "2026-01-01",
+        window: windowSince("2027-01-01"),
         eventId: home.eventId,
         versusTeamId: away.teamId,
       });

@@ -13,6 +13,7 @@
 // about a partner pool that does not exist at Sectionals.
 
 import { describe, expect, it } from "vitest";
+import { evidenceWindow, windowSnapshot } from "../src/cli/window.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { players, teamMatches, teamMemberships, teams } from "../src/db/schema.js";
@@ -30,7 +31,12 @@ function freshDb() {
   return openDb();
 }
 
-const SEASON = "2026-01-01";
+// #122 round-1 Finding 1: `getPlayerProfile`/`getTeamProfile` take a `window` (an
+// `EvidenceWindowDisclosure`), not a bare `since` — `SEASON` is now that window, constructed via
+// `windowSnapshot(evidenceWindow(anchorDay))` (never a hand-assembled triple). `anchorDay` is one
+// year after this file's original `since` bound ("2026-01-01"), preserving every fixture's window
+// exactly (the textual 12-month subtraction `src/cli/window.ts` documents).
+const SEASON = windowSnapshot(evidenceWindow("2027-01-01"));
 const EXCLUDE_MIXED = parseLeagueScope("exclude:Mixed");
 const ONLY_MIXED = parseLeagueScope("only:Mixed");
 
@@ -266,14 +272,14 @@ describe("getPlayerProfile — the records a dossier prints", () => {
         });
       }
 
-      const unscoped = getPlayerProfile(db, nova, { since: SEASON });
-      const scoped = getPlayerProfile(db, nova, { since: SEASON, leagueScope: EXCLUDE_MIXED });
+      const unscoped = getPlayerProfile(db, nova, { window: SEASON });
+      const scoped = getPlayerProfile(db, nova, { window: SEASON, leagueScope: EXCLUDE_MIXED });
 
       // RECORD: 2-3 becomes 2-0. Not merely a smaller count — a different answer to "is this player
       // winning in doubles", which is the question the dossier is read for.
-      expect(unscoped.doublesRecord.season).toMatchObject({ wins: 2, losses: 3 });
-      expect(scoped.doublesRecord.season).toMatchObject({ wins: 2, losses: 0 });
-      expect(scoped.doublesRecord.season).not.toEqual(unscoped.doublesRecord.season);
+      expect(unscoped.doublesRecord.windowed).toMatchObject({ wins: 2, losses: 3 });
+      expect(scoped.doublesRecord.windowed).toMatchObject({ wins: 2, losses: 0 });
+      expect(scoped.doublesRecord.windowed).not.toEqual(unscoped.doublesRecord.windowed);
 
       // SLOT TENDENCIES: "usually plays D2" becomes "plays D1", which is the headline symptom #97
       // was filed for.
@@ -304,7 +310,7 @@ describe("getPlayerProfile — the records a dossier prints", () => {
       play(db, { slot: "D1", discipline: "doubles", ours: [nova], leagueContext: "Adult 18+ 3.5", won: true });
       play(db, { slot: "D1", discipline: "doubles", ours: [nova], leagueContext: "Mixed 40+ 7.0", won: true });
 
-      const scoped = getPlayerProfile(db, nova, { since: SEASON, leagueScope: EXCLUDE_MIXED });
+      const scoped = getPlayerProfile(db, nova, { window: SEASON, leagueScope: EXCLUDE_MIXED });
 
       // The residual, concretely: what survived is NOT all in-league, and the profile says which.
       expect(scoped.evidenceScope.retainedLeagues).toEqual([{ league: "Adult 18+ 3.5", count: 1 }]);
@@ -344,9 +350,9 @@ describe("getTeamProfile — the roster table, the aggregate, and prior meetings
         won: false,
       });
 
-      const unscoped = getTeamProfile(db, opponentTeam, { since: SEASON, versusTeamId: ourTeam });
+      const unscoped = getTeamProfile(db, opponentTeam, { window: SEASON, versusTeamId: ourTeam });
       const scoped = getTeamProfile(db, opponentTeam, {
-        since: SEASON,
+        window: SEASON,
         versusTeamId: ourTeam,
         leagueScope: EXCLUDE_MIXED,
       });
@@ -399,7 +405,7 @@ describe("getTeamProfile — the roster table, the aggregate, and prior meetings
       });
 
       const before = getTeamProfile(db, opponentTeam, {
-        since: SEASON,
+        window: SEASON,
         versusTeamId: ourTeam,
         leagueScope: EXCLUDE_MIXED,
       });
@@ -416,7 +422,7 @@ describe("getTeamProfile — the roster table, the aggregate, and prior meetings
       });
 
       const after = getTeamProfile(db, opponentTeam, {
-        since: SEASON,
+        window: SEASON,
         versusTeamId: ourTeam,
         leagueScope: EXCLUDE_MIXED,
       });
@@ -450,8 +456,8 @@ describe("getTeamProfile — the roster table, the aggregate, and prior meetings
         })
         .run();
 
-      const unscoped = getTeamProfile(db, ourTeam, { since: SEASON });
-      const scoped = getTeamProfile(db, ourTeam, { since: SEASON, leagueScope: EXCLUDE_MIXED });
+      const unscoped = getTeamProfile(db, ourTeam, { window: SEASON });
+      const scoped = getTeamProfile(db, ourTeam, { window: SEASON, leagueScope: EXCLUDE_MIXED });
 
       // Asserted rather than assumed, because both renderers print a sentence saying exactly this —
       // and a sentence about behavior nothing pins is how a true claim becomes a stale one.
@@ -515,7 +521,7 @@ describe("getLineupPlan — the one reader #97 must NOT change", () => {
 
       // The same DB, read through the SCOPED path, drops exactly those rows — which is what makes
       // the assertions above a statement about `getLineupPlan` rather than about the fixture.
-      const scopedTeam = getTeamProfile(db, teamId, { since: SEASON, leagueScope: EXCLUDE_MIXED });
+      const scopedTeam = getTeamProfile(db, teamId, { window: SEASON, leagueScope: EXCLUDE_MIXED });
       expect(scopedTeam.evidenceScope.excluded).toBe(4);
       expect(scopedTeam.slotTendencies).toEqual([{ slot: "S1", count: 3 }]);
     } finally {

@@ -5,9 +5,18 @@ import { eq, inArray, or } from "drizzle-orm";
 import { ratingObservations, teamMatches, teams } from "../db/schema.js";
 import { findTeamByName } from "../ingest/identity.js";
 import type { Db } from "../ingest/db-types.js";
-import { headToHead, selectRosterRatingSource, slotTendencies, teamMatchRecord, windowedRecord } from "./derive.js";
+import {
+  headToHead,
+  rowsWithin,
+  selectRosterRatingSource,
+  slotTendencies,
+  teamMatchRecord,
+  windowedRecord,
+} from "./derive.js";
+import { verifiedWindow } from "../cli/window.js";
 import { resolveHomeTeam } from "./home-team.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
+import type { EvidenceWindowDisclosure } from "./player-profile.js";
 import { resolveRoster } from "./roster.js";
 import type { LeagueScope } from "./league-scope.js";
 import type {
@@ -58,8 +67,8 @@ export type RosterMemberProfile = {
   playerId: number;
   canonicalName: string;
   ageRange: string | null;
-  singlesRecord: WindowedRecordResult; // six-month
-  doublesRecord: WindowedRecordResult; // six-month
+  singlesRecord: WindowedRecordResult; // 12-month evidence window (issue #122)
+  doublesRecord: WindowedRecordResult; // 12-month evidence window (issue #122)
   slotTendencies: SlotTendency[];
 };
 
@@ -133,6 +142,12 @@ export type TeamProfile = {
    * copies would be N restatements of one fact, and any two of them drifting would be a lie the
    * type made possible. */
   evidenceScope: EvidenceScopeSummary;
+  /** #122 round-1 Finding 1: the window every roster member's record/slot tendencies above were
+   * windowed to — `player-profile.ts`'s `PlayerProfile.evidenceWindow`, the same disclosure, one
+   * profile over. Populated from the verified snapshot recomputed at entry (#122 round 2:
+   * `verifiedWindow` refuses a triple that does not derive from its own `anchorDay`); see that
+   * field's own doc comment for the full rationale. */
+  evidenceWindow: EvidenceWindowDisclosure;
 };
 
 /**
@@ -151,8 +166,17 @@ export type TeamProfile = {
 export function getTeamProfile(
   db: Db,
   teamId: number,
-  options: { since: string; versusTeamId?: number; leagueScope?: LeagueScope | null; eventId?: number | null },
+  options: {
+    window: EvidenceWindowDisclosure;
+    versusTeamId?: number;
+    leagueScope?: LeagueScope | null;
+    eventId?: number | null;
+  },
 ): TeamProfile {
+  // #122 round 2 — twin of `getPlayerProfile`'s entry validation: filter and disclosure below both
+  // read the recomputed frozen snapshot, so a hand-assembled triple refuses here (`verifiedWindow`,
+  // src/cli/window.ts) rather than filtering by one bound while the page discloses another.
+  const window = verifiedWindow(options.window);
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getTeamProfile: no team with id ${teamId}`);
 
@@ -191,14 +215,20 @@ export function getTeamProfile(
   // (Codex adversarial review of PR #99, round 1, Finding 2 [medium].)
   const evidence = courtMatchRowsForPlayers(db, rosterPlayerRows.map((r) => r.playerId), options.leagueScope);
   const courtRows = evidence.rows;
+  // Issue #122, Task 3: roster-member `slotTendencies` is windowed to the SAME `since` as the
+  // records beside it — the aggregate below sums these already-windowed per-member entries, so it
+  // follows automatically without a second filter. `headToHead` deliberately does NOT use this: see
+  // its own call site below, and `getPlayerProfile`'s twin doc comment for "the second failure" this
+  // closes.
+  const windowedCourtRows = rowsWithin(window.since)(courtRows);
 
   const roster: RosterMemberProfile[] = rosterPlayerRows.map((p) => ({
     playerId: p.playerId,
     canonicalName: p.canonicalName,
     ageRange: p.ageRange,
-    singlesRecord: windowedRecord(courtRows, p.playerId, { since: options.since, discipline: "singles" }),
-    doublesRecord: windowedRecord(courtRows, p.playerId, { since: options.since, discipline: "doubles" }),
-    slotTendencies: slotTendencies(courtRows, p.playerId),
+    singlesRecord: windowedRecord(courtRows, p.playerId, { since: window.since, discipline: "singles" }),
+    doublesRecord: windowedRecord(courtRows, p.playerId, { since: window.since, discipline: "doubles" }),
+    slotTendencies: slotTendencies(windowedCourtRows, p.playerId),
   }));
 
   const aggregatedSlotCounts = new Map<string, number>();
@@ -268,12 +298,16 @@ export function getTeamProfile(
     seasonCount: resolved.seasonCount,
     absentRoster,
     absentRatingSource: absentRating.source,
-    teamRecord: teamMatchRecord(teamMatchRows, teamId, { since: options.since }),
+    teamRecord: teamMatchRecord(teamMatchRows, teamId, { since: window.since }),
     slotTendencies: aggregatedSlotTendencies,
     headToHead: headToHeadRows,
     // Carried straight from the read that produced `courtRows` — see the same note in
     // `getPlayerProfile`. Note what it does NOT describe: `teamRecord`, which is derived from
     // `team_matches` and carries no league context of its own, so no scope has ever applied to it.
     evidenceScope: evidence.scope,
+    // #122 round-1 Finding 1, provenance updated by round 2: copied from the VERIFIED snapshot
+    // recomputed at entry, not the caller's object — see `PlayerProfile`'s twin field for the full
+    // rationale.
+    evidenceWindow: { anchorDay: window.anchorDay, since: window.since, label: window.label },
   };
 }

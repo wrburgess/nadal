@@ -19,8 +19,8 @@ import {
 import { repoDefault } from "../fs/package-root.js";
 import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "../query/home-team.js";
-import { NoCourtMatchHistoryError, getLineupPlan, requireSlotSet, resolveEvent } from "../query/lineup.js";
-import { type SeasonWindow, seasonSnapshot } from "../cli/window.js";
+import { NoCourtMatchHistoryError, getLineupPlan, requireSlotSet } from "../query/lineup.js";
+import { type EvidenceWindow, windowSnapshot } from "../cli/window.js";
 import type { ResolvedEvent } from "../query/lineup.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
@@ -176,12 +176,12 @@ function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): M
 export function buildTeamDossier(
   db: Db,
   teamId: number,
-  options: { season: SeasonWindow; event?: ResolvedEvent },
+  options: { window: EvidenceWindow; event?: ResolvedEvent },
 ): TeamDossier {
-  // ONE read of the caller's season, validated, before anything derives from it: a structural
-  // `SeasonWindow` can carry an accessor that answers differently on each read, which would filter
-  // the team and its players to one season and label the page with another.
-  const season = seasonSnapshot(options.season);
+  // ONE read of the caller's window, validated, before anything derives from it: a structural
+  // `EvidenceWindow` can carry an accessor that answers differently on each read, which would filter
+  // the team and its players to one window and label the page with another.
+  const window = windowSnapshot(options.window);
   const homeTeam = resolveHomeTeam(db);
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
   // #97: taken from the ALREADY-RESOLVED event, exactly like the slot set below and for the same
@@ -193,10 +193,11 @@ export function buildTeamDossier(
   // #113: the SAME already-resolved event's id scopes the roster — never a second lookup, for the
   // identical reason `leagueScope` above is taken from it rather than re-read.
   const eventId = options.event?.event.id ?? null;
-  const team = getTeamProfile(db, teamId, { since: season.since, versusTeamId, leagueScope, eventId });
-  const players = team.roster.map((member) =>
-    getPlayerProfile(db, member.playerId, { since: season.since, leagueScope }),
-  );
+  // #122 round-1 Finding 1: `window` (a `WindowSnapshot`) is passed straight through as the
+  // profiles' `evidenceWindow` disclosure — it already IS the one validated read this function
+  // performed above, so there is nothing to re-derive.
+  const team = getTeamProfile(db, teamId, { window, versusTeamId, leagueScope, eventId });
+  const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { window, leagueScope }));
 
   // #17 PR B: spec § Deliverables #1 puts the predicted lineup in the dossier, not only behind the
   // `tn lineup plan` command. "No history to predict from" is a normal state for a team that has
@@ -219,7 +220,7 @@ export function buildTeamDossier(
   }
 
   return {
-    season: season.year,
+    window: window.label,
     // Taken from the same resolved value `leagueScope` came from, so the event a dossier names
     // beside its evidence scope is provably the event that scope was read from.
     event: options.event === undefined ? null : { id: options.event.event.id, name: options.event.event.name },
@@ -277,7 +278,7 @@ type PreparedDossierWrite = {
 function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
-  options: { season: SeasonWindow; event?: ResolvedEvent },
+  options: { window: EvidenceWindow; event?: ResolvedEvent },
   dirName?: string,
 ): PreparedDossierWrite {
   const dossier = buildTeamDossier(db, teamId, options);
@@ -381,18 +382,17 @@ export type TeamDossierWriteResult = {
 export function writeTeamDossier(
   db: Db,
   teamId: number,
-  options: { season: SeasonWindow; eventName?: string },
+  options: { window: EvidenceWindow; event?: ResolvedEvent },
   dirName?: string,
 ): TeamDossierWriteResult {
-  // Resolved once, before anything is prepared — the same shape as the batch path below, so both
-  // entry points refuse a bad event name before touching the filesystem rather than partway through.
-  // `requireSlotSet` carries the "no format on file" refusal that `resolveEventFormat` used to throw
-  // itself (#97 split it out so an evidence scope can exist without a court list); calling it right
-  // here keeps that refusal at the same point in the sequence — before any dossier is prepared, and
-  // therefore with nothing written.
-  const event = options.eventName === undefined ? undefined : resolveEvent(db, options.eventName);
-  if (event !== undefined) requireSlotSet(event);
-  const prepared = prepareTeamDossierWrite(db, teamId, { season: options.season, event }, dirName);
+  // #122 round-1 Finding 3: `options.event`, when given, is ALREADY resolved by the caller (the
+  // command's own single `resolveEvent` call, shared with the window anchor derived from it) — this
+  // function never resolves a name itself. `requireSlotSet` still runs here, on the PASSED value, at
+  // the same point in the sequence `resolveEventFormat` used to throw from — before any dossier is
+  // prepared, and therefore with nothing written — so a named event with no format still refuses at
+  // the same moment it always has.
+  if (options.event !== undefined) requireSlotSet(options.event);
+  const prepared = prepareTeamDossierWrite(db, teamId, { window: options.window, event: options.event }, dirName);
   return { files: commitDossierWrite(prepared), rosterSource: prepared.rosterSource };
 }
 
@@ -451,21 +451,23 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
  * what this module actually provides, not a stronger one this comment used to imply.
  */
-export function writeSectionalsDossiers(db: Db, options: { season: SeasonWindow; eventName?: string }): string[] {
-  // PHASE 0 — resolve the named event's format exactly ONCE, before any team is read or any leaf is
-  // validated. Every dossier in this batch then predicts across the SAME slot set, which is what
-  // `docs/cli/GRAMMAR.md` promises; a per-team lookup could not keep that promise across a
-  // concurrent `tn event add` (Codex adversarial review of PR #82, Finding 1 [high]). It also fails
-  // fast in the same direction Phase 1 below already does: an unknown event, or one with no format,
-  // refuses with nothing written — including on a team set that is empty or wholly without history,
-  // where a per-team lookup would never have validated the name at all.
+export function writeSectionalsDossiers(db: Db, options: { window: EvidenceWindow; event?: ResolvedEvent }): string[] {
+  // PHASE 0 (#122 round-1 Finding 3) — `options.event`, when given, was ALREADY resolved once by the
+  // caller — the command's own single `resolveEvent` call, the SAME resolution the window anchor
+  // passed in `options.window` was derived from. This function used to resolve the name itself, a
+  // SECOND, independent read of the `events` row from the one `resolveWindowAnchor` performed for the
+  // window — so a concurrent `tn event add` between the two could hand one batch the OLD event's
+  // window and the NEW event's format/scope/roster. Taking the resolved value as a parameter closes
+  // that: every dossier in this batch predicts across the SAME slot set, draws from the SAME evidence
+  // scope, resolves the SAME roster, AND is windowed against the SAME anchor — one read, four
+  // consumers, not two reads that could each answer differently.
   //
-  // #97 widens what this single resolution covers: the event's EVIDENCE SCOPE now rides in the same
-  // resolved value as its format, read from the same row at the same instant. Two separate lookups
-  // would let one build predict across version A's courts while naming version B's scope — the same
-  // race, one column over.
-  const event = options.eventName === undefined ? undefined : resolveEvent(db, options.eventName);
-  if (event !== undefined) requireSlotSet(event);
+  // `requireSlotSet` still runs here, on the PASSED value, at the same point in the sequence it
+  // always has — before any team is read or any leaf is validated — so an event with no format still
+  // refuses with nothing written, including on a team set that is empty or wholly without history.
+  // The unknown-event refusal itself now lives with `resolveEvent`, at the command boundary that
+  // performs the one read this function (and the window) both consume.
+  if (options.event !== undefined) requireSlotSet(options.event);
   // Same load-bearing `ORDER BY teams.id` as `resolveDirNameForTeam` above, and for the identical
   // reason: this function's own collision-disambiguation only agrees with a later single-team
   // refresh's disambiguation if both see teams in the same order, and SQL does not grant that for
@@ -485,7 +487,7 @@ export function writeSectionalsDossiers(db: Db, options: { season: SeasonWindow;
   // review, PR #38 round 2, Finding 3 [medium]; round 1 fixed the html-then-md ordering WITHIN one
   // team but never widened the guarantee to the whole batch this function drives).
   const preparedTeams = allTeams.map((team) =>
-    prepareTeamDossierWrite(db, team.id, { season: options.season, event }, dirNames.get(team.id)),
+    prepareTeamDossierWrite(db, team.id, { window: options.window, event: options.event }, dirNames.get(team.id)),
   );
 
   const entries: TeamIndexEntry[] = allTeams.map((t) => ({

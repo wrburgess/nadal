@@ -96,7 +96,7 @@ before parsing.
 | Step | Where |
 |---|---|
 | Same dispatcher, different command | `src/cli/router.ts` → `src/cli/commands/report-build.ts` |
-| Anchor the season to the **event**, not to today's date | `src/query/events.ts` → `src/cli/window.ts` |
+| Anchor the 12-month evidence window to the **event**, not to today's date | `src/query/events.ts` → `src/cli/window.ts` |
 | **View entry**: assemble the dossier | `src/report/write.ts` |
 | **Model**: team profile, each roster member's profile, the derived numbers | `src/query/team-profile.ts`, `src/query/player-profile.ts`, `src/query/derive.ts` |
 | **Model**: the predicted lineup, labelled a guess | `src/query/lineup.ts` |
@@ -191,10 +191,15 @@ Each of these is answerable by opening a named path.
 reviewer is not misled by a clean table — none is a bug in itself, and several are reasonable.
 
 - **The View imports from the Controller directory.** `src/report/html.ts` and `src/report/markdown.ts`
-  take their formatters from `src/cli/format-profile.ts`; `src/report/write.ts` takes season arithmetic
-  from `src/cli/window.ts`. Shared rather than duplicated — but the shared home is `src/cli/`.
+  take their formatters from `src/cli/format-profile.ts`; `src/report/write.ts` takes evidence-window
+  arithmetic from `src/cli/window.ts`. Shared rather than duplicated — but the shared home is `src/cli/`.
 - **One front door imports from the other's directory.** `src/mcp/tools.ts` also uses
   `src/cli/window.ts`.
+- **The Model validates against Controller arithmetic.** `src/query/player-profile.ts` and
+  `src/query/team-profile.ts` import `verifiedWindow` from `src/cli/window.ts` (#122 round 2) —
+  the profile services refuse a window disclosure that does not derive from its own anchor day,
+  and the validator lives beside the derivation it checks, whose shared-but-misplaced home is
+  still `src/cli/` (the first bullet's wart, one edge wider).
 - **The View runs its own queries.** `src/report/write.ts` reads the `teams` table directly; no
   `src/query/` function owns "list all teams".
 - **Both controllers run the same one-line query.** `src/cli/commands/team-home.ts` and

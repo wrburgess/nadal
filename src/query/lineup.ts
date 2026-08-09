@@ -90,10 +90,12 @@ const resolvedEvent = Symbol("resolvedEvent");
  */
 export type ResolvedEvent = {
   readonly event: { readonly id: number; readonly name: string };
-  /** The event's own kind and date range, carried ONLY so `requireSlotSet` can render a
-   * copy-pasteable `tn event add` line without a second read of the row — which would reintroduce,
-   * inside the refusal path, the very two-read window this type exists to close. Deliberately kept
-   * out of `event` above, which stays the two fields a presenter may state as provenance. */
+  /** The event's own kind and date range, carried so consumers need no second read of the row —
+   * which would reintroduce the very two-read window this type exists to close. Two consumers:
+   * `requireSlotSet` renders a copy-pasteable `tn event add` line from it inside the refusal path,
+   * and (#122) `team show`/`player show` (CLI and MCP) anchor their 12-month evidence window to
+   * `startsOn`. Deliberately kept out of `event` above, which stays the two fields a presenter may
+   * state as provenance. */
   readonly recordedAs: {
     readonly kind: string;
     readonly startsOn: string | null;
