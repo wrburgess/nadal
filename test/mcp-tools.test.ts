@@ -138,6 +138,40 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(payload).toEqual(expected);
   });
 
+  // #122 round-1 fold (found while fixing Finding 1, pre-existing): the CLI's `tn team show
+  // <team> <event>` passes the resolved event's id into `getTeamProfile`, so its roster is scoped
+  // to the event's registrations (#113) — MCP's `team_show` resolved the same event for league
+  // scope and window but dropped `eventId`, so the two doors described different rosters for the
+  // same arguments (ARCHITECTURE.md §5 question 3, the exact drift the parity discipline exists
+  // to catch). This pins the MCP door to the registered scope.
+  it("team_show scopes its roster to the named event's registrations, like the CLI door", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    seedTeamWithRosters(db, {
+      teamName: "OK/Dickason",
+      season: ["Alice Adams", "Bob Brown", "Cara Cole"],
+      registered: { eventName: "Springfield Sectionals", names: ["Alice Adams"] },
+    });
+    sqlite.close();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "team_show",
+      arguments: { target: "OK/Dickason", event: "Springfield Sectionals" },
+    });
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(textOf(result)) as {
+      rosterSource: string;
+      roster: { canonicalName: string }[];
+      absentRoster: { canonicalName: string }[];
+    };
+
+    expect(payload.rosterSource).toBe("registered");
+    expect(payload.roster.map((r) => r.canonicalName)).toEqual(["Alice Adams"]);
+    // The not-registered watch list is part of the same #113 contract — present, not dropped.
+    expect(payload.absentRoster.map((r) => r.canonicalName).sort()).toEqual(["Bob Brown", "Cara Cole"]);
+  });
+
   // Issue #49: an explicit wire-shape pin. `player_show`'s handler returns `getPlayerProfile`
   // VERBATIM (src/mcp/tools.ts), so the new `retiredAt` field is additive and automatic — but
   // `test/mcp-tool-parity.test.ts` only checks tool-name/command parity, not payload shape, so

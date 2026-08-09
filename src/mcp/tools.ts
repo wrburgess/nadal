@@ -210,9 +210,14 @@ export const MCP_TOOLS: McpToolDef[] = [
         // event-less window slides) produced different numbers with nothing on the wire to say why.
         // `windowSnapshot` is read ONCE here and handed straight to the profile, which copies it
         // verbatim into `evidenceWindow`.
+        // #122 round-1 fold (pre-existing drift found while fixing Finding 1): the CLI door has
+        // passed `eventId` since #113, scoping the roster to the event's registrations — this door
+        // resolved the same event and then dropped its id, so the two doors described different
+        // rosters for the same arguments (ARCHITECTURE.md §5 question 3).
         return getTeamProfile(db, resolution.teamId, {
           window: windowSnapshot(evidenceWindow(anchor)),
           leagueScope: resolvedEvent?.leagueScope ?? null,
+          eventId: resolvedEvent?.event.id ?? null,
         });
       } finally {
         sqlite.close();
