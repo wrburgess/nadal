@@ -126,10 +126,10 @@ describe("the 12-month evidence window (issue #122, superseding #90's calendar-y
     expect(await showTeam(teamName, "Sectionals 2026")).toContain("record: 3-0");
   });
 
-  // Maps old case #7 ("refuses an unknown event"), folded in here as the excluded-day half of the
-  // SAME boundary fixture rather than a separate assertion — the inclusive-bound behavior itself is
-  // unit-tested exhaustively in test/cli-window.test.ts and test/query-derive.test.ts; this is the
-  // integration pin that the exclusion actually reaches the printed record.
+  // NEW case (boundary precision — no old-suite predecessor; old case #7, the unknown-event
+  // refusal, is mapped in the "report build's anchor" describe below). The inclusive-bound behavior
+  // itself is unit-tested exhaustively in test/cli-window.test.ts and test/query-derive.test.ts;
+  // this is the integration pin that the exclusion actually reaches the printed record.
   it("a match exactly one day before the bound is excluded from the printed record", async () => {
     const { teamId, teamName } = seed();
     seedEvent("Sectionals 2026", "2026-08-28");

@@ -18,7 +18,7 @@
 // The fix is a **12-month lookback**, not a calendar boundary: `since` is exactly one year before the
 // anchor day, inclusive, so RECENCY — not administrative-season membership — is what decides what
 // counts. Measured on the same database, this bound keeps 38 of 38 team matches (every team's record
-// becomes true) versus 26 of 38 under the 2026 calendar-year boundary it replaces. It keeps issue
+// becomes true) versus 24 of 38 under the 2026 calendar-year boundary it replaces. It keeps issue
 // #90's own no-drift-with-print-date property: the anchor is still an EVENT's `starts_on` when the
 // caller has one, or the caller's clock otherwise — never the day the command happens to run.
 //
