@@ -155,6 +155,32 @@ export type PlayerProfile = {
    * optional, and never omitted when no scope applies: a reader who cannot tell a scoped profile
    * from an unscoped one is back where this issue started. */
   evidenceScope: EvidenceScopeSummary;
+  /** #122 round-1 Finding 1: the window `singlesRecord`/`doublesRecord`/`slotTendencies`/
+   * `partnerFrequency` above were windowed to — the `evidenceScope` precedent above, one field over.
+   * An event-less `team show`/`player show` window SLIDES with the clock (design decision 6), so a
+   * caller reading only the profile (MCP, or CLI `--json`) had no value that explained which boundary
+   * produced the numbers on the page; the CLI text path alone printed the label out of band. Populated
+   * straight from `options.window` — the SAME validated snapshot `since` above was filtered by, never
+   * a second derivation — so it cannot describe a window other than the one that actually ran. Callers
+   * are expected to pass `windowSnapshot(...)`'s output (or anything structurally identical to it);
+   * the ONE-VALIDATED-READ discipline that guarantees `anchorDay`/`since`/`label` agree is enforced by
+   * `windowSnapshot` itself (src/cli/window.ts), not repeated here. */
+  evidenceWindow: EvidenceWindowDisclosure;
+};
+
+/**
+ * The plain, already-derived shape an evidence window disclosure needs: the anchor day, the
+ * inclusive lower bound derived from it, and the display label — exactly `WindowSnapshot`'s three
+ * fields (src/cli/window.ts), but declared HERE, structurally, rather than imported from `cli/`. The
+ * query layer has no other reason to depend on the CLI's window module, and importing the type just
+ * to re-export it would create an import edge this layer does not otherwise need; `WindowSnapshot`
+ * satisfies this type structurally with no cast, so every real caller (which always passes
+ * `windowSnapshot(...)`'s own output) needs nothing extra to comply.
+ */
+export type EvidenceWindowDisclosure = {
+  readonly anchorDay: string;
+  readonly since: string;
+  readonly label: string;
 };
 
 /** What `courtMatchRowsForPlayers` returns: the rows to derive from, and an honest account of what
@@ -273,18 +299,20 @@ export function courtMatchRowsForPlayers(
 }
 
 /**
- * Assemble every derived section of one player's dossier. `options.since` bounds the WINDOWED
+ * Assemble every derived section of one player's dossier. `options.window.since` bounds the WINDOWED
  * records, slot tendencies and partner counts (issue #122: a 12-month lookback, not a calendar
  * season); the "all-time" records omit it (derive.ts's `windowedRecord` treats a missing `since` as
- * no lower bound).
+ * no lower bound). `options.window` as a whole is copied verbatim into the returned profile's
+ * `evidenceWindow` (round-1 Finding 1) — the disclosure and the filter are the SAME read, so they
+ * cannot describe different windows.
  *
  * **`slotTendencies`/`partnerFrequency` are filtered to the SAME window as the records beside them**
  * (issue #122, Task 3 — "the second failure": the window used to reach `singlesRecord`/
  * `doublesRecord` only, so a player's block could print a windowed "0-0" next to tendencies drawn
  * from matches entirely outside it, with nothing on the page distinguishing "did not play" from
- * "played outside a boundary the page never names"). `rowsWithin(options.since)` (derive.ts) is the
- * one shared predicate both now filter through before deriving, so "one page, one window" holds by
- * construction.
+ * "played outside a boundary the page never names"). `rowsWithin(options.window.since)` (derive.ts)
+ * is the one shared predicate both now filter through before deriving, so "one page, one window"
+ * holds by construction.
  *
  * `options.leagueScope` (#97) scopes the EVIDENCE rather than the window: records, slot tendencies
  * and partner counts are computed only over the court matches the scope retains, and what it set
@@ -294,7 +322,7 @@ export function courtMatchRowsForPlayers(
 export function getPlayerProfile(
   db: Db,
   playerId: number,
-  options: { since: string; leagueScope?: LeagueScope | null },
+  options: { window: EvidenceWindowDisclosure; leagueScope?: LeagueScope | null },
 ): PlayerProfile {
   const playerRow = db.select().from(players).where(eq(players.id, playerId)).all()[0];
   if (playerRow === undefined) throw new Error(`getPlayerProfile: no player with id ${playerId}`);
@@ -315,7 +343,7 @@ export function getPlayerProfile(
   // apply `since` themselves (via `windowedRecord`'s own `since` option, unchanged), so `courtRows`
   // stays the unwindowed evidence set for THEM; `windowedRows` is the explicit, shared filter for
   // everything else that must match.
-  const windowedRows = rowsWithin(options.since)(courtRows);
+  const windowedRows = rowsWithin(options.window.since)(courtRows);
 
   const membershipRows: PlayerTeamMembershipSummary[] = db
     .select({
@@ -348,11 +376,11 @@ export function getPlayerProfile(
     },
     ratingTrajectory: ratingTrajectory(observationRows),
     singlesRecord: {
-      windowed: windowedRecord(courtRows, playerId, { since: options.since, discipline: "singles" }),
+      windowed: windowedRecord(courtRows, playerId, { since: options.window.since, discipline: "singles" }),
       allTime: windowedRecord(courtRows, playerId, { discipline: "singles" }),
     },
     doublesRecord: {
-      windowed: windowedRecord(courtRows, playerId, { since: options.since, discipline: "doubles" }),
+      windowed: windowedRecord(courtRows, playerId, { since: options.window.since, discipline: "doubles" }),
       allTime: windowedRecord(courtRows, playerId, { discipline: "doubles" }),
     },
     slotTendencies: slotTendencies(windowedRows, playerId),
@@ -362,6 +390,11 @@ export function getPlayerProfile(
     // second time could describe a scope the rows above were not actually filtered by, which is
     // precisely the claim #97 forbids a filtered record from making.
     evidenceScope: evidence.scope,
+    // #122 round-1 Finding 1: copied verbatim from `options.window` — never re-derived — so this
+    // disclosure describes the SAME window `since` above actually filtered by, not a second read of
+    // it. See `EvidenceWindowDisclosure`'s own doc comment for why the type is structural rather than
+    // imported from `cli/window.ts`.
+    evidenceWindow: { anchorDay: options.window.anchorDay, since: options.window.since, label: options.window.label },
     // `hasWriter` is a fact about the CODEBASE — "can anything, anywhere, populate this section for
     // a player?" — and it has to keep tracking that fact rather than freezing at whatever was true
     // when it was written (docs/findings.md, #15/Task 3 rule 6). All three sections are now `true`

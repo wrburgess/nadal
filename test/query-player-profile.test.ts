@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { evidenceWindow, windowSnapshot } from "../src/cli/window.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
 import {
@@ -18,6 +19,15 @@ import { setEventRoster } from "../src/ingest/roster-set.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../src/query/player-profile.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
+
+/** #122 round-1 Finding 1: `getPlayerProfile` takes a `window` (an `EvidenceWindowDisclosure`), not
+ * a bare `since` — constructed via `windowSnapshot(evidenceWindow(anchorDay))`, never a hand-assembled
+ * triple. `anchorDay` is one year after the fixture's intended `since` bound (the textual 12-month
+ * subtraction this module documents in `src/cli/window.ts`), so each existing fixture's `since` value
+ * is preserved exactly. */
+function windowSince(anchorDay: string) {
+  return windowSnapshot(evidenceWindow(anchorDay));
+}
 
 type Db = ReturnType<typeof openDb>["db"];
 
@@ -80,7 +90,7 @@ describe("getPlayerProfile", () => {
         ],
       );
 
-      const profile = getPlayerProfile(db, player.id, { since: "2026-06-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-06-01") });
 
       expect(profile.identity.canonicalName).toBe("Nova Norbury");
       expect(profile.ratingTrajectory).toHaveLength(4);
@@ -150,7 +160,7 @@ describe("getPlayerProfile", () => {
         ],
       );
 
-      const profile = getPlayerProfile(db, player.id, { since: "2026-06-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-06-01") });
 
       // Two in-window matches, D3/D4 excluded entirely.
       expect(profile.slotTendencies).toEqual(
@@ -184,7 +194,7 @@ describe("getPlayerProfile", () => {
         .where(eq(teamMemberships.playerId, player.id))
         .run();
 
-      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
 
       expect(profile.teamMemberships).toEqual([
         { teamId: team.id, teamName: "Former Team", eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" },
@@ -215,14 +225,14 @@ describe("getPlayerProfile", () => {
         ],
       );
 
-      const before = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const before = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
 
       db.update(teamMemberships)
         .set({ retiredAt: "2026-07-01T00:00:00.000Z" })
         .where(eq(teamMemberships.playerId, player.id))
         .run();
 
-      const after = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const after = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
       expect(after.doublesRecord).toEqual(before.doublesRecord);
       expect(after.partnerFrequency).toEqual(before.partnerFrequency);
       expect(after.partnerFrequency).toEqual([{ partnerId: partner.id, count: 1, canonicalName: "Steady Partner" }]);
@@ -239,7 +249,7 @@ describe("getPlayerProfile", () => {
         .values({ playerId: player.id, source: "tr_dynamic", value: 3.8, observedOn: "2026-01-01" })
         .run();
 
-      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
 
       expect(profile.ratingTrajectory).toHaveLength(1);
       expect(profile.ratingTrajectory[0]!.source).toBe("tr_dynamic");
@@ -256,7 +266,7 @@ describe("getPlayerProfile", () => {
     try {
       const player = seedPlayer(db, { canonicalName: "Blake Bramwell" });
 
-      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
 
       expect(profile.singlesRecord.allTime).toEqual({ wins: 0, losses: 0, undecided: 0, excludedUndated: 0 });
       expect(profile.doublesRecord.allTime).toEqual({ wins: 0, losses: 0, undecided: 0, excludedUndated: 0 });
@@ -279,7 +289,7 @@ describe("getPlayerProfile", () => {
     const { db, sqlite } = freshDb();
     try {
       const player = seedPlayer(db, { canonicalName: "Casey Calder" });
-      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
       expect(profile.dataGaps).toEqual({
         events: "empty",
         availability: "empty",
@@ -314,7 +324,7 @@ describe("getPlayerProfile", () => {
         .values({ playerId: player.id, note: "Serves big.", createdAt: new Date().toISOString() })
         .run();
 
-      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
       expect(profile.dataGaps.availability).toBe("has-data");
       expect(profile.dataGaps.captainNotes).toBe("has-data");
       // #113: `tn roster set` is now a real production writer for an event-scoped membership, so a
@@ -342,7 +352,7 @@ describe("getPlayerProfile", () => {
       const player = seedPlayer(db, { canonicalName: "Elin Eventless" });
       db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
 
-      const profile = getPlayerProfile(db, player.id, { since: "2026-01-01" });
+      const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
       expect(profile.dataGaps.events).toBe("empty");
     } finally {
       sqlite.close();
@@ -373,10 +383,10 @@ describe("getPlayerProfile", () => {
       const reyId = fixture.seasonPlayerIds.get("Registered Rey")!;
       const umaId = fixture.seasonPlayerIds.get("Unregistered Uma")!;
 
-      const reyProfile = getPlayerProfile(db, reyId, { since: "2026-01-01" });
+      const reyProfile = getPlayerProfile(db, reyId, { window: windowSince("2027-01-01") });
       expect(reyProfile.dataGaps.events).toBe("has-data");
 
-      const umaProfile = getPlayerProfile(db, umaId, { since: "2026-01-01" });
+      const umaProfile = getPlayerProfile(db, umaId, { window: windowSince("2027-01-01") });
       expect(umaProfile.dataGaps.events).toBe("empty");
     } finally {
       sqlite.close();
@@ -486,7 +496,7 @@ describe("resolvePlayerTarget", () => {
       expect(byAlias).toEqual(byCanonical);
 
       const profileByAlias = getPlayerProfile(db, (byAlias as { kind: "ok"; playerId: number }).playerId, {
-        since: "2026-01-01",
+        window: windowSince("2027-01-01"),
       });
       expect(profileByAlias.identity.canonicalName).toBe("Élodie Fontaine");
     } finally {

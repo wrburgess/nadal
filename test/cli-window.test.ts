@@ -166,10 +166,29 @@ describe("windowSnapshot — the report boundary's one read", () => {
   it("derives a well-formed `since` for a range of adversarial-but-valid anchors", () => {
     // The lexical-compare hazard: `played_on` is compared as TEXT, so `since` must be provably
     // `YYYY-MM-DD` shaped or a malformed bound fails OPEN (admits everything) rather than closed.
-    for (const anchorDay of ["2026-01-01", "2026-12-31", "2028-02-29", "2000-02-29", "2025-06-15"]) {
+    // "0001-01-01" is the smallest anchor that still derives a well-formed bound (year 0000) — see
+    // the year-0000 refusal below for the one anchor this loop deliberately stops short of.
+    for (const anchorDay of ["2026-01-01", "2026-12-31", "2028-02-29", "2000-02-29", "2025-06-15", "0001-01-01"]) {
       const { since } = windowSnapshot({ anchorDay });
       expect(since).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
+  });
+
+  it.each(["0000-01-01", "0000-12-31"])(
+    "refuses a year-0000 anchor (%s) rather than deriving a malformed lexical bound",
+    (anchorDay) => {
+      // `isIsoDay("0000-01-01")` is TRUE (it is a real calendar day), so this is not caught by the
+      // malformed-shape refusals above — it needs its own check. Without it, `twelveMonthsBefore`
+      // computes `String(-1).padStart(4, "0")`, which is `"00-1"`, not a 4-digit year: the bound
+      // becomes `"00-1-01-01"`, malformed text that sorts BELOW every real `YYYY-MM-DD` value and so
+      // admits every row a lexical `played_on >= since` compares it against — failing OPEN, the exact
+      // hazard this whole seam exists to close.
+      expect(() => windowSnapshot({ anchorDay })).toThrow(/unusable evidence window anchor/i);
+    },
+  );
+
+  it("windowStart(0001-01-01) is 0000-01-01 — the smallest anchor with a well-formed predecessor year", () => {
+    expect(windowStart("0001-01-01")).toBe("0000-01-01");
   });
 });
 

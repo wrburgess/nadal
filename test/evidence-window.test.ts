@@ -9,7 +9,7 @@
 // printed numbers NOT depending on when the command runs, and the only way to assert that is to run
 // a command twice from two different "nows" and compare.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +20,8 @@ import { events, players, teamMatches, teamMemberships, teams } from "../src/db/
 import { windowStart } from "../src/cli/window.js";
 import { MCP_TOOLS } from "../src/mcp/tools.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
-import { resolveWindowAnchor } from "../src/query/events.js";
+import { windowAnchorFor } from "../src/query/events.js";
+import { resolveEvent } from "../src/query/lineup.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 /** Four team matches spanning both sides of the 12-month bound for anchor `2026-08-28` (the
@@ -227,9 +228,11 @@ describe("the 12-month evidence window (issue #122, superseding #90's calendar-y
     logSpy.mockRestore();
   });
 
-  // Maps old describe block "report build's anchor" (old cases #5, #6, #7) — mechanism unchanged
-  // (`resolveWindowAnchor`, renamed from `resolveSeasonAnchor`), so these three are kept nearly
-  // verbatim, only renamed.
+  // Maps old describe block "report build's anchor" (old cases #5, #6, #7). Round-1 Finding 3
+  // (#122 review) split `resolveWindowAnchor` in two: `resolveEvent` (the ONE read of the `events`
+  // row, shared with format/scope/roster) and `windowAnchorFor` (a PURE function over that
+  // already-resolved event) — closing the double-read that used to let the window come from one
+  // snapshot and the format/scope/roster come from another.
   describe("report build's anchor", () => {
     it("anchors to the EVENT's starts_on, not to the year the command is run in", async () => {
       seed();
@@ -237,7 +240,8 @@ describe("the 12-month evidence window (issue #122, superseding #90's calendar-y
       vi.setSystemTime(new Date("2027-05-01T12:00:00Z"));
       const { db, sqlite } = openDb();
 
-      const anchor = resolveWindowAnchor(db, "Sectionals 2026");
+      const event = resolveEvent(db, "Sectionals 2026");
+      const anchor = windowAnchorFor(event);
       sqlite.close();
 
       expect(anchor).toEqual({ value: "2026-08-28", anchoredTo: "event" });
@@ -250,19 +254,29 @@ describe("the 12-month evidence window (issue #122, superseding #90's calendar-y
       vi.setSystemTime(new Date("2026-08-03T12:00:00Z"));
       const { db, sqlite } = openDb();
 
-      const anchor = resolveWindowAnchor(db, "Undated Event");
+      const event = resolveEvent(db, "Undated Event");
+      const anchor = windowAnchorFor(event);
       sqlite.close();
 
       expect(anchor.anchoredTo).toBe("today");
       expect(windowStart(anchor.value)).toBe("2025-08-03");
     });
 
+    // The unknown-event refusal moved to `resolveEvent` at the command boundary (round-1 Finding 3):
+    // `windowAnchorFor` is now pure over an already-resolved event and cannot itself look anything
+    // up, let alone refuse a bad name — so this is asserted END TO END through `dispatch` rather
+    // than against a helper that no longer has the means to throw it.
     it("refuses an unknown event rather than quietly anchoring to today", async () => {
       seed();
-      const { db, sqlite } = openDb();
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-      expect(() => resolveWindowAnchor(db, "Sectionals 2O26")).toThrow(/unknown event/i);
-      sqlite.close();
+      const code = await dispatch(["report", "build", "sectionals", "Sectionals 2O26"]);
+
+      expect(code).toBe(1);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unknown event"));
+      // The refusal happens before any dossier is prepared — nothing lands on disk.
+      expect(existsSync(join(reportsDir, "index.html"))).toBe(false);
+      errSpy.mockRestore();
     });
   });
 
@@ -275,10 +289,56 @@ describe("the 12-month evidence window (issue #122, superseding #90's calendar-y
 
     const mcpProfile = (await toolHandler("team_show")({ target: teamName, event: "Sectionals 2026" })) as {
       teamRecord: { wins: number; losses: number; undecided: number; excludedUndated: number };
+      evidenceWindow: { anchorDay: string; since: string; label: string };
     };
 
     expect(mcpProfile.teamRecord).toEqual({ wins: 3, losses: 0, undecided: 0, excludedUndated: 0 });
     expect(cliPrinted).toContain("record: 3-0");
+    // Round-1 Finding 1 (#122 review): `team_show`/`player_show` (and CLI `--json`) used to return a
+    // WINDOWED profile with no value explaining the boundary it was windowed to — a caller couldn't
+    // tell one window from another without a second, out-of-band CLI call. `evidenceWindow` is the
+    // disclosure, copied from the SAME validated snapshot the query filtered by.
+    expect(mcpProfile.evidenceWindow).toEqual({
+      anchorDay: "2026-08-28",
+      since: "2025-08-28",
+      label: "12mo to 2026-08-28",
+    });
+  });
+
+  // Round-1 Finding 1 (#122 review), the reviewer's own trace: call `team_show` against the SAME DB
+  // at two different clock times with no event named — the two calls generate different bounds and
+  // therefore different records, but (before this fix) both payloads carried only `windowed` records
+  // with nothing that explained either boundary. `evidenceWindow.since` is the value that makes the
+  // difference legible instead of merely observable.
+  it("MCP team_show, event-less: two different clock times return two different records AND two different evidenceWindow.since values", async () => {
+    const { teamName } = seed();
+
+    vi.setSystemTime(new Date("2026-08-28T12:00:00Z"));
+    const august = (await toolHandler("team_show")({ target: teamName })) as {
+      teamRecord: { wins: number; losses: number };
+      evidenceWindow: { anchorDay: string; since: string; label: string };
+    };
+
+    vi.setSystemTime(new Date("2026-12-24T12:00:00Z"));
+    const december = (await toolHandler("team_show")({ target: teamName })) as {
+      teamRecord: { wins: number; losses: number };
+      evidenceWindow: { anchorDay: string; since: string; label: string };
+    };
+
+    // August: since = 2025-08-28, so JUST_OUTSIDE (2025-08-27) is excluded -> 3-0 (matches the CLI
+    // twin's own assertion above).
+    expect(august.teamRecord).toEqual(expect.objectContaining({ wins: 3, losses: 0 }));
+    expect(august.evidenceWindow).toEqual({ anchorDay: "2026-08-28", since: "2025-08-28", label: "12mo to 2026-08-28" });
+    // December: since = 2025-12-24, so ON_BOUND and JUST_OUTSIDE are both excluded -> 2-0.
+    expect(december.teamRecord).toEqual(expect.objectContaining({ wins: 2, losses: 0 }));
+    expect(december.evidenceWindow).toEqual({
+      anchorDay: "2026-12-24",
+      since: "2025-12-24",
+      label: "12mo to 2026-12-24",
+    });
+    // The records differ, AND the disclosure explains why — a reader given only these two payloads
+    // (no side-channel CLI call) can tell the two windows apart.
+    expect(august.evidenceWindow.since).not.toBe(december.evidenceWindow.since);
   });
 
   // New, per the plan's Task 7 list: "event-anchored windowing actually reaching team show/player

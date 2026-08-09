@@ -24,13 +24,13 @@ import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
-import { addEvent, resolveWindowAnchor } from "../query/events.js";
+import { addEvent, windowAnchorFor } from "../query/events.js";
 import { NoCourtMatchHistoryError, getLineupPlan, resolveEvent } from "../query/lineup.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../report/write.js";
-import { evidenceWindow, windowStart, windowSnapshot } from "../cli/window.js";
+import { evidenceWindow, windowSnapshot } from "../cli/window.js";
 
 /** A tool-level refusal, mapped to `CallToolResult.isError` by `src/mcp/server.ts` — never a crash.
  * Every "unknown target" / "ambiguous target" / domain-service refusal below throws this (or lets
@@ -203,8 +203,15 @@ export const MCP_TOOLS: McpToolDef[] = [
         // The scope summary rides inside the returned profile (`evidenceScope`), so an agent reading
         // this over MCP is handed the same disclosure the CLI prints rather than a bare set of
         // records it would have to take on trust — #97's whole point, one surface over.
+        //
+        // #122 round-1 Finding 1: `evidenceWindow` is the identical disclosure for the WINDOW —
+        // before this fix, `team_show`/`player_show` returned windowed records with no value
+        // explaining the boundary, so two calls against the same DB at different clock times (an
+        // event-less window slides) produced different numbers with nothing on the wire to say why.
+        // `windowSnapshot` is read ONCE here and handed straight to the profile, which copies it
+        // verbatim into `evidenceWindow`.
         return getTeamProfile(db, resolution.teamId, {
-          since: windowStart(anchor),
+          window: windowSnapshot(evidenceWindow(anchor)),
           leagueScope: resolvedEvent?.leagueScope ?? null,
         });
       } finally {
@@ -299,11 +306,12 @@ export const MCP_TOOLS: McpToolDef[] = [
       try {
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
         // #97/#122: resolved ONCE — see `team_show`'s twin comment above for why both the league
-        // scope and the window anchor come from this single resolution.
+        // scope and the window anchor come from this single resolution. Round-1 Finding 1: same
+        // `evidenceWindow` disclosure as `team_show`, for the same reason.
         const resolvedEvent = event === undefined ? undefined : resolveEvent(db, event);
         const anchor = resolvedEvent?.recordedAs.startsOn ?? new Date();
         return getPlayerProfile(db, resolution.playerId, {
-          since: windowStart(anchor),
+          window: windowSnapshot(evidenceWindow(anchor)),
           leagueScope: resolvedEvent?.leagueScope ?? null,
         });
       } finally {
@@ -613,7 +621,15 @@ export const MCP_TOOLS: McpToolDef[] = [
         // same helpers. Three of this issue's six call sites are in this file, and a binder that
         // disagreed with the agent chat about which window it covered would have nothing to surface
         // the difference.
-        const anchor = resolveWindowAnchor(db, event);
+        //
+        // #122 round-1 Finding 3: `resolveEvent` runs EXACTLY ONCE, right here — `windowAnchorFor` is
+        // a pure function over this already-resolved value, and `writeSectionalsDossiers`/
+        // `writeTeamDossier` below take the resolved event as a parameter rather than looking it up
+        // again. The CLI twin's own comment (`src/cli/commands/report-build.ts`) has the full
+        // rationale: two independent reads could let a concurrent `tn event add` hand one build the
+        // old event's window and the new event's format/scope/roster.
+        const resolvedEvent = event === undefined ? undefined : resolveEvent(db, event);
+        const anchor = windowAnchorFor(resolvedEvent);
         const window = evidenceWindow(anchor.value);
         let written: string[];
         let teamsCount: number;
@@ -623,11 +639,11 @@ export const MCP_TOOLS: McpToolDef[] = [
         // cannot honestly carry one scalar for a mix of registered and season teams.
         let rosterSource: "registered" | "season" | undefined;
         if (target === undefined || target === "sectionals") {
-          written = writeSectionalsDossiers(db, { window, eventName: event });
+          written = writeSectionalsDossiers(db, { window, event: resolvedEvent });
           teamsCount = countTeams(db);
         } else {
           const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-          const result = writeTeamDossier(db, resolution.teamId, { window, eventName: event });
+          const result = writeTeamDossier(db, resolution.teamId, { window, event: resolvedEvent });
           written = result.files;
           rosterSource = result.rosterSource;
           teamsCount = 1;

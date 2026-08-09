@@ -210,7 +210,12 @@ and partner counts above are windowed to the 12 months before the event's own `s
 anchor `tn report build` uses, rather than sliding with the clock — a resolved event supplies exactly
 ONE `starts_on` lookup, reused for both the league scope above and this window, never a second read.
 No event named: the window instead slides with the caller's clock (today minus 12 months), and the
-printed label — `12mo to <anchor day>` — says which one was used either way.
+printed label — `12mo to <anchor day>` — says which one was used either way. The JSON forms (`--json`
+on either command, and both MCP tools) carry the identical disclosure as an `evidenceWindow` field
+(`{ anchorDay, since, label }`) inside the returned profile — round 1 of #122's review found the CLI
+text path naming its window while the JSON/MCP path returned windowed records with nothing that
+explained the boundary, which left an agent unable to tell one window from another without a second,
+out-of-band CLI call.
 
 Both commands print the scope **whether or not one applies** — `evidence:` names the filter and the
 count it set aside, `leagues counted:` names what survived it. The unscoped line ("no league scope
@@ -399,7 +404,11 @@ to this team's own schedule instead — see `tn lineup plan` below).
 
 The format and the scope are read from the event row **in one read**, once, before any dossier is
 prepared. Two lookups would let a `tn event add` committing mid-build from the neighbouring `tn mcp
-serve` process give one run version A's courts and version B's scope.
+serve` process give one run version A's courts and version B's scope. The 12-month evidence window's
+anchor (#122) comes from that SAME single read, not a separate one — round 1 of #122's review found
+the anchor still being resolved independently, which could hand one run version A's window alongside
+version B's format/scope/roster; the fix folded the anchor into the one read this paragraph already
+describes.
 
 **The event's format is resolved exactly once, before any dossier is prepared** — not once per team.
 That is what makes "every dossier" true rather than merely intended: nadal runs `tn mcp serve`

@@ -150,6 +150,19 @@ export function windowSnapshot(window: EvidenceWindow): WindowSnapshot {
       `unusable evidence window anchor: ${JSON.stringify(anchorDay)} (expected a real YYYY-MM-DD date)`,
     );
   }
+  // `isIsoDay("0000-01-01")` is TRUE — year 0000 is a real calendar day in this representation — but
+  // `twelveMonthsBefore`'s textual year decrement has no four-digit predecessor year to produce for
+  // it: `String(-1).padStart(4, "0")` is `"00-1"`, not a year, so the derived bound would be
+  // malformed text (`"00-1-01-01"`) that sorts BELOW every real `YYYY-MM-DD` value and therefore
+  // admits every row a lexical `played_on >= since` compares against it — failing OPEN. Year 0000 is
+  // the single valid ISO day-year with no predecessor year this scheme can express, so it is refused
+  // here rather than allowed to derive a malformed lexical bound (fail closed).
+  if (anchorDay.startsWith("0000-")) {
+    throw new Error(
+      `unusable evidence window anchor: ${JSON.stringify(anchorDay)} (expected a real YYYY-MM-DD date) ` +
+        `(year 0000 has no predecessor year to derive a 12-month bound from)`,
+    );
+  }
   return Object.freeze({ anchorDay, since: twelveMonthsBefore(anchorDay), label: `12mo to ${anchorDay}` });
 }
 

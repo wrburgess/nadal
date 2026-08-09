@@ -24,7 +24,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
 import { addEvent } from "../src/query/events.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
-import { windowStart } from "../src/cli/window.js";
+import { evidenceWindow, windowSnapshot, windowStart } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { removeRosterRow } from "./helpers/roster-html.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
@@ -128,7 +128,10 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const { db: db2, sqlite: sqlite2 } = openDb();
     let expected: unknown;
     try {
-      expected = getTeamProfile(db2, team.id, { since: windowStart() });
+      // #122 round-1 Finding 1: `getTeamProfile` now takes `window` (an `EvidenceWindowDisclosure`),
+      // not a bare `since` — this pins the parity claim against the SAME shape the real handler
+      // builds (src/mcp/tools.ts's `team_show`: `windowSnapshot(evidenceWindow(anchor))`).
+      expected = getTeamProfile(db2, team.id, { window: windowSnapshot(evidenceWindow()) });
     } finally {
       sqlite2.close();
     }

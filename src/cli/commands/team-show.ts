@@ -18,7 +18,7 @@ import {
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../format-profile.js";
-import { windowLabel, windowStart } from "../window.js";
+import { evidenceWindow, windowSnapshot } from "../window.js";
 
 /** Every error a bad `[event]` argument can throw (#97). `EventHasNoFormatError` is deliberately
  * absent for the same reason as in `player show`: this command reads the evidence scope, never the
@@ -37,9 +37,12 @@ function isEventRefusal(err: unknown): err is UnknownEventError | InvalidLeagueS
  * `player show` (Task 5): the ok path is not a `key=value` summary line, the error paths are.
  *
  * The spec's "6-month" is superseded by issue #122 (which generalizes #90's calendar-year season
- * into a 12-month lookback): the window is a 12-month lookback, and `windowLabel` is the label for
- * the very boundary `profile` was built with — passed in rather than recomputed here, so the number
- * and the label it sits beside can never come from two different anchors.
+ * into a 12-month lookback): the window is a 12-month lookback, and `label` is the printed form of
+ * the very boundary `profile` was built with — read ONCE (`windowSnapshot`) and passed to both the
+ * profile call and this formatter, so the number and the label it sits beside can never come from two
+ * different anchors (round-1 Finding 1, #122 review: this also removes the second `windowLabel(anchor)`
+ * derivation the pre-fix version used, in favor of reading the label off the same snapshot the profile
+ * itself now discloses as `evidenceWindow`).
  */
 function formatTeamProfileText(profile: TeamProfile, label: string, eventName: string | null): string {
   const lines = [
@@ -131,16 +134,18 @@ export const teamShow: Command = {
       // anchoring to the clock even when an event was given. ONE anchor for both the boundary and
       // the label below, so the two can never come from different reads.
       const anchor = resolvedEvent?.recordedAs.startsOn ?? new Date();
+      // #122 round-1 Finding 1: ONE read of the window (`windowSnapshot`), reused for both the
+      // profile's filter and this command's own label — replacing the separate `windowLabel(anchor)`
+      // derivation the pre-fix version used, which was a second read of the same anchor.
+      const win = windowSnapshot(evidenceWindow(anchor));
       const profile = getTeamProfile(db, resolution.teamId, {
-        since: windowStart(anchor),
+        window: win,
         leagueScope: resolvedEvent?.leagueScope ?? null,
         eventId: resolvedEvent?.event.id ?? null,
       });
 
       if (!opts.quiet) {
-        console.log(
-          opts.json ? emitJson(profile) : formatTeamProfileText(profile, windowLabel(anchor), eventName ?? null),
-        );
+        console.log(opts.json ? emitJson(profile) : formatTeamProfileText(profile, win.label, eventName ?? null));
       }
       return 0;
     } catch (err) {

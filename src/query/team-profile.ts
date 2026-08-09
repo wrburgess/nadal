@@ -15,6 +15,7 @@ import {
 } from "./derive.js";
 import { resolveHomeTeam } from "./home-team.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
+import type { EvidenceWindowDisclosure } from "./player-profile.js";
 import { resolveRoster } from "./roster.js";
 import type { LeagueScope } from "./league-scope.js";
 import type {
@@ -140,6 +141,11 @@ export type TeamProfile = {
    * copies would be N restatements of one fact, and any two of them drifting would be a lie the
    * type made possible. */
   evidenceScope: EvidenceScopeSummary;
+  /** #122 round-1 Finding 1: the window every roster member's record/slot tendencies above were
+   * windowed to — `player-profile.ts`'s `PlayerProfile.evidenceWindow`, the same disclosure, one
+   * profile over. Populated straight from `options.window`, never re-derived; see that field's own
+   * doc comment for the full rationale. */
+  evidenceWindow: EvidenceWindowDisclosure;
 };
 
 /**
@@ -158,7 +164,12 @@ export type TeamProfile = {
 export function getTeamProfile(
   db: Db,
   teamId: number,
-  options: { since: string; versusTeamId?: number; leagueScope?: LeagueScope | null; eventId?: number | null },
+  options: {
+    window: EvidenceWindowDisclosure;
+    versusTeamId?: number;
+    leagueScope?: LeagueScope | null;
+    eventId?: number | null;
+  },
 ): TeamProfile {
   const teamRow = db.select().from(teams).where(eq(teams.id, teamId)).all()[0];
   if (teamRow === undefined) throw new Error(`getTeamProfile: no team with id ${teamId}`);
@@ -203,14 +214,14 @@ export function getTeamProfile(
   // follows automatically without a second filter. `headToHead` deliberately does NOT use this: see
   // its own call site below, and `getPlayerProfile`'s twin doc comment for "the second failure" this
   // closes.
-  const windowedCourtRows = rowsWithin(options.since)(courtRows);
+  const windowedCourtRows = rowsWithin(options.window.since)(courtRows);
 
   const roster: RosterMemberProfile[] = rosterPlayerRows.map((p) => ({
     playerId: p.playerId,
     canonicalName: p.canonicalName,
     ageRange: p.ageRange,
-    singlesRecord: windowedRecord(courtRows, p.playerId, { since: options.since, discipline: "singles" }),
-    doublesRecord: windowedRecord(courtRows, p.playerId, { since: options.since, discipline: "doubles" }),
+    singlesRecord: windowedRecord(courtRows, p.playerId, { since: options.window.since, discipline: "singles" }),
+    doublesRecord: windowedRecord(courtRows, p.playerId, { since: options.window.since, discipline: "doubles" }),
     slotTendencies: slotTendencies(windowedCourtRows, p.playerId),
   }));
 
@@ -281,12 +292,15 @@ export function getTeamProfile(
     seasonCount: resolved.seasonCount,
     absentRoster,
     absentRatingSource: absentRating.source,
-    teamRecord: teamMatchRecord(teamMatchRows, teamId, { since: options.since }),
+    teamRecord: teamMatchRecord(teamMatchRows, teamId, { since: options.window.since }),
     slotTendencies: aggregatedSlotTendencies,
     headToHead: headToHeadRows,
     // Carried straight from the read that produced `courtRows` — see the same note in
     // `getPlayerProfile`. Note what it does NOT describe: `teamRecord`, which is derived from
     // `team_matches` and carries no league context of its own, so no scope has ever applied to it.
     evidenceScope: evidence.scope,
+    // #122 round-1 Finding 1: copied verbatim from `options.window` — see `PlayerProfile`'s twin
+    // field for the full rationale.
+    evidenceWindow: { anchorDay: options.window.anchorDay, since: options.window.since, label: options.window.label },
   };
 }

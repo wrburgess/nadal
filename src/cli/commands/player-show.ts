@@ -18,7 +18,7 @@ import {
   formatRetainedLeaguesLine,
   formatSlotTendencies,
 } from "../format-profile.js";
-import { windowLabel, windowStart } from "../window.js";
+import { evidenceWindow, windowSnapshot } from "../window.js";
 
 /** Every error a bad `[event]` argument can throw (#97) — caller-fixable, so it exits 1 with a
  * diagnostic rather than an uncaught throw. `EventHasNoFormatError` is deliberately absent: this
@@ -120,19 +120,19 @@ export const playerShow: Command = {
       // ONE anchor for both the boundary and the label below, so the two can never come from
       // different reads.
       const anchor = resolvedEvent?.recordedAs.startsOn ?? new Date();
+      // #122 round-1 Finding 1: ONE read of the window (`windowSnapshot`), reused for both the
+      // profile's filter and this command's own label — replacing the separate `windowLabel(anchor)`
+      // derivation the pre-fix version used, which was a second read of the same anchor.
+      const win = windowSnapshot(evidenceWindow(anchor));
       const profile = getPlayerProfile(db, resolution.playerId, {
-        since: windowStart(anchor),
+        window: win,
         leagueScope: resolvedEvent?.leagueScope ?? null,
       });
 
       // `--quiet` wins over `--json` (GRAMMAR.md), same as `emitSummary` — checked here rather
       // than routed through `emitSummary` itself, since neither success form is a `key=value` line.
       if (!opts.quiet) {
-        console.log(
-          opts.json
-            ? emitJson(profile)
-            : formatPlayerProfileText(profile, windowLabel(anchor), eventName ?? null),
-        );
+        console.log(opts.json ? emitJson(profile) : formatPlayerProfileText(profile, win.label, eventName ?? null));
       }
       return 0;
     } catch (err) {

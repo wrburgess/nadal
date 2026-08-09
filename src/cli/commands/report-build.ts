@@ -3,10 +3,10 @@ import { openDb } from "../../db/client.js";
 import { ambiguousMessage } from "../../ingest/errors.js";
 import { InvalidEventFormatError } from "../../query/event-format.js";
 import { InvalidLeagueScopeError } from "../../query/league-scope.js";
-import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
+import { EventHasNoFormatError, UnknownEventError, resolveEvent } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
-import { resolveWindowAnchor } from "../../query/events.js";
+import { windowAnchorFor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
@@ -73,7 +73,17 @@ export const reportBuild: Command = {
       // August as in December. `anchoredTo` is reported in the summary below because an event with
       // no `starts_on` falls back to today, and a fallback that looked identical to a real anchor
       // would reproduce the defect this fixes — a boundary that reads as anchored and is not.
-      const anchor = resolveWindowAnchor(db, eventName);
+      //
+      // #122 round-1 Finding 3: the named event is resolved EXACTLY ONCE, right here — never again
+      // by `windowAnchorFor` (a pure function over this already-resolved value) or by
+      // `writeSectionalsDossiers`/`writeTeamDossier` below (which take the resolved event as a
+      // parameter and never look it up themselves). Before this fix, the window came from its own
+      // separate `resolveWindowAnchor` read while the format/scope/roster came from a SECOND,
+      // independent `resolveEvent` read inside the write — a concurrent `tn event add` between the
+      // two could hand one build the old event's window and the new event's everything else. One
+      // read here removes the second read to disagree with it.
+      const event = eventName === undefined ? undefined : resolveEvent(db, eventName);
+      const anchor = windowAnchorFor(event);
       const window = evidenceWindow(anchor.value);
       let written: string[];
       let teamsCount: number;
@@ -82,7 +92,7 @@ export const reportBuild: Command = {
       // comment below).
       let rosterField: SummaryField | undefined;
       if (target === undefined || target === SECTIONALS_TARGET) {
-        written = writeSectionalsDossiers(db, { window, eventName });
+        written = writeSectionalsDossiers(db, { window, event });
         teamsCount = countTeams(db);
       } else {
         const resolution = resolveTeamTarget(db, target);
@@ -103,7 +113,7 @@ export const reportBuild: Command = {
         // revision re-queried the database after the files had landed, which a concurrent
         // `tn roster set` could slip inside — the summary would then say `roster=registered` about
         // files that say season roster. (Codex adversarial review, round 1, finding 3 [medium].)
-        const result = writeTeamDossier(db, resolution.teamId, { window, eventName });
+        const result = writeTeamDossier(db, resolution.teamId, { window, event });
         written = result.files;
         teamsCount = 1;
         rosterField = ["roster", result.rosterSource];
