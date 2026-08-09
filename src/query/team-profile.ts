@@ -305,8 +305,9 @@ export function getTeamProfile(
     // `getPlayerProfile`. Note what it does NOT describe: `teamRecord`, which is derived from
     // `team_matches` and carries no league context of its own, so no scope has ever applied to it.
     evidenceScope: evidence.scope,
-    // #122 round-1 Finding 1: copied verbatim from `options.window` — see `PlayerProfile`'s twin
-    // field for the full rationale.
+    // #122 round-1 Finding 1, provenance updated by round 2: copied from the VERIFIED snapshot
+    // recomputed at entry, not the caller's object — see `PlayerProfile`'s twin field for the full
+    // rationale.
     evidenceWindow: { anchorDay: window.anchorDay, since: window.since, label: window.label },
   };
 }

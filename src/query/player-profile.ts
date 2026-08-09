@@ -401,10 +401,11 @@ export function getPlayerProfile(
     // second time could describe a scope the rows above were not actually filtered by, which is
     // precisely the claim #97 forbids a filtered record from making.
     evidenceScope: evidence.scope,
-    // #122 round-1 Finding 1: copied verbatim from `options.window` — never re-derived — so this
-    // disclosure describes the SAME window `since` above actually filtered by, not a second read of
-    // it. See `EvidenceWindowDisclosure`'s own doc comment for why the type is structural rather than
-    // imported from `cli/window.ts`.
+    // #122 round-1 Finding 1, provenance updated by round 2: copied from the VERIFIED snapshot
+    // (`verifiedWindow(options.window)` at entry — the recomputed frozen triple, not the caller's
+    // object), the same single value every `since` filter above read — so this disclosure describes
+    // the window that actually ran, whatever the caller handed in. See `EvidenceWindowDisclosure`'s
+    // own doc comment for the validation rationale.
     evidenceWindow: { anchorDay: window.anchorDay, since: window.since, label: window.label },
     // `hasWriter` is a fact about the CODEBASE — "can anything, anywhere, populate this section for
     // a player?" — and it has to keep tracking that fact rather than freezing at whatever was true
