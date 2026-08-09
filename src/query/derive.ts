@@ -31,6 +31,23 @@ import type {
 } from "./types.js";
 
 /**
+ * Rows whose `playedOn` falls within `[since, +∞)` — the SAME inclusive lower bound
+ * `windowedRecord` already applies, extracted into its own pure predicate (issue #122, Task 3) so
+ * `slotTendencies`/`partnerFrequency` can be filtered to the identical window BEFORE deriving from
+ * rows, rather than deriving from every row on file while the record sitting next to them on the
+ * page is windowed. An undated row (`playedOn === null`) is excluded, same rule as
+ * `windowedRecord`'s `excludedUndated`: a window is meaningless without a date.
+ *
+ * Curried (`rowsWithin(since)(rows)`) so one bound can be captured once per caller and reused across
+ * several row sets (a roster's worth of `slotTendencies` calls, for instance) without re-stating
+ * `since` at every call site — the same "one window" the caller already resolved once, applied
+ * everywhere it is used.
+ */
+export function rowsWithin(since: string): (rows: CourtMatchRow[]) => CourtMatchRow[] {
+  return (rows) => rows.filter((row) => row.playedOn !== null && row.playedOn >= since);
+}
+
+/**
  * A player's win/loss/undecided record over `rows`, computed RELATIVE TO the player's own
  * `participants[].side` on each row — never against a literal "home" — per docs/findings.md
  * (#15): "home"/"visiting" are pull-perspective labels, not real home/away, so a Home/Away column

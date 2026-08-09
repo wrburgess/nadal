@@ -20,7 +20,7 @@ import { repoDefault } from "../fs/package-root.js";
 import type { Db } from "../ingest/db-types.js";
 import { resolveHomeTeam } from "../query/home-team.js";
 import { NoCourtMatchHistoryError, getLineupPlan, requireSlotSet, resolveEvent } from "../query/lineup.js";
-import { type SeasonWindow, seasonSnapshot } from "../cli/window.js";
+import { type EvidenceWindow, windowSnapshot } from "../cli/window.js";
 import type { ResolvedEvent } from "../query/lineup.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
@@ -176,12 +176,12 @@ function resolveTeamDirNames(entries: { teamId: number; teamName: string }[]): M
 export function buildTeamDossier(
   db: Db,
   teamId: number,
-  options: { season: SeasonWindow; event?: ResolvedEvent },
+  options: { window: EvidenceWindow; event?: ResolvedEvent },
 ): TeamDossier {
-  // ONE read of the caller's season, validated, before anything derives from it: a structural
-  // `SeasonWindow` can carry an accessor that answers differently on each read, which would filter
-  // the team and its players to one season and label the page with another.
-  const season = seasonSnapshot(options.season);
+  // ONE read of the caller's window, validated, before anything derives from it: a structural
+  // `EvidenceWindow` can carry an accessor that answers differently on each read, which would filter
+  // the team and its players to one window and label the page with another.
+  const window = windowSnapshot(options.window);
   const homeTeam = resolveHomeTeam(db);
   const versusTeamId = homeTeam !== null && homeTeam.id !== teamId ? homeTeam.id : undefined;
   // #97: taken from the ALREADY-RESOLVED event, exactly like the slot set below and for the same
@@ -193,9 +193,9 @@ export function buildTeamDossier(
   // #113: the SAME already-resolved event's id scopes the roster — never a second lookup, for the
   // identical reason `leagueScope` above is taken from it rather than re-read.
   const eventId = options.event?.event.id ?? null;
-  const team = getTeamProfile(db, teamId, { since: season.since, versusTeamId, leagueScope, eventId });
+  const team = getTeamProfile(db, teamId, { since: window.since, versusTeamId, leagueScope, eventId });
   const players = team.roster.map((member) =>
-    getPlayerProfile(db, member.playerId, { since: season.since, leagueScope }),
+    getPlayerProfile(db, member.playerId, { since: window.since, leagueScope }),
   );
 
   // #17 PR B: spec § Deliverables #1 puts the predicted lineup in the dossier, not only behind the
@@ -219,7 +219,7 @@ export function buildTeamDossier(
   }
 
   return {
-    season: season.year,
+    window: window.label,
     // Taken from the same resolved value `leagueScope` came from, so the event a dossier names
     // beside its evidence scope is provably the event that scope was read from.
     event: options.event === undefined ? null : { id: options.event.event.id, name: options.event.event.name },
@@ -277,7 +277,7 @@ type PreparedDossierWrite = {
 function prepareTeamDossierWrite(
   db: Db,
   teamId: number,
-  options: { season: SeasonWindow; event?: ResolvedEvent },
+  options: { window: EvidenceWindow; event?: ResolvedEvent },
   dirName?: string,
 ): PreparedDossierWrite {
   const dossier = buildTeamDossier(db, teamId, options);
@@ -381,7 +381,7 @@ export type TeamDossierWriteResult = {
 export function writeTeamDossier(
   db: Db,
   teamId: number,
-  options: { season: SeasonWindow; eventName?: string },
+  options: { window: EvidenceWindow; eventName?: string },
   dirName?: string,
 ): TeamDossierWriteResult {
   // Resolved once, before anything is prepared — the same shape as the batch path below, so both
@@ -392,7 +392,7 @@ export function writeTeamDossier(
   // therefore with nothing written.
   const event = options.eventName === undefined ? undefined : resolveEvent(db, options.eventName);
   if (event !== undefined) requireSlotSet(event);
-  const prepared = prepareTeamDossierWrite(db, teamId, { season: options.season, event }, dirName);
+  const prepared = prepareTeamDossierWrite(db, teamId, { window: options.window, event }, dirName);
   return { files: commitDossierWrite(prepared), rosterSource: prepared.rosterSource };
 }
 
@@ -451,7 +451,7 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
  * what this module actually provides, not a stronger one this comment used to imply.
  */
-export function writeSectionalsDossiers(db: Db, options: { season: SeasonWindow; eventName?: string }): string[] {
+export function writeSectionalsDossiers(db: Db, options: { window: EvidenceWindow; eventName?: string }): string[] {
   // PHASE 0 — resolve the named event's format exactly ONCE, before any team is read or any leaf is
   // validated. Every dossier in this batch then predicts across the SAME slot set, which is what
   // `docs/cli/GRAMMAR.md` promises; a per-team lookup could not keep that promise across a
@@ -485,7 +485,7 @@ export function writeSectionalsDossiers(db: Db, options: { season: SeasonWindow;
   // review, PR #38 round 2, Finding 3 [medium]; round 1 fixed the html-then-md ordering WITHIN one
   // team but never widened the guarantee to the whole batch this function drives).
   const preparedTeams = allTeams.map((team) =>
-    prepareTeamDossierWrite(db, team.id, { season: options.season, event }, dirNames.get(team.id)),
+    prepareTeamDossierWrite(db, team.id, { window: options.window, event }, dirNames.get(team.id)),
   );
 
   const entries: TeamIndexEntry[] = allTeams.map((t) => ({

@@ -46,11 +46,11 @@ export function buildPlayerProfile(overrides: Partial<PlayerProfile> = {}): Play
       { source: "tr_dynamic", latest: { id: 2, value: 4.1, ratingType: null, observedOn: "2026-06-01" }, series: [] },
     ],
     singlesRecord: overrides.singlesRecord ?? {
-      season: { wins: 3, losses: 1, undecided: 0, excludedUndated: 0 },
+      windowed: { wins: 3, losses: 1, undecided: 0, excludedUndated: 0 },
       allTime: { wins: 10, losses: 4, undecided: 0, excludedUndated: 0 },
     },
     doublesRecord: overrides.doublesRecord ?? {
-      season: { wins: 1, losses: 2, undecided: 0, excludedUndated: 0 },
+      windowed: { wins: 1, losses: 2, undecided: 0, excludedUndated: 0 },
       allTime: { wins: 5, losses: 6, undecided: 0, excludedUndated: 0 },
     },
     slotTendencies: overrides.slotTendencies ?? [{ slot: "S1", count: 4 }],
@@ -164,9 +164,9 @@ export function buildLineupPlan(
 
 export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier {
   return {
-    // A fixed season, so a renderer test never depends on the year the suite is run in — the very
-    // print-date coupling issue #90 removed from the product.
-    season: overrides.season ?? "2026",
+    // A fixed window label, so a renderer test never depends on the day the suite is run — the very
+    // print-date coupling issue #90 (and #122, generalizing it) removed from the product.
+    window: overrides.window ?? "12mo to 2026-08-28",
     // No event named by default, matching the default evidence scope above — a fixture whose scope
     // says "none applied" must not simultaneously claim an event supplied one.
     event: overrides.event ?? null,
@@ -183,7 +183,7 @@ export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier 
  * results, which must still render a valid document rather than crash. */
 export function buildEmptyDossier(): TeamDossier {
   return {
-    season: "2026",
+    window: "12mo to 2026-08-28",
     event: null,
     rosterSource: "season",
     team: buildTeamProfile({

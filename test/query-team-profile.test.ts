@@ -266,6 +266,40 @@ describe("getTeamProfile", () => {
     }
   });
 
+  // Issue #122, Task 3's explicit exemption: `headToHead` stays all-meetings by documented intent —
+  // unlike the records and tendencies above it on the same page, a prior meeting is evidence about
+  // an opponent regardless of when it happened, so it stays UNWINDOWED even though `options.since`
+  // is passed for everything else `getTeamProfile` derives.
+  it("headToHead counts a meeting OUTSIDE the window — it is not filtered by `since`, unlike every other section", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const teamA = seedTeam(db, "Team A");
+      const teamB = seedTeam(db, "Team B");
+      const a1 = seedPlayer(db, "A One");
+      const b1 = seedPlayer(db, "B One");
+      seedMembership(db, a1.id, teamA.id);
+      seedMembership(db, b1.id, teamB.id);
+
+      // Played well before `since` — excluded from every windowed section, but a real prior meeting.
+      seedCourtMatch(
+        db,
+        { slot: "S1", discipline: "singles", winnerSide: "home", playedOn: "2025-09-02" },
+        [{ playerId: a1.id, side: "home" }, { playerId: b1.id, side: "visiting" }],
+      );
+
+      const profile = getTeamProfile(db, teamA.id, { since: "2026-06-01", versusTeamId: teamB.id });
+
+      const rows = profile.headToHead!;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ playerId: a1.id, opponentId: b1.id, wins: 1, losses: 0, matches: 1 });
+      // The windowed record for the same player, over the same match, correctly reads 0-0 — proving
+      // the two sections are genuinely computed differently, not merely asserted to be.
+      expect(profile.roster[0]!.singlesRecord).toEqual({ wins: 0, losses: 0, undecided: 0, excludedUndated: 0 });
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("per-slot roster tendencies aggregate across the whole roster", () => {
     const { db, sqlite } = freshDb();
     try {
@@ -287,6 +321,38 @@ describe("getTeamProfile", () => {
 
       const profile = getTeamProfile(db, team.id, { since: "2026-01-01" });
       expect(profile.slotTendencies).toEqual([{ slot: "S1", count: 2 }]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #122, Task 3: roster-member `slotTendencies` used to be computed over every court match on
+  // file, unwindowed — the same "second failure" shape as the player path, one field over. Both the
+  // per-member entry AND the roster-wide aggregate (which sums the per-member entries) must reflect
+  // only in-window rows.
+  it("roster-member slotTendencies (and the aggregate that sums them) count only in-window rows", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Team A");
+      const p1 = seedPlayer(db, "Player One");
+      const opponent = seedPlayer(db, "Opponent");
+      seedMembership(db, p1.id, team.id);
+
+      // Out-of-window: real evidence, must not reach the member's OR the aggregate's tendencies.
+      seedCourtMatch(db, { slot: "D4", discipline: "doubles", playedOn: "2025-09-02" }, [
+        { playerId: p1.id, side: "home" },
+        { playerId: opponent.id, side: "visiting" },
+      ]);
+      // In-window.
+      seedCourtMatch(db, { slot: "S1", discipline: "singles", playedOn: "2026-06-15" }, [
+        { playerId: p1.id, side: "home" },
+        { playerId: opponent.id, side: "visiting" },
+      ]);
+
+      const profile = getTeamProfile(db, team.id, { since: "2026-06-01" });
+
+      expect(profile.roster[0]!.slotTendencies).toEqual([{ slot: "S1", count: 1 }]);
+      expect(profile.slotTendencies).toEqual([{ slot: "S1", count: 1 }]);
     } finally {
       sqlite.close();
     }

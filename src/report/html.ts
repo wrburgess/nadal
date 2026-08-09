@@ -118,12 +118,13 @@ function renderEvidenceScopeHtml(dossier: TeamDossier): string {
   const eventName = dossier.event?.name ?? null;
   return (
     '<section id="evidence-scope"><h2>Evidence scope</h2>' +
-    "<p><strong>Records, court-slot tendencies and prior meetings below were computed over:</strong> " +
+    "<p><strong>Records and court-slot tendencies below were computed over:</strong> " +
     `${escapeHtml(formatEvidenceScopeLine(summary, eventName))}.</p>` +
     `<p><strong>Leagues counted:</strong> ${escapeHtml(formatRetainedLeaguesLine(summary))}.</p>` +
     '<p class="guess-note">The team record above is derived from team fixtures rather than court ' +
     "matches, and the predicted lineup below is restricted to this team&#39;s own schedule instead — " +
-    "neither is filtered by this scope.</p>" +
+    "neither is filtered by this scope. Prior meetings below draws on the same leagues but every " +
+    "date on file, not the 12-month window above.</p>" +
     "</section>"
   );
 }
@@ -171,6 +172,10 @@ function renderPlayerPriorMeetingsRowHtml(player: PlayerProfile, headToHead: Tea
  * that the designation had not taken. `TeamProfile.isHome` (src/query/team-profile.ts) already
  * distinguishes them, and the two conditions are exhaustive: `versusTeamId` is `undefined` iff
  * there is no home team or this team is it.
+ *
+ * Issue #122, Task 7's explicit exemption: this section is NOT filtered by the page's 12-month
+ * window, unlike the records and tendencies above it — a prior meeting is evidence about an
+ * opponent regardless of when it happened. The heading says so.
  */
 function renderPriorMeetingsSectionHtml(dossier: TeamDossier): string {
   const headToHead = dossier.team.headToHead;
@@ -181,21 +186,21 @@ function renderPriorMeetingsSectionHtml(dossier: TeamDossier): string {
     headToHead === null
       ? unavailable
       : dossier.players.map((p) => renderPlayerPriorMeetingsRowHtml(p, headToHead)).join("");
-  return `<section id="prior-meetings"><h2>Prior meetings vs our players</h2>${body}</section>`;
+  return `<section id="prior-meetings"><h2>Prior meetings vs our players (all meetings on file)</h2>${body}</section>`;
 }
 
 /** One player's full detail block — everything about a single player stays together on the page
  * (`page-break-inside: avoid`, in the inlined stylesheet), so a printed binder never splits one
- * player's record across a page break. Content order follows spec § Deliverables #1: season
+ * player's record across a page break. Content order follows spec § Deliverables #1: windowed
  * singles/doubles records, then court-slot tendencies, then partner frequency. Prior meetings is
  * NOT repeated here — it renders once for the whole dossier, in its own section
  * (`renderPriorMeetingsSectionHtml`). */
-function renderPlayerBlockHtml(player: PlayerProfile, season: string): string {
+function renderPlayerBlockHtml(player: PlayerProfile, windowLabel: string): string {
   return (
     '<div class="player-block">' +
     `<h3>${escapeHtml(player.identity.canonicalName)}</h3>` +
-    `<p><strong>${escapeHtml(season)} record:</strong> singles ${escapeHtml(formatRecord(player.singlesRecord.season))},` +
-    ` doubles ${escapeHtml(formatRecord(player.doublesRecord.season))}</p>` +
+    `<p><strong>Record (${escapeHtml(windowLabel)}):</strong> singles ${escapeHtml(formatRecord(player.singlesRecord.windowed))},` +
+    ` doubles ${escapeHtml(formatRecord(player.doublesRecord.windowed))}</p>` +
     `<p><strong>Court-slot tendencies:</strong> ${escapeHtml(formatSlotTendencies(player.slotTendencies))}</p>` +
     `<p><strong>Partner frequency:</strong> ${escapeHtml(formatPartnerFrequency(player.partnerFrequency))}</p>` +
     "</div>"
@@ -203,7 +208,7 @@ function renderPlayerBlockHtml(player: PlayerProfile, season: string): string {
 }
 
 function renderPlayersSectionHtml(dossier: TeamDossier): string {
-  return dossier.players.map((p) => renderPlayerBlockHtml(p, dossier.season)).join("");
+  return dossier.players.map((p) => renderPlayerBlockHtml(p, dossier.window)).join("");
 }
 
 // Labels for the three `dataGaps` sections — same ones `src/cli/format-profile.ts` uses for the

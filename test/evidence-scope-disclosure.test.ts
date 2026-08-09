@@ -25,7 +25,7 @@ import { resolveEvent } from "../src/query/lineup.js";
 import { buildTeamDossier } from "../src/report/write.js";
 import { renderDossier } from "../src/report/html.js";
 import { renderDossierMarkdown } from "../src/report/markdown.js";
-import { seasonWindow } from "../src/cli/window.js";
+import { evidenceWindow } from "../src/cli/window.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -238,7 +238,7 @@ describe("the dossier, both renderings", () => {
     const { db, sqlite, teamId } = seed();
     try {
       const dossier = buildTeamDossier(db, teamId, {
-        season: seasonWindow("2026-08-28"),
+        window: evidenceWindow("2026-08-28"),
         event: resolveEvent(db, SPRINGFIELD.name),
       });
 
@@ -268,7 +268,7 @@ describe("the dossier, both renderings", () => {
   it("states 'no league scope applied' when the build named no event", () => {
     const { db, sqlite, teamId } = seed();
     try {
-      const dossier = buildTeamDossier(db, teamId, { season: seasonWindow("2026-08-28") });
+      const dossier = buildTeamDossier(db, teamId, { window: evidenceWindow("2026-08-28") });
 
       for (const rendered of [renderDossierMarkdown(dossier), renderDossier(dossier)]) {
         expect(rendered).toContain("no league scope applied");
@@ -290,7 +290,7 @@ describe("the dossier, both renderings", () => {
       // was previously exercised on this field, because nothing rendered it.
       play(db, [nova], "D1", "Adult <script>alert(1)</script> | 3.5");
 
-      const dossier = buildTeamDossier(db, teamId, { season: seasonWindow("2026-08-28") });
+      const dossier = buildTeamDossier(db, teamId, { window: evidenceWindow("2026-08-28") });
 
       const html = renderDossier(dossier);
       expect(html).not.toContain("<script>alert(1)</script>");
@@ -399,7 +399,7 @@ describe("roster disclosure (#113)", () => {
       const { db, sqlite } = openDb();
       try {
         const dossier = buildTeamDossier(db, fixture.teamId, {
-          season: seasonWindow("2026-08-28"),
+          window: evidenceWindow("2026-08-28"),
           event: resolveEvent(db, "Springfield Sectionals 2026"),
         });
 
@@ -431,7 +431,7 @@ describe("roster disclosure (#113)", () => {
       const fixture = seedRegisteredEvent();
       const { db, sqlite } = openDb();
       try {
-        const dossier = buildTeamDossier(db, fixture.teamId, { season: seasonWindow("2026-08-28") });
+        const dossier = buildTeamDossier(db, fixture.teamId, { window: evidenceWindow("2026-08-28") });
 
         for (const rendered of [renderDossierMarkdown(dossier), renderDossier(dossier)]) {
           expect(rendered).toContain("season roster — no event named");
@@ -456,7 +456,7 @@ describe("roster disclosure (#113)", () => {
         });
         addEvent(db, { name: "Event X", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30", format: "S1:singles" });
         const dossier = buildTeamDossier(db, fixture.teamId, {
-          season: seasonWindow("2026-08-28"),
+          window: evidenceWindow("2026-08-28"),
           event: resolveEvent(db, "Event X"),
         });
 

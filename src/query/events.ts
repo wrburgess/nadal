@@ -252,8 +252,9 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
 }
 
 /**
- * The season anchor for a report: the event's own start date when it has one, otherwise the
- * caller's clock (issue #90).
+ * The evidence-window anchor for a report: the event's own start date when it has one, otherwise the
+ * caller's clock (issue #90, generalized by #122 from a calendar-year season to a 12-month lookback —
+ * the anchor-resolution mechanism itself is unchanged).
  *
  * `anchoredTo` is RETURNED, not inferred by the caller, because the two cases must not look alike
  * in the output. A dossier built against an event with no `starts_on` that silently fell back to
@@ -261,9 +262,13 @@ export function addEvent(db: Db, input: AddEventInput): AddEventResult {
  * and is not — so the command prints which one it used and a reader can tell them apart.
  *
  * An unknown event name is NOT a fallback but a refusal, so a typo cannot quietly produce a whole
- * binder filtered to the wrong season.
+ * binder filtered to the wrong window.
+ *
+ * Used only by `report build`'s two entry points (CLI and MCP), which have no other reason to resolve
+ * the named event. `team show`/`player show` do NOT call this: #122 anchors them to their
+ * ALREADY-RESOLVED event's `starts_on` instead, so as not to look the same row up twice.
  */
-export function resolveSeasonAnchor(
+export function resolveWindowAnchor(
   db: Db,
   eventName: string | undefined,
   now: Date = new Date(),

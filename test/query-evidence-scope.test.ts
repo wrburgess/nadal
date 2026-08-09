@@ -271,9 +271,9 @@ describe("getPlayerProfile — the records a dossier prints", () => {
 
       // RECORD: 2-3 becomes 2-0. Not merely a smaller count — a different answer to "is this player
       // winning in doubles", which is the question the dossier is read for.
-      expect(unscoped.doublesRecord.season).toMatchObject({ wins: 2, losses: 3 });
-      expect(scoped.doublesRecord.season).toMatchObject({ wins: 2, losses: 0 });
-      expect(scoped.doublesRecord.season).not.toEqual(unscoped.doublesRecord.season);
+      expect(unscoped.doublesRecord.windowed).toMatchObject({ wins: 2, losses: 3 });
+      expect(scoped.doublesRecord.windowed).toMatchObject({ wins: 2, losses: 0 });
+      expect(scoped.doublesRecord.windowed).not.toEqual(unscoped.doublesRecord.windowed);
 
       // SLOT TENDENCIES: "usually plays D2" becomes "plays D1", which is the headline symptom #97
       // was filed for.

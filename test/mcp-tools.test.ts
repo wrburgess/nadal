@@ -24,7 +24,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 import { encodeEventFormat } from "../src/query/event-format.js";
 import { addEvent } from "../src/query/events.js";
 import { getTeamProfile } from "../src/query/team-profile.js";
-import { seasonStart } from "../src/cli/window.js";
+import { windowStart } from "../src/cli/window.js";
 import { loadFixture } from "./helpers/fixtures.js";
 import { removeRosterRow } from "./helpers/roster-html.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
@@ -128,7 +128,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     const { db: db2, sqlite: sqlite2 } = openDb();
     let expected: unknown;
     try {
-      expected = getTeamProfile(db2, team.id, { since: seasonStart() });
+      expected = getTeamProfile(db2, team.id, { since: windowStart() });
     } finally {
       sqlite2.close();
     }
@@ -1055,9 +1055,11 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(textOf(result)) as { target: string; teams: number; files: number; root: string };
     // Issue #90 added `season` + `anchoredTo` to this payload so an MCP caller can tell an
-    // event-anchored binder from one that fell back to the clock. Asserted exactly (`toEqual`, not
-    // `toMatchObject`) — this pin is what caught the two fields arriving, which is its whole job.
-    // No event was named here, so the honest answer is the current season, anchored to today.
+    // event-anchored binder from one that fell back to the clock; #122 renamed the first field to
+    // `since` (the ISO lower bound, superseding a bare year) when the season boundary became a
+    // 12-month lookback. Asserted exactly (`toEqual`, not `toMatchObject`) — this pin is what caught
+    // the two fields arriving, which is its whole job. No event was named here, so the honest answer
+    // is today's 12-month window, anchored to today.
     //
     // #113 adds `roster` on the SINGLE-TEAM path, matching the CLI's `roster=` field — a result
     // field reaching one door and not the other is guarded by nothing (ARCHITECTURE.md §5 Q3). With
@@ -1067,7 +1069,7 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       teams: 1,
       files: 2,
       root: payload.root,
-      season: String(new Date().getUTCFullYear()),
+      since: windowStart(new Date()),
       anchoredTo: "today",
       roster: "season",
     });

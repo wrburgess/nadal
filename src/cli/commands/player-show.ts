@@ -18,7 +18,7 @@ import {
   formatRetainedLeaguesLine,
   formatSlotTendencies,
 } from "../format-profile.js";
-import { seasonLabel, seasonStart } from "../window.js";
+import { windowLabel, windowStart } from "../window.js";
 
 /** Every error a bad `[event]` argument can throw (#97) — caller-fixable, so it exits 1 with a
  * diagnostic rather than an uncaught throw. `EventHasNoFormatError` is deliberately absent: this
@@ -42,7 +42,7 @@ function isEventRefusal(err: unknown): err is UnknownEventError | InvalidLeagueS
  * error paths (missing/unknown/ambiguous target, a bad flag) still go through `emitSummary` so they
  * stay consistent with every other command's error contract.
  */
-function formatPlayerProfileText(profile: PlayerProfile, season: string, eventName: string | null): string {
+function formatPlayerProfileText(profile: PlayerProfile, label: string, eventName: string | null): string {
   const id = profile.identity;
   const aliasSuffix = id.aliases.length > 0 ? ` (aka ${id.aliases.map(formatName).join(", ")})` : "";
   const gapsLine = formatDataGapsLine(profile.dataGaps);
@@ -51,8 +51,8 @@ function formatPlayerProfileText(profile: PlayerProfile, season: string, eventNa
     `${formatName(id.canonicalName)}${aliasSuffix}`,
     `  age: ${formatName(id.ageRange ?? "unknown")}   gender: ${formatName(id.gender ?? "unknown")}`,
     `  ratings: ${formatRatingTrajectory(profile.ratingTrajectory)}`,
-    `  singles: ${formatRecord(profile.singlesRecord.season)} (${season}) / ${formatRecord(profile.singlesRecord.allTime)} (all-time)`,
-    `  doubles: ${formatRecord(profile.doublesRecord.season)} (${season}) / ${formatRecord(profile.doublesRecord.allTime)} (all-time)`,
+    `  singles: ${formatRecord(profile.singlesRecord.windowed)} (${label}) / ${formatRecord(profile.singlesRecord.allTime)} (all-time)`,
+    `  doubles: ${formatRecord(profile.doublesRecord.windowed)} (${label}) / ${formatRecord(profile.doublesRecord.allTime)} (all-time)`,
     `  slots: ${formatSlotTendencies(profile.slotTendencies)}`,
     `  partners: ${formatPartnerFrequency(profile.partnerFrequency)}`,
     // Issue #49: a retired membership is history, not hidden (player-profile.ts never filters it) —
@@ -108,13 +108,22 @@ export const playerShow: Command = {
         return 1;
       }
 
-      // ONE anchor for both the boundary and the label below (issue #90).
-      const anchor = new Date();
-      // #97: the named event's evidence scope, resolved before the profile is built so a bad name
-      // refuses without printing anything. An event that records no scope resolves to `null`, which
-      // the profile reports as "no league scope applied" rather than silently reading as unscoped.
-      const leagueScope = eventName === undefined ? null : resolveEvent(db, eventName).leagueScope;
-      const profile = getPlayerProfile(db, resolution.playerId, { since: seasonStart(anchor), leagueScope });
+      // #97: the named event, resolved ONCE before the profile is built so a bad name refuses
+      // without printing anything. An event that records no scope resolves `leagueScope` to `null`,
+      // which the profile reports as "no league scope applied" rather than silently reading as
+      // unscoped.
+      const resolvedEvent = eventName === undefined ? undefined : resolveEvent(db, eventName);
+      // Issue #122, design decision 5: anchor to the SAME already-resolved event's own `starts_on`
+      // — never a second lookup — falling back to the caller's clock when no event was named, or
+      // the named event has no `starts_on` on file. This fixes the unnamed defect that
+      // `player show`/`team show` used to ignore their `[event]` argument entirely for windowing.
+      // ONE anchor for both the boundary and the label below, so the two can never come from
+      // different reads.
+      const anchor = resolvedEvent?.recordedAs.startsOn ?? new Date();
+      const profile = getPlayerProfile(db, resolution.playerId, {
+        since: windowStart(anchor),
+        leagueScope: resolvedEvent?.leagueScope ?? null,
+      });
 
       // `--quiet` wins over `--json` (GRAMMAR.md), same as `emitSummary` — checked here rather
       // than routed through `emitSummary` itself, since neither success form is a `key=value` line.
@@ -122,7 +131,7 @@ export const playerShow: Command = {
         console.log(
           opts.json
             ? emitJson(profile)
-            : formatPlayerProfileText(profile, seasonLabel(anchor), eventName ?? null),
+            : formatPlayerProfileText(profile, windowLabel(anchor), eventName ?? null),
         );
       }
       return 0;

@@ -18,7 +18,7 @@ import {
   formatSlotTendencies,
   ratingSourceLabel,
 } from "../format-profile.js";
-import { seasonLabel, seasonStart } from "../window.js";
+import { windowLabel, windowStart } from "../window.js";
 
 /** Every error a bad `[event]` argument can throw (#97). `EventHasNoFormatError` is deliberately
  * absent for the same reason as in `player show`: this command reads the evidence scope, never the
@@ -36,11 +36,12 @@ function isEventRefusal(err: unknown): err is UnknownEventError | InvalidLeagueS
  * and 6-month record, plus the team's match record". Same one-`console.log`-call shape as
  * `player show` (Task 5): the ok path is not a `key=value` summary line, the error paths are.
  *
- * The spec's "6-month" is superseded by issue #90: the window is the SEASON, and `season` is the
- * label for the very boundary `profile` was built with — passed in rather than recomputed here, so
- * the number and the label it sits beside can never come from two different anchors.
+ * The spec's "6-month" is superseded by issue #122 (which generalizes #90's calendar-year season
+ * into a 12-month lookback): the window is a 12-month lookback, and `windowLabel` is the label for
+ * the very boundary `profile` was built with — passed in rather than recomputed here, so the number
+ * and the label it sits beside can never come from two different anchors.
  */
-function formatTeamProfileText(profile: TeamProfile, season: string, eventName: string | null): string {
+function formatTeamProfileText(profile: TeamProfile, label: string, eventName: string | null): string {
   const lines = [
     `${formatName(profile.teamName)}`,
     `  home: ${profile.isHome ? "yes" : "no"}`,
@@ -60,8 +61,8 @@ function formatTeamProfileText(profile: TeamProfile, season: string, eventName: 
   for (const member of profile.roster) {
     lines.push(
       `    ${formatName(member.canonicalName)} — age: ${formatName(member.ageRange ?? "unknown")}` +
-        `   singles: ${formatRecord(member.singlesRecord)} (${season})` +
-        `   doubles: ${formatRecord(member.doublesRecord)} (${season})` +
+        `   singles: ${formatRecord(member.singlesRecord)} (${label})` +
+        `   doubles: ${formatRecord(member.doublesRecord)} (${label})` +
         `   slots: ${formatSlotTendencies(member.slotTendencies)}`,
     );
   }
@@ -120,20 +121,25 @@ export const teamShow: Command = {
         return 1;
       }
 
-      // ONE anchor for both the boundary and the label below.
-      const anchor = new Date();
       // #113: resolved ONCE (never a second lookup) — `eventId` scopes the roster the same read
       // already scopes by `leagueScope`.
       const resolvedEvent = eventName === undefined ? undefined : resolveEvent(db, eventName);
+      // Issue #122, design decision 5: anchor to the ALREADY-RESOLVED event's own `starts_on` when
+      // one was named (never a second lookup) — falls back to the caller's clock when no event was
+      // named, or the named event has no `starts_on` on file. This fixes the unnamed defect that
+      // `team show`/`player show` used to ignore their `[event]` argument entirely for windowing,
+      // anchoring to the clock even when an event was given. ONE anchor for both the boundary and
+      // the label below, so the two can never come from different reads.
+      const anchor = resolvedEvent?.recordedAs.startsOn ?? new Date();
       const profile = getTeamProfile(db, resolution.teamId, {
-        since: seasonStart(anchor),
+        since: windowStart(anchor),
         leagueScope: resolvedEvent?.leagueScope ?? null,
         eventId: resolvedEvent?.event.id ?? null,
       });
 
       if (!opts.quiet) {
         console.log(
-          opts.json ? emitJson(profile) : formatTeamProfileText(profile, seasonLabel(anchor), eventName ?? null),
+          opts.json ? emitJson(profile) : formatTeamProfileText(profile, windowLabel(anchor), eventName ?? null),
         );
       }
       return 0;

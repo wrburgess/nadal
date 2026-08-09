@@ -4,6 +4,7 @@ import {
   headToHead,
   partnerFrequency,
   ratingTrajectory,
+  rowsWithin,
   slotTendencies,
   teamMatchRecord,
   windowedRecord,
@@ -183,6 +184,59 @@ describe("windowedRecord — perspective invariance (correctness rule 1)", () =>
     const recordB = windowedRecord([pulledFromOpponentTeam], PLAYER);
     expect(recordA).toEqual(recordB);
     expect(recordA).toEqual({ wins: 0, losses: 1, undecided: 0, excludedUndated: 0 });
+  });
+});
+
+// Issue #122, Task 3: `slotTendencies`/`partnerFrequency` (player path) and roster-member
+// `slotTendencies` (team path) used to be computed over EVERY row on file, regardless of the same
+// `since` boundary that already filtered the records sitting right beside them on the page — a
+// player's block could print "0-0" for the window and, two lines down, court-slot tendencies drawn
+// entirely from matches outside it, with nothing on the page distinguishing "did not play" from
+// "played outside a boundary the page never names" (the exact ambiguity `dataGaps` exists to prevent
+// one section lower). `rowsWithin(since)` is the one shared predicate every windowed derived-metric
+// call now filters through first, so "one page, one window" holds by construction rather than by
+// each call site remembering to apply the same rule.
+describe("rowsWithin", () => {
+  it("keeps a row played exactly ON `since` — the same inclusive bound `windowedRecord` uses", () => {
+    const rows = [courtMatch({ playedOn: "2026-06-15", participants: [{ playerId: PLAYER, side: "home" }] })];
+    expect(rowsWithin("2026-06-15")(rows)).toEqual(rows);
+  });
+
+  it("drops a row played one day BEFORE `since`", () => {
+    const rows = [courtMatch({ playedOn: "2026-06-14", participants: [{ playerId: PLAYER, side: "home" }] })];
+    expect(rowsWithin("2026-06-15")(rows)).toEqual([]);
+  });
+
+  it("keeps a row played one day AFTER `since`", () => {
+    const rows = [courtMatch({ playedOn: "2026-06-16", participants: [{ playerId: PLAYER, side: "home" }] })];
+    expect(rowsWithin("2026-06-15")(rows)).toEqual(rows);
+  });
+
+  it("drops an undated row — a window is meaningless without a date, same rule `windowedRecord` applies", () => {
+    const rows = [courtMatch({ playedOn: null, participants: [{ playerId: PLAYER, side: "home" }] })];
+    expect(rowsWithin("2026-06-15")(rows)).toEqual([]);
+  });
+
+  it("keeps only the in-window subset from a mixed set, preserving order", () => {
+    const before = courtMatch({ playedOn: "2025-01-01", participants: [{ playerId: PLAYER, side: "home" }] });
+    const onBound = courtMatch({ playedOn: "2026-06-15", participants: [{ playerId: PLAYER, side: "home" }] });
+    const after = courtMatch({ playedOn: "2026-08-01", participants: [{ playerId: PLAYER, side: "home" }] });
+    const undated = courtMatch({ playedOn: null, participants: [{ playerId: PLAYER, side: "home" }] });
+
+    expect(rowsWithin("2026-06-15")([before, onBound, undated, after])).toEqual([onBound, after]);
+  });
+
+  it("an empty input returns an empty array", () => {
+    expect(rowsWithin("2026-06-15")([])).toEqual([]);
+  });
+
+  it("is curried — the same bound predicate can be reused across multiple row sets", () => {
+    const since2026 = rowsWithin("2026-06-15");
+    const inWindow = courtMatch({ playedOn: "2026-08-01", participants: [{ playerId: PLAYER, side: "home" }] });
+    const outOfWindow = courtMatch({ playedOn: "2025-01-01", participants: [{ playerId: PLAYER, side: "home" }] });
+
+    expect(since2026([inWindow])).toEqual([inWindow]);
+    expect(since2026([outOfWindow])).toEqual([]);
   });
 });
 

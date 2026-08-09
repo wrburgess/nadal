@@ -88,14 +88,81 @@ describe("getPlayerProfile", () => {
       expect(bySource.get("ntrp")!.latest.ratingType).toBe("C");
       expect(bySource.get("tr_dynamic")!.latest.value).toBe(4.1);
 
-      expect(profile.singlesRecord.season).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
-      expect(profile.doublesRecord.season).toEqual({ wins: 0, losses: 1, undecided: 0, excludedUndated: 0 });
+      expect(profile.singlesRecord.windowed).toEqual({ wins: 1, losses: 0, undecided: 0, excludedUndated: 0 });
+      expect(profile.doublesRecord.windowed).toEqual({ wins: 0, losses: 1, undecided: 0, excludedUndated: 0 });
       expect(profile.slotTendencies).toEqual(
         expect.arrayContaining([{ slot: "S1", count: 1 }, { slot: "D1", count: 1 }]),
       );
       expect(profile.partnerFrequency).toEqual([{ partnerId: partner.id, count: 1, canonicalName: "Kai Kestrel" }]);
       expect(profile.teamMemberships).toEqual([
         { teamId: team.id, teamName: "Team A", eventId: null, retiredAt: null },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #122, Task 3: the defect this whole issue records as "the second failure" — the window
+  // reached `singlesRecord`/`doublesRecord` but not `slotTendencies`/`partnerFrequency`, so a
+  // player's block could print a windowed "0-0" beside tendencies drawn from matches entirely
+  // outside it. Both are now filtered through the SAME `since` boundary as the records beside them.
+  it("slotTendencies and partnerFrequency count only in-window rows, the same boundary singlesRecord/doublesRecord use", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const player = seedPlayer(db, { canonicalName: "Anthony Richardson" });
+      const partnerInWindow = seedPlayer(db, { canonicalName: "In Window Partner" });
+      const partnerOutOfWindow = seedPlayer(db, { canonicalName: "Out Of Window Partner" });
+      const opponent = seedPlayer(db, { canonicalName: "Some Opponent" });
+
+      // Two matches BEFORE `since`: real evidence, but outside the window — must not reach
+      // tendencies or partner counts, exactly as they already do not reach the record.
+      seedCourtMatch(
+        db,
+        { slot: "D3", discipline: "doubles", winnerSide: "home", playedOn: "2025-09-02" },
+        [
+          { playerId: player.id, side: "home" },
+          { playerId: partnerOutOfWindow.id, side: "home" },
+          { playerId: opponent.id, side: "visiting" },
+        ],
+      );
+      seedCourtMatch(
+        db,
+        { slot: "D4", discipline: "doubles", winnerSide: "home", playedOn: "2025-10-01" },
+        [
+          { playerId: player.id, side: "home" },
+          { playerId: partnerOutOfWindow.id, side: "home" },
+          { playerId: opponent.id, side: "visiting" },
+        ],
+      );
+      // One match ON `since` (inclusive) and one AFTER it — both in-window.
+      seedCourtMatch(
+        db,
+        { slot: "S1", discipline: "singles", winnerSide: "home", playedOn: "2026-06-01" },
+        [{ playerId: player.id, side: "home" }, { playerId: opponent.id, side: "visiting" }],
+      );
+      seedCourtMatch(
+        db,
+        { slot: "D1", discipline: "doubles", winnerSide: "home", playedOn: "2026-06-15" },
+        [
+          { playerId: player.id, side: "home" },
+          { playerId: partnerInWindow.id, side: "home" },
+          { playerId: opponent.id, side: "visiting" },
+        ],
+      );
+
+      const profile = getPlayerProfile(db, player.id, { since: "2026-06-01" });
+
+      // Two in-window matches, D3/D4 excluded entirely.
+      expect(profile.slotTendencies).toEqual(
+        expect.arrayContaining([{ slot: "S1", count: 1 }, { slot: "D1", count: 1 }]),
+      );
+      expect(profile.slotTendencies).toHaveLength(2);
+      expect(profile.slotTendencies.find((s) => s.slot === "D3" || s.slot === "D4")).toBeUndefined();
+
+      // Only the in-window partner counts — the out-of-window partner (2 shared matches) is
+      // invisible here even though those matches are real and on file.
+      expect(profile.partnerFrequency).toEqual([
+        { partnerId: partnerInWindow.id, count: 1, canonicalName: "In Window Partner" },
       ]);
     } finally {
       sqlite.close();

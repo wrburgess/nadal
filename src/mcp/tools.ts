@@ -24,13 +24,13 @@ import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
-import { addEvent, resolveSeasonAnchor } from "../query/events.js";
+import { addEvent, resolveWindowAnchor } from "../query/events.js";
 import { NoCourtMatchHistoryError, getLineupPlan, resolveEvent } from "../query/lineup.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
 import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../report/write.js";
-import { seasonStart, seasonWindow } from "../cli/window.js";
+import { evidenceWindow, windowStart, windowSnapshot } from "../cli/window.js";
 
 /** A tool-level refusal, mapped to `CallToolResult.isError` by `src/mcp/server.ts` — never a crash.
  * Every "unknown target" / "ambiguous target" / domain-service refusal below throws this (or lets
@@ -192,11 +192,21 @@ export const MCP_TOOLS: McpToolDef[] = [
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-        const leagueScope = event === undefined ? null : resolveEvent(db, event).leagueScope;
+        // #97/#122: resolved ONCE — its league scope restricts the court matches every roster
+        // record and slot tendency below is computed over, and (issue #122, design decision 5) its
+        // OWN `starts_on` anchors the 12-month window, falling back to the clock when no event was
+        // named or the named event has no `starts_on` on file. This mirrors `tn team show`'s CLI
+        // command, fixing the same defect: MCP's `team_show` used to ignore its `event` argument
+        // for windowing exactly like the CLI did.
+        const resolvedEvent = event === undefined ? undefined : resolveEvent(db, event);
+        const anchor = resolvedEvent?.recordedAs.startsOn ?? new Date();
         // The scope summary rides inside the returned profile (`evidenceScope`), so an agent reading
         // this over MCP is handed the same disclosure the CLI prints rather than a bare set of
         // records it would have to take on trust — #97's whole point, one surface over.
-        return getTeamProfile(db, resolution.teamId, { since: seasonStart(), leagueScope });
+        return getTeamProfile(db, resolution.teamId, {
+          since: windowStart(anchor),
+          leagueScope: resolvedEvent?.leagueScope ?? null,
+        });
       } finally {
         sqlite.close();
       }
@@ -288,8 +298,14 @@ export const MCP_TOOLS: McpToolDef[] = [
       const { db, sqlite } = openDb();
       try {
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
-        const leagueScope = event === undefined ? null : resolveEvent(db, event).leagueScope;
-        return getPlayerProfile(db, resolution.playerId, { since: seasonStart(), leagueScope });
+        // #97/#122: resolved ONCE — see `team_show`'s twin comment above for why both the league
+        // scope and the window anchor come from this single resolution.
+        const resolvedEvent = event === undefined ? undefined : resolveEvent(db, event);
+        const anchor = resolvedEvent?.recordedAs.startsOn ?? new Date();
+        return getPlayerProfile(db, resolution.playerId, {
+          since: windowStart(anchor),
+          leagueScope: resolvedEvent?.leagueScope ?? null,
+        });
       } finally {
         sqlite.close();
       }
@@ -593,11 +609,12 @@ export const MCP_TOOLS: McpToolDef[] = [
       const { target, event } = rawArgs as { target?: string; event?: string };
       const { db, sqlite } = openDb();
       try {
-        // Issue #90: the same anchor resolution as `tn report build`, from the same helpers. Three
-        // of this issue's six call sites are in this file, and a binder that disagreed with the
-        // agent chat about which season it covered would have nothing to surface the difference.
-        const anchor = resolveSeasonAnchor(db, event);
-        const season = seasonWindow(anchor.value);
+        // Issue #122 (generalizes #90): the same anchor resolution as `tn report build`, from the
+        // same helpers. Three of this issue's six call sites are in this file, and a binder that
+        // disagreed with the agent chat about which window it covered would have nothing to surface
+        // the difference.
+        const anchor = resolveWindowAnchor(db, event);
+        const window = evidenceWindow(anchor.value);
         let written: string[];
         let teamsCount: number;
         // #113: single-team only, and carried out of the write rather than re-read — the same
@@ -606,27 +623,27 @@ export const MCP_TOOLS: McpToolDef[] = [
         // cannot honestly carry one scalar for a mix of registered and season teams.
         let rosterSource: "registered" | "season" | undefined;
         if (target === undefined || target === "sectionals") {
-          written = writeSectionalsDossiers(db, { season, eventName: event });
+          written = writeSectionalsDossiers(db, { window, eventName: event });
           teamsCount = countTeams(db);
         } else {
           const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
-          const result = writeTeamDossier(db, resolution.teamId, { season, eventName: event });
+          const result = writeTeamDossier(db, resolution.teamId, { window, eventName: event });
           written = result.files;
           rosterSource = result.rosterSource;
           teamsCount = 1;
         }
-        // `season` and `anchoredTo` are returned for the same reason `tn report build` prints them
-        // (issue #90): an event with no `starts_on` falls back to the clock, and a caller that
-        // cannot tell that from a real event anchor has no way to know its binder covers a
-        // different season than it asked for. Omitting them here left the CLI honest and this
-        // surface silent — the drift this issue's own parity test was meant to prevent, one field
-        // over. (Codex adversarial review of PR #91, Finding 1 [high].)
+        // `since` and `anchoredTo` are returned for the same reason `tn report build` prints them
+        // (issue #90, field renamed by #122): an event with no `starts_on` falls back to the clock,
+        // and a caller that cannot tell that from a real event anchor has no way to know its binder
+        // covers a different window than it asked for. Omitting them here left the CLI honest and
+        // this surface silent — the drift this issue's own parity test was meant to prevent, one
+        // field over. (Codex adversarial review of PR #91, Finding 1 [high].)
         return {
           target: target ?? "sectionals",
           teams: teamsCount,
           files: written.length,
           root: resolvedReportsRoot(),
-          season: season.year,
+          since: windowSnapshot(window).since,
           anchoredTo: anchor.anchoredTo,
           ...(rosterSource === undefined ? {} : { roster: rosterSource }),
         };

@@ -13,11 +13,12 @@ import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamProfile } from "../query/team-profile.js";
 
 export type TeamDossier = {
-  /** The season every windowed record in this dossier was filtered to, as a display label
-   * ("2026") — issue #90. It rides on the VIEW rather than being recomputed per renderer, so the
-   * HTML and the markdown can never label the same numbers with different seasons, and so
-   * `src/report/*` stays clock-free (the anchor is chosen once, by `report build`). */
-  season: string;
+  /** The 12-month evidence window every windowed record in this dossier was filtered to, as a
+   * display label ("12mo to 2026-08-28") — issue #122, superseding #90's bare calendar-year label.
+   * It rides on the VIEW rather than being recomputed per renderer, so the HTML and the markdown can
+   * never label the same numbers with different windows, and so `src/report/*` stays clock-free (the
+   * anchor is chosen once, by `report build`). */
+  window: string;
   /** The event this build was scoped to, or `null` when none was named (#97). Carried on the VIEW,
    * like `season`, so both renderers name the same event beside the same evidence scope — and so a
    * renderer never has to reach into `lineup.slotEvent` for it, which is a different field about a

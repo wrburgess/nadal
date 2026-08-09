@@ -19,7 +19,7 @@ import {
 import { assertPlayerAliasesKeyed, assertPlayersKeyed, findPlayerByName } from "../ingest/identity.js";
 import type { NameLookup } from "../ingest/identity.js";
 import type { Db } from "../ingest/db-types.js";
-import { dataGaps, partnerFrequency, ratingTrajectory, slotTendencies, windowedRecord } from "./derive.js";
+import { dataGaps, partnerFrequency, ratingTrajectory, rowsWithin, slotTendencies, windowedRecord } from "./derive.js";
 import type { LeagueScope } from "./league-scope.js";
 import { leagueScopeRetains } from "./league-scope.js";
 import type {
@@ -144,8 +144,8 @@ export type PlayerTeamMembershipSummary = {
 export type PlayerProfile = {
   identity: PlayerIdentitySummary;
   ratingTrajectory: RatingTrajectoryResult;
-  singlesRecord: { season: WindowedRecordResult; allTime: WindowedRecordResult };
-  doublesRecord: { season: WindowedRecordResult; allTime: WindowedRecordResult };
+  singlesRecord: { windowed: WindowedRecordResult; allTime: WindowedRecordResult };
+  doublesRecord: { windowed: WindowedRecordResult; allTime: WindowedRecordResult };
   slotTendencies: SlotTendency[];
   partnerFrequency: (PartnerFrequencyEntry & { canonicalName: string })[];
   teamMemberships: PlayerTeamMembershipSummary[];
@@ -273,9 +273,18 @@ export function courtMatchRowsForPlayers(
 }
 
 /**
- * Assemble every derived section of one player's dossier. `options.since` bounds the "six-month"
- * windowed records; the "all-time" records omit it (derive.ts's `windowedRecord` treats a missing
- * `since` as no lower bound).
+ * Assemble every derived section of one player's dossier. `options.since` bounds the WINDOWED
+ * records, slot tendencies and partner counts (issue #122: a 12-month lookback, not a calendar
+ * season); the "all-time" records omit it (derive.ts's `windowedRecord` treats a missing `since` as
+ * no lower bound).
+ *
+ * **`slotTendencies`/`partnerFrequency` are filtered to the SAME window as the records beside them**
+ * (issue #122, Task 3 — "the second failure": the window used to reach `singlesRecord`/
+ * `doublesRecord` only, so a player's block could print a windowed "0-0" next to tendencies drawn
+ * from matches entirely outside it, with nothing on the page distinguishing "did not play" from
+ * "played outside a boundary the page never names"). `rowsWithin(options.since)` (derive.ts) is the
+ * one shared predicate both now filter through before deriving, so "one page, one window" holds by
+ * construction.
  *
  * `options.leagueScope` (#97) scopes the EVIDENCE rather than the window: records, slot tendencies
  * and partner counts are computed only over the court matches the scope retains, and what it set
@@ -301,6 +310,12 @@ export function getPlayerProfile(
 
   const evidence = courtMatchRowsForPlayers(db, [playerId], options.leagueScope);
   const courtRows = evidence.rows;
+  // Slot tendencies and partner frequency are windowed to the SAME `since` as the records below —
+  // see this function's own doc comment ("the second failure"). `singlesRecord`/`doublesRecord`
+  // apply `since` themselves (via `windowedRecord`'s own `since` option, unchanged), so `courtRows`
+  // stays the unwindowed evidence set for THEM; `windowedRows` is the explicit, shared filter for
+  // everything else that must match.
+  const windowedRows = rowsWithin(options.since)(courtRows);
 
   const membershipRows: PlayerTeamMembershipSummary[] = db
     .select({
@@ -314,7 +329,7 @@ export function getPlayerProfile(
     .where(eq(teamMemberships.playerId, playerId))
     .all();
 
-  const partnerCounts = partnerFrequency(courtRows, playerId);
+  const partnerCounts = partnerFrequency(windowedRows, playerId);
   const partnerNames = partnerCounts.map((entry) => {
     const partnerRow = db.select().from(players).where(eq(players.id, entry.partnerId)).all()[0];
     return { ...entry, canonicalName: partnerRow?.canonicalName ?? `player #${entry.partnerId}` };
@@ -333,14 +348,14 @@ export function getPlayerProfile(
     },
     ratingTrajectory: ratingTrajectory(observationRows),
     singlesRecord: {
-      season: windowedRecord(courtRows, playerId, { since: options.since, discipline: "singles" }),
+      windowed: windowedRecord(courtRows, playerId, { since: options.since, discipline: "singles" }),
       allTime: windowedRecord(courtRows, playerId, { discipline: "singles" }),
     },
     doublesRecord: {
-      season: windowedRecord(courtRows, playerId, { since: options.since, discipline: "doubles" }),
+      windowed: windowedRecord(courtRows, playerId, { since: options.since, discipline: "doubles" }),
       allTime: windowedRecord(courtRows, playerId, { discipline: "doubles" }),
     },
-    slotTendencies: slotTendencies(courtRows, playerId),
+    slotTendencies: slotTendencies(windowedRows, playerId),
     partnerFrequency: partnerNames,
     teamMemberships: membershipRows,
     // Carried straight from the read that produced `courtRows`, never rebuilt: a summary derived a

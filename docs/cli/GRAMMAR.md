@@ -205,6 +205,13 @@ legitimately carry a different status for each overlapping event.
 tendency, partner count and prior-meeting row is computed over. Same optional-trailing-positional
 shape as everywhere else; no new flags.
 
+**The named event also anchors the 12-month evidence window** (#122): the records, slot tendencies
+and partner counts above are windowed to the 12 months before the event's own `starts_on`, the same
+anchor `tn report build` uses, rather than sliding with the clock — a resolved event supplies exactly
+ONE `starts_on` lookup, reused for both the league scope above and this window, never a second read.
+No event named: the window instead slides with the caller's clock (today minus 12 months), and the
+printed label — `12mo to <anchor day>` — says which one was used either way.
+
 Both commands print the scope **whether or not one applies** — `evidence:` names the filter and the
 count it set aside, `leagues counted:` names what survived it. The unscoped line ("no league scope
 applied — every league counts") is not filler: a filtered record that does not say what it filtered
