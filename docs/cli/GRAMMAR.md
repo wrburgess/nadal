@@ -375,8 +375,15 @@ nothing and would imply a correctness this command gets from the team linkage in
 governs `tn report build`'s records, `tn player show` and `tn team show`; it does not govern this.
 
 `tn report build [sectionals|<team>] [event] [--json]` — `<team>` renders that one team's dossier;
-`sectionals`, and bare (no target), render one dossier per team on file plus a top-level
-`index.html`/`index.md`. Output root: `TN_REPORTS_PATH` when set (resolved against the caller's cwd
+`sectionals`, and bare (no target), render one dossier per team **in the event's field** plus a
+top-level `index.html`/`index.md`. The field (#124) is derived from registrations: a team with at
+least one player registered for the named `[event]` (via `tn roster set`, #113) is in that event's
+field. When no event is named, or when the named event has no registrations at all, the reading falls
+back to **every team on file** — the pre-#124 behavior, and the only useful answer for an event nobody
+has registered for yet. Which reading was used is reported as `field="registered"` / `field="all-teams"`
+in the summary (and as `field` in the `report_build` MCP result), because the two are
+indistinguishable from a team count alone. `teams=` counts the dossiers actually written, not the rows
+in `teams`. Output root: `TN_REPORTS_PATH` when set (resolved against the caller's cwd
 when relative), defaulting otherwise to `reports/` anchored to the `tn` checkout itself (issue
 #111 — the same directory regardless of which directory `tn` was invoked from) — mirroring
 `TN_DB_PATH`/`TN_RAW_PATH` exactly, so this introduces no new flag. Every write is

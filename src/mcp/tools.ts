@@ -29,7 +29,12 @@ import { NoCourtMatchHistoryError, getLineupPlan, resolveEvent } from "../query/
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
-import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../report/write.js";
+import {
+  type SectionalsFieldSource,
+  resolvedReportsRoot,
+  writeSectionalsDossiers,
+  writeTeamDossier,
+} from "../report/write.js";
 import { evidenceWindow, windowSnapshot } from "../cli/window.js";
 
 /** A tool-level refusal, mapped to `CallToolResult.isError` by `src/mcp/server.ts` — never a crash.
@@ -643,9 +648,16 @@ export const MCP_TOOLS: McpToolDef[] = [
         // and not the other is guarded by nothing (ARCHITECTURE.md §5 question 3), and a batch
         // cannot honestly carry one scalar for a mix of registered and season teams.
         let rosterSource: "registered" | "season" | undefined;
+        // #124: batch only, and — like `rosterSource` above — carried OUT of the write rather than
+        // re-read, so this door and the CLI's report the same reading of "the field" on the same
+        // terms. `countTeams(db)` used to supply the count here; once the batch is scoped to an
+        // event's field that read reports every team on file instead of the ones written.
+        let fieldSource: SectionalsFieldSource | undefined;
         if (target === undefined || target === "sectionals") {
-          written = writeSectionalsDossiers(db, { window, event: resolvedEvent });
-          teamsCount = countTeams(db);
+          const batch = writeSectionalsDossiers(db, { window, event: resolvedEvent });
+          written = batch.files;
+          teamsCount = batch.teamCount;
+          fieldSource = batch.fieldSource;
         } else {
           const resolution = requireResolved(resolveTeamTarget(db, target), "target", target);
           const result = writeTeamDossier(db, resolution.teamId, { window, event: resolvedEvent });
@@ -666,6 +678,7 @@ export const MCP_TOOLS: McpToolDef[] = [
           root: resolvedReportsRoot(),
           since: windowSnapshot(window).since,
           anchoredTo: anchor.anchoredTo,
+          ...(fieldSource === undefined ? {} : { field: fieldSource }),
           ...(rosterSource === undefined ? {} : { roster: rosterSource }),
         };
       } finally {

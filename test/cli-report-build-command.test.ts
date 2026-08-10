@@ -386,6 +386,79 @@ describe("tn report build (end-to-end via dispatch)", () => {
     });
   });
 
+  // #124: the batch build's summary names which reading of "the field" it used, and its `teams=`
+  // count comes out of the write rather than from a second whole-table read.
+  describe("the field= summary field (#124)", () => {
+    it("scopes the batch to the registered teams and prints field=\"registered\" with a matching teams=", async () => {
+      const { team, playerIds } = seedTeamWithHistory("Team In Field");
+      seedTeamWithHistory("Team Not In Field");
+      const { db, sqlite } = openDb();
+      const event = addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+      db.insert(teamMemberships).values({ playerId: playerIds[0]!, teamId: team.id, eventId: event.eventId }).run();
+      sqlite.close();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "sectionals", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toContain('field="registered"');
+      // `teams=1`, not `teams=2`: this is the assertion that fails if the count is ever taken from a
+      // second whole-table read again — two teams are on file and only one is in the field.
+      expect(printed).toContain("teams=1");
+      expect(existsSync(join(reportsDir, "team-in-field", "index.md"))).toBe(true);
+      expect(existsSync(join(reportsDir, "team-not-in-field", "index.md"))).toBe(false);
+    });
+
+    it("prints field=\"all-teams\" when the named event has nobody registered", async () => {
+      seedTeamWithHistory("Team A Unregistered");
+      seedTeamWithHistory("Team B Unregistered");
+      const { db, sqlite } = openDb();
+      addEvent(db, {
+        name: "Springfield Sectionals 2026",
+        kind: "tournament",
+        startsOn: "2026-08-28",
+        endsOn: "2026-08-30",
+        format: "D1:doubles",
+      });
+      sqlite.close();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "sectionals", "Springfield Sectionals 2026"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).toContain('field="all-teams"');
+      // Both seeded teams are rendered. Deliberately NOT asserting a literal `teams=` count here:
+      // this suite shares one database across its tests, so the total depends on what earlier tests
+      // seeded. The registered case above is where the count is pinned, and it is pinned there
+      // against a field SMALLER than the table — which is the case that actually distinguishes a
+      // count taken from the write from one taken from a second whole-table read.
+      expect(existsSync(join(reportsDir, "team-a-unregistered", "index.md"))).toBe(true);
+      expect(existsSync(join(reportsDir, "team-b-unregistered", "index.md"))).toBe(true);
+    });
+
+    // A single-team build has no field to have scoped, so the key must be ABSENT rather than
+    // present-with-some-value — `field="all-teams"` on a one-team build would read as a claim that
+    // one team is the whole field.
+    it("omits field= entirely on a single-team build", async () => {
+      seedTeamWithHistory("Team Solo");
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const code = await dispatch(["report", "build", "Team Solo"]);
+
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]?.[0] as string;
+      expect(printed).not.toContain("field=");
+    });
+  });
+
   // Task 7 (#113): the single-team build's summary line names which roster the dossier just written
   // actually drew on.
   describe("the roster= summary field (#113)", () => {
