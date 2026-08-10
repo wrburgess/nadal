@@ -320,6 +320,16 @@ function renderOwnTeamBookMarkdown(dossier: TeamDossier): string {
       "_No event named for this build, so there is no day range to report availability over._" +
         " Re-run naming the event to see the grid.",
     );
+  } else if (book.availability.days.length === 0) {
+    // A named event with no `starts_on`/`ends_on` on file. Both columns are NULLABLE
+    // (src/db/schema.ts) and `eventsForDay` already guards for it — the `events` table predates its
+    // only writer (`addEvent`, #17 PR B), so undated rows are representable. Without this branch the
+    // grid below emits a header with one cell more than its divider, which is not a table at all: the
+    // whole block renders as literal pipes on the printed page.
+    lines.push(
+      "_This event has no date range on file, so there are no days to report availability over._" +
+        " Set its start and end dates (`tn event add`) and rebuild.",
+    );
   } else if (book.availability.players.length === 0) {
     lines.push("_None recorded._ Use `tn player avail` to record who can play which day.");
   } else {

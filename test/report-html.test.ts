@@ -321,6 +321,23 @@ describe("own-team book (HTML)", () => {
     expect(html.toLowerCase()).toContain("none recorded");
   });
 
+  it("does not emit a zero-column table when the named event has no date range on file", () => {
+    // The markdown twin explains the state: `events.starts_on`/`ends_on` are nullable, so a named
+    // event can have no days.
+    const html = renderDossier(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: { days: [], players: [{ playerId: 1, canonicalName: "Nova Norbury", days: [] }] },
+        }),
+      }),
+    );
+
+    expect(html.toLowerCase()).toContain("no date range on file");
+    // An empty grid would read as "nobody is available" rather than "this event has no dates".
+    expect(html).not.toContain("<table class=\"roster\"><thead><tr><th>Player</th></tr></thead>");
+  });
+
   it("says availability needs a named event rather than printing an empty grid", () => {
     const html = renderDossier(
       buildDossier({ team: homeTeam, ownTeam: buildOwnTeamBook({ availability: null }) }),

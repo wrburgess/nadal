@@ -343,6 +343,31 @@ describe("own-team book (markdown)", () => {
     expect(book).not.toContain("no writer exists");
   });
 
+  it("does not emit a malformed table when the named event has no date range on file", () => {
+    // `events.starts_on`/`ends_on` are NULLABLE (src/db/schema.ts) and `eventsForDay` already guards
+    // for that, so an undated event is a representable state — the `events` table predates its only
+    // writer (`addEvent`, #17 PR B), which is why the null case exists at all. `enumerateIsoDays`
+    // then returns [], giving a non-null availability view with a roster but ZERO days.
+    const md = renderDossierMarkdown(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: {
+            days: [],
+            players: [{ playerId: 1, canonicalName: "Nova Norbury", days: [] }],
+          },
+        }),
+      }),
+    );
+
+    const book = md.slice(md.indexOf("## Own-team book"), md.indexOf("## Player detail"));
+    // A zero-column table is not a table. Every row of a markdown table must have the same cell
+    // count as its divider, or the whole block renders as literal text in the printed binder.
+    const tableRows = book.split("\n").filter((line) => line.trimStart().startsWith("|"));
+    const cellCounts = new Set(tableRows.map((line) => line.split("|").length));
+    expect(cellCounts.size).toBeLessThanOrEqual(1);
+  });
+
   it("says availability needs a named event rather than printing an empty grid", () => {
     const md = renderDossierMarkdown(
       buildDossier({ team: homeTeam, ownTeam: buildOwnTeamBook({ availability: null }) }),

@@ -360,6 +360,13 @@ function renderOwnTeamBookHtml(dossier: TeamDossier): string {
     availability =
       "<p><em>No event named for this build, so there is no day range to report availability over." +
       " Re-run naming the event to see the grid.</em></p>";
+  } else if (book.availability.days.length === 0) {
+    // See the markdown twin: a named event whose `starts_on`/`ends_on` are null. HTML tolerates a
+    // zero-column table better than markdown does, but an empty grid still reads as "nobody is
+    // available" rather than "this event has no dates", so both renderers say the same thing.
+    availability =
+      "<p><em>This event has no date range on file, so there are no days to report availability over." +
+      " Set its start and end dates (<code>tn event add</code>) and rebuild.</em></p>";
   } else if (book.availability.players.length === 0) {
     availability = "<p><em>None recorded.</em> Use <code>tn player avail</code> to record who can play which day.</p>";
   } else {
