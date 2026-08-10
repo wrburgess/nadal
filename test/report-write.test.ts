@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { evidenceWindow, windowSnapshot } from "../src/cli/window.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
 import { OutputPathError } from "../src/fs/output-root.js";
+import { setAvailability } from "../src/query/availability.js";
+import { addCaptainNote } from "../src/query/captain-notes.js";
 import { addEvent } from "../src/query/events.js";
 import { resolveEvent } from "../src/query/lineup.js";
 import { setHomeTeam } from "../src/query/home-team.js";
@@ -18,6 +21,7 @@ import {
   writeTeamDossier,
   writeSectionalsDossiers,
 } from "../src/report/write.js";
+import { seedHomeTeamFixture } from "./helpers/home-team.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -90,6 +94,202 @@ describe("src/report/write.ts", () => {
       } finally {
         sqlite.close();
       }
+    });
+
+    // #126. Driven through the REAL writers (`setAvailability` / `addCaptainNote`) rather than
+    // hand-inserted rows — the discipline #113 established, and whose cost `player-profile.ts`
+    // records: a fixture that writes rows directly can pass while the actual write path is broken.
+    describe("own-team book (#126)", () => {
+      function seedHomeWithEvent() {
+        runMigrations();
+        const { db, sqlite } = openDb();
+        const fixture = seedHomeTeamFixture(db, { eventName: "Springfield Sectionals 2026" });
+        // `buildTeamDossier` threads `options.event` into `getLineupPlan`, which refuses an event
+        // with no format on file — added so the build reaches the assertions, as above.
+        addEvent(db, {
+          name: "Springfield Sectionals 2026",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          format: "S1:singles",
+        });
+        return { db, sqlite, fixture };
+      }
+
+      it("populates ownTeam for the home team, from what the real writers stored", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+          addCaptainNote(db, { playerId: fixture.playerId, text: "steady under pressure" });
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          expect(dossier.ownTeam).not.toBeNull();
+          // Every day of the event range, not only the answered one.
+          expect(dossier.ownTeam!.availability!.days).toEqual(["2026-08-28", "2026-08-29", "2026-08-30"]);
+          expect(dossier.ownTeam!.notes.player.map((n) => n.note)).toEqual(["steady under pressure"]);
+
+          // And it reaches the page — the point of the whole issue.
+          expect(renderDossierMarkdown(dossier)).toContain("## Own-team book");
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      it("leaves ownTeam null for an opponent, even with our own availability on file", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+          const opponent = seedTeamWithRosters(db, {
+            teamName: "OK/Dickason/40&over3.5M",
+            season: ["Cy Calder"],
+          });
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, opponent.teamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          // An opponent's book is not empty — it does not exist. Spec § Domain model: captain notes
+          // and availability are "populated for our team only, by design".
+          expect(dossier.ownTeam).toBeNull();
+          expect(renderDossierMarkdown(dossier)).not.toContain("Own-team book");
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      // THE regression this issue's real-data check caught. Against the live database the grid
+      // listed 13 players while the roster table three sections above it said "registered 11" — and
+      // the two extra names were exactly the ones the dossier's own "Not registered (watch for
+      // adds)" section prints. Every unit test passed: the query was scoped correctly to the TEAM,
+      // which is simply the wrong question for an event-scoped dossier.
+      it("the availability grid lists the REGISTERED field, not everyone on the season roster", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          // A season-roster member who did not register for this event.
+          const unregistered = db.insert(players).values({ canonicalName: "Nate Notregistered" }).returning().get();
+          db.insert(teamMemberships)
+            .values({ playerId: unregistered.id, teamId: fixture.homeTeamId, eventId: null })
+            .run();
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          // One page, one answer to "who is on this team": the grid and the roster table must name
+          // the same people.
+          expect(dossier.ownTeam!.availability!.players.map((p) => p.canonicalName)).toEqual(
+            dossier.team.roster.map((m) => m.canonicalName),
+          );
+          expect(dossier.ownTeam!.availability!.players.map((p) => p.canonicalName)).not.toContain(
+            "Nate Notregistered",
+          );
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      // Retirement filtering lives in `resolveRoster` (src/query/roster.ts), not in
+      // `getAvailabilityForEvent` — this is the end-to-end proof that it still reaches the grid,
+      // asserted at the layer that owns it rather than at the one that merely benefits.
+      it("a soft-retired member reaches neither the roster table nor the availability grid", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+          db.update(teamMemberships)
+            .set({ retiredAt: "2026-08-01T00:00:00.000Z" })
+            .where(eq(teamMemberships.playerId, fixture.playerId))
+            .run();
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          expect(dossier.team.roster.map((m) => m.canonicalName)).not.toContain(fixture.playerName);
+          expect(dossier.ownTeam!.availability!.players.map((p) => p.canonicalName)).not.toContain(
+            fixture.playerName,
+          );
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      // The home-team race lives in test/report-write-home-team-race.test.ts, which needs a
+      // module-wide mock of `resolveHomeTeam` to make the interleaving deterministic. Two tests
+      // that USED to sit here were removed rather than kept: named "even if the home team changes
+      // mid-assembly", neither changed the home team, and both passed against the pre-fix code they
+      // were written to guard (Codex round 2 [high]). A test that cannot fail is worse than no test
+      // — it retires the vigilance that would otherwise notice the gap.
+
+      // REGRESSION, Codex round 2 [high] — the THIRD instance of "who is on this roster, derived
+      // twice" in this PR. `getCaptainNotes` re-queried memberships and returned the SEASON roster
+      // while the roster table and availability grid showed the event-scoped REGISTERED field, so a
+      // note about someone who never registered rendered on a dossier that did not list them.
+      it("captain notes are scoped to the registered field, like the roster table and the grid", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          // On the season roster only — did not register for this event.
+          const unregistered = db.insert(players).values({ canonicalName: "Bob Seasononly" }).returning().get();
+          db.insert(teamMemberships)
+            .values({ playerId: unregistered.id, teamId: fixture.homeTeamId, eventId: null })
+            .run();
+          // The writer permits this: Bob IS on the home team's current roster.
+          addCaptainNote(db, { playerId: unregistered.id, text: "about someone who did not register" });
+          addCaptainNote(db, { playerId: fixture.playerId, text: "about someone who did" });
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          const rosterNames = dossier.team.roster.map((m) => m.canonicalName);
+          expect(rosterNames).not.toContain("Bob Seasononly");
+          // All three views of "who is on this team" must name the same people.
+          expect(dossier.ownTeam!.notes.player.map((n) => n.canonicalName)).not.toContain("Bob Seasononly");
+          expect(dossier.ownTeam!.availability!.players.map((p) => p.canonicalName)).toEqual(rosterNames);
+          // ...and the note about a registered player still renders, so this is scoping, not silence.
+          expect(dossier.ownTeam!.notes.player.map((n) => n.note)).toEqual(["about someone who did"]);
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      it("reports availability as null, not an empty grid, when the build names no event", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          // The note goes on a SEASON-roster member (`event_id IS NULL`). `resolveRoster` defines
+          // the season roster as exactly those rows, so with no event named the fixture's own
+          // event-registered player is legitimately not on it — the roster this dossier is about is
+          // the season one, and the notes follow it.
+          const seasonMember = db.insert(players).values({ canonicalName: "Sam Seasonroster" }).returning().get();
+          db.insert(teamMemberships)
+            .values({ playerId: seasonMember.id, teamId: fixture.homeTeamId, eventId: null })
+            .run();
+          addCaptainNote(db, { playerId: seasonMember.id, text: "notes still work unscoped" });
+
+          // No `event` option at all — availability is per-event-day, so there is no range.
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, { window: evidenceWindow("2026-01-01") });
+
+          expect(dossier.ownTeam).not.toBeNull();
+          expect(dossier.ownTeam!.availability).toBeNull();
+          // Notes are event-independent, so they still render — scoped to whichever roster applies.
+          expect(dossier.ownTeam!.notes.player.map((n) => n.note)).toEqual(["notes still work unscoped"]);
+          expect(renderDossierMarkdown(dossier).toLowerCase()).toContain("no event named");
+        } finally {
+          sqlite.close();
+        }
+      });
     });
   });
 

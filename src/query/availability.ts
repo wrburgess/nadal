@@ -10,7 +10,7 @@ import { z } from "zod";
 import { availability, events, teamMemberships } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoHomeTeamError, requireHomeTeam } from "./home-team.js";
-import { isIsoDay } from "./iso-day.js";
+import { enumerateIsoDays, isIsoDay } from "./iso-day.js";
 
 type EventRow = typeof events.$inferSelect;
 type AvailabilityRow = typeof availability.$inferSelect;
@@ -231,4 +231,103 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
 
     return { availabilityId: row.id, eventId: event.id, eventName: event.name, status: row.status };
   }, { behavior: "immediate" });
+}
+
+export type AvailabilityStatus = AvailabilityRow["status"];
+
+/** One player's answer for every day of the event — `null` where no row exists. */
+export type PlayerAvailability = {
+  playerId: number;
+  canonicalName: string;
+  days: { day: string; status: AvailabilityStatus | null }[];
+};
+
+export type EventAvailability = {
+  /** Every day in the event's range, inclusive — see `getAvailabilityForEvent`. */
+  days: string[];
+  /** One entry per CURRENT roster member, name-ordered. Empty only when the roster is. */
+  players: PlayerAvailability[];
+};
+
+/**
+ * Reads back what `setAvailability` wrote, as content rather than as a count (#126).
+ *
+ * Two shape decisions carry the feature's correctness, and both exist to make a plausible renderer
+ * bug unrepresentable rather than merely untested:
+ *
+ * 1. **`days` comes from the EVENT's range, never from the rows returned.** A day nobody has
+ *    answered for is exactly the day the captain most needs to see, and a list derived from stored
+ *    rows would omit it — rendering "who is available Saturday?" as though there were no Saturday.
+ *    The bug would be invisible, because the grid it produces looks complete.
+ * 2. **Every player carries an entry for EVERY day**, with `status: null` for unrecorded. A renderer
+ *    zipping a sparse list against a day header can misalign; one that reads a dense per-day list
+ *    cannot. It also keeps "not recorded" and "recorded unavailable" structurally distinct, which is
+ *    the distinction the captain acts on.
+ *
+ * **The roster is supplied by the caller, not re-derived here**, and that is the third correctness
+ * decision. `buildTeamDossier` has already resolved which roster this dossier is ABOUT — the
+ * registered field when an event was named, the season roster otherwise (#113, #125) — and the grid
+ * has to be the same set of people the roster table three sections above it lists. Re-querying
+ * `team_memberships` here produced exactly that disagreement: against the real database the grid
+ * listed 13 while the roster table said "registered 11", and the two players it added were the very
+ * ones the dossier's own "Not registered (watch for adds)" section names. One page cannot hold two
+ * answers to "who is on this team", so there is only one place that question is answered.
+ *
+ * Note this is deliberately NARROWER than what `setAvailability` will accept: the writer takes any
+ * non-retired membership regardless of `event_id`, because a `tn team pull` roster writes
+ * `event_id: null` and requiring an event-scoped row would refuse every real roster. Recording
+ * availability for a season-roster player who has not registered is therefore still allowed and
+ * still stored — it simply does not appear in an event-scoped grid until they register, which is
+ * when it starts to matter.
+ *
+ * Unlike the write service this takes no `teamId` and never calls `requireHomeTeam`: the caller has
+ * already resolved the home team and decided this dossier is ours, and re-resolving it would be the
+ * second read of one row that #97 and #125 both closed.
+ */
+export function getAvailabilityForEvent(
+  db: Db,
+  input: { eventId: number; roster: { playerId: number; canonicalName: string }[] },
+): EventAvailability {
+  const event = db.select().from(events).where(eq(events.id, input.eventId)).get();
+  const days =
+    event?.startsOn != null && event.endsOn != null ? enumerateIsoDays(event.startsOn, event.endsOn) : [];
+
+  // One entry per player even if the caller's roster somehow repeats one — a player legitimately
+  // holds both a season and an event membership row for the same team (docs/findings.md #15), the
+  // same duplicate pair `tn player show` prints twice (#131), so a caller assembling this list from
+  // membership rows could hand us two. The grid wants one row per person.
+  const byId = new Map<number, { playerId: number; canonicalName: string }>();
+  for (const member of input.roster) byId.set(member.playerId, member);
+
+  const recorded = db
+    .select({ playerId: availability.playerId, day: availability.day, status: availability.status })
+    .from(availability)
+    .where(eq(availability.eventId, input.eventId))
+    .all();
+  // Nested, rather than a composite `${playerId}<sep>${day}` string key. A composite key has to
+  // invent a separator, and that is a decision with a wrong answer: an earlier revision of these
+  // two lines carried a literal NUL byte as the separator. It was invisible in an editor and
+  // behaviourally harmless only because the write and the read happened to carry the SAME byte,
+  // so no test could see it - `test/source-no-nul-bytes.test.ts` caught it at the byte level.
+  // A Map of Maps has no delimiter to get wrong.
+  const statusFor = new Map<number, Map<string, AvailabilityStatus>>();
+  for (const row of recorded) {
+    let byDay = statusFor.get(row.playerId);
+    if (byDay === undefined) {
+      byDay = new Map<string, AvailabilityStatus>();
+      statusFor.set(row.playerId, byDay);
+    }
+    byDay.set(row.day, row.status);
+  }
+
+  const rosterPlayers = Array.from(byId.values()).sort((a, b) => a.canonicalName.localeCompare(b.canonicalName));
+
+  return {
+    days,
+    players: rosterPlayers.map((member) => ({
+      playerId: member.playerId,
+      canonicalName: member.canonicalName,
+      days: days.map((day) => ({ day, status: statusFor.get(member.playerId)?.get(day) ?? null })),
+    })),
+  };
 }

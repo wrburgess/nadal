@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { escapeHtml, renderDossier } from "../src/report/html.js";
-import { buildDossier, buildEmptyDossier, buildPlayerProfile, buildTeamProfile } from "./helpers/dossier.js";
+import {
+  buildDossier,
+  buildEmptyDossier,
+  buildOwnTeamBook,
+  buildPlayerProfile,
+  buildTeamProfile,
+} from "./helpers/dossier.js";
 
 describe("escapeHtml", () => {
   it("escapes the five XML-significant characters", () => {
@@ -254,5 +260,135 @@ describe("renderDossier", () => {
     expect(html).toContain("<strong>Records and court-slot tendencies below were computed over:</strong>");
     expect(html).not.toContain("Records, court-slot tendencies and prior meetings");
     expect(html).toContain("Prior meetings below draws on the same leagues but every date on file, not the 12-month window above.");
+  });
+});
+
+// #126 — the HTML twin of the markdown own-team-book suite. Both renderers consume one shape
+// (src/report/types.ts), so the same facts are asserted in both files: a renderer that drifts is
+// the failure this pairing exists to catch.
+describe("own-team book (HTML)", () => {
+  const homeTeam = buildTeamProfile({ isHome: true });
+
+  it("renders the section on the home team's dossier", () => {
+    const html = renderDossier(buildDossier({ team: homeTeam, ownTeam: buildOwnTeamBook() }));
+    expect(html).toContain("Own-team book");
+  });
+
+  it("omits the section entirely on an opponent's dossier", () => {
+    const html = renderDossier(buildDossier({ ownTeam: null }));
+    expect(html).not.toContain("Own-team book");
+  });
+
+  it("keeps a day nobody answered for as a column", () => {
+    // The markdown suite's twin of this test explains why this is the dangerous case.
+    const html = renderDossier(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: {
+            days: ["2026-08-28", "2026-08-29", "2026-08-30"],
+            players: [
+              {
+                playerId: 1,
+                canonicalName: "Nova Norbury",
+                days: [
+                  { day: "2026-08-28", status: "available" },
+                  { day: "2026-08-29", status: null },
+                  { day: "2026-08-30", status: null },
+                ],
+              },
+            ],
+          },
+        }),
+      }),
+    );
+
+    expect(html).toContain("2026-08-30");
+  });
+
+  it("renders an empty book as an explicit 'none recorded', not as an absent section", () => {
+    const html = renderDossier(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: { days: ["2026-08-28"], players: [] },
+          notes: { player: [], pairing: [] },
+        }),
+      }),
+    );
+
+    expect(html).toContain("Own-team book");
+    expect(html.toLowerCase()).toContain("none recorded");
+  });
+
+  it("does not emit a zero-column table when the named event has no date range on file", () => {
+    // The markdown twin explains the state: `events.starts_on`/`ends_on` are nullable, so a named
+    // event can have no days.
+    const html = renderDossier(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: { days: [], players: [{ playerId: 1, canonicalName: "Nova Norbury", days: [] }] },
+        }),
+      }),
+    );
+
+    expect(html.toLowerCase()).toContain("no date range on file");
+    // An empty grid would read as "nobody is available" rather than "this event has no dates".
+    expect(html).not.toContain("<table class=\"roster\"><thead><tr><th>Player</th></tr></thead>");
+  });
+
+  it("says availability needs a named event rather than printing an empty grid", () => {
+    const html = renderDossier(
+      buildDossier({ team: homeTeam, ownTeam: buildOwnTeamBook({ availability: null }) }),
+    );
+    expect(html.toLowerCase()).toContain("no event named");
+  });
+
+  it("escapes markup in free-text note content", () => {
+    // Captain notes are arbitrary operator text landing in an HTML document.
+    const hostile = "<script>alert(1)</script>";
+    const html = renderDossier(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          notes: {
+            player: [
+              {
+                noteId: 1,
+                playerId: 1,
+                canonicalName: "Nova Norbury",
+                note: hostile,
+                createdAt: "2026-08-09T00:00:00.000Z",
+              },
+            ],
+            pairing: [],
+          },
+        }),
+      }),
+    );
+
+    expect(html).not.toContain(hostile);
+    expect(html).toContain(escapeHtml(hostile));
+  });
+
+  it("escapes markup in a player's name inside the availability grid", () => {
+    // The grid renders names from a DIFFERENT source than the roster table above it, so it needs
+    // its own escaping proof rather than inheriting that table's.
+    const nastyName = '<img src=x onerror="alert(1)">';
+    const html = renderDossier(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: {
+            days: ["2026-08-28"],
+            players: [{ playerId: 1, canonicalName: nastyName, days: [{ day: "2026-08-28", status: "available" }] }],
+          },
+        }),
+      }),
+    );
+
+    expect(html).not.toContain(nastyName);
+    expect(html).toContain(escapeHtml(nastyName));
   });
 });

@@ -278,6 +278,107 @@ function renderPlayersSectionMarkdown(dossier: TeamDossier): string {
   return dossier.players.map((p) => renderPlayerBlockMarkdown(p, dossier.window)).join("\n\n");
 }
 
+/** What a day with no recorded answer prints. Deliberately NOT a blank cell: an empty cell in a
+ * printed grid reads as an oversight, where a glyph reads as a recorded absence of an answer. */
+const UNRECORDED_DAY = "—";
+
+/** `2026-08-09T00:00:00.000Z` → `2026-08-09`. The binder is read at a tennis court; the time of day
+ * a note was typed is noise. */
+function noteDay(createdAt: string): string {
+  return createdAt.slice(0, 10);
+}
+
+/**
+ * #126, spec § Deliverables #2 — the own-team book: availability and captain notes, on OUR dossier
+ * only. Returns "" for every opponent, which is what `ownTeam: null` means.
+ *
+ * Three absences are rendered as three DIFFERENT sentences, because they call for different actions
+ * and collapsing them is the whole failure mode this section exists to avoid:
+ *   - no book at all  → nothing (not our team; their availability is not ours to record)
+ *   - no event named  → say so (there is no day range to grid over — NOT "nobody is available")
+ *   - book is empty   → "none recorded" (a writer exists and the captain has not used it yet)
+ *
+ * That last sentence must not be confused with the `## Not collected yet` section below, which
+ * means "no writer exists anywhere in this codebase" — true of these two tables until #17 PR A, and
+ * false ever since.
+ */
+function renderOwnTeamBookMarkdown(dossier: TeamDossier): string {
+  const book = dossier.ownTeam;
+  if (book === null) return "";
+
+  const lines: string[] = [
+    "\n\n## Own-team book",
+    "",
+    "_The captain's layer — availability and notes. Recorded for our team only, by design._",
+    "",
+    "### Availability",
+    "",
+  ];
+
+  if (book.availability === null) {
+    lines.push(
+      "_No event named for this build, so there is no day range to report availability over._" +
+        " Re-run naming the event to see the grid.",
+    );
+  } else if (book.availability.days.length === 0) {
+    // A named event with no `starts_on`/`ends_on` on file. Both columns are NULLABLE
+    // (src/db/schema.ts) and `eventsForDay` already guards for it — the `events` table predates its
+    // only writer (`addEvent`, #17 PR B), so undated rows are representable. Without this branch the
+    // grid below emits a header with one cell more than its divider, which is not a table at all: the
+    // whole block renders as literal pipes on the printed page.
+    lines.push(
+      "_This event has no date range on file, so there are no days to report availability over._" +
+        " Set its start and end dates (`tn event add`) and rebuild.",
+    );
+  } else if (book.availability.players.length === 0) {
+    lines.push("_None recorded._ Use `tn player avail` to record who can play which day.");
+  } else {
+    const { days, players } = book.availability;
+    // Columns come from the EVENT's day range (see `getAvailabilityForEvent`), so a day nobody has
+    // answered for still gets a column full of `—` rather than vanishing from the page.
+    lines.push(
+      `| Player | ${days.map((d) => escapeMarkdownCell(d)).join(" | ")} |`,
+      `|---|${days.map(() => "---|").join("")}`,
+      ...players.map(
+        (p) =>
+          `| ${escapeMarkdownCell(p.canonicalName)} | ` +
+          p.days.map((d) => escapeMarkdownCell(d.status ?? UNRECORDED_DAY)).join(" | ") +
+          " |",
+      ),
+      "",
+      `_\`${UNRECORDED_DAY}\` means **not recorded** — which is not the same as unavailable._`,
+    );
+  }
+
+  lines.push("", "### Captain notes", "");
+  if (book.notes.player.length === 0) {
+    lines.push("_None recorded._ Use `tn player note` to add one.");
+  } else {
+    lines.push(
+      ...book.notes.player.map(
+        (n) => `- **${escapeMarkdownCell(n.canonicalName)}** — ${escapeMarkdownCell(n.note)} _(${noteDay(n.createdAt)})_`,
+      ),
+    );
+  }
+
+  // Pairing notes get their OWN block rather than appearing under each partner: the note is one
+  // observation about the two of them together, and printing it twice would read as two.
+  lines.push("", "### Pairing notes", "");
+  if (book.notes.pairing.length === 0) {
+    lines.push("_None recorded._");
+  } else {
+    lines.push(
+      ...book.notes.pairing.map(
+        (n) =>
+          `- **${escapeMarkdownCell(n.canonicalName)} + ${escapeMarkdownCell(n.pairCanonicalName)}** —` +
+          ` ${escapeMarkdownCell(n.note)} _(${noteDay(n.createdAt)})_`,
+      ),
+    );
+  }
+
+  return lines.join("\n");
+}
+
 const DATA_GAP_LABELS: Record<string, string> = {
   events: "events",
   availability: "availability",
@@ -317,6 +418,9 @@ export function renderDossierMarkdown(dossier: TeamDossier): string {
     renderEvidenceScopeMarkdown(dossier) +
     "\n\n" +
     renderPredictedLineupMarkdown(dossier) +
+    // #126: between the predicted lineup and the per-player detail — the captain reads the guess,
+    // then who is actually there, then the individual write-ups.
+    renderOwnTeamBookMarkdown(dossier) +
     "\n\n## Player detail\n\n" +
     renderPlayersSectionMarkdown(dossier) +
     "\n\n" +

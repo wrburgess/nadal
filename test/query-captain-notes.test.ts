@@ -8,6 +8,7 @@ import {
   PlayerNotOnHomeRosterError,
   SelfPairingCaptainNoteError,
   addCaptainNote,
+  getCaptainNotes,
 } from "../src/query/captain-notes.js";
 import { seedHomeTeamFixture } from "./helpers/home-team.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -205,6 +206,131 @@ describe("addCaptainNote", () => {
       expect(note.note).toBe(hostile);
       const stored = rows(db)[0]!;
       expect(stored.note).toBe(hostile);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// #126 — the READ side, the counterpart to `getAvailabilityForEvent`. As with availability, nothing
+// read these rows back as CONTENT before this issue.
+describe("getCaptainNotes", () => {
+  useTnDbPath();
+
+  it("returns player notes newest first", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      const older = addCaptainNote(db, { playerId: fixture.playerId, text: "older" });
+      const newer = addCaptainNote(db, { playerId: fixture.playerId, text: "newer" });
+
+      // `addCaptainNote` stamps `createdAt` itself from the wall clock, so two appends inside one
+      // millisecond would tie and the ordering assertion would pass or fail by luck. Pin the two
+      // timestamps AFTER the real writer has run — the insert path under test stays the production
+      // one; only the clock is made deterministic (rules/testing.md: never race a real clock).
+      db.update(captainNotes).set({ createdAt: "2026-08-01T00:00:00.000Z" }).where(eq(captainNotes.id, older.id)).run();
+      db.update(captainNotes).set({ createdAt: "2026-08-09T00:00:00.000Z" }).where(eq(captainNotes.id, newer.id)).run();
+
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
+
+      expect(view.player.map((n) => n.note)).toEqual(["newer", "older"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("separates a pairing note from a player note and names both partners", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      const partner = db.insert(players).values({ canonicalName: "Bryan Partner" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: partner.id, teamId: fixture.homeTeamId, eventId: fixture.eventId }).run();
+
+      addCaptainNote(db, { playerId: fixture.playerId, text: "solo note" });
+      addCaptainNote(db, { playerId: fixture.playerId, pairPlayerId: partner.id, text: "strong together" });
+
+      const view = getCaptainNotes(db, {
+        roster: [
+          { playerId: fixture.playerId, canonicalName: fixture.playerName },
+          { playerId: partner.id, canonicalName: partner.canonicalName },
+        ],
+      });
+
+      // A pairing note is about the PAIR — it belongs in neither player's own list, or it reads as
+      // two separate observations.
+      expect(view.player.map((n) => n.note)).toEqual(["solo note"]);
+      expect(view.pairing).toHaveLength(1);
+      expect(view.pairing[0]).toMatchObject({
+        canonicalName: fixture.playerName,
+        pairCanonicalName: "Bryan Partner",
+        note: "strong together",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("returns empty lists when nothing is recorded, rather than refusing", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+
+      // The state the feature ships in until #129 runs.
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
+
+      expect(view.player).toEqual([]);
+      expect(view.pairing).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("excludes a note about a player on another team", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      addCaptainNote(db, { playerId: fixture.playerId, text: "ours" });
+
+      // A note that exists in the table but belongs to a roster this dossier is not about. Written
+      // directly because `addCaptainNote` correctly refuses a non-home player — the row shape is
+      // still reachable via an earlier home-team designation, so the READ must scope too.
+      const otherTeam = db.insert(teams).values({ name: "OK/Dickason/40&over3.5M" }).returning().get();
+      const stranger = db.insert(players).values({ canonicalName: "Not Ours" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: stranger.id, teamId: otherTeam.id }).run();
+      db.insert(captainNotes)
+        .values({ playerId: stranger.id, pairPlayerId: null, note: "theirs", createdAt: "2026-08-09T00:00:00.000Z" })
+        .run();
+
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
+
+      expect(view.player.map((n) => n.note)).toEqual(["ours"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Soft-retired members (issue #49) are NOT filtered here, exactly as in `getAvailabilityForEvent`:
+  // this function does not resolve the roster, it is handed one. `resolveRoster`
+  // (src/query/roster.ts:76) applies `retiredAt IS NULL` and `getTeamProfile` builds `team.roster`
+  // through it, so a retired player never reaches this call in production. The end-to-end guarantee
+  // is asserted in test/report-write.test.ts, at the layer that owns it — asserting it here would
+  // test a filter this function does not have.
+
+  it("returns exactly the roster it was handed, and nobody else with a note on file", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      addCaptainNote(db, { playerId: fixture.playerId, text: "in the field" });
+
+      // A second home-team player the caller did NOT include — the season-roster-but-not-registered
+      // case. `addCaptainNote` permits the note; an event-scoped dossier must still not show it.
+      const other = db.insert(players).values({ canonicalName: "Bob Seasononly" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: other.id, teamId: fixture.homeTeamId, eventId: null }).run();
+      addCaptainNote(db, { playerId: other.id, text: "not in the field" });
+
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
+
+      expect(view.player.map((n) => n.note)).toEqual(["in the field"]);
     } finally {
       sqlite.close();
     }

@@ -171,6 +171,22 @@ export function getTeamProfile(
     versusTeamId?: number;
     leagueScope?: LeagueScope | null;
     eventId?: number | null;
+    /**
+     * The home team the CALLER already resolved, so `isHome` below is not a second, independent read
+     * of a row the caller has already read (#126, found by the Codex adversarial review of PR #134).
+     *
+     * `undefined` means "not supplied — resolve it here", which is what `team show` and the MCP tool
+     * pass: each performs exactly one read in its own call, so it has nothing to disagree with.
+     * `null` means "the caller resolved it and there is no home team" — a real answer, not an absent
+     * one, and it must not fall back to a fresh read.
+     *
+     * `buildTeamDossier` supplies it because it derives THREE things from the home team —
+     * `versusTeamId`, `ownTeam`, and this `isHome` — across a window in which another process can
+     * run `tn team home` against the same WAL database. Two of the three came from one read and the
+     * third from another, so a flip landing between them produced a dossier carrying an Own-team book
+     * while its prior-meetings section printed "no home team configured" (the #19 defect).
+     */
+    homeTeamId?: number | null;
   },
 ): TeamProfile {
   // #122 round 2 — twin of `getPlayerProfile`'s entry validation: filter and disclosure below both
@@ -291,7 +307,9 @@ export function getTeamProfile(
   return {
     teamId: teamRow.id,
     teamName: teamRow.name,
-    isHome: resolveHomeTeam(db)?.id === teamRow.id,
+    // `undefined` — not supplied — falls back to resolving here; `null` is the caller's own answer
+    // that no home team exists and must NOT re-read. See `homeTeamId` in this function's options.
+    isHome: (options.homeTeamId !== undefined ? options.homeTeamId : (resolveHomeTeam(db)?.id ?? null)) === teamRow.id,
     roster,
     rosterSource: resolved.source,
     registeredCount: resolved.registeredCount,

@@ -85,3 +85,108 @@ export function addCaptainNote(db: Db, input: AddCaptainNoteInput): CaptainNoteR
     .returning()
     .get();
 }
+
+export type CaptainNoteEntry = {
+  noteId: number;
+  playerId: number;
+  canonicalName: string;
+  note: string;
+  createdAt: string;
+};
+
+/** A note about two players TOGETHER — never about either one alone. */
+export type CaptainPairingNote = CaptainNoteEntry & {
+  pairPlayerId: number;
+  pairCanonicalName: string;
+};
+
+export type CaptainNotesView = {
+  player: CaptainNoteEntry[];
+  pairing: CaptainPairingNote[];
+};
+
+/**
+ * Reads back what `addCaptainNote` appended, as content rather than as a count (#126).
+ *
+ * **Player notes and pairing notes are returned separately**, split on `pair_player_id`. Folding a
+ * pairing note into each partner's list would print one observation twice and strip the very thing
+ * it records — that these two play well (or badly) *together*, which is a fact about the pair and
+ * about neither player alone.
+ *
+ * Ordering is newest-first on `created_at`, tie-broken by descending id. The tiebreak is not
+ * decorative: `addCaptainNote` stamps `created_at` from the wall clock, so two notes appended in the
+ * same millisecond carry identical timestamps and would otherwise come back in whatever order SQLite
+ * felt like — a journal that reorders itself between reads.
+ *
+ * **The roster is supplied by the caller, exactly as in `getAvailabilityForEvent`** — this function
+ * does not resolve it and takes no `teamId`. An earlier revision queried `team_memberships` here,
+ * which returned the SEASON roster while the dossier's roster table and availability grid showed the
+ * event-scoped REGISTERED field, so a note about a player who had not registered rendered on a
+ * dossier that did not list them:
+ *
+ * ```
+ * roster table:      [ Alice Registered ]
+ * availability grid: [ Alice Registered ]
+ * captain notes:     [ Bob Seasononly   ]   <- the defect
+ * ```
+ *
+ * That was the *third* instance in one PR of deriving "who is on this roster" twice — after the
+ * availability grid (fixed the same way) and the home team itself. Found by the Codex adversarial
+ * review of PR #134, round 2, and the reason this function now shares the caller's single
+ * resolution rather than performing its own.
+ *
+ * As with availability this is deliberately NARROWER than what `addCaptainNote` accepts: the writer
+ * takes any non-retired membership regardless of `event_id`, so a note about a season-roster player
+ * is still stored — it simply does not appear on an event-scoped dossier until they register.
+ *
+ * For a pairing note BOTH partners must be in the supplied roster, mirroring `addCaptainNote`'s own
+ * two-call check — a pairing whose partner is not in this dossier's field is not a pairing this
+ * dossier can field.
+ */
+export function getCaptainNotes(
+  db: Db,
+  input: { roster: { playerId: number; canonicalName: string }[] },
+): CaptainNotesView {
+  // One entry per player even if the caller's list repeats one — a player legitimately holds both a
+  // season and an event membership row for the same team (docs/findings.md #15).
+  const nameOf = new Map<number, string>();
+  for (const member of input.roster) nameOf.set(member.playerId, member.canonicalName);
+
+  const all = db.select().from(captainNotes).all();
+
+  // Newest first, ties broken by descending id so the order is total and stable. Sorting ISO-8601
+  // strings lexically is correct here precisely BECAUSE `addCaptainNote` writes
+  // `new Date().toISOString()` — fixed-width, UTC, zero-padded. A local-time or offset-bearing
+  // stamp would not sort chronologically as text, so this comparison and that writer have to stay
+  // together.
+  const ordered = [...all].sort((a, b) => (a.createdAt === b.createdAt ? b.id - a.id : b.createdAt < a.createdAt ? -1 : 1));
+
+  const player: CaptainNoteEntry[] = [];
+  const pairing: CaptainPairingNote[] = [];
+
+  for (const row of ordered) {
+    const canonicalName = nameOf.get(row.playerId);
+    if (canonicalName === undefined) continue; // not on this team's current roster
+
+    if (row.pairPlayerId === null) {
+      player.push({ noteId: row.id, playerId: row.playerId, canonicalName, note: row.note, createdAt: row.createdAt });
+      continue;
+    }
+
+    const pairCanonicalName = nameOf.get(row.pairPlayerId);
+    // BOTH partners must still be on the roster — see the doc comment above.
+    if (pairCanonicalName === undefined) continue;
+
+    pairing.push({
+      noteId: row.id,
+      playerId: row.playerId,
+      canonicalName,
+      pairPlayerId: row.pairPlayerId,
+      pairCanonicalName,
+      note: row.note,
+      createdAt: row.createdAt,
+    });
+  }
+
+  return { player, pairing };
+}
