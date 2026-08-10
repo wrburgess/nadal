@@ -11,6 +11,7 @@ import { availability, events, teamMemberships } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { NoHomeTeamError, requireHomeTeam } from "./home-team.js";
 import { enumerateIsoDays, isIsoDay } from "./iso-day.js";
+import { resolveRoster } from "./roster.js";
 
 type EventRow = typeof events.$inferSelect;
 type AvailabilityRow = typeof availability.$inferSelect;
@@ -86,6 +87,20 @@ export type SetAvailabilityResult = {
   eventId: number;
   eventName: string;
   status: AvailabilityRow["status"];
+  /**
+   * #129: whether `playerId` is in `resolveRoster`'s `members` for the resolved event — the SAME
+   * set the dossier's availability grid renders over (`getTeamProfile` → `resolveRoster`,
+   * src/query/roster.ts:96). `false` does not mean the write above was refused; `onRoster` above
+   * still accepts ANY current home-team membership, season-scoped included, by design (a real
+   * `tn team pull` roster always writes `event_id: null`) — so a season-roster player who has not
+   * registered for THIS event still passes it and is still stored. It simply will not render on
+   * that event's dossier until they register, and before this field existed nothing said so: a
+   * missing SIGNAL, not data loss, the same class #126/PR #134 closed one door over (captain notes,
+   * the home-team read) — read from `resolved.members` rather than re-derived, so an event with no
+   * registered roster at all (which falls back to the season roster inside `resolveRoster`) reports
+   * `true` for a season player without this needing to special-case that fallback itself.
+   */
+  onEventRoster: boolean;
 };
 
 /**
@@ -219,6 +234,12 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
 
     const event = selectEvent(tx, day, candidateEvents, input.eventName);
 
+    // #129: the SAME roster the dossier's availability grid will render for this event, resolved
+    // inside this transaction alongside the `onRoster` check above — never a second, separate read
+    // outside the lock, for the identical reason `eventsForDay`/`selectEvent` already run in here.
+    const resolvedRoster = resolveRoster(tx, { teamId: homeTeam.id, eventId: event.id });
+    const onEventRoster = resolvedRoster.members.some((member) => member.playerId === input.playerId);
+
     const row = tx
       .insert(availability)
       .values({ playerId: input.playerId, eventId: event.id, day, status })
@@ -229,7 +250,7 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
       .returning()
       .get();
 
-    return { availabilityId: row.id, eventId: event.id, eventName: event.name, status: row.status };
+    return { availabilityId: row.id, eventId: event.id, eventName: event.name, status: row.status, onEventRoster };
   }, { behavior: "immediate" });
 }
 

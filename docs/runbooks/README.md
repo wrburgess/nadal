@@ -57,6 +57,9 @@ command is missing.
   availability and captain notes conversationally
 - [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md) — `tn lineup plan` → read the guess
   critically; record availability behind `tn event add`
+- [capture-availability.md](capture-availability.md) — the Springfield Sectionals capture procedure:
+  back up first, availability before notes, the not-registered warning (#129), and why there is no
+  readback command
 - [in-event-screenshot-ingest.md](in-event-screenshot-ingest.md) — scorecard photo → agent →
   `match_add` → verified rows → what to do when a name is flagged
 - [db-migration-recovery.md](db-migration-recovery.md) — `tn db migrate` fails on an existing

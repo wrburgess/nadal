@@ -164,6 +164,88 @@ describe("tn player avail (end-to-end via dispatch)", () => {
   });
 });
 
+// #129: a season-roster player who has not registered for the resolved event still writes — the
+// writer's own roster check is deliberately wider than the dossier's roster (see
+// `setAvailability`'s `onEventRoster` doc comment) — but the CLI has to say so, since nothing else
+// will.
+describe("tn player avail: the not-registered warning (#129)", () => {
+  useTnDbPath();
+
+  function seedUnregistered() {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const fixture = seedHomeTeamFixture(db); // registers ITS OWN player, giving the event a roster
+    const unregistered = db.insert(players).values({ canonicalName: "Nate Notregistered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: unregistered.id, teamId: fixture.homeTeamId, eventId: null }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+    return { fixture, unregisteredName: unregistered.canonicalName };
+  }
+
+  it("still writes (exit 0), reports onEventRoster=\"false\" on the summary line, and warns on stderr naming the player and event", async () => {
+    const { unregisteredName } = seedUnregistered();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "avail", unregisteredName, "2026-08-29", "available"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('onEventRoster="false"'));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`"${unregisteredName}" is not registered for "Springfield Sectionals 2026"`),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("will not appear on that event's dossier"));
+
+    const { db, sqlite } = openDb();
+    try {
+      // Stored regardless — this is a warning, not a refusal.
+      expect(db.select().from(availability).all()).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the registered fixture player carries onEventRoster=\"true\" and no warning", async () => {
+    const { fixture } = seedUnregistered();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "avail", fixture.playerName, "2026-08-29", "available"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('onEventRoster="true"'));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // Settles the --quiet question rather than leaving it implicit: `emit.ts`/GRAMMAR.md's own
+  // contract is that `--quiet` suppresses only the stdout `status=ok` line, never anything written
+  // to stderr (their own wording groups "errors, warnings" together) — this warning is exactly that,
+  // printed unconditionally the same way `team pull`'s `cascadeFailureWarning` already is.
+  it("--quiet suppresses the stdout summary line but NOT the not-registered warning", async () => {
+    const { unregisteredName } = seedUnregistered();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "avail", unregisteredName, "2026-08-29", "available", "--quiet"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("is not registered"));
+  });
+
+  it("--json carries onEventRoster as a real boolean-shaped string field", async () => {
+    const { unregisteredName } = seedUnregistered();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "avail", unregisteredName, "2026-08-29", "available", "--json"]);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(parsed).toMatchObject({ status: "ok", onEventRoster: "false" });
+  });
+});
+
 // The CLI half of the overlapping-events fix (Codex review of PR #47, rated high).
 describe("tn player avail with an overlapping event day", () => {
   useTnDbPath();
