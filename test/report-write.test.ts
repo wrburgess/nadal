@@ -224,6 +224,57 @@ describe("src/report/write.ts", () => {
         }
       });
 
+      // REGRESSION, Codex adversarial review of PR #134 [high]. `buildTeamDossier` derives THREE
+      // things from "who is the home team" — `versusTeamId`, `team.isHome`, and `ownTeam`. Two came
+      // from the read at write.ts:185 and the third from an independent re-read inside
+      // `getTeamProfile` (team-profile.ts:294). A `tn team home` from the neighbouring process
+      // landing between them produced a dossier carrying an Own-team book while its prior-meetings
+      // section printed "no home team configured" — the #19 defect, through the back door.
+      //
+      // The fixture forces the divergence deterministically rather than racing a real clock: it
+      // proves the three derivations now come from ONE read, which is the actual invariant.
+      it("ownTeam and team.isHome always agree, even if the home team changes mid-assembly", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          const other = seedTeamWithRosters(db, { teamName: "OK/Dickason/40&over3.5M", season: ["Cy Calder"] });
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          // The two must never contradict: a book means "this is our team", and so does `isHome`.
+          expect(dossier.ownTeam !== null).toBe(dossier.team.isHome);
+
+          // And the opposite pairing, on a team that is not ours.
+          const opponentDossier = buildTeamDossier(db, other.teamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+          expect(opponentDossier.ownTeam !== null).toBe(opponentDossier.team.isHome);
+          expect(opponentDossier.team.isHome).toBe(false);
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      it("a dossier built with no home team designated carries no book and reports isHome false", () => {
+        // The `null` half of the `homeTeamId` contract: "the caller resolved it and there is none"
+        // must not fall back to a fresh read inside `getTeamProfile`.
+        runMigrations();
+        const { db, sqlite } = openDb();
+        try {
+          const team = seedTeamWithRosters(db, { teamName: "Nobody Home", season: ["Cy Calder"] });
+          const dossier = buildTeamDossier(db, team.teamId, { window: evidenceWindow("2026-01-01") });
+
+          expect(dossier.ownTeam).toBeNull();
+          expect(dossier.team.isHome).toBe(false);
+        } finally {
+          sqlite.close();
+        }
+      });
+
       it("reports availability as null, not an empty grid, when the build names no event", () => {
         const { db, sqlite, fixture } = seedHomeWithEvent();
         try {

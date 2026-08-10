@@ -196,7 +196,21 @@ export function buildTeamDossier(
   // #122 round-1 Finding 1: `window` (a `WindowSnapshot`) is passed straight through as the
   // profiles' `evidenceWindow` disclosure — it already IS the one validated read this function
   // performed above, so there is nothing to re-derive.
-  const team = getTeamProfile(db, teamId, { window, versusTeamId, leagueScope, eventId });
+  // `homeTeamId` is the SAME read performed at the top of this function — never a second one. This
+  // assembly derives three separate things from "who is the home team" (`versusTeamId`, `isHome`,
+  // and `ownTeam` below), and until #134's review they did not all come from one read: a
+  // `tn team home` from the neighbouring process (nadal runs `tn mcp serve` beside the CLI against
+  // one WAL database) landing mid-assembly produced a dossier that carried an Own-team book AND
+  // printed "no home team configured" — the #19 defect, reintroduced through the back door.
+  // `homeTeam?.id ?? null` distinguishes "no home team" (null, an answer) from "not supplied"
+  // (undefined, which would re-read).
+  const team = getTeamProfile(db, teamId, {
+    window,
+    versusTeamId,
+    leagueScope,
+    eventId,
+    homeTeamId: homeTeam?.id ?? null,
+  });
   const players = team.roster.map((member) => getPlayerProfile(db, member.playerId, { window, leagueScope }));
 
   // #17 PR B: spec § Deliverables #1 puts the predicted lineup in the dossier, not only behind the
