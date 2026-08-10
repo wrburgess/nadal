@@ -17,12 +17,27 @@ otherwise.
 - **The event is already on file, spelled exactly `Springfield Sectionals`** — not
   `"Springfield Sectionals 2026"`. That year-suffixed spelling is what every test fixture in this
   repo uses, which makes it an easy name to type from memory or copy from a test file; it is not the
-  name on record. `tn player avail`/`tn report build` resolve by exact `events.name`, and an unnamed
-  or misnamed event refuses rather than guessing — so a captured run under the wrong spelling either
-  refuses outright (day resolution finds nothing to write against) or, worse, silently lands under a
-  second event nobody meant to create. If you are not sure which spelling is on file, `tn event add`
-  is idempotent on the name: re-running it with the real dates and the real spelling updates in
-  place rather than creating a duplicate, so it is a safe way to confirm rather than a risk.
+  name on record.
+
+  **The two commands read that name differently, and only one of them needs it.** `tn player avail`
+  resolves the event **from the day**, so it never takes the name at all unless the day falls inside
+  more than one event. `tn report build` does take it, and **refuses** an unknown name rather than
+  falling back to unscoped — so the wrong spelling there costs you the whole grid, loudly.
+
+  So the real hazard of the wrong spelling is not a mis-filed write. It is `tn event add` creating a
+  **second** event across the same three days, after which `tn player avail` refuses *every* capture
+  as ambiguous (`AmbiguousEventForDayError`, listing both candidates) and **writes nothing** until
+  one is removed or named explicitly. Availability is stored per (player, event, day), so two events
+  over one weekend is a state the writer will not guess its way out of.
+
+  **To confirm which spelling is on file, read the table — do not probe with `tn event add`.** That
+  command is idempotent on the *name*, which means a right guess updates in place and a **wrong
+  guess silently creates the duplicate described above**: it is the hazard, not a test for it. There
+  is no `tn event list`, so read it directly:
+
+  ```
+  sqlite3 data/nadal.db "select name, starts_on, ends_on from events;"
+  ```
 - **Back up first.** Availability and captain notes exist nowhere outside this database — a re-pull
   cannot rebuild either one (`docs/runbooks/backup-restore.md`'s own accounting of what a backup
   here actually protects). Before any capture session:
