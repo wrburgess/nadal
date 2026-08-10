@@ -410,6 +410,46 @@ describe("setAvailability: onEventRoster (#129)", () => {
       sqlite.close();
     }
   });
+
+  // This case is why `onRoster` and `resolveRoster` are kept as TWO reads rather than collapsed into
+  // one. `onRoster` accepts any current home-team membership; `resolveRoster`'s `members ∪ absent`
+  // does NOT contain a player whose only membership is scoped to some OTHER event (they are neither
+  // season-scoped nor registered for this one), so collapsing the refusal onto it would newly REFUSE
+  // this write. That is a behavior change #129 deliberately did not make — and the PR says so, which
+  // is exactly why it needs a test rather than a sentence: without this, a later "simplification"
+  // that collapses the two reads breaks the documented contract with every test still green.
+  it("accepts a player whose only membership is scoped to a DIFFERENT event, reporting onEventRoster: false — the refusal semantics are unchanged", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      // The fixture's own player is registered for THIS event, which is what puts resolveRoster in
+      // its `source: "registered"` branch — otherwise the season fallback would answer `true` and
+      // this test would pass for the wrong reason.
+      const fixture = seedHomeTeamFixture(db);
+      const otherEvent = db
+        .insert(events)
+        .values({ name: "Other Event", kind: "tournament", startsOn: "2026-09-10", endsOn: "2026-09-12" })
+        .returning()
+        .get();
+      const elsewhere = db.insert(players).values({ canonicalName: "Otto Otherevent" }).returning().get();
+      // No season row and no row for the fixture's event — this membership names `otherEvent` only.
+      db.insert(teamMemberships)
+        .values({ playerId: elsewhere.id, teamId: fixture.homeTeamId, eventId: otherEvent.id })
+        .run();
+
+      // 2026-08-29 falls inside the fixture event only, so the day resolves unambiguously.
+      const result = setAvailability(db, { playerId: elsewhere.id, day: "2026-08-29", status: "available" });
+
+      expect(result.onEventRoster).toBe(false);
+      expect(result.eventId).toBe(fixture.eventId);
+      // Accepted and stored — the point of the case.
+      expect(rows(db).find((r) => r.playerId === elsewhere.id)).toMatchObject({
+        day: "2026-08-29",
+        status: "available",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
 });
 
 // Found by the independent Codex review of PR #47 (rated high). Overlapping event ranges are a
