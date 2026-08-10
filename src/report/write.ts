@@ -257,7 +257,13 @@ export function buildTeamDossier(
                   eventId,
                   roster: team.roster.map((m) => ({ playerId: m.playerId, canonicalName: m.canonicalName })),
                 }),
-          notes: getCaptainNotes(db, { teamId }),
+          // The SAME `team.roster` the grid above uses — never a second derivation. Round 2 of the
+          // #134 review found this read returning the season roster while the roster table and the
+          // grid showed the registered field, so a note about an unregistered player rendered on a
+          // dossier that did not list them.
+          notes: getCaptainNotes(db, {
+            roster: team.roster.map((m) => ({ playerId: m.playerId, canonicalName: m.canonicalName })),
+          }),
         }
       : null;
 

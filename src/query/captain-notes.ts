@@ -4,7 +4,7 @@
 // so two calls about the same player produce two rows, deliberately, never a merge.
 
 import { and, eq, isNull } from "drizzle-orm";
-import { captainNotes, players, teamMemberships } from "../db/schema.js";
+import { captainNotes, teamMemberships } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import { requireHomeTeam } from "./home-team.js";
 
@@ -118,27 +118,39 @@ export type CaptainNotesView = {
  * same millisecond carry identical timestamps and would otherwise come back in whatever order SQLite
  * felt like — a journal that reorders itself between reads.
  *
- * Roster scoping matches `getAvailabilityForEvent` and both write services: a non-retired
- * `team_memberships` row for (player, team), any `event_id` (docs/findings.md #15), `retiredAt IS
- * NULL` per issue #49. For a pairing note BOTH partners must be on the roster, mirroring
- * `addCaptainNote`'s own two-call check — a pairing whose partner has since left the team is no
- * longer a pairing this team can field.
+ * **The roster is supplied by the caller, exactly as in `getAvailabilityForEvent`** — this function
+ * does not resolve it and takes no `teamId`. An earlier revision queried `team_memberships` here,
+ * which returned the SEASON roster while the dossier's roster table and availability grid showed the
+ * event-scoped REGISTERED field, so a note about a player who had not registered rendered on a
+ * dossier that did not list them:
  *
- * Unlike the write service this takes an explicit `teamId` rather than calling `requireHomeTeam` —
- * same reason as the availability read: the caller has already resolved it, and a second read of
- * that row is the defect class #97 and #125 closed.
+ * ```
+ * roster table:      [ Alice Registered ]
+ * availability grid: [ Alice Registered ]
+ * captain notes:     [ Bob Seasononly   ]   <- the defect
+ * ```
+ *
+ * That was the *third* instance in one PR of deriving "who is on this roster" twice — after the
+ * availability grid (fixed the same way) and the home team itself. Found by the Codex adversarial
+ * review of PR #134, round 2, and the reason this function now shares the caller's single
+ * resolution rather than performing its own.
+ *
+ * As with availability this is deliberately NARROWER than what `addCaptainNote` accepts: the writer
+ * takes any non-retired membership regardless of `event_id`, so a note about a season-roster player
+ * is still stored — it simply does not appear on an event-scoped dossier until they register.
+ *
+ * For a pairing note BOTH partners must be in the supplied roster, mirroring `addCaptainNote`'s own
+ * two-call check — a pairing whose partner is not in this dossier's field is not a pairing this
+ * dossier can field.
  */
-export function getCaptainNotes(db: Db, input: { teamId: number }): CaptainNotesView {
-  const roster = db
-    .select({ playerId: players.id, canonicalName: players.canonicalName })
-    .from(teamMemberships)
-    .innerJoin(players, eq(players.id, teamMemberships.playerId))
-    .where(and(eq(teamMemberships.teamId, input.teamId), isNull(teamMemberships.retiredAt)))
-    .all();
-  // One entry per player, not per membership row — a player legitimately holds both a season and an
-  // event membership for the same team (docs/findings.md #15).
+export function getCaptainNotes(
+  db: Db,
+  input: { roster: { playerId: number; canonicalName: string }[] },
+): CaptainNotesView {
+  // One entry per player even if the caller's list repeats one — a player legitimately holds both a
+  // season and an event membership row for the same team (docs/findings.md #15).
   const nameOf = new Map<number, string>();
-  for (const member of roster) nameOf.set(member.playerId, member.canonicalName);
+  for (const member of input.roster) nameOf.set(member.playerId, member.canonicalName);
 
   const all = db.select().from(captainNotes).all();
 

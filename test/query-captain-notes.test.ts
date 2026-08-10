@@ -231,7 +231,7 @@ describe("getCaptainNotes", () => {
       db.update(captainNotes).set({ createdAt: "2026-08-01T00:00:00.000Z" }).where(eq(captainNotes.id, older.id)).run();
       db.update(captainNotes).set({ createdAt: "2026-08-09T00:00:00.000Z" }).where(eq(captainNotes.id, newer.id)).run();
 
-      const view = getCaptainNotes(db, { teamId: fixture.homeTeamId });
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
 
       expect(view.player.map((n) => n.note)).toEqual(["newer", "older"]);
     } finally {
@@ -249,7 +249,12 @@ describe("getCaptainNotes", () => {
       addCaptainNote(db, { playerId: fixture.playerId, text: "solo note" });
       addCaptainNote(db, { playerId: fixture.playerId, pairPlayerId: partner.id, text: "strong together" });
 
-      const view = getCaptainNotes(db, { teamId: fixture.homeTeamId });
+      const view = getCaptainNotes(db, {
+        roster: [
+          { playerId: fixture.playerId, canonicalName: fixture.playerName },
+          { playerId: partner.id, canonicalName: partner.canonicalName },
+        ],
+      });
 
       // A pairing note is about the PAIR — it belongs in neither player's own list, or it reads as
       // two separate observations.
@@ -271,7 +276,7 @@ describe("getCaptainNotes", () => {
       const fixture = seedHomeTeamFixture(db);
 
       // The state the feature ships in until #129 runs.
-      const view = getCaptainNotes(db, { teamId: fixture.homeTeamId });
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
 
       expect(view.player).toEqual([]);
       expect(view.pairing).toEqual([]);
@@ -296,7 +301,7 @@ describe("getCaptainNotes", () => {
         .values({ playerId: stranger.id, pairPlayerId: null, note: "theirs", createdAt: "2026-08-09T00:00:00.000Z" })
         .run();
 
-      const view = getCaptainNotes(db, { teamId: fixture.homeTeamId });
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
 
       expect(view.player.map((n) => n.note)).toEqual(["ours"]);
     } finally {
@@ -304,22 +309,28 @@ describe("getCaptainNotes", () => {
     }
   });
 
-  it("omits notes about a soft-retired roster member", () => {
+  // Soft-retired members (issue #49) are NOT filtered here, exactly as in `getAvailabilityForEvent`:
+  // this function does not resolve the roster, it is handed one. `resolveRoster`
+  // (src/query/roster.ts:76) applies `retiredAt IS NULL` and `getTeamProfile` builds `team.roster`
+  // through it, so a retired player never reaches this call in production. The end-to-end guarantee
+  // is asserted in test/report-write.test.ts, at the layer that owns it — asserting it here would
+  // test a filter this function does not have.
+
+  it("returns exactly the roster it was handed, and nobody else with a note on file", () => {
     const { db, sqlite } = freshDb();
     try {
       const fixture = seedHomeTeamFixture(db);
-      addCaptainNote(db, { playerId: fixture.playerId, text: "was ours" });
+      addCaptainNote(db, { playerId: fixture.playerId, text: "in the field" });
 
-      // Issue #49, same rule the availability read follows: retired is not on the CURRENT roster,
-      // and `addCaptainNote` would now refuse for this player.
-      db.update(teamMemberships)
-        .set({ retiredAt: "2026-08-01T00:00:00.000Z" })
-        .where(eq(teamMemberships.playerId, fixture.playerId))
-        .run();
+      // A second home-team player the caller did NOT include — the season-roster-but-not-registered
+      // case. `addCaptainNote` permits the note; an event-scoped dossier must still not show it.
+      const other = db.insert(players).values({ canonicalName: "Bob Seasononly" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: other.id, teamId: fixture.homeTeamId, eventId: null }).run();
+      addCaptainNote(db, { playerId: other.id, text: "not in the field" });
 
-      const view = getCaptainNotes(db, { teamId: fixture.homeTeamId });
+      const view = getCaptainNotes(db, { roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }] });
 
-      expect(view.player).toEqual([]);
+      expect(view.player.map((n) => n.note)).toEqual(["in the field"]);
     } finally {
       sqlite.close();
     }
