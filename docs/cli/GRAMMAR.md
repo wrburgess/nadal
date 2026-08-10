@@ -200,6 +200,17 @@ supplied for an **unambiguous** day is still checked, not ignored: if it does no
 command refuses. Availability is stored per (player, event, day), so the same player and day can
 legitimately carry a different status for each overlapping event.
 
+**`onEventRoster=` (#129)** reports whether the recorded player is in the roster the dossier's own
+availability grid will render for this event (`resolveRoster`, `src/query/roster.ts`) — carried on the
+summary line as a quoted `"true"`/`"false"` string, same as `player distinct`'s `created=`, and as a
+real boolean on the `player_avail` MCP result. This command's own roster check is deliberately wider
+than that (any current home-team membership, season-scoped included, is enough to write), so a
+season-roster player who has not yet registered for THIS event still succeeds and is still stored —
+`onEventRoster="false"` says the row is invisible on that event's dossier until they do, and the text
+path additionally prints an unconditional stderr warning naming the player and the event. This is a
+warning, never a refusal: the write is not rolled back over it, and `--quiet` does not suppress the
+warning, matching this grammar's own "quiet suppresses stdout only" rule for every error/warning line.
+
 `tn player show <name|usta:…> [event]` and `tn team show <name|tr:…> [event]` — the optional trailing
 `[event]` (#97) names an event whose **league scope** restricts the court matches every record, slot
 tendency, partner count and prior-meeting row is computed over. Same optional-trailing-positional

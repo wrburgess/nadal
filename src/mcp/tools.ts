@@ -353,7 +353,16 @@ export const MCP_TOOLS: McpToolDef[] = [
       try {
         const resolution = requireResolved(resolvePlayerTarget(db, target), "target", target);
         const result = setAvailability(db, { playerId: resolution.playerId, day, status, eventName: event });
-        return { player: target, day, availability: result.status, event: result.eventName };
+        // #129: `false` means the write above still succeeded and is stored, but the player is not
+        // in the roster the dossier's availability grid renders for this event — see
+        // `setAvailability`'s `onEventRoster` doc comment (src/query/availability.ts).
+        return {
+          player: target,
+          day,
+          availability: result.status,
+          event: result.eventName,
+          onEventRoster: result.onEventRoster,
+        };
       } finally {
         sqlite.close();
       }

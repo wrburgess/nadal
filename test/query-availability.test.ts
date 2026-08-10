@@ -344,6 +344,114 @@ describe("setAvailability", () => {
   });
 });
 
+// #129: `setAvailability`'s own roster check (`onRoster` above) accepts ANY current home-team
+// membership, season-scoped included — by design, so a real `tn team pull` roster (which always
+// writes `event_id: null`) is never refused. But the dossier's availability grid is rendered over
+// `resolveRoster`'s `members` (src/query/roster.ts), which for an event WITH a registered roster is
+// the narrower REGISTERED set. A season-roster player who has not registered therefore passes the
+// write and is stored, then never renders — silently, exactly the shape #126/PR #134 closed on the
+// captain-notes door and the home-team read, one door over. `onEventRoster` makes that outcome
+// visible on the result rather than leaving it a fact only a direct row read could recover.
+describe("setAvailability: onEventRoster (#129)", () => {
+  useTnDbPath();
+
+  it("a season-roster player who is not registered for the resolved event reports onEventRoster: false, when the event HAS a registered roster", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      // seedHomeTeamFixture's own player carries an EVENT-scoped membership, which is what gives
+      // this event a registered roster at all (resolveRoster's `source: "registered"` branch).
+      const fixture = seedHomeTeamFixture(db);
+      const unregistered = db.insert(players).values({ canonicalName: "Nate Notregistered" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: unregistered.id, teamId: fixture.homeTeamId, eventId: null }).run();
+
+      // The writer accepts the write — season membership is enough for `onRoster`, unchanged.
+      const result = setAvailability(db, { playerId: unregistered.id, day: "2026-08-29", status: "available" });
+
+      expect(result.onEventRoster).toBe(false);
+      // Stored regardless — a missing SIGNAL, not a refusal (Task 2's design constraint).
+      expect(rows(db).find((r) => r.playerId === unregistered.id)).toMatchObject({
+        day: "2026-08-29",
+        status: "available",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("the player actually registered for the resolved event reports onEventRoster: true", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      const result = setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+      expect(result.onEventRoster).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a season-roster player reports onEventRoster: true when the event has NO registered roster at all — the fallback falls out of resolveRoster, not an enumerated special case here", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+      setHomeTeam(db, team.id);
+      db.insert(events)
+        .values({ name: "Event", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .run();
+      // Every membership on this team for this event is season-scoped (event_id: null) — nobody has
+      // registered, so resolveRoster falls back to `source: "season"` and `members` IS the season
+      // roster (src/query/roster.ts).
+      const player = db.insert(players).values({ canonicalName: "Season Only" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+
+      const result = setAvailability(db, { playerId: player.id, day: "2026-08-29", status: "available" });
+
+      expect(result.onEventRoster).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // This case is why `onRoster` and `resolveRoster` are kept as TWO reads rather than collapsed into
+  // one. `onRoster` accepts any current home-team membership; `resolveRoster`'s `members ∪ absent`
+  // does NOT contain a player whose only membership is scoped to some OTHER event (they are neither
+  // season-scoped nor registered for this one), so collapsing the refusal onto it would newly REFUSE
+  // this write. That is a behavior change #129 deliberately did not make — and the PR says so, which
+  // is exactly why it needs a test rather than a sentence: without this, a later "simplification"
+  // that collapses the two reads breaks the documented contract with every test still green.
+  it("accepts a player whose only membership is scoped to a DIFFERENT event, reporting onEventRoster: false — the refusal semantics are unchanged", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      // The fixture's own player is registered for THIS event, which is what puts resolveRoster in
+      // its `source: "registered"` branch — otherwise the season fallback would answer `true` and
+      // this test would pass for the wrong reason.
+      const fixture = seedHomeTeamFixture(db);
+      const otherEvent = db
+        .insert(events)
+        .values({ name: "Other Event", kind: "tournament", startsOn: "2026-09-10", endsOn: "2026-09-12" })
+        .returning()
+        .get();
+      const elsewhere = db.insert(players).values({ canonicalName: "Otto Otherevent" }).returning().get();
+      // No season row and no row for the fixture's event — this membership names `otherEvent` only.
+      db.insert(teamMemberships)
+        .values({ playerId: elsewhere.id, teamId: fixture.homeTeamId, eventId: otherEvent.id })
+        .run();
+
+      // 2026-08-29 falls inside the fixture event only, so the day resolves unambiguously.
+      const result = setAvailability(db, { playerId: elsewhere.id, day: "2026-08-29", status: "available" });
+
+      expect(result.onEventRoster).toBe(false);
+      expect(result.eventId).toBe(fixture.eventId);
+      // Accepted and stored — the point of the case.
+      expect(rows(db).find((r) => r.playerId === elsewhere.id)).toMatchObject({
+        day: "2026-08-29",
+        status: "available",
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
 // Found by the independent Codex review of PR #47 (rated high). Overlapping event ranges are a
 // NORMAL domain state — a district league season runs Mar-Jun and a districts tournament sits
 // inside it in May — so every day in that window resolves to two events. Before #17 PR B nothing

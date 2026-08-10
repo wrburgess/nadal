@@ -279,7 +279,13 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       arguments: { target: player.canonicalName, day: "2026-08-29", status: "available" },
     });
     expect(availResult.isError).not.toBe(true);
-    expect(JSON.parse(textOf(availResult))).toMatchObject({ availability: "available", day: "2026-08-29" });
+    // #129: `player` carries an EVENT-scoped membership above, so they are on the roster the
+    // dossier's own availability grid renders for this event.
+    expect(JSON.parse(textOf(availResult))).toMatchObject({
+      availability: "available",
+      day: "2026-08-29",
+      onEventRoster: true,
+    });
 
     const noteResult = await client.callTool({
       name: "player_note",
@@ -329,6 +335,43 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(JSON.parse(textOf(availResult))).toMatchObject({
       availability: "available",
       event: "Springfield Sectionals 2026",
+    });
+  });
+
+  // #129: the writer's own roster check is deliberately wider than the dossier's roster — a
+  // season-roster player who has not registered for the resolved event still writes over MCP too,
+  // and the result says so rather than leaving it a silent gap between the write and the dossier.
+  it("player_avail reports onEventRoster: false for a season-roster player not registered for the resolved event", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+    const event = db
+      .insert(events)
+      .values({ name: "Springfield Sectionals 2026", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+      .returning()
+      .get();
+    // One EVENT-scoped member — gives the event a registered roster at all.
+    const registered = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: registered.id, teamId: team.id, eventId: event.id }).run();
+    // A second, SEASON-only member, deliberately not registered for the event above.
+    const unregistered = db.insert(players).values({ canonicalName: "Nate Notregistered" }).returning().get();
+    db.insert(teamMemberships).values({ playerId: unregistered.id, teamId: team.id, eventId: null }).run();
+    backfillNameKeys(db);
+    sqlite.close();
+
+    const client = await connectedClient();
+    await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+    const availResult = await client.callTool({
+      name: "player_avail",
+      arguments: { target: unregistered.canonicalName, day: "2026-08-29", status: "available" },
+    });
+    expect(availResult.isError).not.toBe(true);
+    // Stored regardless — a missing signal, not a refusal.
+    expect(JSON.parse(textOf(availResult))).toMatchObject({
+      availability: "available",
+      event: "Springfield Sectionals 2026",
+      onEventRoster: false,
     });
   });
 

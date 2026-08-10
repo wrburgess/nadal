@@ -13,6 +13,7 @@ import {
   UnknownEventError,
   setAvailability,
 } from "../../query/availability.js";
+import { sanitizeValue } from "../../sanitize.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitSummary } from "../emit.js";
 
@@ -47,6 +48,10 @@ function isAvailabilityRefusal(
  * commands with flags beyond the global three). The event is resolved from the day, not passed
  * explicitly; `resolvePlayerTarget` (reused unchanged) never creates a player, so an unknown or
  * ambiguous name refuses exactly like every other command's target resolution.
+ *
+ * #129: a season-roster player who has not registered for the resolved event still succeeds here —
+ * see `setAvailability`'s `onEventRoster` doc comment — but prints an unconditional stderr warning
+ * below, since the row will not appear on that event's dossier until they register.
  */
 export const playerAvail: Command = {
   noun: "player",
@@ -104,9 +109,26 @@ export const playerAvail: Command = {
             ["day", day],
             ["availability", result.status],
             ["event", result.eventName],
+            // #129: "true"/"false" as a STRING field, matching `player distinct`'s `created=` and
+            // `player alias`'s `recorded=` — SummaryField has no boolean kind, and this codebase's
+            // existing answer to that is `String(bool)`, not widening the type.
+            ["onEventRoster", String(result.onEventRoster)],
           ],
           opts,
         );
+        // #129: a MISSING SIGNAL, never a refusal — the write above already committed, so this is a
+        // warning, not an error. GRAMMAR.md/emit.ts's own contract for `--quiet` is "suppresses the
+        // stdout summary line; does not touch stderr" (errors AND warnings, its own wording) — so
+        // this prints unconditionally, the same posture `cascadeFailureWarning`'s `console.warn`
+        // already takes in `team-pull.ts` for an ok-ish outcome with a caveat.
+        if (!result.onEventRoster) {
+          console.warn(
+            sanitizeValue(
+              `player avail: warning: "${parsed.target}" is not registered for "${result.eventName}" — ` +
+                `this row will not appear on that event's dossier until they register`,
+            ),
+          );
+        }
         return 0;
       } catch (err) {
         if (!isAvailabilityRefusal(err)) throw err;
