@@ -19,10 +19,13 @@ otherwise.
   repo uses, which makes it an easy name to type from memory or copy from a test file; it is not the
   name on record.
 
-  **The two commands read that name differently, and only one of them needs it.** `tn player avail`
-  resolves the event **from the day**, so it never takes the name at all unless the day falls inside
-  more than one event. `tn report build` does take it, and **refuses** an unknown name rather than
-  falling back to unscoped — so the wrong spelling there costs you the whole grid, loudly.
+  **The two commands read that name differently.** `tn player avail` resolves the event **from the
+  day**, so the name is an optional trailing argument you need only when the day falls inside more
+  than one event. It is **not ignored when you do supply it**: a name given for an unambiguous day is
+  still checked, and the command refuses if that name is unknown (`UnknownEventError`) or names an
+  event that does not cover the day (`EventDoesNotCoverDayError`). `tn report build` takes the name
+  as well, and **refuses** an unknown one rather than falling back to unscoped — so the wrong
+  spelling there costs you the whole grid, loudly.
 
   So the real hazard of the wrong spelling is not a mis-filed write. It is `tn event add` creating a
   **second** event across the same three days, after which `tn player avail` refuses *every* capture
