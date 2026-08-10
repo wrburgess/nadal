@@ -5,7 +5,7 @@ import { InvalidEventFormatError } from "../../query/event-format.js";
 import { InvalidLeagueScopeError } from "../../query/league-scope.js";
 import { EventHasNoFormatError, UnknownEventError, resolveEvent } from "../../query/lineup.js";
 import { OutputPathError } from "../../fs/output-root.js";
-import { countTeams, resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
+import { resolvedReportsRoot, writeSectionalsDossiers, writeTeamDossier } from "../../report/write.js";
 import { windowAnchorFor } from "../../query/events.js";
 import { resolveTeamTarget } from "../../query/team-profile.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
@@ -41,8 +41,9 @@ function isEventRefusal(
 
 /**
  * Spec § Interfaces: `tn report build [sectionals|<team>] [event] [--json]`. `<team>` builds that
- * one team's dossier; `sectionals` — and bare, no target — builds one dossier per team in the DB
- * plus a top-level index. The optional trailing `event` (#63) resolves against `events.name` and its
+ * one team's dossier; `sectionals` — and bare, no target — builds one dossier per team in the named
+ * event's FIELD (#124: teams with a player registered for it), or per team on file when no event is
+ * named or none has registered, plus a top-level index. The optional trailing `event` (#63) resolves against `events.name` and its
  * format REPLACES the derived slot set for EVERY dossier this run builds — the same optional
  * trailing positional `tn lineup plan`/`tn player avail` already use, no new flags. Unlike
  * `player show`/`team show` (Task 5/6), this command's ok path IS a `key=value` summary line
@@ -91,9 +92,20 @@ export const reportBuild: Command = {
       // and one scalar cannot describe both without lying about one of them (see the field's own
       // comment below).
       let rosterField: SummaryField | undefined;
+      // #124: only ever set on the BATCH path — a single-team build has no "field" to have scoped,
+      // and printing `field=` there would invite the reading that one team WAS the field.
+      let fieldField: SummaryField | undefined;
       if (target === undefined || target === SECTIONALS_TARGET) {
-        written = writeSectionalsDossiers(db, { window, event });
-        teamsCount = countTeams(db);
+        // Both the count and the reading come back FROM the write, never from a second read. The
+        // old `countTeams(db)` here reported every team on file, which was indistinguishable from
+        // the batch's own count only while the batch was unscoped — the moment #124 scoped it to the
+        // event's field, that second read would have printed `teams=32` over 5 written dossiers.
+        // This is the same defect `writeTeamDossier`'s `rosterSource` was already fixed for (Codex
+        // adversarial review, round 1, finding 3 [medium]), one call up.
+        const batch = writeSectionalsDossiers(db, { window, event });
+        written = batch.files;
+        teamsCount = batch.teamCount;
+        fieldField = ["field", batch.fieldSource];
       } else {
         const resolution = resolveTeamTarget(db, target);
         if (resolution.kind === "not-found") {
@@ -137,6 +149,7 @@ export const reportBuild: Command = {
           // two indistinguishable, which is the defect this change exists to remove.
           ["since", windowSnapshot(window).since],
           ["anchoredTo", anchor.anchoredTo],
+          ...(fieldField === undefined ? [] : [fieldField]),
           ...(rosterField === undefined ? [] : [rosterField]),
         ],
         opts,

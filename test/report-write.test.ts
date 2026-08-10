@@ -477,7 +477,9 @@ describe("src/report/write.ts", () => {
         });
 
         // Completed at all — a re-read would have thrown InvalidEventFormatError on the corrupted row.
-        expect(written.length).toBe(6);
+        // Still 6: nobody is registered for this event, so the #124 field scope takes the all-teams
+        // reading and both seeded teams are rendered, exactly as before that change.
+        expect(written.files.length).toBe(6);
       } finally {
         sqlite.close();
       }
@@ -495,7 +497,7 @@ describe("src/report/write.ts", () => {
       seedTeamWithRoster("Team F", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") });
+        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") }).files;
         // 2 teams * 2 files each (index.html + index.md) + 2 top-level index files.
         expect(written.length).toBe(6);
         for (const path of written) {
@@ -515,6 +517,128 @@ describe("src/report/write.ts", () => {
       }
     });
 
+    // #124. "Every team on file" was the only available reading of "the field" while nothing linked a
+    // TEAM to an EVENT. `tn roster set` (#113) supplies that link in practice — a team with at least
+    // one player registered for this event IS in this event's field — so the batch no longer renders
+    // the whole database when an event names a real field. The Springfield case that motivated it:
+    // 32 teams on file, 5 in the field, 66 files where 12 were wanted.
+    it("scopes the field to teams with a player registered for the named event", () => {
+      const inField = seedTeamWithRoster("Team In", ["Reg Istered"]);
+      seedTeamWithRoster("Team Out", ["Un Registered"]);
+      const { db, sqlite } = openDb();
+      try {
+        addEvent(db, {
+          name: "Springfield Sectionals 2026",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          format: "S1:singles,D1:doubles",
+        });
+        const event = resolveEvent(db, "Springfield Sectionals 2026");
+        sqlite
+          .prepare("UPDATE team_memberships SET event_id = ? WHERE team_id = ?")
+          .run(event.event.id, inField.id);
+
+        const result = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01"), event });
+
+        // 1 team * 2 files + 2 top-level index files — NOT 6, which is what rendering both teams costs.
+        expect(result.files.length).toBe(4);
+        expect(result.teamCount).toBe(1);
+        expect(result.fieldSource).toBe("registered");
+        expect(result.files).toContain(join(reportsDir, "team-in", "index.html"));
+        expect(result.files).not.toContain(join(reportsDir, "team-out", "index.html"));
+        // The unregistered team must not merely be absent from the returned list — it must not be on
+        // disk, and must not be linked from the index a captain navigates by.
+        expect(existsSync(join(reportsDir, "team-out", "index.html"))).toBe(false);
+        expect(readFileSync(join(reportsDir, "index.md"), "utf8")).not.toContain("Team Out");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // The fallback is REPORTED, never silent. An event nobody has registered for yet is the state
+    // every event passes through, and emitting one dossier per team on file is the only useful answer
+    // there — but a caller cannot distinguish that from a real 32-team field unless the batch says
+    // which reading it used. `fieldSource` is what the command's summary prints.
+    it("falls back to every team when the named event has no registered team, and says so", () => {
+      seedTeamWithRoster("Team In", ["Reg Istered"]);
+      seedTeamWithRoster("Team Out", ["Un Registered"]);
+      const { db, sqlite } = openDb();
+      try {
+        addEvent(db, {
+          name: "Springfield Sectionals 2026",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          format: "S1:singles,D1:doubles",
+        });
+        const event = resolveEvent(db, "Springfield Sectionals 2026");
+
+        const result = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01"), event });
+
+        expect(result.files.length).toBe(6);
+        expect(result.teamCount).toBe(2);
+        expect(result.fieldSource).toBe("all-teams");
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Registration is scoped to THIS event, not to "any event". A team registered for a DIFFERENT
+    // event says nothing about this one — the objection `writeSectionalsDossiers`' own doc comment
+    // raised against deriving a field at all, and the reason the filter binds `event.event.id`
+    // rather than testing `event_id IS NOT NULL`.
+    it("ignores registrations belonging to a different event", () => {
+      seedTeamWithRoster("Team In", ["Reg Istered"]);
+      const otherTeam = seedTeamWithRoster("Team Out", ["Un Registered"]);
+      const { db, sqlite } = openDb();
+      try {
+        addEvent(db, {
+          name: "Springfield Sectionals 2026",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          format: "S1:singles,D1:doubles",
+        });
+        addEvent(db, {
+          name: "Some Other Event",
+          kind: "tournament",
+          startsOn: "2026-09-28",
+          endsOn: "2026-09-30",
+          format: "S1:singles,D1:doubles",
+        });
+        const event = resolveEvent(db, "Springfield Sectionals 2026");
+        const other = resolveEvent(db, "Some Other Event");
+        sqlite
+          .prepare("UPDATE team_memberships SET event_id = ? WHERE team_id = ?")
+          .run(other.event.id, otherTeam.id);
+
+        const result = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01"), event });
+
+        // Nobody is registered for Springfield, so this is the all-teams fallback — the OTHER event's
+        // registration must not be mistaken for this event's field, which would silently render a
+        // one-team field of the wrong team.
+        expect(result.fieldSource).toBe("all-teams");
+        expect(result.teamCount).toBe(2);
+      } finally {
+        sqlite.close();
+      }
+    });
+
+    // Bare `report build` names no event, so there is no field to scope to and nothing to fall back
+    // FROM — the reading is "every team on file" by construction, not by fallback.
+    it("reports all-teams when no event is named at all", () => {
+      seedTeamWithRoster("Team In", []);
+      const { db, sqlite } = openDb();
+      try {
+        const result = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") });
+        expect(result.fieldSource).toBe("all-teams");
+        expect(result.teamCount).toBe(1);
+      } finally {
+        sqlite.close();
+      }
+    });
+
     it("two distinct team names that slugify identically get distinct, collision-safe directories", () => {
       // "Team A!!!" and "Team A???" both slugify to "team-a" — neither may overwrite the other's
       // dossier, so the later team (by insertion/id order) must get its id appended to disambiguate.
@@ -522,7 +646,7 @@ describe("src/report/write.ts", () => {
       const teamTwo = seedTeamWithRoster("Team A???", []);
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") });
+        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") }).files;
         expect(written).toContain(join(reportsDir, "team-a", "index.html"));
         expect(written).toContain(join(reportsDir, `team-a-${teamTwo.id}`, "index.html"));
         // Every written path actually exists, and the two dossiers are genuinely distinct files —
@@ -576,7 +700,7 @@ describe("src/report/write.ts", () => {
       expect([t1.id, t2.id, t3.id]).toEqual([1, 2, 3]);
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") });
+        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") }).files;
         const teamIndexHtmlPaths = written.filter(
           (p) => p.endsWith("index.html") && p !== join(reportsDir, "index.html"),
         );
@@ -720,7 +844,7 @@ describe("src/report/write.ts", () => {
       const batch = openDb();
       let batchWritten: string[];
       try {
-        batchWritten = writeSectionalsDossiers(batch.db, { window: evidenceWindow("2026-01-01") });
+        batchWritten = writeSectionalsDossiers(batch.db, { window: evidenceWindow("2026-01-01") }).files;
       } finally {
         batch.sqlite.close();
       }
@@ -753,7 +877,7 @@ describe("src/report/write.ts", () => {
       runMigrations();
       const { db, sqlite } = openDb();
       try {
-        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") });
+        const written = writeSectionalsDossiers(db, { window: evidenceWindow("2026-01-01") }).files;
         expect(written.length).toBe(2);
       } finally {
         sqlite.close();

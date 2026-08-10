@@ -7,7 +7,7 @@
 // must be refused by the same control that refuses `TN_RAW_PATH=src`, never a second hand-rolled
 // check.
 
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -24,7 +24,7 @@ import { type EvidenceWindow, windowSnapshot } from "../cli/window.js";
 import type { ResolvedEvent } from "../query/lineup.js";
 import { getPlayerProfile } from "../query/player-profile.js";
 import { getTeamProfile } from "../query/team-profile.js";
-import { teams } from "../db/schema.js";
+import { teamMemberships, teams } from "../db/schema.js";
 import { renderDossier, escapeHtml } from "./html.js";
 import { escapeMarkdownCell, renderDossierMarkdown } from "./markdown.js";
 import type { TeamDossier } from "./types.js";
@@ -49,12 +49,10 @@ export function resolvedReportsRoot(): string {
   return resolve(reportsRoot());
 }
 
-/** The number of teams currently on file — what the CLI's `teams=` summary field reports for a
- * `sectionals` build. A single-team `report build <team>` never needs this: it always writes
- * exactly one team's dossier by definition. */
-export function countTeams(db: Db): number {
-  return db.select().from(teams).all().length;
-}
+// `countTeams(db)` used to live here, supplying the CLI's and MCP's `teams=` for a `sectionals`
+// build. #124 removed it rather than leaving it exported and uncalled: it counted every team on
+// file, which is the WRONG number the moment a batch is scoped to an event's field, and both doors
+// now take the count out of `SectionalsBatch` — from the pass that actually wrote the dossiers.
 
 /**
  * Lowercase, collapse every run of non-alphanumeric characters to a single `-`, then trim leading
@@ -426,16 +424,30 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
 
 /**
  * `sectionals` (and bare, no target — spec: "Bare (no target) is equivalent to `sectionals`"):
- * one dossier per team present in the DB, plus a top-level `index.html`/`index.md` linking each.
- * "Every team in the DB" is the only available reading of "the field", and #113 does NOT change
- * that, even though `team_memberships.event_id` is no longer null on every real row: `tn roster set`
- * (#113) associates individual PLAYERS with an event, never a TEAM. A team with zero registered
- * players is not thereby excluded from Sectionals — it may just not have registered anyone yet — and
- * a team with some players registered for event A says nothing about whether the team ITSELF is in
- * event B. Answering "which teams are in this event" would need a team-level link this schema still
- * does not have (`team_matches.event_id` is null on every real `tn team pull`, docs/findings.md #15,
- * and no writer sets it from a roster registration). Scoping this call to an event becomes possible
- * when that association lands (TennisLink, #27, is the likely source).
+ * one dossier per team in the event's FIELD, plus a top-level `index.html`/`index.md` linking each.
+ *
+ * #124 replaced "every team in the DB" as the reading of "the field". This comment previously argued
+ * that scoping was impossible until a team-level link landed, on the grounds that `tn roster set`
+ * (#113) associates individual PLAYERS with an event and never a TEAM. Two of the three objections it
+ * raised are answered rather than waived:
+ *
+ *   - *"a team with players registered for event A says nothing about event B"* — answered by
+ *     binding the derivation to `event.event.id`, so a registration for another event is not read as
+ *     evidence about this one (pinned by "ignores registrations belonging to a different event").
+ *   - *"answering which teams are in this event needs a link the schema does not have"* — the link is
+ *     derived, not stored: for the events nadal actually builds binders for, a team with a player
+ *     registered IS in the field, and that is a fact `tn roster set` already records.
+ *
+ * The third objection stands and is NOT solved here: *a team with zero registered players is not
+ * thereby excluded* — it may simply not have registered anyone yet, and nothing in this schema tells
+ * the two apart. That is why the scope engages only when the event has at least one registration at
+ * all, falls back to every team on file when it has none, and REPORTS which of the two readings it
+ * used (`SectionalsFieldSource`) instead of leaving a caller to infer it from a count. A partially
+ * registered event will therefore under-report its field, and the honest signal for that is the
+ * per-team `Roster:` line, not this count.
+ *
+ * (`team_matches.event_id` is still null on every real `tn team pull`, docs/findings.md #15 — a
+ * TennisLink-sourced field, #27, would supply the stored association this derives.)
  *
  * The PRECISE guarantee this batch call makes, stated without overclaiming (Codex adversarial
  * review, PR #38 round 3, Finding 2 [high]): every leaf in the WHOLE batch — every team's html+md
@@ -451,7 +463,31 @@ function renderIndexMarkdown(entries: TeamIndexEntry[]): string {
  * narrower guarantee — validate-before-any-write, atomic-per-leaf, no cross-file transaction — is
  * what this module actually provides, not a stronger one this comment used to imply.
  */
-export function writeSectionalsDossiers(db: Db, options: { window: EvidenceWindow; event?: ResolvedEvent }): string[] {
+/**
+ * Which reading of "the field" a `sectionals` batch actually used (#124). `registered` means the
+ * named event had at least one team with a player registered for it and the batch rendered exactly
+ * those teams; `all-teams` means every team on file was rendered — either because no event was named,
+ * or because the named event has no registrations yet. The two are indistinguishable from a team
+ * count alone, which is why the batch reports this rather than leaving a caller to guess.
+ */
+export type SectionalsFieldSource = "registered" | "all-teams";
+
+/** What a `sectionals` batch wrote, and on what reading of "the field" — returned together, from the
+ * ONE pass that wrote them, so a caller's summary can never disagree with what landed on disk. The
+ * count deliberately does NOT come from a second `countTeams(db)` read: once the field is scoped,
+ * that read reports every team on file while the batch wrote only the field, and a concurrent write
+ * between the two could make them disagree even when it is not (the same one-read discipline
+ * `writeTeamDossier` already follows for its `rosterSource`). */
+export type SectionalsBatch = {
+  readonly files: string[];
+  readonly teamCount: number;
+  readonly fieldSource: SectionalsFieldSource;
+};
+
+export function writeSectionalsDossiers(
+  db: Db,
+  options: { window: EvidenceWindow; event?: ResolvedEvent },
+): SectionalsBatch {
   // PHASE 0 (#122 round-1 Finding 3) — `options.event`, when given, was ALREADY resolved once by the
   // caller — the command's own single `resolveEvent` call, the SAME resolution the window anchor
   // passed in `options.window` was derived from. This function used to resolve the name itself, a
@@ -473,6 +509,38 @@ export function writeSectionalsDossiers(db: Db, options: { window: EvidenceWindo
   // refresh's disambiguation if both see teams in the same order, and SQL does not grant that for
   // free (Codex adversarial review, PR #38 round 2, Finding 2 [high]).
   const allTeams = db.select().from(teams).orderBy(asc(teams.id)).all();
+  // #124 — scope the batch to the event's FIELD when one is on record. `tn roster set` (#113)
+  // registers PLAYERS against an event; a team with at least one such registration for THIS event is
+  // in this event's field, which is the team-level link the doc comment above says the schema lacks.
+  // It is derived rather than stored, and the derivation is deliberately narrow:
+  //
+  //   - bound to `event.event.id`, never `event_id IS NOT NULL` — a registration for event A says
+  //     nothing about event B, which is the objection that kept this call unscoped until now;
+  //   - read from the SAME resolved event the window/scope/roster come from, so this adds no second
+  //     read of `events` for a concurrent `tn event add` to slip inside (#122 round-1 Finding 3).
+  //
+  // The residual this CANNOT resolve, stated rather than hidden: a team that is in the field but has
+  // registered nobody is indistinguishable from a team that is not in the field. Both have zero rows.
+  // That is why an event with NO registrations at all falls back to every team on file instead of
+  // writing an empty binder — and why the reading used is REPORTED (`fieldSource`) rather than left
+  // for a caller to infer from a count that looks identical either way.
+  const registeredTeamIds =
+    options.event === undefined
+      ? new Set<number>()
+      : new Set(
+          db
+            .selectDistinct({ teamId: teamMemberships.teamId })
+            .from(teamMemberships)
+            .where(eq(teamMemberships.eventId, options.event.event.id))
+            .all()
+            .map((r) => r.teamId),
+        );
+  const fieldSource: SectionalsFieldSource = registeredTeamIds.size === 0 ? "all-teams" : "registered";
+  const fieldTeams = fieldSource === "registered" ? allTeams.filter((t) => registeredTeamIds.has(t.id)) : allTeams;
+  // Dir names are still assigned across ALL teams, not just the field: a later single-team refresh of
+  // a team OUTSIDE the field must land on the same directory this batch would have given it, and
+  // `resolveTeamDirNames`' collision suffixes depend on which teams it is shown. Narrowing this input
+  // to the field would make `team-a` mean one team in the batch and a different one on a refresh.
   const dirNames = resolveTeamDirNames(allTeams.map((t) => ({ teamId: t.id, teamName: t.name })));
 
   // PHASE 1 — validate every leaf this batch will touch, EVERY team's html+md pair plus the
@@ -486,11 +554,15 @@ export function writeSectionalsDossiers(db: Db, options: { window: EvidenceWindo
   // dossier sitting on disk, discovered only at write time, one team too late (Codex adversarial
   // review, PR #38 round 2, Finding 3 [medium]; round 1 fixed the html-then-md ordering WITHIN one
   // team but never widened the guarantee to the whole batch this function drives).
-  const preparedTeams = allTeams.map((team) =>
+  const preparedTeams = fieldTeams.map((team) =>
     prepareTeamDossierWrite(db, team.id, { window: options.window, event: options.event }, dirNames.get(team.id)),
   );
 
-  const entries: TeamIndexEntry[] = allTeams.map((t) => ({
+  // `fieldTeams`, not `allTeams`: the top-level index is how a captain navigates the binder, so an
+  // entry here for a team whose dossier this batch did not write is a dead link. (Caught by #124's
+  // own "must not be linked from the index" assertion — scoping only the WRITE loop left every
+  // out-of-field team still listed, pointing at a directory that does not exist.)
+  const entries: TeamIndexEntry[] = fieldTeams.map((t) => ({
     teamId: t.id,
     teamName: t.name,
     dirName: dirNames.get(t.id)!,
@@ -510,7 +582,7 @@ export function writeSectionalsDossiers(db: Db, options: { window: EvidenceWindo
   const realIndexHtmlPath = resolveRealOutputPath(reportsRoot(), indexHtmlPath, DEFAULT_REPORTS_DIR);
   const realIndexMdPath = resolveRealOutputPath(reportsRoot(), indexMdPath, DEFAULT_REPORTS_DIR);
   // Same post-mkdir re-check + no-follow-leaf-overwrite discipline as `writeTeamDossier` above — the
-  // top-level index names every team on file, so it deserves the identical protection, not a lesser
+  // top-level index names every team in the field, so it deserves the identical protection, not a lesser
   // one just because it lives one directory up.
   assertLeafWritable(realIndexHtmlPath);
   assertLeafWritable(realIndexMdPath);
@@ -532,5 +604,5 @@ export function writeSectionalsDossiers(db: Db, options: { window: EvidenceWindo
   overwriteOutputFile(realIndexMdPath, renderIndexMarkdown(entries));
   written.push(indexHtmlPath, indexMdPath);
 
-  return written;
+  return { files: written, teamCount: fieldTeams.length, fieldSource };
 }
