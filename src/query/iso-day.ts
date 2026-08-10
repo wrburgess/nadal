@@ -30,3 +30,36 @@ export function isIsoDay(day: string): boolean {
   if (Number.isNaN(parsed.getTime())) return false;
   return parsed.toISOString().slice(0, 10) === day;
 }
+
+/**
+ * Every calendar day from `startsOn` to `endsOn`, inclusive at both ends — the same inclusivity
+ * `eventsForDay` uses when it decides which event a day belongs to, so a day this function emits is
+ * always a day that function would have matched.
+ *
+ * It lives here, beside `isIsoDay`, because it is the same rule seen from the other side: that
+ * predicate says what a day IS, this says what lies between two of them, and a range enumerated by
+ * a different notion of "day" than the one the writers validate against could produce a column no
+ * stored row can ever fill.
+ *
+ * Returns `[]` rather than throwing when either endpoint is not a real day, or when the range runs
+ * backwards. A caller reading an `events` row cannot assume its TEXT columns hold valid dates — the
+ * table predates `isIsoDay` — and the honest answer for an unusable range is "no days", which a
+ * renderer already has to handle for an event with no dates at all.
+ *
+ * Stepping is done in UTC milliseconds, never by mutating a local-time `Date`: `setDate()` on a
+ * local-zone date lands on the wrong day across a DST boundary, which would drop or duplicate a
+ * tournament day for anyone running this in a zone that observes it.
+ */
+export function enumerateIsoDays(startsOn: string, endsOn: string): string[] {
+  if (!isIsoDay(startsOn) || !isIsoDay(endsOn)) return [];
+  const start = Date.parse(`${startsOn}T00:00:00Z`);
+  const end = Date.parse(`${endsOn}T00:00:00Z`);
+  if (start > end) return [];
+
+  const days: string[] = [];
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  for (let t = start; t <= end; t += DAY_MS) {
+    days.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return days;
+}

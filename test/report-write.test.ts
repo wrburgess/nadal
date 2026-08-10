@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { evidenceWindow, windowSnapshot } from "../src/cli/window.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { players, teamMemberships, teams } from "../src/db/schema.js";
 import { OutputPathError } from "../src/fs/output-root.js";
+import { setAvailability } from "../src/query/availability.js";
+import { addCaptainNote } from "../src/query/captain-notes.js";
 import { addEvent } from "../src/query/events.js";
 import { resolveEvent } from "../src/query/lineup.js";
 import { setHomeTeam } from "../src/query/home-team.js";
@@ -18,6 +21,7 @@ import {
   writeTeamDossier,
   writeSectionalsDossiers,
 } from "../src/report/write.js";
+import { seedHomeTeamFixture } from "./helpers/home-team.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -90,6 +94,153 @@ describe("src/report/write.ts", () => {
       } finally {
         sqlite.close();
       }
+    });
+
+    // #126. Driven through the REAL writers (`setAvailability` / `addCaptainNote`) rather than
+    // hand-inserted rows — the discipline #113 established, and whose cost `player-profile.ts`
+    // records: a fixture that writes rows directly can pass while the actual write path is broken.
+    describe("own-team book (#126)", () => {
+      function seedHomeWithEvent() {
+        runMigrations();
+        const { db, sqlite } = openDb();
+        const fixture = seedHomeTeamFixture(db, { eventName: "Springfield Sectionals 2026" });
+        // `buildTeamDossier` threads `options.event` into `getLineupPlan`, which refuses an event
+        // with no format on file — added so the build reaches the assertions, as above.
+        addEvent(db, {
+          name: "Springfield Sectionals 2026",
+          kind: "tournament",
+          startsOn: "2026-08-28",
+          endsOn: "2026-08-30",
+          format: "S1:singles",
+        });
+        return { db, sqlite, fixture };
+      }
+
+      it("populates ownTeam for the home team, from what the real writers stored", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+          addCaptainNote(db, { playerId: fixture.playerId, text: "steady under pressure" });
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          expect(dossier.ownTeam).not.toBeNull();
+          // Every day of the event range, not only the answered one.
+          expect(dossier.ownTeam!.availability!.days).toEqual(["2026-08-28", "2026-08-29", "2026-08-30"]);
+          expect(dossier.ownTeam!.notes.player.map((n) => n.note)).toEqual(["steady under pressure"]);
+
+          // And it reaches the page — the point of the whole issue.
+          expect(renderDossierMarkdown(dossier)).toContain("## Own-team book");
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      it("leaves ownTeam null for an opponent, even with our own availability on file", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+          const opponent = seedTeamWithRosters(db, {
+            teamName: "OK/Dickason/40&over3.5M",
+            season: ["Cy Calder"],
+          });
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, opponent.teamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          // An opponent's book is not empty — it does not exist. Spec § Domain model: captain notes
+          // and availability are "populated for our team only, by design".
+          expect(dossier.ownTeam).toBeNull();
+          expect(renderDossierMarkdown(dossier)).not.toContain("Own-team book");
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      // THE regression this issue's real-data check caught. Against the live database the grid
+      // listed 13 players while the roster table three sections above it said "registered 11" — and
+      // the two extra names were exactly the ones the dossier's own "Not registered (watch for
+      // adds)" section prints. Every unit test passed: the query was scoped correctly to the TEAM,
+      // which is simply the wrong question for an event-scoped dossier.
+      it("the availability grid lists the REGISTERED field, not everyone on the season roster", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          // A season-roster member who did not register for this event.
+          const unregistered = db.insert(players).values({ canonicalName: "Nate Notregistered" }).returning().get();
+          db.insert(teamMemberships)
+            .values({ playerId: unregistered.id, teamId: fixture.homeTeamId, eventId: null })
+            .run();
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          // One page, one answer to "who is on this team": the grid and the roster table must name
+          // the same people.
+          expect(dossier.ownTeam!.availability!.players.map((p) => p.canonicalName)).toEqual(
+            dossier.team.roster.map((m) => m.canonicalName),
+          );
+          expect(dossier.ownTeam!.availability!.players.map((p) => p.canonicalName)).not.toContain(
+            "Nate Notregistered",
+          );
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      // Retirement filtering lives in `resolveRoster` (src/query/roster.ts), not in
+      // `getAvailabilityForEvent` — this is the end-to-end proof that it still reaches the grid,
+      // asserted at the layer that owns it rather than at the one that merely benefits.
+      it("a soft-retired member reaches neither the roster table nor the availability grid", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+          db.update(teamMemberships)
+            .set({ retiredAt: "2026-08-01T00:00:00.000Z" })
+            .where(eq(teamMemberships.playerId, fixture.playerId))
+            .run();
+
+          const event = resolveEvent(db, "Springfield Sectionals 2026");
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, {
+            window: evidenceWindow("2026-01-01"),
+            event,
+          });
+
+          expect(dossier.team.roster.map((m) => m.canonicalName)).not.toContain(fixture.playerName);
+          expect(dossier.ownTeam!.availability!.players.map((p) => p.canonicalName)).not.toContain(
+            fixture.playerName,
+          );
+        } finally {
+          sqlite.close();
+        }
+      });
+
+      it("reports availability as null, not an empty grid, when the build names no event", () => {
+        const { db, sqlite, fixture } = seedHomeWithEvent();
+        try {
+          addCaptainNote(db, { playerId: fixture.playerId, text: "notes still work unscoped" });
+
+          // No `event` option at all — availability is per-event-day, so there is no range.
+          const dossier = buildTeamDossier(db, fixture.homeTeamId, { window: evidenceWindow("2026-01-01") });
+
+          expect(dossier.ownTeam).not.toBeNull();
+          expect(dossier.ownTeam!.availability).toBeNull();
+          // Notes are event-independent, so they still render.
+          expect(dossier.ownTeam!.notes.player).toHaveLength(1);
+          expect(renderDossierMarkdown(dossier).toLowerCase()).toContain("no event named");
+        } finally {
+          sqlite.close();
+        }
+      });
     });
   });
 

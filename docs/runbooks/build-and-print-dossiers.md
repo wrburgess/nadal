@@ -168,6 +168,30 @@ about an opponent since last time (useful mid-event).
   how to read it critically, is in [predict-an-opponent-lineup.md](predict-an-opponent-lineup.md).
 - **A team with no court matches of its own renders the lineup section as an explicit absence**
   rather than an empty table. Pull it (the prompt form in *Before you start*) and rebuild.
+- **The "Own-team book" section appears on OUR dossier only, and starts empty** (#126). It carries
+  the captain's layer — an availability grid (one column per event day) and captain notes — and no
+  opponent dossier has one, because availability and notes are *"populated for our team only, by
+  design"* (spec § Domain model). Three things it prints are deliberately different sentences:
+  - `—` in a grid cell means **not recorded**, which is *not* the same as `unavailable`. A blank
+    binder cell is a question nobody has asked yet; act on it accordingly.
+  - *"None recorded."* means the table is empty and `tn player avail` / `tn player note` will fill
+    it. It does **not** mean the feature is missing — that is the separate *"Not collected yet"*
+    section, which says no writer exists anywhere in the codebase.
+  - *"No event named for this build…"* means availability had no day range to grid over. Re-run
+    naming the event (step 2's setup note) to get the grid.
+
+  A day nobody has answered for still gets a column of `—`, deliberately: the columns come from the
+  event's date range, not from the rows on file, so "who is available Saturday?" can never render as
+  though there were no Saturday.
+- **Pairing notes can only be recorded over MCP, not from the CLI.** The dossier renders a *Pairing
+  notes* block, and `tn player note` has no way to name the second player — pairing notes are
+  reachable only through the `player_note` MCP tool (`src/cli/commands/player-note.ts:29`, a
+  deliberate #17 PR A decision, not a regression). Until that changes, expect the block to read
+  *"None recorded."* on a CLI-only workflow even when per-player notes are populated.
+- **The availability grid lists the REGISTERED field, not the whole season roster.** It names exactly
+  the players in the Roster table at the top of the same dossier. Someone on the season roster who
+  did not register will not appear — though `tn player avail` still *accepts* a recording for them,
+  so the data is kept and appears the moment they register.
 - **A registered roster scopes the dossier to who is actually traveling** (#113). `tn team pull`
   still writes every player's roster row with a null `event_id` — that is the season roster, not a
   registration — but `tn roster set` (below) records the SEPARATE, event-scoped fact of who

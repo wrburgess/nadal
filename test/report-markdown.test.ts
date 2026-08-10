@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { escapeMarkdownCell, renderDossierMarkdown } from "../src/report/markdown.js";
-import { buildDossier, buildEmptyDossier, buildPlayerProfile, buildTeamProfile } from "./helpers/dossier.js";
+import {
+  buildDossier,
+  buildEmptyDossier,
+  buildOwnTeamBook,
+  buildPlayerProfile,
+  buildTeamProfile,
+} from "./helpers/dossier.js";
 
 describe("escapeMarkdownCell", () => {
   it("escapes a pipe so it cannot be mistaken for a table delimiter", () => {
@@ -231,5 +237,150 @@ describe("renderDossierMarkdown", () => {
   it("with no home team designated at all, the unavailable line DOES say so", () => {
     const md = renderDossierMarkdown(buildDossier({ team: buildTeamProfile({ isHome: false, headToHead: null }) }));
     expect(md.toLowerCase()).toContain("no home team configured");
+  });
+});
+
+// #126 — spec § Deliverables #2. The home dossier used to render the identical six sections an
+// opponent's did, so the captain's subjective layer had nowhere to land in the printed binder.
+describe("own-team book (markdown)", () => {
+  const homeTeam = buildTeamProfile({ isHome: true });
+
+  it("renders the section on the home team's dossier", () => {
+    const md = renderDossierMarkdown(buildDossier({ team: homeTeam, ownTeam: buildOwnTeamBook() }));
+    expect(md).toContain("## Own-team book");
+  });
+
+  it("omits the section entirely on an opponent's dossier", () => {
+    // `ownTeam: null` is what `buildTeamDossier` produces for every team that is not ours — an
+    // opponent's availability is not merely unrecorded, it is none of our business (spec § Domain
+    // model: "populated for our team only, by design").
+    const md = renderDossierMarkdown(buildDossier({ ownTeam: null }));
+    expect(md).not.toContain("Own-team book");
+  });
+
+  it("keeps a day nobody answered for as a column, with every cell unrecorded", () => {
+    // THE failure this feature is most likely to ship with: derive the day list from the recorded
+    // rows and Saturday silently disappears, so "who is available Saturday?" renders as though
+    // there were no Saturday. The grid still looks complete, which is what makes it dangerous.
+    const md = renderDossierMarkdown(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: {
+            days: ["2026-08-28", "2026-08-29", "2026-08-30"],
+            players: [
+              {
+                playerId: 1,
+                canonicalName: "Nova Norbury",
+                days: [
+                  { day: "2026-08-28", status: "available" },
+                  { day: "2026-08-29", status: null },
+                  { day: "2026-08-30", status: null },
+                ],
+              },
+            ],
+          },
+        }),
+      }),
+    );
+
+    expect(md).toContain("2026-08-30");
+  });
+
+  it("prints an unrecorded day differently from a recorded 'unavailable'", () => {
+    const md = renderDossierMarkdown(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: {
+            days: ["2026-08-28", "2026-08-29"],
+            players: [
+              {
+                playerId: 1,
+                canonicalName: "Nova Norbury",
+                days: [
+                  { day: "2026-08-28", status: "unavailable" },
+                  { day: "2026-08-29", status: null },
+                ],
+              },
+            ],
+          },
+        }),
+      }),
+    );
+
+    const row = md.split("\n").find((line) => line.includes("Nova Norbury") && line.includes("unavailable"))!;
+    // Exact cell equality, not `contains`: the whole point is that these two render as DIFFERENT
+    // strings, and a substring check on "unavailable" passes even if the null cell printed it too.
+    expect(row.split("|").map((c) => c.trim())).toEqual(["", "Nova Norbury", "unavailable", "—", ""]);
+  });
+
+  it("renders an empty book as an explicit 'none recorded', not as an absent section", () => {
+    // The state this ships in until the captain enters data (#129). An absent section is
+    // indistinguishable from a section nobody thought to add (src/report/types.ts), and this one
+    // must NOT borrow the "Not collected yet" wording — that sentence means no writer exists
+    // anywhere in the codebase, which has been false since #17 PR A.
+    const md = renderDossierMarkdown(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          availability: { days: ["2026-08-28"], players: [] },
+          notes: { player: [], pairing: [] },
+        }),
+      }),
+    );
+
+    expect(md).toContain("## Own-team book");
+
+    // Scoped to the book's own section on purpose. The whole document legitimately contains the
+    // "no writer exists" sentence, because `buildPlayerProfile`'s default `dataGaps` still says
+    // `not-collected` for all three sections — a state production can no longer produce
+    // (`player-profile.ts` hardcodes `hasWriter: true` since #113), but one two existing renderer
+    // tests are pinned to. Asserting over the whole string would fail for that unrelated fixture
+    // default rather than for anything this feature does. Logged in docs/findings.md.
+    const book = md.slice(md.indexOf("## Own-team book"), md.indexOf("## Player detail"));
+    expect(book.toLowerCase()).toContain("none recorded");
+    expect(book).not.toContain("no writer exists");
+  });
+
+  it("says availability needs a named event rather than printing an empty grid", () => {
+    const md = renderDossierMarkdown(
+      buildDossier({ team: homeTeam, ownTeam: buildOwnTeamBook({ availability: null }) }),
+    );
+    // "nobody is available" and "you did not name an event" are different facts.
+    expect(md.toLowerCase()).toContain("no event named");
+  });
+
+  it("renders a pairing note once, in its own block, not under each partner", () => {
+    const md = renderDossierMarkdown(buildDossier({ team: homeTeam, ownTeam: buildOwnTeamBook() }));
+    // A pairing note is one observation about two people; printing it under both would read as two.
+    expect(md.split("strong together")).toHaveLength(2);
+    expect(md).toContain("Nova Norbury + Kai Kestrel");
+  });
+
+  it("escapes a pipe in free-text note content so the table survives", () => {
+    // Captain notes are arbitrary operator text landing in a markdown table.
+    const md = renderDossierMarkdown(
+      buildDossier({
+        team: homeTeam,
+        ownTeam: buildOwnTeamBook({
+          notes: {
+            player: [
+              {
+                noteId: 1,
+                playerId: 1,
+                canonicalName: "Nova Norbury",
+                note: "fast | flat",
+                createdAt: "2026-08-09T00:00:00.000Z",
+              },
+            ],
+            pairing: [],
+          },
+        }),
+      }),
+    );
+
+    expect(md).toContain("fast \\| flat");
+    expect(md).not.toContain("fast | flat");
   });
 });

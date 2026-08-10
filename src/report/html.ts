@@ -335,6 +335,92 @@ function renderNotCollectedHtml(dossier: TeamDossier): string {
   );
 }
 
+/** The markdown twin's `UNRECORDED_DAY`. Kept identical so the printed binder and the screen agree
+ * on what "we never asked" looks like. */
+const UNRECORDED_DAY = "—";
+
+function noteDayHtml(createdAt: string): string {
+  return escapeHtml(createdAt.slice(0, 10));
+}
+
+/**
+ * #126 — the HTML twin of `renderOwnTeamBookMarkdown`. See that function for why the three absent
+ * states (not our team / no event named / nothing recorded) must read as three different sentences.
+ *
+ * Every interpolation here goes through `escapeHtml`: captain notes are arbitrary operator text and
+ * the availability grid renders names from a different source than the roster table above it, so
+ * neither can borrow that table's escaping.
+ */
+function renderOwnTeamBookHtml(dossier: TeamDossier): string {
+  const book = dossier.ownTeam;
+  if (book === null) return "";
+
+  let availability: string;
+  if (book.availability === null) {
+    availability =
+      "<p><em>No event named for this build, so there is no day range to report availability over." +
+      " Re-run naming the event to see the grid.</em></p>";
+  } else if (book.availability.players.length === 0) {
+    availability = "<p><em>None recorded.</em> Use <code>tn player avail</code> to record who can play which day.</p>";
+  } else {
+    const { days, players } = book.availability;
+    availability =
+      '<table class="roster"><thead><tr><th>Player</th>' +
+      days.map((d) => `<th>${escapeHtml(d)}</th>`).join("") +
+      "</tr></thead><tbody>" +
+      players
+        .map(
+          (p) =>
+            `<tr><td>${escapeHtml(p.canonicalName)}</td>` +
+            p.days.map((d) => `<td>${escapeHtml(d.status ?? UNRECORDED_DAY)}</td>`).join("") +
+            "</tr>",
+        )
+        .join("") +
+      "</tbody></table>" +
+      `<p class="guess-note"><code>${UNRECORDED_DAY}</code> means <strong>not recorded</strong> —` +
+      " which is not the same as unavailable.</p>";
+  }
+
+  const playerNotes =
+    book.notes.player.length === 0
+      ? "<p><em>None recorded.</em> Use <code>tn player note</code> to add one.</p>"
+      : "<ul>" +
+        book.notes.player
+          .map(
+            (n) =>
+              `<li><strong>${escapeHtml(n.canonicalName)}</strong> — ${escapeHtml(n.note)}` +
+              ` <em>(${noteDayHtml(n.createdAt)})</em></li>`,
+          )
+          .join("") +
+        "</ul>";
+
+  // Own block, not repeated under each partner — see the markdown twin.
+  const pairingNotes =
+    book.notes.pairing.length === 0
+      ? "<p><em>None recorded.</em></p>"
+      : "<ul>" +
+        book.notes.pairing
+          .map(
+            (n) =>
+              `<li><strong>${escapeHtml(n.canonicalName)} + ${escapeHtml(n.pairCanonicalName)}</strong> —` +
+              ` ${escapeHtml(n.note)} <em>(${noteDayHtml(n.createdAt)})</em></li>`,
+          )
+          .join("") +
+        "</ul>";
+
+  return (
+    '<section id="own-team-book"><h2>Own-team book</h2>' +
+    '<p class="guess-note">The captain\'s layer — availability and notes. Recorded for our team only, by design.</p>' +
+    "<h3>Availability</h3>" +
+    availability +
+    "<h3>Captain notes</h3>" +
+    playerNotes +
+    "<h3>Pairing notes</h3>" +
+    pairingNotes +
+    "</section>"
+  );
+}
+
 // Inlined once, verbatim, into every rendered document — no `<link>`, so no external request.
 // Print rules sized for a courtside binder (letter paper, half-inch margins) per the plan.
 const STYLE = `
@@ -374,6 +460,9 @@ export function renderDossier(dossier: TeamDossier): string {
     // Placed BEFORE everything it qualifies — see the markdown twin's comment.
     renderEvidenceScopeHtml(dossier) +
     renderPredictedLineupHtml(dossier) +
+    // #126: same position as the markdown twin — the guess, then who is actually there, then the
+    // per-player detail.
+    renderOwnTeamBookHtml(dossier) +
     '<section id="players"><h2>Player detail</h2>' +
     renderPlayersSectionHtml(dossier) +
     "</section>" +

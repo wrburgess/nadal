@@ -12,6 +12,7 @@ import {
   NoEventForDayError,
   NoHomeTeamError,
   PlayerNotOnHomeRosterError,
+  getAvailabilityForEvent,
   setAvailability,
 } from "../src/query/availability.js";
 import { setHomeTeam } from "../src/query/home-team.js";
@@ -545,4 +546,156 @@ describe("setAvailability is atomic against a concurrent event-range change", ()
       other.close();
     }
   });
+});
+
+// #126 — the READ side. `setAvailability` above has existed since #17 PR A; nothing ever read the
+// rows back as CONTENT (`player-profile.ts` reads a COUNT, for a data-gap disclosure), so the
+// own-team book had no data path at all. These cover that path.
+describe("getAvailabilityForEvent", () => {
+  useTnDbPath();
+
+  it("returns every day in the event's range, not only the days someone recorded", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      // One row, on the MIDDLE day of a three-day event.
+      setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+
+      const view = getAvailabilityForEvent(db, {
+        eventId: fixture.eventId,
+        roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }],
+      });
+
+      // The whole point: 08-28 and 08-30 have no row and must still appear. Deriving the day list
+      // from the rows returned would silently answer "who is available Saturday" with "there is no
+      // Saturday" — a broken feature that renders as a complete one.
+      expect(view.days).toEqual(["2026-08-28", "2026-08-29", "2026-08-30"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("reports an unrecorded day as null, distinct from a recorded 'unavailable'", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "unavailable" });
+
+      const view = getAvailabilityForEvent(db, {
+        eventId: fixture.eventId,
+        roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }],
+      });
+      const player = view.players.find((p) => p.playerId === fixture.playerId)!;
+
+      // Every day present for every player, so a renderer cannot omit one by accident.
+      expect(player.days).toEqual([
+        { day: "2026-08-28", status: null },
+        { day: "2026-08-29", status: "unavailable" },
+        { day: "2026-08-30", status: null },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("returns every roster player with all-null days when nothing at all is recorded", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+
+      // The state this feature actually ships in until the captain enters data (#129) — it must be
+      // an empty RESULT, never an error and never an absent player.
+      const view = getAvailabilityForEvent(db, {
+        eventId: fixture.eventId,
+        roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }],
+      });
+
+      expect(view.players).toHaveLength(1);
+      expect(view.players[0]!.days.every((d) => d.status === null)).toBe(true);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("returns exactly the roster it was handed, and nobody else on the team", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      // A second player, genuinely on the same team, deliberately NOT in the roster passed below —
+      // the season-roster-but-not-registered case. Availability may be recorded for them (the
+      // writer allows it) and they must still not appear in an event-scoped grid.
+      const unregistered = db.insert(players).values({ canonicalName: "Nate Notregistered" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: unregistered.id, teamId: fixture.homeTeamId, eventId: null }).run();
+      setAvailability(db, { playerId: unregistered.id, day: "2026-08-29", status: "available" });
+
+      const view = getAvailabilityForEvent(db, {
+        eventId: fixture.eventId,
+        roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }],
+      });
+
+      // The grid must agree with the roster table on the same page (#126) — this function answers
+      // "what did they say", never "who is on the team".
+      expect(view.players.map((p) => p.playerId)).toEqual([fixture.playerId]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("collapses a player the caller listed twice into one grid row", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+
+      // A caller assembling the roster from membership rows can hand us the same person twice — a
+      // season row and an event row (docs/findings.md #15), the duplicate pair #131 is about.
+      const view = getAvailabilityForEvent(db, {
+        eventId: fixture.eventId,
+        roster: [
+          { playerId: fixture.playerId, canonicalName: fixture.playerName },
+          { playerId: fixture.playerId, canonicalName: fixture.playerName },
+        ],
+      });
+
+      expect(view.players).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("ignores availability recorded against a different event", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      setAvailability(db, { playerId: fixture.playerId, day: "2026-08-29", status: "available" });
+
+      // A second event, disjoint in time, with its own row for the same player.
+      const other = db
+        .insert(events)
+        .values({ name: "Districts", kind: "tournament", startsOn: "2026-05-01", endsOn: "2026-05-02" })
+        .returning()
+        .get();
+      setAvailability(db, { playerId: fixture.playerId, day: "2026-05-01", status: "unavailable" });
+
+      const view = getAvailabilityForEvent(db, {
+        eventId: other.id,
+        roster: [{ playerId: fixture.playerId, canonicalName: fixture.playerName }],
+      });
+      const player = view.players.find((p) => p.playerId === fixture.playerId)!;
+
+      // Only the OTHER event's day range, and only its own row.
+      expect(view.days).toEqual(["2026-05-01", "2026-05-02"]);
+      expect(player.days).toEqual([
+        { day: "2026-05-01", status: "unavailable" },
+        { day: "2026-05-02", status: null },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Soft-retired members (issue #49) are NOT filtered here — this function does not resolve the
+  // roster, it is handed one. `resolveRoster` (src/query/roster.ts:76) applies `retiredAt IS NULL`,
+  // and `getTeamProfile` builds `team.roster` through it, so a retired player never reaches this
+  // call in production. The end-to-end guarantee is asserted in test/report-write.test.ts, at the
+  // layer that actually owns it; asserting it here would test a filter this function does not have.
 });

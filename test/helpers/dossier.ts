@@ -8,7 +8,7 @@ import type { LineupPlan, LineupSlotProvenance } from "../../src/query/lineup.js
 import type { EvidenceWindowDisclosure, PlayerProfile } from "../../src/query/player-profile.js";
 import type { TeamProfile } from "../../src/query/team-profile.js";
 import type { EvidenceScopeSummary } from "../../src/query/types.js";
-import type { TeamDossier } from "../../src/report/types.js";
+import type { OwnTeamBook, TeamDossier } from "../../src/report/types.js";
 
 /** The default evidence-window disclosure for a hand-built fixture (#122 round-1 Finding 1) — the
  * same fixed anchor `buildDossier`'s own `window` string label already uses ("12mo to 2026-08-28"),
@@ -171,6 +171,57 @@ export function buildLineupPlan(
   };
 }
 
+/**
+ * An own-team book (#126) with one recorded day, one unrecorded day, one player note and one
+ * pairing note — so a renderer test exercises the recorded, the not-recorded, the solo-note and the
+ * pairing-note paths at once, the same way `buildLineupPlan` covers its three confidence paths.
+ *
+ * Note the SECOND day carries no status for anyone: that is the case a renderer is most likely to
+ * drop, and `buildDossier`'s default must therefore contain it rather than leave it to whichever
+ * test remembers.
+ */
+export function buildOwnTeamBook(overrides: Partial<OwnTeamBook> = {}): OwnTeamBook {
+  return {
+    availability: overrides.availability === undefined
+      ? {
+          days: ["2026-08-28", "2026-08-29"],
+          players: [
+            {
+              playerId: 1,
+              canonicalName: "Nova Norbury",
+              days: [
+                { day: "2026-08-28", status: "available" },
+                { day: "2026-08-29", status: null },
+              ],
+            },
+          ],
+        }
+      : overrides.availability,
+    notes: overrides.notes ?? {
+      player: [
+        {
+          noteId: 1,
+          playerId: 1,
+          canonicalName: "Nova Norbury",
+          note: "prefers the deuce court",
+          createdAt: "2026-08-09T00:00:00.000Z",
+        },
+      ],
+      pairing: [
+        {
+          noteId: 2,
+          playerId: 1,
+          canonicalName: "Nova Norbury",
+          pairPlayerId: 2,
+          pairCanonicalName: "Kai Kestrel",
+          note: "strong together",
+          createdAt: "2026-08-08T00:00:00.000Z",
+        },
+      ],
+    },
+  };
+}
+
 export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier {
   return {
     // A fixed window label, so a renderer test never depends on the day the suite is run — the very
@@ -184,6 +235,10 @@ export function buildDossier(overrides: Partial<TeamDossier> = {}): TeamDossier 
     team: overrides.team ?? buildTeamProfile(),
     players: overrides.players ?? [buildPlayerProfile()],
     lineup: overrides.lineup === undefined ? buildLineupPlan() : overrides.lineup,
+    // #126: `null` by default — the default fixture's `buildTeamProfile` is an OPPONENT
+    // (`isHome: false`), and an opponent never carries a book. A home-team test passes one in
+    // explicitly, which keeps the two states from being confused by omission.
+    ownTeam: overrides.ownTeam === undefined ? null : overrides.ownTeam,
   };
 }
 
@@ -206,5 +261,9 @@ export function buildEmptyDossier(): TeamDossier {
     // No roster and no matches means nothing to predict from — the same `null` `buildTeamDossier`
     // produces when `getLineupPlan` refuses.
     lineup: null,
+    // #126: an opponent-shaped empty dossier, so no book — the home-team empty case is its own
+    // fixture in the renderer suites, since "we have a book and it is empty" and "this is not our
+    // team" must render differently.
+    ownTeam: null,
   };
 }

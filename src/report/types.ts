@@ -8,9 +8,27 @@
 // only names the shape both renderers consume, so their tests can hand-build one directly rather
 // than standing up a DB (the same "pure function, hand-built input" discipline `derive.ts` uses).
 
+import type { EventAvailability } from "../query/availability.js";
+import type { CaptainNotesView } from "../query/captain-notes.js";
 import type { LineupPlan } from "../query/lineup.js";
 import type { PlayerProfile } from "../query/player-profile.js";
 import type { TeamProfile } from "../query/team-profile.js";
+
+/**
+ * Spec § Deliverables #2, the "own-team book": the same cold data as any dossier PLUS Randy's
+ * subjective layer. Present only on the HOME team's dossier — `captain_notes` and `availability` are
+ * "populated for our team only, by design" (spec § Domain model), so an opponent's dossier carries
+ * `null` here rather than an empty book, which would imply we simply hadn't filled theirs in.
+ */
+export type OwnTeamBook = {
+  /**
+   * `null` when the build named no event. Availability is per-event-DAY, so with no event there is
+   * no day range to render a grid over — and an empty grid would read as "nobody is available"
+   * rather than "you did not name an event". Both renderers must say which of the two it is.
+   */
+  availability: EventAvailability | null;
+  notes: CaptainNotesView;
+};
 
 export type TeamDossier = {
   /** The 12-month evidence window every windowed record in this dossier was filtered to, as a
@@ -44,4 +62,11 @@ export type TeamDossier = {
    * silently-empty lineup would read as "we predict nobody plays".
    */
   lineup: LineupPlan | null;
+  /**
+   * The own-team book (#126) — `null` on every dossier but the home team's. Computed once in
+   * `write.ts` and carried on the VIEW for the same reason `window` and `event` are: two renderers
+   * reading one field cannot disagree about what the captain recorded, whereas two renderers each
+   * reaching for the data would eventually drift.
+   */
+  ownTeam: OwnTeamBook | null;
 };

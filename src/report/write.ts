@@ -18,6 +18,8 @@ import {
 } from "../fs/output-root.js";
 import { repoDefault } from "../fs/package-root.js";
 import type { Db } from "../ingest/db-types.js";
+import { getAvailabilityForEvent } from "../query/availability.js";
+import { getCaptainNotes } from "../query/captain-notes.js";
 import { resolveHomeTeam } from "../query/home-team.js";
 import { NoCourtMatchHistoryError, getLineupPlan, requireSlotSet } from "../query/lineup.js";
 import { type EvidenceWindow, windowSnapshot } from "../cli/window.js";
@@ -217,6 +219,34 @@ export function buildTeamDossier(
     if (!(err instanceof NoCourtMatchHistoryError)) throw err;
   }
 
+  // #126, spec § Deliverables #2: the own-team book rides on the HOME dossier only. `homeTeam` and
+  // `eventId` are both the values resolved at the top of this function — never a second read, the
+  // defect class #97 and #125 each closed once.
+  //
+  // The condition is `homeTeam?.id === teamId`, the exact complement of the `versusTeamId` line
+  // above: a dossier is either about us or about an opponent, and those two fields must never both
+  // be set. When no home team is designated at all, `resolveHomeTeam` returns null and every dossier
+  // in the run — correctly — carries no book.
+  const ownTeam: TeamDossier["ownTeam"] =
+    homeTeam !== null && homeTeam.id === teamId
+      ? {
+          // `null`, not an empty grid, when no event was named: availability is per-event-day, so
+          // there is no day range to render and the renderers say so rather than implying nobody is
+          // available. See `OwnTeamBook.availability`.
+          // `team.roster` — the roster this dossier is ABOUT (registered when an event was named,
+          // season otherwise), never a fresh membership query. See `getAvailabilityForEvent`: a
+          // second derivation here made the grid list 13 while the roster table said 11.
+          availability:
+            eventId === null
+              ? null
+              : getAvailabilityForEvent(db, {
+                  eventId,
+                  roster: team.roster.map((m) => ({ playerId: m.playerId, canonicalName: m.canonicalName })),
+                }),
+          notes: getCaptainNotes(db, { teamId }),
+        }
+      : null;
+
   return {
     window: window.label,
     // Taken from the same resolved value `leagueScope` came from, so the event a dossier names
@@ -227,6 +257,7 @@ export function buildTeamDossier(
     team,
     players,
     lineup,
+    ownTeam,
   };
 }
 
