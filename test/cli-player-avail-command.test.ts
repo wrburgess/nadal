@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { dispatch } from "../src/cli/router.js";
+import { HELP_EXAMPLE_ARGV, dispatch } from "../src/cli/router.js";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { backfillNameKeys } from "../src/db/name-key.js";
 import { availability, events, players, teamMemberships, teams } from "../src/db/schema.js";
@@ -161,6 +161,38 @@ describe("tn player avail (end-to-end via dispatch)", () => {
 
     expect(code).toBe(0);
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  // The example `tn --help` and GRAMMAR.md both print, EXECUTED rather than asserted about. The two
+  // tests in test/cli-router.test.ts check that it names a registered command and renders the way
+  // the doc says; neither would notice an example whose positional ORDER was wrong, whose status
+  // spelling the writer rejects, or that refuses for a reason a reader could not have known — all
+  // of which are exactly what a copied-and-pasted line hits first. A worked example is a claim, and
+  // a claim in this repo gets an executable pin rather than a careful sentence.
+  it("the worked example printed by `tn --help` runs: exit 0, and it stores the day and status it prints", async () => {
+    const [noun, verb, playerName, day, status] = HELP_EXAMPLE_ARGV;
+    runMigrations();
+    const { db, sqlite } = openDb();
+    // The event range is seeded FROM the example's own day rather than left at the fixture default,
+    // so this test stays a statement about the EXAMPLE: changing the example's date keeps it green,
+    // while changing its player name, its argument order, or its status does not.
+    const fixture = seedHomeTeamFixture(db, { playerName, eventStartsOn: day, eventEndsOn: day });
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch([...HELP_EXAMPLE_ARGV]);
+
+    expect(code, `\`tn ${noun} ${verb} …\` — the example in the help — did not exit 0`).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("status=ok"));
+
+    const { db: readDb, sqlite: readSqlite } = openDb();
+    try {
+      const rows = readDb.select().from(availability).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ playerId: fixture.playerId, day, status });
+    } finally {
+      readSqlite.close();
+    }
   });
 });
 

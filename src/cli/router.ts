@@ -56,6 +56,34 @@ export const COMMANDS: Command[] = [
   mcpServe,
 ];
 
+/**
+ * The one worked example the help prints, held as **argv** because that is the form the tests can
+ * execute: `test/cli-player-avail-command.test.ts` dispatches this array against a seeded database
+ * and asserts the row it stores, so the line a reader copies is a line CI has run. A string here
+ * with the argv retyped in the test would be two things to keep in agreement, which is how a doc
+ * example comes to name an argument order the command does not take.
+ *
+ * `tn player avail` rather than another command because it exercises three things at once that no
+ * summary row in the table below can show: a multi-word target and therefore the shell quoting it
+ * needs, and two payload positionals in an order the reader has no other way to learn. It is also
+ * safe to demonstrate — its payload is a date and a closed set of three status words, where
+ * `tn player note`'s is free text a shell would parse (see docs/runbooks/capture-availability.md).
+ * One example, not one per command: spec § Interfaces asks that help fit one screen.
+ */
+export const HELP_EXAMPLE_ARGV = ["player", "avail", "Randy Burgess", "2026-08-29", "available"] as const;
+
+/**
+ * `HELP_EXAMPLE_ARGV` rendered as a paste-able command line — quoting only a token that contains a
+ * space, which is the only reason any token in this example needs quoting at all.
+ *
+ * Deliberately NOT a general shell quoter. Inside double quotes a POSIX shell still expands `$`, a
+ * backtick, and `\`, so a renderer that silently quoted such a token would hand the reader a line
+ * that runs something when pasted — the hazard docs/runbooks/capture-availability.md already warns
+ * about for `tn player note`. The guard is an allowlist over the tokens themselves, asserted in
+ * test/cli-router.test.ts, rather than escaping logic here that would have to be right forever.
+ */
+export const HELP_EXAMPLE = `tn ${HELP_EXAMPLE_ARGV.map((token) => (token.includes(" ") ? `"${token}"` : token)).join(" ")}`;
+
 export function helpText(): string {
   const lines = ["tn <noun> <verb> <target> [payload] [flags]", ""];
   // Padding only the verb (the old approach) misaligns every row whose NOUN differs in length —
@@ -68,7 +96,10 @@ export function helpText(): string {
     const command = `${c.noun} ${c.verb}`.padEnd(commandColumnWidth);
     lines.push(`  tn ${command}  ${c.summary}`);
   }
-  lines.push("", "Global flags: --quiet/-q  --json  --help");
+  // A labelled single line, the same shape as the flags line above it — NOT an indented block. The
+  // command rows are the only lines that start with "  tn ", and the alignment test counts them to
+  // assert one row per registered command; an indented example would be counted as a nineteenth.
+  lines.push("", "Global flags: --quiet/-q  --json  --help", `Example: ${HELP_EXAMPLE}`);
   return lines.join("\n");
 }
 

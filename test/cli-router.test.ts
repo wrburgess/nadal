@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COMMANDS, dispatch, helpText } from "../src/cli/router.js";
+import { COMMANDS, HELP_EXAMPLE, HELP_EXAMPLE_ARGV, dispatch, helpText } from "../src/cli/router.js";
 import { runMigrations } from "../src/db/client.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -26,6 +26,37 @@ describe("tn router", () => {
       return line!.indexOf(c.summary);
     });
     expect(new Set(summaryStarts).size).toBe(1);
+  });
+
+  // The help listed every command's NAME and not one invocation, so nothing in it showed what a
+  // target, a payload positional, or a shell-quoted name actually looks like — a reader had to open
+  // GRAMMAR.md to type the first command. These three tests are what keep the one example honest:
+  // it renders from argv (below), it is a REGISTERED command (below), and it genuinely runs
+  // (test/cli-player-avail-command.test.ts) against a doc that carries the same line
+  // (test/cli-grammar-parity.test.ts).
+  it("helpText prints one worked example, rendered from the argv the tests execute", () => {
+    // Pinned literally, not just "contains HELP_EXAMPLE" — that weaker assertion would pass on any
+    // rendering at all, including one that dropped the quotes around the two-word name and so read
+    // as four arguments rather than three.
+    expect(HELP_EXAMPLE).toBe('tn player avail "Randy Burgess" 2026-08-29 available');
+    expect(helpText()).toContain(HELP_EXAMPLE);
+  });
+
+  it("the example names a REGISTERED command — an example of a command that does not exist is worse than none", () => {
+    const [noun, verb] = HELP_EXAMPLE_ARGV;
+    expect(COMMANDS.map((c) => `${c.noun} ${c.verb}`)).toContain(`${noun} ${verb}`);
+  });
+
+  it("every token of the example is safe to paste into a shell", () => {
+    // An allowlist, matched whole — the renderer wraps a token containing a space in DOUBLE quotes,
+    // inside which a POSIX shell still expands `$`, a backtick, and `\`. A future edit that put any
+    // of those in the example would hand the reader a line that runs something when pasted; this is
+    // the guard for that class, and it is a POSITIVE accounting of what may appear rather than a
+    // list of characters to reject — the shape docs/findings.md:162 records after eight consecutive
+    // escapes from a hand-enumerated guard, arriving here from a different direction.
+    for (const token of HELP_EXAMPLE_ARGV) {
+      expect(token, `example token "${token}" is not paste-safe`).toMatch(/^[A-Za-z0-9 :._@%+/-]+$/);
+    }
   });
 
   it("dispatch returns 2 and prints an error line for an unknown command", async () => {

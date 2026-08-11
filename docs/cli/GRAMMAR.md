@@ -207,6 +207,21 @@ comment. `wtn-profile:…` (issue #128) is a DIFFERENT page entirely — a playe
 worldtennisnumber.com — and supplies the two fields only that page prints, `age` and `gender`; it
 carries no rating at all, so it never competes with `wtn:…`'s widget-sourced number.
 
+A worked example — the same line `tn --help` prints:
+
+```
+tn player avail "Randy Burgess" 2026-08-29 available
+```
+
+The target is quoted because it contains a space, and `<status>` is exactly one of `available`,
+`unavailable`, `uncertain`. No event is named because this reads as the ordinary case, one event
+covering the day; where two events overlap it the command refuses and asks for the name (below).
+Availability is stored per **day**, not per match: one call covers every match that player plays that
+day, and a second call for the same player and day updates the status in place rather than adding a
+row. This line is not illustrative prose — `test/cli-player-avail-command.test.ts` dispatches it
+against a seeded database and asserts the row it writes, and `test/cli-grammar-parity.test.ts`
+asserts this document and the CLI help carry the same rendering of it.
+
 `tn player avail <name> <YYYY-MM-DD> <status> [event]` — the fourth positional is **optional** and
 names which event the day belongs to. It is needed only when the day falls inside more than one
 event's range, which is ordinary rather than exceptional: a district league season runs Mar–Jun and

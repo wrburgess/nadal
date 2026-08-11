@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { COMMANDS } from "../src/cli/router.js";
+import { COMMANDS, HELP_EXAMPLE } from "../src/cli/router.js";
 import { emitSummary } from "../src/cli/emit.js";
 
 type GrammarRow = { noun: string; verb: string; summary: string };
@@ -258,6 +258,13 @@ describe("grammar parity", () => {
   // (`roster=18`) are bare too. The paragraph is now scoped to string values — and this is what
   // stops it drifting again. A doc claim with no enforcer is exactly how `:33` came to exist; the
   // fix is not a more careful sentence, it is a sentence something can falsify.
+  // Same shape as the summary-line pin below, one artifact over: the CLI help and GRAMMAR.md are
+  // two places a reader looks for "what do I actually type", and two independently maintained
+  // examples is how they come to disagree. One constant, rendered once, asserted in both.
+  it("GRAMMAR.md carries the same worked example the help prints", () => {
+    expect(readFileSync("docs/cli/GRAMMAR.md", "utf8")).toContain(HELP_EXAMPLE);
+  });
+
   it("GRAMMAR.md's worked summary-line example is the line emitSummary actually renders", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
