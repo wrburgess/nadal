@@ -165,14 +165,22 @@ describe("tn player pull (end-to-end via dispatch)", () => {
     expect(logSpy.mock.calls[0]?.[0]).toMatch(/^player pull status=ok player="micah merrivale"/);
   });
 
-  it("a wtn-profile: target with no --from exits 1 (this tool never automates a login)", async () => {
+  it("a wtn-profile: target with no --from exits 1, and says WHY without claiming a login is needed", async () => {
+    // Codex adversarial review round 3, class C. This target still requires a saved page, but for a
+    // different reason than `usta:`/`wtn:` do: the page is PUBLIC and merely client-rendered. The
+    // error used to say "login-assisted path", which sends an operator to sign in to a site that
+    // needs no account — and contradicted docs/runbooks/capture-wtn-profile.md, shipped in the same
+    // PR, which says explicitly not to.
     runMigrations();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const code = await dispatch(["player", "pull", "wtn-profile:MER9000003"]);
 
     expect(code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("login-assisted"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--from"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("no login needed"));
+    // The false claim must be gone, not merely accompanied by a true one.
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("login-assisted"));
   });
 
   it("an unknown target exits 1 with a message on stderr and writes no player row", async () => {

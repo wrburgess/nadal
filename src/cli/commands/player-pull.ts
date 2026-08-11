@@ -64,24 +64,33 @@ export const playerPull: Command = {
 
     const { db, sqlite } = openDb();
     try {
-      // `usta:`/`wtn:` name the login-gated source: WTN rides on the same USTA profile page (one
-      // fetch, two parsers — see src/ingest/archived.ts), so both route through the archived,
-      // login-assisted path rather than a live fetch. That path REQUIRES `--from`/`--source-url`
-      // since this tool never automates a login.
+      // These targets all read a SAVED PAGE rather than fetching, but for two different reasons,
+      // and conflating them misdirects the operator:
       //
-      // `wtn-profile:` (issue #128) is a THIRD, distinct login-gated source: a player's own WTN
-      // profile page (worldtennisnumber.com), not the ITF widget embedded in the USTA page above —
-      // `wtn:` keeps its existing, documented meaning unchanged, and this is a new target
-      // altogether rather than a second spelling of it. `.startsWith("wtn:")` does not also match
-      // `wtn-profile:…` (the fourth character differs, `-` vs `:`), so the two never collide.
+      //  - `usta:`/`wtn:` are LOGIN-gated. WTN rides on the same USTA profile page (one fetch, two
+      //    parsers — see src/ingest/archived.ts), which only exists behind a signed-in session, and
+      //    this tool never automates a login.
+      //  - `wtn-profile:` (issue #128) is a THIRD, distinct source — a player's own WTN profile page
+      //    at worldtennisnumber.com, not the ITF widget embedded in the USTA page — and it is
+      //    **PUBLIC**. No login, no account, no token. What it needs is JavaScript: a plain fetch
+      //    returns a data-less shell, so the saved page must be a post-render DOM. Telling an
+      //    operator to log in for it sends them somewhere there is nothing to do, and contradicts
+      //    docs/runbooks/capture-wtn-profile.md, which says explicitly not to.
+      //
+      // `wtn:` keeps its existing, documented meaning unchanged; `.startsWith("wtn:")` does not also
+      // match `wtn-profile:…` (the fourth character differs, `-` vs `:`), so the two never collide.
       const isWtnProfile = parsed.target.startsWith("wtn-profile:");
-      const isLoginGated = parsed.target.startsWith("usta:") || parsed.target.startsWith("wtn:") || isWtnProfile;
-      if (isLoginGated) {
+      const isLoginGated = parsed.target.startsWith("usta:") || parsed.target.startsWith("wtn:");
+      const needsSavedPage = isLoginGated || isWtnProfile;
+      if (needsSavedPage) {
         if (typeof from !== "string" || typeof sourceUrl !== "string") {
+          const why = isWtnProfile
+            ? "public page, but client-rendered — save the post-render DOM; no login needed"
+            : "login-assisted path";
           emitSummary(
             "player pull",
             "error",
-            [["message", `target "${parsed.target}" requires --from and --source-url (login-assisted path)`]],
+            [["message", `target "${parsed.target}" requires --from and --source-url (${why})`]],
             opts,
           );
           return 1;

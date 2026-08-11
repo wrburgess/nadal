@@ -191,11 +191,15 @@ a stale roster snapshot, and reconciling against one would soft-retire every pla
 The team page is fetched exactly once, at its own season, whatever `--since` says.
 
 `tn player pull <name|url|usta:…|wtn:…|wtn-profile:…> [--from … --source-url …]` — a bare name or a
-TennisRecord URL fetches live. The three prefixed targets are **login-gated**: this tool never
-automates a login, so each REQUIRES `--from <path>` (a page the HC already saved from their own
-logged-in session) together with `--source-url <url>` (the real page URL, since a saved file carries
-none of its own); the id after the prefix is not itself read back — the real identity comes from the
-saved page. `usta:…` and `wtn:…` name the SAME page and route to the SAME archived pull: a USTA
+TennisRecord URL fetches live. The three prefixed targets all read a **saved page** instead, and each
+REQUIRES `--from <path>` together with `--source-url <url>` (the real page URL, since a saved file
+carries none of its own); the id after the prefix is not itself read back — the real identity comes
+from the saved page. **Why they need a saved page differs, and the distinction is operational:**
+`usta:…` and `wtn:…` are **login-gated** — the page only exists behind a signed-in session and this
+tool never automates a login, so the HC saves it from their own. `wtn-profile:…` is **public** — no
+login, no account — but **client-rendered**, so a plain fetch returns a data-less shell and what must
+be saved is the post-render DOM. Do not sign in for it; see
+[`docs/runbooks/capture-wtn-profile.md`](../runbooks/capture-wtn-profile.md). `usta:…` and `wtn:…` name the SAME page and route to the SAME archived pull: a USTA
 profile, which embeds the ITF WTN rating widget on that one page (issue #132 settled the widget as
 the WTN rating source of record) — one fetch, two parsers, per `src/parsers/wtn/widget.ts`'s own doc
 comment. `wtn-profile:…` (issue #128) is a DIFFERENT page entirely — a player's own profile at
