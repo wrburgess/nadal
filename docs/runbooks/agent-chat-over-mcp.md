@@ -70,13 +70,21 @@ uses **none** of them, so nothing here is deprecated or broken.
 What the revision *adds* splits two ways, and it is worth keeping them apart rather than waving at
 the whole set:
 
-- **Genuinely Streamable-HTTP-only** — sessions and `Mcp-Session-Id` removed, `subscriptions/listen`
-  replacing the HTTP GET stream, SSE resumability removed. None of it reaches a stdio server.
-- **Protocol-wide, stdio included** — statelessness (the handshake removal), a required `resultType`
-  on every result, `ttlMs`/`cacheScope` on every list result, MRTR, the error-code renumbering.
-  **These do apply here.** What makes them not worth migrating for is that nadal *needs* none of them:
-  it initiates no server requests (so MRTR replaces nothing), mints no error codes, and has one
-  client that is not polling a cache.
+- **Genuinely Streamable-HTTP-only** — the `Mcp-Session-Id` header, `subscriptions/listen` replacing
+  the HTTP GET stream, and SSE resumability. None of that reaches a stdio server.
+- **Protocol-wide, stdio included** — the removal of **protocol-level sessions** (list endpoints no
+  longer vary per connection), statelessness (the handshake removal), a required `resultType` on
+  every result, `ttlMs`/`cacheScope` on every list result, MRTR, and the error-code renumbering.
+  **These do apply here.** What makes them not worth migrating for is that nadal *needs* none of
+  them: `MCP_TOOLS` is a static array, so its list results already do not vary per connection and the
+  session removal asks nothing of it; it initiates no server requests, so MRTR replaces nothing; it
+  mints no error codes; and it has one client that is not polling a cache.
+
+  **Session removal belongs in the second bucket, and an earlier draft of this page put it in the
+  first.** Only the *header* is HTTP machinery — "protocol-level sessions" and the rule that list
+  endpoints no longer vary per connection are transport-agnostic, and a stdio server holding
+  connection-scoped list state would have to change. nadal does not hold any, which is a fact about
+  nadal rather than a fact about the transport.
 
 This is one local stdio process, one user, one SQLite file on a hotel laptop. Set against that: the
 migration would rewrite every tool registration and re-open `src/cli/commands/mcp-serve.ts`, whose
@@ -115,28 +123,39 @@ about any particular client's behavior.
 tools.* That is the fallback failing, and it turns this from a currency question into a bug. If you
 see it:
 
-1. **Identify the exact binary your client ran, and prove it is this one.** Not "`tn` is on my
-   `PATH`" — the client has its own environment, and a stale `npm link`, a global install, or a
-   wrapper script all start *an* MCP server and would list nothing or the wrong thing. Read the
-   client's configured command, resolve it (`command -v tn`, `readlink -f "$(command -v tn)"`), and
-   confirm it points at this checkout. **This is the commonest cause by a wide margin and it is not
-   ruled out by the server having started.**
+1. **Make the client's binary unambiguous, because you cannot verify it from your own shell.** Read
+   the command your client is configured to launch (Claude Code: `claude mcp get nadal`). **If it is
+   a bare `tn`, stop and change it to an absolute path**, then restart the client:
+
+   ```sh
+   claude mcp remove nadal
+   claude mcp add nadal -- "$(readlink -f "$(command -v tn)")" mcp serve
+   ```
+
+   This is not a diagnostic, it is the remedy for the commonest cause — a stale `npm link`, a global
+   install, or a wrapper all start *an* MCP server, and the client resolves `tn` in **its own**
+   environment, not yours. `command -v tn` in your terminal answers a different question than the one
+   you are asking, so no amount of resolving it here rules this out. **An absolute path in the client
+   config is what makes steps 2–4 mean anything.** If the tool list comes back after this, that was
+   the whole problem.
 2. From the nadal checkout, run `npx vitest run test/mcp-protocol-negotiation.test.ts`. **Read what
    green does and does not prove:** it exercises the `McpServer` object and its tool registrations
    over an in-process transport, so green says this checkout's server would serve a newer-revision
-   client and that all tools registered. It does **not** exercise the stdio transport, the `tn`
-   binary, or your client — so green narrows the cause, it does not identify one.
-3. **Confirm the stdio surface directly**, which is the layer step 2 skips:
+   client and that all tools registered. It does **not** exercise the stdio transport, the binary, or
+   your client — so green narrows the cause, it does not identify one.
+3. **Probe the stdio surface of the exact path from step 1** — the layer step 2 skips. Use that
+   absolute path, not `tn`; running a different binary than the client runs is the mistake this whole
+   sequence exists to avoid:
    ```sh
-   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | tn mcp serve
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | /abs/path/to/tn mcp serve
    ```
-   A JSON-RPC line listing tools means the whole server side — binary, transport and registrations —
-   is working, and only then is the client the remaining candidate.
-4. **Only with steps 1–3 all clean is this the protocol case.** All three must hold: the client ran
-   *this* binary, the tests are green, and the stdio probe listed tools — and the client still shows
-   none. Any one of them unchecked and the likelier answer is configuration, not the spec revision.
-   One observation cannot select a v2 migration on its own; three can make it the only explanation
-   left.
+   A JSON-RPC line listing tools means that binary's whole server side — transport and registrations
+   — is working.
+4. **Only with steps 1–3 all clean is this the protocol case.** All three must hold: the client is
+   configured with an absolute path, the tests are green, and the stdio probe of **that same path**
+   listed tools — and the client still shows none. Any one of them unchecked and the likelier answer
+   is configuration, not the spec revision. One observation cannot select a v2 migration on its own;
+   these three can make it the only explanation left.
 5. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named,
    which of steps 1–4 you completed, and what each returned.
 
