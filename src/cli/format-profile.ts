@@ -106,9 +106,15 @@ export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]
 
   return Array.from(byTeam.values())
     .map((rows) => {
-      // Every row in the group carries the same `teamName` (they share a `teamId`, and the name came
-      // from the joined `teams` row), so the first is as good as any.
-      const teamName = formatName(rows[0]!.teamName);
+      // FIRST ROW WINS on the name, and that tie-break is specified rather than incidental (Codex
+      // review of PR #141, guard completeness, class B). The one caller inner-joins `teams` on
+      // `teamMemberships.teamId = teams.id`, so every row sharing a `teamId` necessarily carries the
+      // same `teams.name` and there is no tie to break. A caller that hands in two names for one id
+      // has a defect of its own; this presenter resolves it by taking the first rather than
+      // re-splitting the group, because splitting would print the team TWICE — reintroducing the
+      // exact defect #131 exists to close, in the name of reporting a state the query cannot produce.
+      // `test/cli-format-profile.test.ts` pins the choice so it cannot drift silently.
+      const teamName = displayName(rows[0]!.teamName, `team #${rows[0]!.teamId}`);
 
       // The season membership is ONE context however many rows carry it, so its retired-ness is
       // read across all of them rather than off whichever sorted first. `membership_unique_no_event`
@@ -131,18 +137,48 @@ export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]
       if (seasonRows.length > 0) contexts.push(withRetirement("season roster", seasonRetired));
       for (const row of eventRows) {
         // `membership_unique` (playerId, teamId, eventId) makes each event at most one row here, so
-        // no event is named twice. A null `eventName` on a non-null `eventId` is a broken foreign
-        // key, not a nameless event: printing the id keeps the fault VISIBLE, where
-        // `registered for ""` would read as ordinary data.
-        const label =
-          row.eventName === null
-            ? `registered for event #${row.eventId}`
-            : `registered for "${formatName(row.eventName)}"`;
+        // no event is named twice. A name that does not RENDER is a data fault, not a nameless
+        // event: printing the id keeps the fault visible, where `registered for ""` would read as
+        // ordinary data. `displayName` decides that — see its own comment for why the test is
+        // "renders as nothing" rather than `=== null`.
+        const label = `registered for ${displayName(row.eventName, `event #${row.eventId}`, { quoted: true })}`;
         contexts.push(withRetirement(label, row.retiredAt !== null));
       }
       return `${teamName} (${contexts.join("; ")})`;
     })
     .join(", ");
+}
+
+/**
+ * A stored name as it will actually appear on the line, or `fallback` when it would appear as
+ * nothing (Codex review of PR #141, fail-open, class B).
+ *
+ * **The test is "renders as nothing", not `=== null`.** The reviewer's case was an empty
+ * `events.name`: that column is `NOT NULL UNIQUE` with no `CHECK`, and `addEvent`
+ * (`src/query/events.ts`, the only writer of the table) trims and refuses a blank — so `""` is
+ * unreachable through the application but permitted by the schema, and a LEFT join returns it as a
+ * perfectly ordinary string. `registered for ""` then reads as an event whose name nobody filled in,
+ * which is exactly the ordinary-looking output the null branch existed to prevent.
+ *
+ * Two things widen it past the reported instance, because fixing the reported case and leaving its
+ * siblings is the failure mode this module's own header records:
+ *
+ * - **Whitespace and control characters count as nothing too.** `formatName` replaces control
+ *   characters with SPACES rather than deleting them, so a name of nothing but an ANSI escape
+ *   sanitizes to `" "` and renders blank. The emptiness test therefore runs on the SANITIZED value,
+ *   after trimming — never on the raw column.
+ * - **The team name gets the same treatment**, falling back to `team #{id}`. `teams.name` is under
+ *   an identical `NOT NULL UNIQUE`-with-no-`CHECK` constraint, and a blank one would have rendered
+ *   the whole entry as a bare parenthetical with a leading space. The reviewer flagged one of the
+ *   two; they are the same defect on the same line.
+ *
+ * Display uses the sanitized value untrimmed, so surrounding whitespace inside the quotes stays
+ * visible as itself; only the emptiness DECISION trims.
+ */
+function displayName(raw: string | null, fallback: string, options?: { quoted: boolean }): string {
+  const rendered = raw === null ? "" : formatName(raw);
+  if (rendered.trim() === "") return fallback;
+  return options?.quoted === true ? `"${rendered}"` : rendered;
 }
 
 /** One roster context's label, marked when that context has been soft-retired. Takes the decided

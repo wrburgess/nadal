@@ -450,8 +450,12 @@ describe("formatTeamMemberships", () => {
 
   it("renders an event row with no season row without inventing a season claim", () => {
     // No current writer produces this state (`setEventRoster` refuses a player with no current
-    // season membership), so it is asserted at the FORMATTER tier only — a presenter must be total
-    // over its input type, not merely correct over the states today's writers happen to reach.
+    // season membership), so it is asserted at the FORMATTER tier only — the QUERY can still produce
+    // it (nothing in the read requires a season row), so the presenter must render it correctly
+    // rather than only the states today's writers happen to reach. That is narrower than "total over
+    // its input type", which was the earlier wording here and claimed more than this suite proves:
+    // a caller can hand this function inputs the query cannot, and where that matters the behavior
+    // is pinned by its own test (the team-name tie-break below) rather than asserted in general.
     const line = formatTeamMemberships([membership(REGISTERED)]);
 
     expect(line).toBe('HOA/Burgess-Zingg/40&over3.5M (registered for "Springfield Sectionals")');
@@ -477,6 +481,61 @@ describe("formatTeamMemberships", () => {
     const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName: null })]);
 
     expect(line).toBe("Team (registered for event #7)");
+  });
+
+  // Codex review of PR #141, fail-open, class B — and the two cases it did NOT name, added because
+  // this module's own header records that fixing the reported instance and leaving its siblings is
+  // this repo's most-recorded failure mode. `events.name` and `teams.name` are both
+  // `NOT NULL UNIQUE` with no `CHECK`, so the schema permits a blank that the writers refuse; the
+  // decision is made on the SANITIZED value, so a name of nothing but control characters (which
+  // `formatName` turns into spaces, not deletions) is caught by the same test.
+  it.each([
+    ["an empty event name — the reviewer's case", "", "Team (registered for event #7)"],
+    ["a whitespace-only event name", "   ", "Team (registered for event #7)"],
+    ["an event name of nothing but a control character", ESC_BYTE, "Team (registered for event #7)"],
+    ["a real event name, which must be unaffected", "Springfield", 'Team (registered for "Springfield")'],
+  ])("falls back to the event id for %s", (_label, eventName, expected) => {
+    const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })]);
+
+    expect(line).toBe(expected);
+  });
+
+  it.each([
+    ["an empty team name", "", "team #4"],
+    ["a whitespace-only team name", "  ", "team #4"],
+    ["a control-character-only team name", ESC_BYTE, "team #4"],
+  ])("falls back to the team id for %s", (_label, teamName, expected) => {
+    // The sibling of the reviewer's finding, on the same line: a blank team name would have rendered
+    // the whole entry as a bare parenthetical with a leading space.
+    expect(formatTeamMemberships([membership({ teamId: 4, teamName })])).toBe(expected);
+    expect(formatTeamMemberships([membership({ teamId: 4, teamName, eventId: 1, eventName: "E" })])).toBe(
+      `${expected} (registered for "E")`,
+    );
+  });
+
+  it("keeps surrounding whitespace inside the quotes of a real event name", () => {
+    // Only the emptiness DECISION trims; the displayed value does not, so padding stays visible as
+    // itself rather than being silently normalised away.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Team", eventId: 7, eventName: " Springfield " }),
+    ]);
+
+    expect(line).toBe('Team (registered for " Springfield ")');
+  });
+
+  it("takes the first row's team name when a group disagrees, rather than splitting the team", () => {
+    // Codex review of PR #141, guard completeness, class B. The one caller inner-joins `teams` on
+    // `teamId`, so every row in a group necessarily carries the same name and there is no tie to
+    // break. This pins the tie-break as a DECISION rather than an accident: splitting the group on
+    // name would print the team twice, reintroducing the exact defect #131 exists to close in order
+    // to report a state the query cannot produce.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Alpha" }),
+      membership({ teamId: 1, teamName: "Beta", eventId: 7, eventName: "Springfield" }),
+    ]);
+
+    expect(line).toBe('Alpha (season roster; registered for "Springfield")');
+    expect(line).not.toContain("Beta");
   });
 
   it("returns 'none' for a player on no team", () => {
