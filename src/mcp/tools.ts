@@ -26,6 +26,7 @@ import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
 import { addEvent, windowAnchorFor } from "../query/events.js";
 import { NoCourtMatchHistoryError, getLineupPlan, resolveEvent } from "../query/lineup.js";
+import { getLineupBuild } from "../query/lineup-build.js";
 import { setHomeTeam } from "../query/home-team.js";
 import { getPlayerProfile, resolvePlayerTarget } from "../query/player-profile.js";
 import { getTeamProfile, resolveTeamTarget } from "../query/team-profile.js";
@@ -398,6 +399,36 @@ export const MCP_TOOLS: McpToolDef[] = [
             `no court-match history on file for "${target}" — run the team_pull tool with players: true first`,
           );
         }
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "lineup_build",
+    cliCommand: "lineup build",
+    description: "Build the home team's lineup for an event day from who is available",
+    inputShape: {
+      // The CLI's `<target>` positional for this command IS the day (#127) — there is no name to
+      // resolve, because the team comes from `requireHomeTeam`. Named `day` rather than `target`
+      // here for that reason: a field called `target` in a tool schema reads as something to look
+      // up, and an agent would reasonably supply a team name to it.
+      day: z.string().min(1),
+      // Needed only when the day falls inside more than one event's range, and still checked
+      // AGAINST the day when supplied — the same disambiguator `player_avail` takes.
+      event: z.string().optional(),
+    },
+    handler: async (rawArgs) => {
+      const { day, event } = rawArgs as { day: string; event?: string };
+      const { db, sqlite } = openDb();
+      try {
+        // The STRUCTURED build, not the CLI's rendered page: agent chat is where our own lineup gets
+        // worked (spec § Deliverables 3), and it needs the ledger, the per-court evidence and the
+        // per-scenario strategy names as fields to reason with. Same precedent `lineup_plan` set one
+        // tool over. Every refusal propagates as its own distinct class — `src/mcp/server.ts` turns a
+        // thrown error into a structured result — so none is re-wrapped here.
+        return getLineupBuild(db, { day, eventName: event });
       } finally {
         sqlite.close();
       }

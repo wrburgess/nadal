@@ -286,8 +286,13 @@ const RATING_SOURCE_PRECEDENCE: RatingSource[] = ["tr_dynamic", "ntrp", "wtn_dou
 
 /** WTN runs the other way from NTRP and TennisRecord's dynamic rating: a LOWER World Tennis Number
  * is the stronger player. Sorting every source descending would silently rank a WTN roster
- * backwards — the strongest player would be predicted last. */
-const INVERTED_RATING_SOURCES = new Set<RatingSource>(["wtn_singles", "wtn_doubles"]);
+ * backwards — the strongest player would be predicted last.
+ *
+ * Exported for `derive-lineup-build.ts` (#127), which normalizes a rating INTO a strength by negating
+ * it for these sources. Shared rather than restated: two lists of which scales run backwards is one
+ * list too many, and the failure mode of a stale copy is a lineup ranked exactly wrong with nothing
+ * on the page to say so. */
+export const INVERTED_RATING_SOURCES = new Set<RatingSource>(["wtn_singles", "wtn_doubles"]);
 
 const HIGH_CONFIDENCE_SUPPORT = 5;
 const MEDIUM_CONFIDENCE_SUPPORT = 2;

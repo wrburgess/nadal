@@ -18,7 +18,7 @@ import type { LeagueScope } from "./league-scope.js";
 import { readLeagueScope } from "./league-scope.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
 import { resolveRoster } from "./roster.js";
-import type { LineupBasis, LineupConfidence, RatingSource } from "./types.js";
+import type { CourtMatchRow, LineupBasis, LineupConfidence, RatingSource } from "./types.js";
 
 export { NoCourtMatchHistoryError };
 
@@ -208,6 +208,69 @@ function assertResolvedByUs(value: ResolvedEvent): void {
   }
 }
 
+/** What `ownTeamCourtMatchRows` returns: the evidence, and how much of these players' history it
+ * had to set aside to get it. The two travel together for the same reason `CourtMatchEvidence`'s do
+ * — a caller cannot obtain the restricted rows without also being handed the number that makes an
+ * honest zero explicable. */
+export type OwnTeamCourtMatches = {
+  rows: CourtMatchRow[];
+  /** Court matches these players appeared in that belong to some OTHER team (or to no team match on
+   * file) and were therefore not used as evidence. */
+  excludedOtherTeamMatches: number;
+};
+
+/**
+ * Court matches `playerIds` appeared in that are THIS TEAM's own — not merely court matches its
+ * players appear in.
+ *
+ * Spec § Ingestion ingests a player's full history "including their other leagues (18+ etc.)", so a
+ * roster member's matches are mostly NOT this team's matches. Selecting by player id alone let one
+ * team's predicted lineup be built from partnerships those players formed elsewhere — a confident
+ * "8 matches together" for a pair that has never once played together for this team, and a lineup
+ * for a newly assembled roster that should have refused outright. Found by the independent Codex
+ * review of PR #47 (rated high).
+ *
+ * The association is `court_matches.team_match_id` -> `team_matches`, which `player-pull` sets
+ * whenever a `team_matches` row already exists for the same `mid=` (i.e. whenever `tn team pull` has
+ * seen this team's schedule). Both sides are checked: home/visiting are pull-perspective labels, not
+ * venue, so a team is as likely to sit in one column as the other.
+ *
+ * An UNLINKED court match (`team_match_id IS NULL`) is excluded rather than assumed to belong here.
+ * That is the conservative direction on purpose: including it is how the defect above happened, and
+ * the cost of excluding it is a refusal that says "pull this team first", which is true and
+ * actionable. The count of what was set aside is reported rather than silently dropped.
+ *
+ * **No league scope, deliberately** (#97): `courtMatchRowsForPlayers` is called WITHOUT one, because
+ * the team linkage this function applies is the stronger restriction — see `getLineupPlan`'s doc
+ * comment for the measurement and the pinned test. Extracted out of `getLineupPlan` for #127 so
+ * `tn lineup build` scopes its shared-match evidence through the SAME function rather than growing a
+ * second answer to "which matches count as ours" — the one defect class this whole restriction
+ * exists to hold shut.
+ */
+export function ownTeamCourtMatchRows(db: Db, teamId: number, playerIds: number[]): OwnTeamCourtMatches {
+  const ownTeamMatchIds = db
+    .select({ id: teamMatches.id })
+    .from(teamMatches)
+    .where(or(eq(teamMatches.homeTeamId, teamId), eq(teamMatches.visitingTeamId, teamId)))
+    .all()
+    .map((r) => r.id);
+
+  const ownCourtMatchIds = new Set<number>(
+    ownTeamMatchIds.length === 0
+      ? []
+      : db
+          .select({ id: courtMatches.id })
+          .from(courtMatches)
+          .where(inArray(courtMatches.teamMatchId, ownTeamMatchIds))
+          .all()
+          .map((r) => r.id),
+  );
+
+  const allPlayerRows = courtMatchRowsForPlayers(db, playerIds).rows;
+  const rows = allPlayerRows.filter((row) => ownCourtMatchIds.has(row.id));
+  return { rows, excludedOtherTeamMatches: allPlayerRows.length - rows.length };
+}
+
 export type LineupPlan = LineupSlotProvenance & {
   teamId: number;
   teamName: string;
@@ -318,47 +381,12 @@ export function getLineupPlan(db: Db, teamId: number, event?: string | ResolvedE
   // above (see the doc comment: one person, however many event-scoped membership rows).
   const rosterPlayerIds = Array.from(nameById.keys()).sort((a, b) => a - b);
 
-  // Evidence must be THIS TEAM's court matches, not merely court matches its players appear in.
-  //
-  // Spec § Ingestion ingests a player's full history "including their other leagues (18+ etc.)",
-  // so a roster member's matches are mostly NOT this team's matches. Selecting by player id alone
-  // let one team's predicted lineup be built from partnerships those players formed elsewhere — a
-  // confident "8 matches together" for a pair that has never once played together for this team,
-  // and a lineup for a newly assembled roster that should have refused outright. Found by the
-  // independent Codex review of PR #47 (rated high).
-  //
-  // The association is `court_matches.team_match_id` -> `team_matches`, which `player-pull` sets
-  // whenever a `team_matches` row already exists for the same `mid=` (i.e. whenever `tn team pull`
-  // has seen this team's schedule). Both sides are checked: home/visiting are pull-perspective
-  // labels, not venue, so a team is as likely to sit in one column as the other.
-  //
-  // An UNLINKED court match (`team_match_id IS NULL`) is excluded rather than assumed to belong
-  // here. That is the conservative direction on purpose: including it is how the defect above
-  // happened, and the cost of excluding it is a refusal that says "pull this team first", which is
-  // true and actionable. The count of what was set aside is reported rather than silently dropped.
-  const ownTeamMatchIds = db
-    .select({ id: teamMatches.id })
-    .from(teamMatches)
-    .where(or(eq(teamMatches.homeTeamId, teamId), eq(teamMatches.visitingTeamId, teamId)))
-    .all()
-    .map((r) => r.id);
-
-  const ownCourtMatchIds = new Set<number>(
-    ownTeamMatchIds.length === 0
-      ? []
-      : db
-          .select({ id: courtMatches.id })
-          .from(courtMatches)
-          .where(inArray(courtMatches.teamMatchId, ownTeamMatchIds))
-          .all()
-          .map((r) => r.id),
-  );
-
-  // No league scope passed, deliberately — see this function's doc comment. The team linkage below
-  // is the stronger restriction, and #97 names this reader as the one that must not change.
-  const allPlayerRows = courtMatchRowsForPlayers(db, rosterPlayerIds).rows;
-  const courtRows = allPlayerRows.filter((row) => ownCourtMatchIds.has(row.id));
-  const excludedOtherTeamMatches = allPlayerRows.length - courtRows.length;
+  // Evidence must be THIS TEAM's court matches, not merely court matches its players appear in —
+  // the whole rule, and the review history behind it, lives on `ownTeamCourtMatchRows` above, which
+  // `getLineupBuild` (#127) shares so the two lineup readers cannot disagree about which matches
+  // count as ours. No league scope is passed there, deliberately: see this function's own doc
+  // comment, and #97 names this reader as the one that must not change.
+  const { rows: courtRows, excludedOtherTeamMatches } = ownTeamCourtMatchRows(db, teamId, rosterPlayerIds);
 
   const observationRows =
     rosterPlayerIds.length === 0
