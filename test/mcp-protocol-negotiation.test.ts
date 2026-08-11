@@ -222,15 +222,24 @@ describe("MCP protocol negotiation (raw JSON-RPC against the real server)", () =
     const conn = await rawConnection();
 
     // `2026-07-28`'s second major change REMOVES the `initialize`/`notifications/initialized`
-    // handshake: a client on that revision carries its protocol version and identity in `_meta` on
-    // every request instead. #106's own write-up called the missing handshake "the only real
-    // exposure" — measurement says otherwise, and that is why this case is asserted rather than
-    // reasoned about. The v1 server registers no initialization gate on the request path, so a bare
-    // `tools/list` from a client that never handshook is answered in full.
+    // handshake: a client on that revision carries its protocol version and client capabilities in
+    // `_meta` on every request instead, and SHOULD identify itself there too. #106's own write-up
+    // called the missing handshake "the only real exposure" — measurement says otherwise, and that
+    // is why this case is asserted rather than reasoned about. The v1 server registers no
+    // initialization gate on the request path, so a `tools/list` from a client that never handshook
+    // is answered in full.
+    //
+    // All three `_meta` keys are sent, not just the version. An earlier draft omitted
+    // `clientCapabilities` — the changelog names it alongside `protocolVersion` as what every
+    // request now carries, so a fixture without it is a PARTIAL stateless request while the test
+    // title claims the shape the revision specifies. The v1 server ignores `_meta` either way, which
+    // is exactly why the omission was invisible in the result and had to be caught by reading the
+    // spec against the fixture. (Independent Codex review of this PR, round 1, class A.)
     const listed = toolNamesIn(
       await conn.request("tools/list", {
         _meta: {
           "io.modelcontextprotocol/protocolVersion": NEW_REVISION,
+          "io.modelcontextprotocol/clientCapabilities": {},
           "io.modelcontextprotocol/clientInfo": { name: "stateless-test-client", version: "0.0.0" },
         },
       }),

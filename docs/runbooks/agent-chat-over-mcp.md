@@ -65,13 +65,30 @@ protocol, and those are separate facts.
 **Why it stays.** The revision's [§ *Deprecated*](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
 has four entries — Roots/Sampling/Logging; the HTTP+SSE transport; the `includeContext` values
 `"thisServer"`/`"allServers"`; and OAuth 2.0 Dynamic Client Registration — and nadal's MCP surface
-uses **none** of them, so nothing here is deprecated or broken. What the revision *adds*
-(statelessness, sessions removed, `subscriptions/listen`, `CacheableResult`, MRTR) is aimed at
-multi-tenant HTTP servers. This is one local stdio process, one user, one SQLite file on a hotel
-laptop. Set against that: the migration would rewrite every tool registration and re-open
-`src/cli/commands/mcp-serve.ts`, whose stdin-EOF handling was established by *running* it against
-real pipes rather than from the SDK's stated contract — and v2's transport is a rewrite, so that
-would have to be re-derived the same way.
+uses **none** of them, so nothing here is deprecated or broken.
+
+What the revision *adds* splits two ways, and it is worth keeping them apart rather than waving at
+the whole set:
+
+- **Genuinely Streamable-HTTP-only** — sessions and `Mcp-Session-Id` removed, `subscriptions/listen`
+  replacing the HTTP GET stream, SSE resumability removed. None of it reaches a stdio server.
+- **Protocol-wide, stdio included** — statelessness (the handshake removal), a required `resultType`
+  on every result, `ttlMs`/`cacheScope` on every list result, MRTR, the error-code renumbering.
+  **These do apply here.** What makes them not worth migrating for is that nadal *needs* none of them:
+  it initiates no server requests (so MRTR replaces nothing), mints no error codes, and has one
+  client that is not polling a cache.
+
+This is one local stdio process, one user, one SQLite file on a hotel laptop. Set against that: the
+migration would rewrite every tool registration and re-open `src/cli/commands/mcp-serve.ts`, whose
+stdin-EOF handling was established by *running* it against real pipes rather than from the SDK's
+stated contract — and v2's transport is a rewrite, so that would have to be re-derived the same way.
+
+**The one place a strict client could still refuse us, stated rather than smoothed over.** For the
+missing `resultType` the spec supplies its own backward-compatibility rule — clients **MUST** read an
+omitted field as `"complete"`. For `CacheableResult` (`ttlMs`/`cacheScope` on `tools/list`) the
+changelog states no such rule, so a client that validates list results strictly could reject a v1
+server's reply. That is unmeasurable from this side and is **exactly** what the trigger below exists
+to catch — it is the reason this decision ships with a trigger instead of a compatibility claim.
 
 **What was measured, not assumed** (`test/mcp-protocol-negotiation.test.ts` asserts all four, so
 they stay true):
@@ -98,19 +115,30 @@ about any particular client's behavior.
 tools.* That is the fallback failing, and it turns this from a currency question into a bug. If you
 see it:
 
-1. Check the ordinary causes first — the server failed to start, `tn` is not on the client's `PATH`,
-   or the client is pointed at a different binary. A crashed server also lists nothing, and that is a
-   far commoner cause than a protocol mismatch.
+1. **Identify the exact binary your client ran, and prove it is this one.** Not "`tn` is on my
+   `PATH`" — the client has its own environment, and a stale `npm link`, a global install, or a
+   wrapper script all start *an* MCP server and would list nothing or the wrong thing. Read the
+   client's configured command, resolve it (`command -v tn`, `readlink -f "$(command -v tn)"`), and
+   confirm it points at this checkout. **This is the commonest cause by a wide margin and it is not
+   ruled out by the server having started.**
 2. From the nadal checkout, run `npx vitest run test/mcp-protocol-negotiation.test.ts`. **Read what
    green does and does not prove:** it exercises the `McpServer` object and its tool registrations
-   over an in-process transport, so green says the server would serve a newer-revision client and
-   that all tools registered. It does **not** exercise the stdio transport, the `tn` binary, or your
-   client — so green narrows the cause to those three plus the client, it does not identify one.
-3. If green, the remaining candidates are the stdio wiring and the client. A client that lists other
-   MCP servers' tools but not nadal's, against a server that starts, is the protocol case — that is
-   the trigger, and the answer is the v2 migration #106 declined.
-4. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named,
-   and say which of the steps above you got to.
+   over an in-process transport, so green says this checkout's server would serve a newer-revision
+   client and that all tools registered. It does **not** exercise the stdio transport, the `tn`
+   binary, or your client — so green narrows the cause, it does not identify one.
+3. **Confirm the stdio surface directly**, which is the layer step 2 skips:
+   ```sh
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | tn mcp serve
+   ```
+   A JSON-RPC line listing tools means the whole server side — binary, transport and registrations —
+   is working, and only then is the client the remaining candidate.
+4. **Only with steps 1–3 all clean is this the protocol case.** All three must hold: the client ran
+   *this* binary, the tests are green, and the stdio probe listed tools — and the client still shows
+   none. Any one of them unchecked and the likelier answer is configuration, not the spec revision.
+   One observation cannot select a v2 migration on its own; three can make it the only explanation
+   left.
+5. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named,
+   which of steps 1–4 you completed, and what each returned.
 
 ## Tools available
 
