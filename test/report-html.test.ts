@@ -113,6 +113,17 @@ describe("renderDossier", () => {
     expect(html).toContain("4.10"); // TR dynamic, fixed 2-decimal precision
   });
 
+  // Issue #128's other side, missing before this PR: `buildDossier()`'s default player already
+  // carries an age range, so the table above never proved the null path also renders correctly —
+  // the permanent 1668-of-1745 case, a player with no WTN profile on file.
+  it("renders 'unknown' in the age range column for a player with none on file", () => {
+    const dossier = buildDossier({
+      players: [buildPlayerProfile({ identity: { ...buildPlayerProfile().identity, ageRange: null } })],
+    });
+    const html = renderDossier(dossier);
+    expect(html).toContain("<td>unknown</td>");
+  });
+
   it("renders court-slot tendencies and partner frequency for each player", () => {
     const html = renderDossier(buildDossier());
     expect(html).toContain("S1");

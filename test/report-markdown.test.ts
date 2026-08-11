@@ -131,6 +131,17 @@ describe("renderDossierMarkdown", () => {
     expect(md).toContain("4.10"); // TR dynamic, fixed 2-decimal precision
   });
 
+  // Issue #128's other side, missing before this PR: `buildDossier()`'s default player already
+  // carries an age range, so the table above never proved the null path also renders correctly —
+  // the permanent 1668-of-1745 case, a player with no WTN profile on file.
+  it("renders 'unknown' in the age range column for a player with none on file", () => {
+    const dossier = buildDossier({
+      players: [buildPlayerProfile({ identity: { ...buildPlayerProfile().identity, ageRange: null } })],
+    });
+    const md = renderDossierMarkdown(dossier);
+    expect(md).toContain("| unknown |");
+  });
+
   it("renders head-to-head rows when headToHead is present, with an undecided count when nonzero, naming the OPPONENT'S NAME rather than a raw id", () => {
     const dossier = buildDossier({
       team: buildTeamProfile({

@@ -7,7 +7,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
-import { events, teamMemberships } from "../src/db/schema.js";
+import { events, players, teamMemberships } from "../src/db/schema.js";
 import { resolveRoster } from "../src/query/roster.js";
 import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
@@ -59,6 +59,30 @@ describe("resolveRoster", () => {
       expect(roster.registeredCount).toBe(0);
       expect(roster.seasonCount).toBe(20);
       expect(roster.absent).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Issue #128: `ageRange` was NULL for every player before this PR, so no roster read had ever
+  // been exercised against a real value — `resolveRoster` is the one choke point `getTeamProfile`,
+  // its opponent roster, and `getLineupPlan` all read through (this file's own header comment), so
+  // a defect here would reach all three silently.
+  it("member ageRange is read straight off the player row — present and absent, side by side", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedTeamWithRosters(db, { teamName: "Team A", season: ["Micah Merrivale", "Noel Nobody"] });
+      const merrivaleId = fixture.seasonPlayerIds.get("Micah Merrivale");
+      if (merrivaleId === undefined) throw new Error("expected seeded player id");
+      db.update(players).set({ ageRange: "41-50" }).where(eq(players.id, merrivaleId)).run();
+
+      const roster = resolveRoster(db, { teamId: fixture.teamId, eventId: null });
+
+      const merrivale = roster.members.find((m) => m.canonicalName === "Micah Merrivale");
+      const nobody = roster.members.find((m) => m.canonicalName === "Noel Nobody");
+      expect(merrivale?.ageRange).toBe("41-50");
+      // The permanent case (#128): no WTN profile on file means this stays NULL forever.
+      expect(nobody?.ageRange).toBeNull();
     } finally {
       sqlite.close();
     }

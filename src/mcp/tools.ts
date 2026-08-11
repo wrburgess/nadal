@@ -11,6 +11,7 @@ import { openDb, runMigrations } from "../db/client.js";
 import { teams } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { pullArchivedUstaProfile } from "../ingest/archived.js";
+import { pullArchivedWtnProfile } from "../ingest/wtn-profile-pull.js";
 import { declareDistinctPlayer, recordPlayerAlias } from "../ingest/disambiguate.js";
 import { ambiguousMessage } from "../ingest/errors.js";
 import { fetchPage } from "../ingest/fetch.js";
@@ -262,18 +263,30 @@ export const MCP_TOOLS: McpToolDef[] = [
       }
       const { db, sqlite } = openDb();
       try {
-        // Mirrors src/cli/commands/player-pull.ts exactly: usta:/wtn: targets are login-gated and
-        // route through the archived, login-assisted path, which REQUIRES from+sourceUrl since this
-        // tool never automates a login itself.
+        // Mirrors src/cli/commands/player-pull.ts, INCLUDING `wtn-profile:` (issue #128). That
+        // parity is load-bearing and was briefly broken: `startsWith("wtn:")` does not match
+        // `wtn-profile:…` (the fourth character differs, `-` vs `:`), so adding the target to the
+        // CLI alone left this surface routing it to the LIVE-FETCH branch below — an agent driving
+        // nadal over MCP would have had a saved-page target attempted as a network fetch, silently,
+        // while the comment above it claimed the two surfaces already agreed. Same shape as #94:
+        // a fix that lands on two of three reporters.
+        //
+        // The two reasons a target needs a saved page are different and the message says which:
+        // `usta:`/`wtn:` are login-gated; `wtn-profile:` is PUBLIC but client-rendered.
+        const isWtnProfile = args.target.startsWith("wtn-profile:");
         const isLoginGated = args.target.startsWith("usta:") || args.target.startsWith("wtn:");
-        const result = isLoginGated
+        const needsSavedPage = isLoginGated || isWtnProfile;
+        const result = needsSavedPage
           ? await (async () => {
               if (args.from === undefined || args.sourceUrl === undefined) {
-                throw new McpToolError(
-                  `target "${args.target}" requires from and sourceUrl (login-assisted path)`,
-                );
+                const why = isWtnProfile
+                  ? "public page, but client-rendered — save the post-render DOM; no login needed"
+                  : "login-assisted path";
+                throw new McpToolError(`target "${args.target}" requires from and sourceUrl (${why})`);
               }
-              return pullArchivedUstaProfile({ db, path: args.from, sourceUrl: args.sourceUrl });
+              return isWtnProfile
+                ? pullArchivedWtnProfile({ db, path: args.from, sourceUrl: args.sourceUrl })
+                : pullArchivedUstaProfile({ db, path: args.from, sourceUrl: args.sourceUrl });
             })()
           : await pullPlayer({
               db,

@@ -241,3 +241,28 @@ export const wtnProfileSchema = z.object({
   doubles: z.union([wtnRatingSchema, z.null()]),
 });
 export type WtnProfile = z.infer<typeof wtnProfileSchema>;
+
+/**
+ * Identity + demographic fields off a player's OWN WTN profile page — worldtennisnumber.com,
+ * `?tennis-id=...` — a different page and a different fetch from `WtnProfile` above, which is the
+ * ratings widget USTA embeds inside ITS OWN profile page. Issue #128: only this page prints an age
+ * range at all, and it is the only source that can ever supply one, so `ageRange` stays `unknown`
+ * for any player without a WTN profile — there is no fallback source to fall back to.
+ *
+ * Carries **no ratings**. Issue #132 already settled WTN ratings as sourced from the USTA-embedded
+ * ITF widget (`WtnProfile`/`parseWtnWidget`) — a second, independent rating on this page would be
+ * two numbers for one player with no rule for which a dossier should trust, so this type does not
+ * carry one at all rather than carry a second opinion nothing downstream is built to reconcile.
+ *
+ * `gender` is constrained to exactly `"Male" | "Female"` — unlike `UstaProfile.gender`, which is a
+ * bare string emitted as printed. The difference is deliberate: `parseWtnProfile` FAILS CLOSED on
+ * an unrecognised spelling (throws `ParseError`) rather than passing one through, so by the time a
+ * value reaches this field it has already been checked against the two known spellings.
+ */
+export const wtnPlayerProfileSchema = z.object({
+  name: z.string().min(1),
+  tennisId: z.string().min(1),
+  gender: z.enum(["Male", "Female"]),
+  ageRange: z.string().min(1),
+});
+export type WtnPlayerProfile = z.infer<typeof wtnPlayerProfileSchema>;
