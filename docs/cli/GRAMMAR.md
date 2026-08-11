@@ -431,10 +431,19 @@ printed **once**, under all of their names, with a line saying so. Three identic
 read as three options — and the degenerate case is real: with nothing rated and nothing played, all
 three fall through to the same stable ordering, and the output says the ordering was not strength.
 
-**Only this team's own matches count as shared history**, exactly as in `tn lineup plan`: a
+**Only this team's own matches count as shared history, and only this team's side of them.** A
 partnership formed on a different team says nothing about how *this* team fields courts, so evidence
-is restricted to court matches linked to one of this team's `team_matches` rows and the rest is
-reported as an `excluded:` count. Unlike `tn lineup plan`, a roster with **no** history at all does
+is restricted to court matches linked to one of this team's `team_matches` rows. That restriction
+alone is not enough, which is why there are **two** `excluded:` counts rather than one: a player on
+this roster *now* may have played one of those very courts **against** us, before changing teams, and
+two such players share the opposing side with each other — so participants are additionally
+restricted to the side this team was on. The two exclusions stay separate sentences because they are
+different facts: *this match was not ours*, versus *this match was ours and these players were on the
+other half of it*. `evidence:` counts only what survived both, so it never offers a court as support
+for a count that court took no part in.
+
+`tn lineup plan` applies the first restriction and not the second; that difference is deliberate for
+now, since #127 leaves its behavior unchanged. Unlike `tn lineup plan`, a roster with **no** history at all does
 **not** refuse — availability is the input and history is only a soft signal, so every pair simply
 reads *no shared history* and the scenarios still emit. That matters for the case this command exists
 to serve: a newly-assembled sectionals roster that has never played together.

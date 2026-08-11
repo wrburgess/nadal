@@ -473,7 +473,13 @@ describe("getLineupBuild — the evidence is this team's own", () => {
       // team-linkage restriction alone cannot catch this case, and why the side filter is a second,
       // independent guard rather than a tightening of the first.
       expect(build.excludedOtherTeamMatches).toBe(0);
-      expect(build.observedCourtMatches).toBe(11);
+      // The evidence line counts what SURVIVED the side filter — the three doubles courts on our
+      // side plus the two singles — not all eleven of our courts. Reporting 11 here would offer six
+      // courts as support for counts they contributed nothing to (Codex final pass, class A: a
+      // defect in the fix that added the filter). The six are not dropped, they move to their own
+      // counter, which is a different fact from `excludedOtherTeamMatches` and stays separate.
+      expect(build.observedCourtMatches).toBe(5);
+      expect(build.excludedOpposingSideMatches).toBe(6);
       const history0 = build.scenarios.find((s) => s.strategies.includes("history-first"))!;
       expect(history0.courts.find((c) => c.slot === "S1")!.players.map((p) => p.playerId)).toEqual([ids[7]!]);
 

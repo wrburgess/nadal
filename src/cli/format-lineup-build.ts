@@ -213,6 +213,17 @@ export function formatLineupBuild(build: LineupBuild): string {
       `  excluded: ${courtMatchCount(build.excludedOtherTeamMatches)} these players played for other teams`,
     );
   }
+  // The SECOND exclusion, and it gets its own sentence rather than being added to the first: that one
+  // means "not our match", this one means "our match, but these players were on the other half of
+  // it" — a roster member who played that court AGAINST us before changing teams. Printing only the
+  // surviving count and staying silent about this one would leave the evidence line quietly smaller
+  // than a reader expects with no way to find out why.
+  if (build.excludedOpposingSideMatches > 0) {
+    lines.push(
+      `  excluded: ${courtMatchCount(build.excludedOpposingSideMatches)} of ours in which these ` +
+        "players were on the opposing side",
+    );
+  }
 
   // Captain notes: DISPLAYED, NEVER SCORED — no strategy above read one, and the line says so, so a
   // reader cannot mistake a note beside a court for the reason that court was chosen.

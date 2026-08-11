@@ -69,12 +69,33 @@ export type LineupBuild = {
    * scored. Scoring on a pairing note would drag a CLI grammar change into scope, and a captain's
    * subjective line is context for a decision rather than an input to an optimizer. */
   captainNotes: CaptainNotesView;
-  /** This team's own court matches involving these players — the evidence every shared-match count
-   * rests on, reported so an honest zero is legible as a scoped zero. */
+  /**
+   * The evidence every shared-match count actually rests on: this team's own court matches in which
+   * at least one of these players was on THIS TEAM's side. Reported so an honest zero is legible as
+   * a scoped zero.
+   *
+   * Counts the rows that **survived** the side filter, not every row that was ours. Before the
+   * filter existed the two were the same number; after it they are not, and reporting the wider one
+   * here would have made the denominator overstate the support beneath it — a court that
+   * contributed nothing to any count would still have been offered as evidence for the counts. The
+   * difference is not dropped, it moves to `excludedOpposingSideMatches` below.
+   */
   observedCourtMatches: number;
   /** Court matches these players appeared in that belong to some OTHER team, set aside rather than
    * silently dropped. */
   excludedOtherTeamMatches: number;
+  /**
+   * Court matches that ARE this team's own, but in which every one of these players sat on the
+   * opposing side — a roster member who played that court *against* us, before changing teams.
+   *
+   * A second, separate exclusion from `excludedOtherTeamMatches`, and deliberately not folded into
+   * it: that one means "this match was not ours", this one means "this match was ours and these
+   * players were not on our half of it". Collapsing them would make the page unable to say which
+   * happened. Found by the independent Codex review of PR #137 (final pass, class A) — as a defect
+   * in the *fix* for its own earlier finding, which added the side filter and left this counter
+   * reading the unfiltered set.
+   */
+  excludedOpposingSideMatches: number;
   rosterSize: number;
   /** `resolveRoster`'s own discriminant (#113), carried through unchanged, exactly as `LineupPlan`
    * carries it. */
@@ -200,6 +221,11 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
     ...row,
     participants: row.participants.filter((p) => p.side === ourSideByCourtMatch.get(row.id)),
   }));
+  // A row the filter emptied is one of OUR courts on which none of these players was on our side.
+  // It survives as a row and contributes to nothing, so it is counted separately rather than left
+  // inside `observedCourtMatches` — see both fields' doc comments for why the two exclusions stay
+  // distinct.
+  const contributingRows = ourRows.filter((row) => row.participants.length > 0);
 
   const observationRows =
     memberIds.length === 0
@@ -248,8 +274,9 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
     ratedEligible: scenarios.ratedEligible,
     scenarios: scenarios.scenarios,
     captainNotes,
-    observedCourtMatches: rows.length,
+    observedCourtMatches: contributingRows.length,
     excludedOtherTeamMatches,
+    excludedOpposingSideMatches: rows.length - contributingRows.length,
     rosterSize: memberIds.length,
     rosterSource: rosterResolution.source,
     registeredCount: rosterResolution.registeredCount,

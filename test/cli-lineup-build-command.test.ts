@@ -172,7 +172,14 @@ let nextMid = 0;
 
 /** `times` doubles court matches with `pair` on the same side, linked to `teamMatchId` (ours) or to
  * some other team's match (evidence that must NOT count). */
-function playDoubles(db: Db, pair: [number, number], times: number, teamMatchId: number): void {
+function playDoubles(
+  db: Db,
+  pair: [number, number],
+  times: number,
+  teamMatchId: number,
+  /** Which side the pair sat on; `"home"` is OUR side on `ourMatchId`. */
+  side: "home" | "visiting" = "home",
+): void {
   for (let i = 0; i < times; i++) {
     nextMid += 1;
     const court = upsertCourtMatch(db, {
@@ -185,7 +192,7 @@ function playDoubles(db: Db, pair: [number, number], times: number, teamMatchId:
       playedOn: "2026-05-01",
       sourceMatchId: `cli-build-${nextMid}`,
     });
-    for (const playerId of pair) upsertCourtMatchPlayers(db, { courtMatchId: court.id, playerId, side: "home" });
+    for (const playerId of pair) upsertCourtMatchPlayers(db, { courtMatchId: court.id, playerId, side });
   }
 }
 
@@ -453,6 +460,31 @@ describe("tn lineup build — this team's own evidence", () => {
     expect(output).toMatch(/D1 +Fay Fenwick \/ Gil Garrow +NTRP 7\.9 +1 match together/);
     expect(output).not.toContain("1 matches together");
     expect(output).not.toContain("1 court matches");
+  });
+
+  it("names courts that were OURS but on which these players sat opposite, in their own sentence", async () => {
+    // The two exclusions are different facts and must not read as one. `excludedOtherTeamMatches`
+    // means "this match was not ours"; this one means "this match WAS ours and these players were on
+    // the other half of it" — a roster member who played that court against us before changing
+    // teams. Codex final pass, class A: the side filter that made the shared counts honest left the
+    // evidence line counting courts that contributed nothing, which offered them as support for
+    // counts they took no part in.
+    const fixture = seedDay();
+    withDb((db) => {
+      playDoubles(db, [fixture.ids["Fay Fenwick"]!, fixture.ids["Gil Garrow"]!], 3, fixture.ourMatchId, "home");
+      playDoubles(db, [fixture.ids["Ada Ashby"]!, fixture.ids["Bo Bramwell"]!], 2, fixture.ourMatchId, "visiting");
+      backfillNameKeys(db);
+    });
+
+    const { output } = await render();
+
+    // Three, not five: the evidence line counts what survived the side filter.
+    expect(output).toContain("evidence: 3 court matches of this team's own across this roster");
+    expect(output).toContain("excluded: 2 court matches of ours in which these players were on the opposing side");
+    // And it is NOT folded into the other-team sentence, which has nothing to report here.
+    expect(output).not.toContain("these players played for other teams");
+    // The against-us pair never surfaces as a partnership.
+    expect(output).not.toContain("2 matches together");
   });
 
   it("omits the excluded line entirely when there is nothing to exclude", async () => {
