@@ -239,8 +239,9 @@ describe("tn player show (end-to-end via dispatch)", () => {
   });
 
   // Guards the one mistake that would make this change LOSE data: an inner join to `events` drops
-  // every `event_id IS NULL` row, i.e. the entire `teams:` line for the 1696 players who hold only
-  // a season membership — and it would look like a working dedupe in every test that seeds an event.
+  // every `event_id IS NULL` row, i.e. the entire `teams:` line for every player who holds only a
+  // season membership (28 of the 77 with any membership on the live database) — and it would look
+  // like a working dedupe in every test that seeds an event.
   it("still shows the team of a player who holds only a season membership", async () => {
     runMigrations();
     const { db, sqlite } = openDb();

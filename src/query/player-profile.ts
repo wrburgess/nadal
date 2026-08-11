@@ -378,8 +378,8 @@ export function getPlayerProfile(
   // #131. The `teams` join stays INNER (`team_id` is NOT NULL, so every membership has one); the
   // `events` join is LEFT, because `event_id` is nullable and a null one is the ORDINARY case — a
   // season/district roster row. An inner join here would silently drop the only membership of every
-  // season-only player (1696 of 1745 on the live database) while still looking like a correct
-  // dedupe for the 49 who also hold a registration.
+  // season-only player — 28 of the 77 players who hold any membership on the live database — while
+  // still looking like a correct dedupe for the 49 who also hold a registration.
   //
   // `orderBy` is the ONE ordering, applied here rather than in a presenter: SQLite sorts NULL
   // first, so a team's season row always precedes its event rows and no renderer has to re-sort

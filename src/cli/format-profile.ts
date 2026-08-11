@@ -81,10 +81,12 @@ export function formatPartnerFrequency(
  * one who may not travel. The wording is #113's (`resolveRoster`, `formatRosterSourceLine`), reused
  * so one distinction has one vocabulary across the CLI.
  *
- * **What the parenthetical omits.** A lone CURRENT season membership renders bare — 1696 of 1745
- * players, for whom "season roster" would be a label with nothing to distinguish it from. That is a
- * presentation default and nothing more: every context is built uniformly below, and only the final
- * label is elided.
+ * **What the parenthetical omits.** A lone CURRENT season membership renders bare, for players whom
+ * "season roster" would label with nothing to distinguish it from — 28 of the 77 players who hold
+ * any membership at all (the other 49 hold both a season row and a registration; 1668 of the 1745
+ * players on file hold no membership and reach the `"none"` branch above). That is a presentation
+ * default and nothing more: every context is built uniformly below, and only the final label is
+ * elided.
  *
  * **`former` is per context, never per team.** A player may hold a retired season membership beside
  * a live registration (a `tn team pull` after `tn roster set`), and labelling the whole team
@@ -108,39 +110,48 @@ export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]
       // from the joined `teams` row), so the first is as good as any.
       const teamName = formatName(rows[0]!.teamName);
 
-      const seasonRow = rows.find((r) => r.eventId === null);
+      // The season membership is ONE context however many rows carry it, so its retired-ness is
+      // read across all of them rather than off whichever sorted first. `membership_unique_no_event`
+      // (a partial unique index on `event_id IS NULL`) makes that set exactly one row today, so the
+      // two readings coincide — but if that index were ever lost, `find` would silently drop a row
+      // and report the first one's state, while `every` says "former" only when the player has
+      // genuinely left. Same derivation on both branches below, so they cannot disagree.
+      const seasonRows = rows.filter((r) => r.eventId === null);
       const eventRows = rows.filter((r) => r.eventId !== null);
+      const seasonRetired = seasonRows.every((r) => r.retiredAt !== null);
 
       // The one elision: with no registration there is nothing to distinguish, so nothing is said —
-      // 1696 of 1745 players. A retired season row still takes the "(former)" suffix it has carried
-      // since #49. `every` rather than reading the single season row: `membership_unique_no_event`
-      // (a partial unique index on `event_id IS NULL`) makes this group exactly one row, so the two
-      // are identical today — and if that index were ever lost, "former" should mean the player left
-      // the team, which is the conservative reading rather than whichever row sorted first.
+      // 28 of the 77 players who hold any membership. A retired season row still takes the
+      // "(former)" suffix it has carried since #49.
       if (eventRows.length === 0) {
-        return rows.every((r) => r.retiredAt !== null) ? `${teamName} (former)` : teamName;
+        return seasonRetired ? `${teamName} (former)` : teamName;
       }
 
       const contexts: string[] = [];
-      if (seasonRow !== undefined) contexts.push(withRetirement("season roster", seasonRow.retiredAt));
+      if (seasonRows.length > 0) contexts.push(withRetirement("season roster", seasonRetired));
       for (const row of eventRows) {
-        // A null `eventName` on a non-null `eventId` is a broken foreign key, not a nameless event.
-        // Printing the id keeps the fault VISIBLE; `registered for ""` would read as ordinary data.
+        // `membership_unique` (playerId, teamId, eventId) makes each event at most one row here, so
+        // no event is named twice. A null `eventName` on a non-null `eventId` is a broken foreign
+        // key, not a nameless event: printing the id keeps the fault VISIBLE, where
+        // `registered for ""` would read as ordinary data.
         const label =
           row.eventName === null
             ? `registered for event #${row.eventId}`
             : `registered for "${formatName(row.eventName)}"`;
-        contexts.push(withRetirement(label, row.retiredAt));
+        contexts.push(withRetirement(label, row.retiredAt !== null));
       }
       return `${teamName} (${contexts.join("; ")})`;
     })
     .join(", ");
 }
 
-/** One roster context's label, marked when that specific membership has been soft-retired. An em
- * dash rather than a second parenthesis, so the marker cannot be misread as closing the group. */
-function withRetirement(label: string, retiredAt: string | null): string {
-  return retiredAt === null ? label : `${label} — former`;
+/** One roster context's label, marked when that context has been soft-retired. Takes the decided
+ * boolean rather than a `retiredAt` string, so the caller owns "what counts as retired for this
+ * context" in one place — the season context decides it over a set of rows, an event context over
+ * its single row. An em dash rather than a second parenthesis, so the marker cannot be misread as
+ * closing the group. */
+function withRetirement(label: string, retired: boolean): string {
+  return retired ? `${label} — former` : label;
 }
 
 /**
@@ -163,8 +174,21 @@ function withRetirement(label: string, retiredAt: string | null): string {
  * defect #31 closed.
  */
 export function formatAliases(canonicalName: string, aliases: string[]): string | null {
-  const own = nameKey(canonicalName);
-  const distinct = aliases.filter((alias) => nameKey(alias) !== own);
+  // Deduped BY KEY among themselves, not only filtered against the canonical name — the same reason
+  // the `teams:` line above groups on `teamId`. `player_alias_unique` is on (`player_id`, `alias`),
+  // the RAW string, so the DATABASE permits two rows whose spellings fold to one name; only
+  // `recordAlias` guards that, in application code, and the two creation paths each insert once. No
+  // current writer produces such a pair — but a presenter whose entire purpose is to stop printing
+  // one name twice should not rest on an invariant enforced one table over and not by its index.
+  // Seeding the set with the player's own key makes the self-alias filter fall out of the same pass.
+  const seen = new Set<string>([nameKey(canonicalName)]);
+  const distinct: string[] = [];
+  for (const alias of aliases) {
+    const key = nameKey(alias);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    distinct.push(alias);
+  }
   if (distinct.length === 0) return null;
   return distinct.map(formatName).join(", ");
 }

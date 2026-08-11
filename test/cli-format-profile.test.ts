@@ -403,8 +403,9 @@ describe("formatTeamMemberships", () => {
   });
 
   it("renders a lone current season membership bare — byte-identical to the pre-#131 output", () => {
-    // 1696 of 1745 players. Naming "season roster" when it is the only context adds nothing, so the
-    // parenthetical is elided. This is the case a regression would be least likely to notice.
+    // 28 of the 77 players who hold any membership. Naming "season roster" when it is the only
+    // context adds nothing, so the parenthetical is elided. This is the case a regression would be
+    // least likely to notice.
     expect(formatTeamMemberships([membership({ teamId: 1, teamName: "Solo Team" })])).toBe("Solo Team");
   });
 
@@ -533,6 +534,21 @@ describe("formatAliases", () => {
 
   it("returns null for a player with no aliases at all", () => {
     expect(formatAliases("Nova Norbury", [])).toBeNull();
+  });
+
+  it("prints one entry for two alias rows whose spellings fold to the same name", () => {
+    // Found by the adversarial pass at `verify`. `player_alias_unique` is on (`player_id`, `alias`)
+    // — the RAW string — so the database permits this pair; only `recordAlias` rejects it, in
+    // application code. No current writer produces one, which is exactly why it needs a test rather
+    // than a live measurement: this presenter exists to stop printing one name twice, and it must
+    // not do so for aliases either.
+    expect(formatAliases("JT Martin", ["Jerry Martin", "jerry martin"])).toBe("Jerry Martin");
+    expect(formatAliases("JT Martin", ["Jerry Martin", "  JERRY MARTIN  "])).toBe("Jerry Martin");
+  });
+
+  it("keeps two genuinely different aliases, in the order given", () => {
+    // The refutation of the dedupe above: it must fold spellings, never distinct people's names.
+    expect(formatAliases("JT Martin", ["Jerry Martin", "J. Martin"])).toBe("Jerry Martin, J. Martin");
   });
 
   it("sanitizes a surviving alias", () => {
