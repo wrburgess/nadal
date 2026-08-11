@@ -108,6 +108,91 @@ describe("tn player distinct (end-to-end via dispatch)", () => {
     vi.restoreAllMocks();
   });
 
+  // #142, at the CLI surface. The pair form's whole reason to exist is an empty database — both
+  // sides of the ambiguity rolled back with the pull that reported them.
+  it("settles an ambiguity with neither side on file, naming the counterpart, exit 0", async () => {
+    seed([]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "distinct", "Maria Negron", "Marie Negron"]);
+
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(
+      'player distinct status=ok player="Maria Negron" created="true" ' +
+        'distinctFrom="Marie Negron" alsoCreated="Marie Negron"',
+    );
+    expect(readPlayers().sort()).toEqual(["Maria Negron", "Marie Negron"]);
+    vi.restoreAllMocks();
+  });
+
+  // `alsoCreated=` appears only when a second person was minted, so its ABSENCE on the single-name
+  // form is part of the contract — a caller reading it as "a second row was written" must not be
+  // able to see it on a run that wrote one row.
+  it("omits alsoCreated on the single-name form", async () => {
+    seed(["Mason Davis"]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await dispatch(["player", "distinct", "Karson Davis"]);
+
+    expect(String(logSpy.mock.calls[0]?.[0])).not.toContain("alsoCreated");
+    vi.restoreAllMocks();
+  });
+
+  it("refuses a counterpart that is not near the target, exit 1, writing nothing", async () => {
+    seed([]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "distinct", "Maria Negron", "Wilhelmina Fotheringay"]);
+
+    expect(code).toBe(1);
+    expect(String(errSpy.mock.calls[0]?.[0])).toContain("further apart than the fuzzy radius");
+    expect(readPlayers()).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("refuses two spellings of one name, exit 1, writing nothing", async () => {
+    seed([]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "distinct", "Maria Negron", "maria negron"]);
+
+    expect(code).toBe(1);
+    expect(String(errSpy.mock.calls[0]?.[0])).toContain("the same name to the identity ladder");
+    expect(readPlayers()).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  // The refusal an operator meeting #142 actually hits is `not-ambiguous` on the SINGLE-name form.
+  // If that message does not name the way out, the fix is unreachable from where the problem is
+  // met — which is how #142 cost a registered player's whole season in the first place.
+  it("points a not-ambiguous refusal at the pair form", async () => {
+    seed([]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await dispatch(["player", "distinct", "Maria Negron"]);
+
+    const printed = String(errSpy.mock.calls[0]?.[0]);
+    expect(printed).toContain("rolled back with that pull");
+    expect(printed).toContain('tn player distinct \\"Maria Negron\\" \\"<the name it was near>\\"');
+    vi.restoreAllMocks();
+  });
+
+  // The ambiguous side can be the COUNTERPART, and a message that always named the target would
+  // send the operator after a row that is fine.
+  it("names the COUNTERPART when it is the side already on two rows", async () => {
+    seedDirect(["Marie Negron", "marie negron"]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "distinct", "Maria Negron", "Marie Negron"]);
+
+    expect(code).toBe(1);
+    const printed = String(errSpy.mock.calls[0]?.[0]);
+    expect(printed).toContain('\\"Marie Negron\\" is already on file more than once');
+    expect(printed).not.toContain('\\"Maria Negron\\" is already on file');
+    expect(readPlayers().sort()).toEqual(["Marie Negron", "marie negron"]);
+    vi.restoreAllMocks();
+  });
+
   it("refuses an unrecognized flag rather than ignoring it", async () => {
     seed(["Mason Davis"]);
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);

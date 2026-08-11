@@ -166,6 +166,190 @@ describe("declareDistinctPlayer", () => {
   });
 });
 
+// Issue #142. A pull is ONE transaction, rolled back on refusal, and the ladder's fuzzy tier
+// compares an incoming name against the names seen so far in that same transaction. So two names
+// that first appear in the SAME pull can be reported ambiguous against each other and then both
+// roll back — leaving a reported ambiguity with neither side on disk.
+//
+// The single-name form cannot settle that: `nearNeighbours` reads committed rows, finds none, and
+// takes the typo-guard branch on a name a pull genuinely refused. Found live on NE/Penland, where
+// `Maria Negron` and `Marie Negron` both first appeared in one player's 2025 match history — and it
+// is deterministic, so that player's history could not be ingested at all.
+//
+// The second name is what makes it rulable: the caller supplies the counterpart the warning named,
+// and the guard moves from "does it have a committed neighbour?" to "are these two actually near
+// each other?" — which is the question the typo guard was always a proxy for.
+describe("declareDistinctPlayer — the pair form (#142)", () => {
+  useTnDbPath();
+
+  // The reproduction, and the thing that must change. Both halves are asserted together so the
+  // second cannot be read as passing for some reason unrelated to the first.
+  it("settles an ambiguity whose BOTH sides rolled back, which the single-name form cannot", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Nothing on file: exactly the state a rolled-back pull leaves behind.
+      expect(db.select().from(players).all()).toHaveLength(0);
+      expect(declareDistinctPlayer(db, { name: "Maria Negron" }).kind).toBe("not-ambiguous");
+
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(result.kind).toBe("created");
+      if (result.kind !== "created") throw new Error("expected created");
+      expect(result.player.canonicalName).toBe("Maria Negron");
+      expect(result.distinctFrom).toEqual(["Marie Negron"]);
+      // The counterpart is MINTED, not merely named — a ruling that two people are different is a
+      // claim about both of them, and the pull will meet both names again on its next run.
+      expect(result.alsoCreated).toEqual(["Marie Negron"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The claim that matters operationally: the pull stops refusing. Asserted through the ladder the
+  // pull actually runs, not by counting rows.
+  it("makes BOTH names resolve afterwards, to two different players", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      const maria = resolvePlayer(db, { name: "Maria Negron" });
+      const marie = resolvePlayer(db, { name: "Marie Negron" });
+      expect(maria.kind).toBe("matched");
+      expect(marie.kind).toBe("matched");
+      if (maria.kind !== "matched" || marie.kind !== "matched") throw new Error("expected matched");
+      expect(maria.row.id).not.toBe(marie.row.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Both rows get their own alias row, the same as every other creation path — a player with no
+  // alias row resolves through the FUZZY tier next time, which is the state this exists to leave.
+  it("records each name as its own first alias, so the exact tier answers for both", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      const aliases = db.select().from(playerAliases).all().map((a) => a.alias).sort();
+      expect(aliases).toEqual(["Maria Negron", "Marie Negron"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The typo guard, preserved in the form the pair makes possible. Without this the second argument
+  // would be a way to mint any two people at will, which is exactly what the single-name form
+  // refuses to allow.
+  it("REFUSES two names that are not near each other — nothing would have reported them together", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const result = declareDistinctPlayer(db, {
+        name: "Maria Negron",
+        nearName: "Wilhelmina Fotheringay",
+      });
+
+      expect(result.kind).toBe("not-near");
+      expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Two spellings folding to ONE comparison key are not two people the ladder can ever tell apart:
+  // creating both would put two ids behind one `name_key`, which is a PERMANENT exact-tier
+  // ambiguity — the `already-ambiguous` state, manufactured by the very command meant to prevent it.
+  it("REFUSES two spellings that fold to the same key — that would mint a permanent ambiguity", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "maria negron" });
+
+      expect(result.kind).toBe("same-name");
+      expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REFUSES a blank counterpart rather than treating it as the single-name form", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "   " });
+
+      expect(result.kind).toBe("empty-name");
+      expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The counterpart already committed is the ORDINARY case the single-name form handles, and naming
+  // it explicitly must not change the outcome or mint a duplicate.
+  it("creates only the missing side when the counterpart is already on file", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      resolvePlayer(db, { name: "Marie Negron" });
+
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(result.kind).toBe("created");
+      if (result.kind !== "created") throw new Error("expected created");
+      expect(result.alsoCreated).toEqual([]);
+      expect(db.select().from(players).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("is idempotent — a re-run adds no third row", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      const again = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(again.kind).toBe("already-on-file");
+      if (again.kind !== "already-on-file") throw new Error("expected already-on-file");
+      expect(again.player.canonicalName).toBe("Maria Negron");
+      expect(again.alsoCreated).toEqual([]);
+      expect(db.select().from(players).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Nothing partially written on a refusal that happens after the first insert would be possible —
+  // both rows land in ONE transaction, so a failure minting the second must not leave the first.
+  it("writes both players in one transaction, or neither", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      db.insert(players).values({ canonicalName: "Marie Negron" }).run();
+      db.insert(players).values({ canonicalName: "marie negron" }).run();
+      backfillNameKeys(db);
+
+      // The counterpart is itself already ambiguous, so the ruling cannot be applied to it.
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(result.kind).toBe("already-ambiguous");
+      // ...and `Maria Negron` was NOT created on the way to discovering that.
+      expect(db.select().from(players).all().map((p) => p.canonicalName).sort()).toEqual([
+        "Marie Negron",
+        "marie negron",
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
 describe("recordPlayerAlias", () => {
   useTnDbPath();
 

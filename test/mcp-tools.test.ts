@@ -1548,7 +1548,43 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
       player: "Karson Davis",
       created: true,
       distinctFrom: ["Mason Davis"],
+      // Empty on the single-name form, and present rather than omitted so an agent reading this
+      // shape never has to distinguish "no counterpart minted" from "this field does not exist".
+      alsoCreated: [],
     });
+  });
+
+  // #142's case over MCP: the pair form is on this surface too, because agent chat is where a
+  // cascade's warnings are read and acted on conversationally.
+  it("player_distinct settles an ambiguity whose both sides rolled back, given the counterpart", async () => {
+    runMigrations();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "player_distinct",
+      arguments: { target: "Maria Negron", nearName: "Marie Negron" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).toEqual({
+      player: "Maria Negron",
+      created: true,
+      distinctFrom: ["Marie Negron"],
+      alsoCreated: ["Marie Negron"],
+    });
+  });
+
+  it("player_distinct refuses a counterpart that is not near the target", async () => {
+    runMigrations();
+
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "player_distinct",
+      arguments: { target: "Maria Negron", nearName: "Wilhelmina Fotheringay" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("further apart than the fuzzy radius");
   });
 
   it("player_distinct refuses a name that is near nothing — the typo guard reaches this surface too", async () => {

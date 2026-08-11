@@ -148,7 +148,7 @@ looks for `--help` then depends on whether that resolved:
 | `tn player show` | Show a player's full profile: ratings trajectory, history, records |
 | `tn player avail` | Record a home-team player's availability for an event day |
 | `tn player note` | Append a captain note about a home-team player or pairing |
-| `tn player distinct` | Declare a name a different person from its near-matches, creating that player |
+| `tn player distinct` | Declare similar names different people, creating any of them not yet on file |
 | `tn player alias` | Record a second spelling as the same person as a known player |
 | `tn event add` | Create or update an event and its inclusive date range |
 | `tn roster set` | Replace an event's registered roster from a payload file |
@@ -326,7 +326,7 @@ clearing a roster to nothing is not a capability this command offers. On success
 carries `team=`, `event=`, `registered=` (names written this run) and `retired=` (memberships this
 run un-registered).
 
-`tn player distinct <name>` and `tn player alias <known> <other>` (#94) — the two rulings a human can
+`tn player distinct <name> [<near-name>]` and `tn player alias <known> <other>` (#94, #142) — the two rulings a human can
 make about an ambiguous identity, and the **only** commands that write `players` / `player_aliases`
 outside a scrape. Every other write path routes through the identity ladder, whose tier-3 contract is
 "report the candidates and create nothing" (spec § Ingestion forbids a silent merge) — the right
@@ -345,10 +345,27 @@ Neither merges two existing players. A merge would have to reassign court matche
 ratings, and is deliberately out of scope — `distinct` on a name already held by two rows refuses and
 says so rather than adding a third.
 
+`distinct`'s optional second name settles the one ambiguity the first form cannot reach (#142). A pull
+is **one transaction, rolled back on refusal**, and the fuzzy tier compares an incoming name against
+the names seen so far *within* it — so two names first appearing in the same pull can be reported
+ambiguous against each other and then both roll back, leaving a reported ambiguity with **neither side
+on disk**. The single-name form then reads an empty committed band as "nothing ever refused this" and
+takes the typo-guard branch, permanently, since every re-run rolls back again. Naming the counterpart
+from the warning makes the ruling expressible: both names are minted in one transaction, and
+`alsoCreated=` on the summary line says when a second person was written — a run that mints one person
+omits the field rather than printing it empty. The `not-ambiguous` refusal names this way out, because
+that message is where an operator meets the problem.
+
 They refuse in opposite directions, and the asymmetry is deliberate. `distinct` **requires the name to
 actually be ambiguous**: a name near nothing was never refused by anything, so it is a typo (`Karsen`
 for `Karson`) or a job for `player pull`, and accepting it would mint a person nobody meant to create
-one letter from a real one. `alias` requires no such thing, because a spelling further away than the
+one letter from a real one. The pair form does not weaken that requirement, it **relocates** it — the
+question moves from "does this name have a committed neighbour?" to "are these two names within the
+fuzzy radius of each other?", which is what the committed-neighbour test was always standing in for.
+Two names further apart than that radius are refused (`not-near`), and two spellings folding to one
+comparison key are refused as well (`same-name`): creating both would put two ids behind a single
+`name_key`, manufacturing the permanent exact-tier ambiguity this command refuses to repair. `alias`
+requires no such thing, because a spelling further away than the
 fuzzy radius ("Bob" for "Robert") is never *reported* ambiguous — it silently creates a duplicate on
 the next pull, which is exactly the case worth recording ahead of time. What `alias` does refuse is
 an `<other>` another player already answers to: both rows would then share one comparison key, so the
