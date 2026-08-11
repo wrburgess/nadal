@@ -47,18 +47,103 @@ config file/format is the client's own, not nadal's; consult that client's own M
 default) in the server's environment the same way you would for the `tn` CLI directly — the MCP
 server reads the identical env vars via the identical `src/db/client.ts`/`src/report/write.ts`.
 
+## Protocol revision and SDK version
+
+**nadal speaks MCP `2025-11-25`, and deliberately does not track `2026-07-28`
+([#106](https://github.com/wrburgess/nadal/issues/106)).**
+
+| | nadal | Current standard |
+|---|---|---|
+| Spec revision | `2025-11-25` (down to `2024-10-07` on request) | `2026-07-28` |
+| Package | `@modelcontextprotocol/sdk@^1.30.0` | `@modelcontextprotocol/{core,client,server}@2.0.0` |
+
+**Nothing here will show up as an outdated dependency.** v2 was published under three *new* package
+names, so `@modelcontextprotocol/sdk` still resolves `latest` to `1.30.0` and carries no deprecation
+notice; `npm outdated` will never mention this. nadal is current on its dependency and behind on the
+protocol, and those are separate facts.
+
+**Why it stays.** The revision's [§ *Deprecated*](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
+has four entries — Roots/Sampling/Logging; the HTTP+SSE transport; the `includeContext` values
+`"thisServer"`/`"allServers"`; and OAuth 2.0 Dynamic Client Registration — and nadal's MCP surface
+uses **none** of them, so nothing here is deprecated or broken. What the revision *adds*
+(statelessness, sessions removed, `subscriptions/listen`, `CacheableResult`, MRTR) is aimed at
+multi-tenant HTTP servers. This is one local stdio process, one user, one SQLite file on a hotel
+laptop. Set against that: the migration would rewrite every tool registration and re-open
+`src/cli/commands/mcp-serve.ts`, whose stdin-EOF handling was established by *running* it against
+real pipes rather than from the SDK's stated contract — and v2's transport is a rewrite, so that
+would have to be re-derived the same way.
+
+**What was measured, not assumed** (`test/mcp-protocol-negotiation.test.ts` asserts all four, so
+they stay true):
+
+- **A client that never handshakes at all is served in full.** `2026-07-28` removes the
+  `initialize`/`notifications/initialized` handshake and carries the protocol version in `_meta` on
+  each request instead. The v1 server registers no initialization gate on its request path, so a bare
+  `tools/list` from a stateless client is answered with the complete tool list. This is the case
+  #106's own write-up expected to be the *one* real exposure; measuring it is what showed it is not.
+- A client that *does* announce `protocolVersion: "2026-07-28"` is **not refused** either. The server
+  answers with a successful result at `2025-11-25` — it downgrades an unrecognized version rather
+  than rejecting it.
+- `server/discover`, which `2026-07-28` says servers MUST implement and nadal does not, comes back as
+  JSON-RPC `-32601 Method not found` **and the connection keeps working** — so a client's
+  backward-compatibility probe is a recoverable refusal, not a dead session.
+- An unknown *tool name* is different in shape and equally recoverable: a successful result carrying
+  `isError: true`, never a crash.
+
+**What nadal cannot promise.** Whether a real `2026-07-28` client actually *takes* that fallback is
+the client's obligation, not this server's. The three facts above are nadal's half; they say nothing
+about any particular client's behavior.
+
+**Trigger to revisit — one observation.** *An MCP client connects to `tn mcp serve` and lists **zero**
+tools.* That is the fallback failing, and it turns this from a currency question into a bug. If you
+see it:
+
+1. Check it is not the ordinary causes first — the server failed to start, `tn` is not on the client's
+   `PATH`, or the client is pointed at a different binary. A crashed server also lists nothing.
+2. If the server is up and the client still lists nothing, run
+   `npx vitest run test/mcp-protocol-negotiation.test.ts`. Green means nadal's half is intact and the
+   client is refusing to negotiate down — that is the trigger, and the answer is the v2 migration
+   #106 declined.
+3. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named.
+
 ## Tools available
 
-Every tool mirrors a `tn` command 1:1 (`test/mcp-tool-parity.test.ts` enforces this both directions):
-`db_migrate`, `team_pull`, `team_show`, `team_home`, `player_pull`, `player_show`, `player_avail`,
-`player_note`, `event_add`, `match_add`, `lineup_plan`, `report_build`. `match_add` takes its
-scorecard payload inline (see [in-event-screenshot-ingest.md](in-event-screenshot-ingest.md)) rather
-than a file path — the one tool whose whole reason to exist is that the agent produced the payload
-itself and has no file to hand. `player_note` additionally accepts an MCP-only `pairTarget` argument
-for a pairing note (`src/cli/commands/player-note.ts`'s own doc comment explains why that stays
-MCP-only rather than a third CLI positional) — this is the one deliberate CLI/MCP argument-shape
-difference, and it is *additive*: every other argument matches the CLI grammar's target/payload
-positionals by name.
+**Every registered `tn <noun> <verb>` is an MCP tool named `noun_verb`** — `tn team pull` is
+`team_pull`, `tn player avail` is `player_avail`, and so on. `tn mcp serve` is the single exception,
+and it is one by construction rather than by omission: starting the server *is* the operation, so
+there is no service function for it to call. `test/mcp-tool-parity.test.ts` enforces the rule in both
+directions, so a command without a tool, or a tool without a command, fails the suite.
+
+**So the tool list is the command list, and it has two live answers** — use one of these rather than a
+list typed out here, which is exactly what went stale before (see the note below):
+
+- **the client's own tool list** — whatever your MCP client shows for `nadal`, which is the server's
+  own answer to `tools/list`; or
+- **[`docs/cli/GRAMMAR.md`](../cli/GRAMMAR.md) § *Commands***, the command registry, which
+  `test/cli-grammar-parity.test.ts` holds to `src/cli/router.ts`.
+
+What *no* registry records, and what this section is really for, is where the two surfaces
+deliberately differ:
+
+- **`match_add` takes its scorecard payload inline** (see
+  [in-event-screenshot-ingest.md](in-event-screenshot-ingest.md)) rather than a file path — the one
+  tool whose whole reason to exist is that the agent produced the payload itself and has no file to
+  hand.
+- **`player_note` accepts an MCP-only `pairTarget` argument** for a pairing note
+  (`src/cli/commands/player-note.ts`'s own doc comment explains why that stays MCP-only rather than a
+  third CLI positional). This is the one deliberate CLI/MCP argument-shape difference, and it is
+  *additive*: every other argument matches the CLI grammar's target/payload positionals by name.
+
+> **Why this section no longer lists the tools** (#106). It used to, and the list drifted: it named
+> twelve tools while `src/mcp/tools.ts` had seventeen, silently omitting `db_backup`, `lineup_build`,
+> `roster_set`, `player_distinct` and `player_alias` — including `roster_set`, the tool that scopes a
+> dossier to who actually registered. The parity test compares CLI commands to MCP tool names and
+> never reads this page, so nothing caught it. Re-typing the list with five more names would have
+> reset the same clock; adding a second markdown-parsing guard would have repeated a cost this repo
+> has already paid in full (see `test/cli-grammar-parity.test.ts`, whose own comment records three
+> review rounds producing three new parse defects and residual
+> [#85](https://github.com/wrburgess/nadal/issues/85), and whose stated durable fix is to *remove*
+> the parser). Deleting the third copy of a fact that already has a checked home is that fix.
 
 ## Steps: a captain-notes session
 
