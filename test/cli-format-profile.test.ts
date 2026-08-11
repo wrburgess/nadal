@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAbsentRosterMember,
+  formatAliases,
   formatDataGapsLine,
   formatName,
   formatPartnerFrequency,
@@ -8,8 +9,10 @@ import {
   formatRecord,
   formatRosterSourceLine,
   formatSlotTendencies,
+  formatTeamMemberships,
   formatWtnProvenanceLine,
 } from "../src/cli/format-profile.js";
+import type { PlayerTeamMembershipSummary } from "../src/query/player-profile.js";
 import type { AbsentRosterMember } from "../src/query/team-profile.js";
 import type { DataGapsResult, PartnerFrequencyEntry, RatingTrajectoryResult, SlotTendency, WindowedRecordResult } from "../src/query/types.js";
 
@@ -329,5 +332,344 @@ describe("formatWtnProvenanceLine (#132)", () => {
     const line = formatWtnProvenanceLine([[entry("wtn_singles", 30.35, "2026-08-05\nInjected")]]);
 
     expect(line).not.toMatch(/[\r\n]/);
+  });
+});
+
+/** Control and bidi characters built from CODE POINTS — never from a literal byte and never from
+ * a `backslash-u` escape, which this repo's tooling has been observed to resolve into the byte
+ * itself before the file is written. `src/sanitize.ts` uses the identical device on its own
+ * property escapes, for the identical reason: a literal invisible character in a source file
+ * shares the exact failure mode these assertions exist to probe, and one has already inverted a
+ * review outcome here (docs/findings.md). */
+const BACKSLASH = String.fromCharCode(0x5c);
+const ESC_BYTE = String.fromCharCode(0x1b); // ANSI CSI introducer
+const RLO_BYTE = String.fromCharCode(0x202e); // RIGHT-TO-LEFT OVERRIDE
+const ZWSP_BYTE = String.fromCharCode(0x200b); // ZERO WIDTH SPACE
+const CGJ_BYTE = String.fromCharCode(0x034f); // COMBINING GRAPHEME JOINER — category Mn, NOT Cc/Cf
+const VS16_BYTE = String.fromCharCode(0xfe0f); // VARIATION SELECTOR-16 — also Mn
+const MVS_BYTE = String.fromCharCode(0x180e); // MONGOLIAN VOWEL SEPARATOR — Cf, but Mongolian script
+const FVS1_BYTE = String.fromCharCode(0x180b); // MONGOLIAN FREE VARIATION SELECTOR ONE — Mn + Mongolian
+const HANGUL_FILLER_BYTE = String.fromCharCode(0x3164); // HANGUL FILLER — Lo, NFKC-maps to U+1160
+const HANGUL_JUNGSEONG_FILLER_BYTE = String.fromCharCode(0x1160); // Lo + Hangul
+const KHMER_AQ_BYTE = String.fromCharCode(0x17b4); // KHMER VOWEL INHERENT AQ — Mn + Khmer
+const CONTROL_OR_BIDI = new RegExp(`[${BACKSLASH}p{Cc}${BACKSLASH}p{Cf}]`, "u");
+
+// Issue #131. `team_memberships` is `player <-> team <-> event` by design, so a player on both a
+// season/district roster (`event_id IS NULL`) and an event's registered roster (`event_id = N`)
+// legitimately holds two rows for ONE team — 49 such pairs on the live database, spread across all
+// five Sectionals teams. The old renderer mapped rows straight to strings and printed the team name
+// twice with byte-identical text.
+//
+// These tests pin the whole grouping contract, not just the dedupe, because the issue's own framing
+// is that collapsing to one name would DISCARD the season-vs-registered distinction — and on the
+// measured data that distinction is a scouting fact about opponents, not roster admin.
+describe("formatTeamMemberships", () => {
+  function membership(
+    over: Partial<PlayerTeamMembershipSummary> & Pick<PlayerTeamMembershipSummary, "teamId" | "teamName">,
+  ): PlayerTeamMembershipSummary {
+    return { eventId: null, eventName: null, retiredAt: null, ...over };
+  }
+
+  const SEASON = { teamId: 1, teamName: "HOA/Burgess-Zingg/40&over3.5M" };
+  const REGISTERED = {
+    teamId: 1,
+    teamName: "HOA/Burgess-Zingg/40&over3.5M",
+    eventId: 1,
+    eventName: "Springfield Sectionals",
+  };
+
+  /** Substring COUNTING, deliberately: `toContain` passes just as happily on the buggy output, so an
+   * occurrence count is the only assertion that distinguishes "printed once" from "printed twice". */
+  function occurrences(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1;
+  }
+
+  it("prints one entry for a team the player holds both a season and an event row on (the #131 defect)", () => {
+    const line = formatTeamMemberships([membership(SEASON), membership(REGISTERED)]);
+
+    expect(occurrences(line, "HOA/Burgess-Zingg/40&over3.5M")).toBe(1);
+  });
+
+  it("names BOTH roster contexts rather than collapsing the distinction away", () => {
+    // The half of the issue a plain `DISTINCT` would silently lose. `season roster` / `registered
+    // for` is #113's vocabulary (`resolveRoster`, `formatRosterSourceLine`), reused rather than
+    // reinvented so one distinction has one wording across the CLI.
+    const line = formatTeamMemberships([membership(SEASON), membership(REGISTERED)]);
+
+    expect(line).toBe('HOA/Burgess-Zingg/40&over3.5M (season roster; registered for "Springfield Sectionals")');
+  });
+
+  it("keeps two genuinely different teams as two entries", () => {
+    // The issue's second acceptance clause. Grouping is on `teamId`, so nothing here may merge.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Alpha" }),
+      membership({ teamId: 2, teamName: "Beta" }),
+    ]);
+
+    expect(line).toBe("Alpha, Beta");
+  });
+
+  it("renders a lone current season membership bare — byte-identical to the pre-#131 output", () => {
+    // 28 of the 77 players who hold any membership. Naming "season roster" when it is the only
+    // context adds nothing, so the parenthetical is elided. This is the case a regression would be
+    // least likely to notice.
+    expect(formatTeamMemberships([membership({ teamId: 1, teamName: "Solo Team" })])).toBe("Solo Team");
+  });
+
+  it("renders a lone retired season membership '(former)' — the #49 behavior, unchanged", () => {
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Former Team", retiredAt: "2026-07-01T00:00:00.000Z" }),
+    ]);
+
+    expect(line).toBe("Former Team (former)");
+  });
+
+  it("attaches 'former' to the RETIRED context, not to the whole team, when a registration still stands", () => {
+    // The corner no live row exercises (`retired_at` is non-null on 0 of 126 rows today) and the one
+    // this change could most easily get wrong: reading any single row's `retiredAt` for the whole
+    // team would label a player who is still registered for Springfield as a former member.
+    // Reachable in practice — `setEventRoster` requires a current season membership at registration
+    // time, but a later `tn team pull` retires the season row and correctly leaves the registration
+    // standing (see `formatRosterSourceLine`'s own note on the same asymmetry).
+    const line = formatTeamMemberships([
+      membership({ ...SEASON, retiredAt: "2026-07-01T00:00:00.000Z" }),
+      membership(REGISTERED),
+    ]);
+
+    expect(line).toBe(
+      'HOA/Burgess-Zingg/40&over3.5M (season roster — former; registered for "Springfield Sectionals")',
+    );
+    expect(line).not.toContain("40&over3.5M (former)");
+  });
+
+  it("attaches 'former' to a retired REGISTRATION while the season membership stands", () => {
+    // The mirror of the case above — `retireAbsentEventMemberships` produces it when a re-issued
+    // roster payload drops a player who is still on the season roster.
+    const line = formatTeamMemberships([
+      membership(SEASON),
+      membership({ ...REGISTERED, retiredAt: "2026-07-01T00:00:00.000Z" }),
+    ]);
+
+    expect(line).toBe(
+      'HOA/Burgess-Zingg/40&over3.5M (season roster; registered for "Springfield Sectionals" — former)',
+    );
+  });
+
+  it("renders an event row with no season row without inventing a season claim", () => {
+    // No current writer produces this state (`setEventRoster` refuses a player with no current
+    // season membership), so it is asserted at the FORMATTER tier only — the QUERY can still produce
+    // it (nothing in the read requires a season row), so the presenter must render it correctly
+    // rather than only the states today's writers happen to reach. That is narrower than "total over
+    // its input type", which was the earlier wording here and claimed more than this suite proves:
+    // a caller can hand this function inputs the query cannot, and where that matters the behavior
+    // is pinned by its own test (the team-name tie-break below) rather than asserted in general.
+    const line = formatTeamMemberships([membership(REGISTERED)]);
+
+    expect(line).toBe('HOA/Burgess-Zingg/40&over3.5M (registered for "Springfield Sectionals")');
+    expect(line).not.toContain("season roster");
+  });
+
+  it("names every event when a player is registered for more than one on the same team", () => {
+    const line = formatTeamMemberships([
+      membership(SEASON),
+      membership(REGISTERED),
+      membership({ ...REGISTERED, eventId: 2, eventName: "District Playoffs" }),
+    ]);
+
+    expect(occurrences(line, "HOA/Burgess-Zingg/40&over3.5M")).toBe(1);
+    expect(line).toContain('registered for "Springfield Sectionals"');
+    expect(line).toContain('registered for "District Playoffs"');
+  });
+
+  it("makes a broken event foreign key visible rather than blank", () => {
+    // `eventName` is null only when `eventId` is. A non-null id whose left join found no row means
+    // the referenced event is gone; printing `registered for ""` would read as a nameless event
+    // rather than as a data fault, so the id is printed instead.
+    const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName: null })]);
+
+    expect(line).toBe("Team (registered for event #7)");
+  });
+
+  // Codex review of PR #141, fail-open, class B — and the two cases it did NOT name, added because
+  // this module's own header records that fixing the reported instance and leaving its siblings is
+  // this repo's most-recorded failure mode. `events.name` and `teams.name` are both
+  // `NOT NULL UNIQUE` with no `CHECK`, so the schema permits a blank that the writers refuse; the
+  // decision is made on the SANITIZED value, so a name of nothing but control characters (which
+  // `formatName` turns into spaces, not deletions) is caught by the same test.
+  it.each([
+    ["an empty event name — round 1's case", "", "Team (registered for event #7)"],
+    ["a whitespace-only event name", "   ", "Team (registered for event #7)"],
+    ["an event name of nothing but a control character", ESC_BYTE, "Team (registered for event #7)"],
+    ["an event name of nothing but a bidi override", RLO_BYTE, "Team (registered for event #7)"],
+    // Fix-verification pass 1's case: U+034F is category Mn, so `sanitizeValue` (Cc/Cf/Zl/Zp) leaves
+    // it and `.trim()` does not remove it. Caught by the `nameKey` half of the union, whose INVISIBLE
+    // class is `Default_Ignorable_Code_Point` and therefore reaches Mn.
+    ["an event name of nothing but a combining grapheme joiner", CGJ_BYTE, "Team (registered for event #7)"],
+    ["an event name of nothing but a variation selector", VS16_BYTE, "Team (registered for event #7)"],
+    // Fix-verification pass 2's case, and the reason the predicate is a UNION. `nameKey` deliberately
+    // RETAINS U+180E — its script scope exempts complex-script invisibles, because deleting one
+    // changes what a reader sees. So the `nameKey` half misses it and the sanitization half catches
+    // it: each half is blind exactly where the other sees.
+    ["an event name of nothing but a Mongolian vowel separator", MVS_BYTE, "Team (registered for event #7)"],
+    ["a real event name, which must be unaffected", "Springfield", 'Team (registered for "Springfield")'],
+    // The refutation of the fold: these are visible names and must survive it.
+    ["a single-character event name", "X", 'Team (registered for "X")'],
+    ["a punctuation-only event name", ".", 'Team (registered for ".")'],
+  ])("falls back to the event id for %s", (_label, eventName, expected) => {
+    const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })]);
+
+    expect(line).toBe(expected);
+  });
+
+  it.each([
+    ["an empty team name", "", "team #4"],
+    ["a whitespace-only team name", "  ", "team #4"],
+    ["a control-character-only team name", ESC_BYTE, "team #4"],
+    ["a combining-grapheme-joiner-only team name", CGJ_BYTE, "team #4"],
+  ])("falls back to the team id for %s", (_label, teamName, expected) => {
+    // The sibling of the reviewer's finding, on the same line: a blank team name would have rendered
+    // the whole entry as a bare parenthetical with a leading space.
+    expect(formatTeamMemberships([membership({ teamId: 4, teamName })])).toBe(expected);
+    expect(formatTeamMemberships([membership({ teamId: 4, teamName, eventId: 1, eventName: "E" })])).toBe(
+      `${expected} (registered for "E")`,
+    );
+  });
+
+  // The ACCEPTED RESIDUAL CLASS of the union predicate, pinned so it is a recorded limitation rather
+  // than an untested belief, and so a future change to `nameKey` or `sanitizeValue` surfaces here as
+  // an expectation to update instead of silently changing behavior nobody was watching.
+  //
+  // THESE ARE A SAMPLE, NOT THE SET, and the distinction is the point: an earlier revision asserted
+  // there were exactly two and a review pass blocked the merge on it. Swept against this exact
+  // predicate: of 4174 `Default_Ignorable_Code_Point` characters, 395 are treated as blank and 3779
+  // are not. No rule about which fall on which side is claimed — two attempts at one were both
+  // falsified (script membership does not decide it: U+180E is Mongolian and IS caught, as the
+  // complement test below asserts). See `src/db/name-key.ts` for why no such rule is available.
+  it.each([
+    ["U+180B Mongolian free variation selector one (Mn + Mongolian)", FVS1_BYTE],
+    ["U+3164 Hangul filler (Lo, NFKC-maps to U+1160)", HANGUL_FILLER_BYTE],
+    ["U+1160 Hangul jungseong filler (Lo)", HANGUL_JUNGSEONG_FILLER_BYTE],
+    ["U+17B4 Khmer vowel inherent aq (Mn + Khmer)", KHMER_AQ_BYTE],
+  ])("KNOWN RESIDUAL (sample of a 3779-member class): %s still renders blank", (_label, eventName) => {
+    const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })]);
+
+    expect(line).not.toBe("Team (registered for event #7)");
+    expect(line).toBe(`Team (registered for "${eventName}")`);
+  });
+
+  it("catches every REACHABLE blank case — which is what the union is actually for", () => {
+    // The complement of the residual class above, stated as its own assertion so the two are read
+    // together: what a scraper or a bad parse actually produces (empty, whitespace, ASCII/Latin
+    // controls) IS caught. Nothing in this project's ingestion path can produce a name consisting
+    // solely of a complex-script invisible.
+    for (const eventName of ["", " ", "\t", "   ", ESC_BYTE, RLO_BYTE, ZWSP_BYTE, CGJ_BYTE, VS16_BYTE, MVS_BYTE]) {
+      expect(formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })])).toBe(
+        "Team (registered for event #7)",
+      );
+    }
+  });
+
+  it("keeps surrounding whitespace inside the quotes of a real event name", () => {
+    // Only the emptiness DECISION trims; the displayed value does not, so padding stays visible as
+    // itself rather than being silently normalised away.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Team", eventId: 7, eventName: " Springfield " }),
+    ]);
+
+    expect(line).toBe('Team (registered for " Springfield ")');
+  });
+
+  it("takes the first row's team name when a group disagrees, rather than splitting the team", () => {
+    // Codex review of PR #141, guard completeness, class B. The one caller inner-joins `teams` on
+    // `teamId`, so every row in a group necessarily carries the same name and there is no tie to
+    // break. This pins the tie-break as a DECISION rather than an accident: splitting the group on
+    // name would print the team twice, reintroducing the exact defect #131 exists to close in order
+    // to report a state the query cannot produce.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Alpha" }),
+      membership({ teamId: 1, teamName: "Beta", eventId: 7, eventName: "Springfield" }),
+    ]);
+
+    expect(line).toBe('Alpha (season roster; registered for "Springfield")');
+    expect(line).not.toContain("Beta");
+  });
+
+  it("returns 'none' for a player on no team", () => {
+    expect(formatTeamMemberships([])).toBe("none");
+  });
+
+  it("sanitizes the event name as well as the team name", () => {
+    // Team names are scraped; event names are operator-supplied via `tn event add`. Both reach a TTY
+    // here, so both go through `formatName` — the Trojan-Source class this module's header
+    // documents. The event name is reaching terminal output for the first time in this change, so it
+    // is the one with no prior coverage.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: `Team${ESC_BYTE}[2J`, eventId: 1, eventName: `Event${RLO_BYTE}Name` }),
+    ]);
+
+    expect(line).not.toMatch(CONTROL_OR_BIDI);
+    expect(line).toContain("Team");
+    expect(line).toContain("Event");
+  });
+});
+
+// Issue #131, folded adjacent defect. Every player-creating path seeds an alias row equal to the new
+// player's own canonical name (`src/ingest/identity.ts`, `src/ingest/disambiguate.ts`), because
+// `player_aliases.name_key` is the lookup index `findPlayerByNameOrAlias` queries. Measured on the
+// live database: 1745 players, 1745 alias rows, 1745 of them exactly equal to their own canonical
+// name — so `tn player show` printed `Randy Burgess (aka Randy Burgess)` on EVERY profile and the
+// suffix had never once carried information. The alias rows are correct and stay; the presenter is
+// what must stop repeating the name it just printed.
+describe("formatAliases", () => {
+  it("returns null when the only alias is the player's own name (the 1745-of-1745 case)", () => {
+    expect(formatAliases("Randy Burgess", ["Randy Burgess"])).toBeNull();
+  });
+
+  it("returns null for an alias differing only by case or surrounding whitespace", () => {
+    // Folded with `nameKey` — the repo's single definition of "the same name" — rather than raw
+    // string equality, so the suppression rule is the one the database itself keys by. A second
+    // notion of sameness here is exactly the "one ladder, two notions of a name" defect #31 closed.
+    expect(formatAliases("Randy Burgess", ["randy burgess"])).toBeNull();
+    expect(formatAliases("Randy Burgess", ["  RANDY BURGESS  "])).toBeNull();
+  });
+
+  it("returns null for an alias differing only by an invisible character", () => {
+    // The same fold that keeps `Versteeg` and `Versteeg<U+202E>` one identity in the database keeps
+    // them one name here. Built from a code point, never written as a literal byte.
+    expect(formatAliases("Randy Burgess", [`Randy Burgess${ZWSP_BYTE}`])).toBeNull();
+  });
+
+  it("keeps a genuinely different spelling", () => {
+    expect(formatAliases("JT Martin", ["Jerry Martin"])).toBe("Jerry Martin");
+  });
+
+  it("drops the self-alias and keeps the real one from a mixed list", () => {
+    expect(formatAliases("JT Martin", ["JT Martin", "Jerry Martin"])).toBe("Jerry Martin");
+  });
+
+  it("returns null for a player with no aliases at all", () => {
+    expect(formatAliases("Nova Norbury", [])).toBeNull();
+  });
+
+  it("prints one entry for two alias rows whose spellings fold to the same name", () => {
+    // Found by the adversarial pass at `verify`. `player_alias_unique` is on (`player_id`, `alias`)
+    // — the RAW string — so the database permits this pair; only `recordAlias` rejects it, in
+    // application code. No current writer produces one, which is exactly why it needs a test rather
+    // than a live measurement: this presenter exists to stop printing one name twice, and it must
+    // not do so for aliases either.
+    expect(formatAliases("JT Martin", ["Jerry Martin", "jerry martin"])).toBe("Jerry Martin");
+    expect(formatAliases("JT Martin", ["Jerry Martin", "  JERRY MARTIN  "])).toBe("Jerry Martin");
+  });
+
+  it("keeps two genuinely different aliases, in the order given", () => {
+    // The refutation of the dedupe above: it must fold spellings, never distinct people's names.
+    expect(formatAliases("JT Martin", ["Jerry Martin", "J. Martin"])).toBe("Jerry Martin, J. Martin");
+  });
+
+  it("sanitizes a surviving alias", () => {
+    const rendered = formatAliases("JT Martin", [`Jerry${ESC_BYTE}[2JMartin`]);
+
+    expect(rendered).not.toMatch(CONTROL_OR_BIDI);
+    expect(rendered).toContain("Jerry");
   });
 });

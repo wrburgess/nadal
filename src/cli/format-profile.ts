@@ -6,7 +6,9 @@
 // couple two audiences (a terminal, a printed binder) that should stay free to diverge.
 
 import { sanitizeValue } from "../sanitize.js";
+import { nameKey } from "../db/name-key.js";
 import { leagueScopeLabel } from "../query/league-scope.js";
+import type { PlayerTeamMembershipSummary } from "../query/player-profile.js";
 import type { AbsentRosterMember } from "../query/team-profile.js";
 import type {
   DataGapsResult,
@@ -58,6 +60,213 @@ export function formatPartnerFrequency(
 ): string {
   if (partners.length === 0) return "none";
   return partners.map((p) => `${formatName(p.canonicalName)} ×${p.count}`).join(", ");
+}
+
+/**
+ * The `teams:` line of `tn player show` (#131). One entry per **team**, grouped on `teamId`.
+ *
+ * **Why grouping, and why on the id.** `team_memberships` is `player ↔ team ↔ event` by design, so a
+ * player on both a season/district roster (`event_id IS NULL`) and an event's registered roster
+ * legitimately holds two rows for one team — 49 such `(player, team)` pairs on the live database at
+ * the time of writing, spread across all five Sectionals teams. The rows are correct; mapping them
+ * straight to strings, as this line used to, printed the team name twice with byte-identical text.
+ * Grouping on the **id** rather than on the rendered string matters: deduping display text would
+ * hide the very failure it is meant to expose, since two rows that *render* alike would become
+ * indistinguishable from two rows that *are* alike.
+ *
+ * **Why the contexts are named rather than collapsed.** The issue asked for this to be decided
+ * rather than defaulted past, and the measurement decided it: registrations exist on every team in
+ * the field, not only ours, so "registered for the event" versus "on the season roster" is a
+ * scouting fact about an opponent — the difference between a player who will be in Springfield and
+ * one who may not travel. The wording is #113's (`resolveRoster`, `formatRosterSourceLine`), reused
+ * so one distinction has one vocabulary across the CLI.
+ *
+ * **What the parenthetical omits.** A lone CURRENT season membership renders bare, for players whom
+ * "season roster" would label with nothing to distinguish it from — 28 of the 77 players who hold
+ * any membership at all (the other 49 hold both a season row and a registration; 1668 of the 1745
+ * players on file hold no membership and reach the `"none"` branch above). That is a presentation
+ * default and nothing more: every context is built uniformly below, and only the final label is
+ * elided.
+ *
+ * **`former` is per context, never per team.** A player may hold a retired season membership beside
+ * a live registration (a `tn team pull` after `tn roster set`), and labelling the whole team
+ * "(former)" off any single row would call someone still registered for Springfield a former member.
+ * `retired_at` is non-null on 0 of 126 live rows, so nothing on disk would catch that — only
+ * `test/cli-format-profile.test.ts` does.
+ */
+export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]): string {
+  if (memberships.length === 0) return "none";
+
+  const byTeam = new Map<number, PlayerTeamMembershipSummary[]>();
+  for (const m of memberships) {
+    const rows = byTeam.get(m.teamId);
+    if (rows === undefined) byTeam.set(m.teamId, [m]);
+    else rows.push(m);
+  }
+
+  return Array.from(byTeam.values())
+    .map((rows) => {
+      // FIRST ROW WINS on the name, and that tie-break is specified rather than incidental (Codex
+      // review of PR #141, guard completeness, class B). The one caller inner-joins `teams` on
+      // `teamMemberships.teamId = teams.id`, so every row sharing a `teamId` necessarily carries the
+      // same `teams.name` and there is no tie to break. A caller that hands in two names for one id
+      // has a defect of its own; this presenter resolves it by taking the first rather than
+      // re-splitting the group, because splitting would print the team TWICE — reintroducing the
+      // exact defect #131 exists to close, in the name of reporting a state the query cannot produce.
+      // `test/cli-format-profile.test.ts` pins the choice so it cannot drift silently.
+      const teamName = displayName(rows[0]!.teamName, `team #${rows[0]!.teamId}`);
+
+      // The season membership is ONE context however many rows carry it, so its retired-ness is
+      // read across all of them rather than off whichever sorted first. `membership_unique_no_event`
+      // (a partial unique index on `event_id IS NULL`) makes that set exactly one row today, so the
+      // two readings coincide — but if that index were ever lost, `find` would silently drop a row
+      // and report the first one's state, while `every` says "former" only when the player has
+      // genuinely left. Same derivation on both branches below, so they cannot disagree.
+      const seasonRows = rows.filter((r) => r.eventId === null);
+      const eventRows = rows.filter((r) => r.eventId !== null);
+      const seasonRetired = seasonRows.every((r) => r.retiredAt !== null);
+
+      // The one elision: with no registration there is nothing to distinguish, so nothing is said —
+      // 28 of the 77 players who hold any membership. A retired season row still takes the
+      // "(former)" suffix it has carried since #49.
+      if (eventRows.length === 0) {
+        return seasonRetired ? `${teamName} (former)` : teamName;
+      }
+
+      const contexts: string[] = [];
+      if (seasonRows.length > 0) contexts.push(withRetirement("season roster", seasonRetired));
+      for (const row of eventRows) {
+        // `membership_unique` (playerId, teamId, eventId) makes each event at most one row here, so
+        // no event is named twice. A name that does not RENDER is a data fault, not a nameless
+        // event: printing the id keeps the fault visible, where `registered for ""` would read as
+        // ordinary data. `displayName` decides that — see its own comment for why the test is
+        // "renders as nothing" rather than `=== null`.
+        const label = `registered for ${displayName(row.eventName, `event #${row.eventId}`, { quoted: true })}`;
+        contexts.push(withRetirement(label, row.retiredAt !== null));
+      }
+      return `${teamName} (${contexts.join("; ")})`;
+    })
+    .join(", ");
+}
+
+/**
+ * A stored name as it will actually appear on the line, or `fallback` when it would appear as
+ * nothing (Codex review of PR #141, fail-open, class B).
+ *
+ * **The test is "renders as nothing", not `=== null`.** The reviewer's case was an empty
+ * `events.name`: that column is `NOT NULL UNIQUE` with no `CHECK`, and `addEvent`
+ * (`src/query/events.ts`, the only writer of the table) trims and refuses a blank — so `""` is
+ * unreachable through the application but permitted by the schema, and a LEFT join returns it as a
+ * perfectly ordinary string. `registered for ""` then reads as an event whose name nobody filled in,
+ * which is exactly the ordinary-looking output the null branch existed to prevent.
+ *
+ * **The emptiness test is a UNION of two partial predicates, and that is the decision here.** It went
+ * through three single-predicate versions, each of which a review pass broke:
+ *
+ * 1. `raw === null` — caught a dangling foreign key, missed an empty stored name (Codex round 1).
+ * 2. `formatName(raw).trim() === ""` — caught empty, whitespace and Cc/Cf controls; missed U+034F
+ *    COMBINING GRAPHEME JOINER and U+FE0F, which are **Mn**, so `sanitizeValue` (Cc/Cf/Zl/Zp) leaves
+ *    them and `.trim()` does not remove them (fix-verification pass 1).
+ * 3. `nameKey(raw) === ""` — caught those, and REGRESSED on U+180E MONGOLIAN VOWEL SEPARATOR, which
+ *    `nameKey` deliberately retains because its script scope exempts complex-script invisibles
+ *    (fix-verification pass 2).
+ *
+ * The two predicates ask **different questions** — `nameKey` asks *"is this a name?"*, sanitization
+ * asks *"does this render?"* — and each is correct about its own and blind to the other's. That is
+ * the recorded signature of partial predicates rather than a wrong one
+ * (`docs/findings.md`, #133/PR #139: *"when two successive fixes to one line each fix the other's
+ * blind spot, stop replacing and start conjoining — the second fix's failing case is the first fix's
+ * passing case"*). v3's failing case is exactly v2's passing case, so this unions them rather than
+ * guessing a fourth time. Escalated to the HC at the fix-verification bound and decided there, not
+ * iterated past it.
+ *
+ * **This predicate does not catch every name that renders as nothing, and the shortfall is stated as
+ * a measurement rather than as a rule.** Two earlier revisions of this comment tried to describe the
+ * gap — first as a list of two characters, then as a derivation — and a review pass falsified each.
+ * Only the numbers below survived, so only the numbers are claimed.
+ *
+ * Swept over the whole code-point space against this exact predicate: of **4174**
+ * `Default_Ignorable_Code_Point` characters, **395** are treated as blank here and **3779** are not.
+ * Representatives of the 3779, each verified individually: U+180B/U+180C/U+180D/U+180F (Mongolian
+ * free variation selectors), U+115F/U+1160/U+3164/U+FFA0 (Hangul fillers), U+17B4/U+17B5 (Khmer
+ * inherent vowels), and 31 of the 128 code points in the U+E0000 tag block — the other 97 of that
+ * block ARE caught.
+ *
+ * No rule about *which* characters fall on which side is asserted here. Both attempts were wrong in
+ * ways that looked right: script membership does not decide it (U+180E is Mongolian and IS caught,
+ * because it is also `Cf` and so `sanitizeValue` flattens it), and neither branch's name describes
+ * its own reach (`nameKey` also blanks ordinary whitespace through its `.trim()`, stripping nothing).
+ * `src/db/name-key.ts` explains at length why no such rule is available — *"there is no Unicode
+ * property equal to 'deleting this cannot change what a reader sees'"* — having reached that
+ * conclusion over five revisions of the same class, with its residuals accepted by the HC.
+ *
+ * **What IS guaranteed is asserted as a test, not as prose**: `test/cli-format-profile.test.ts` pins
+ * that every reachable case — empty, whitespace, tab, ESC, RLO, ZWSP, CGJ, VS16, U+180E — falls back
+ * to the id. Those are what a scraper or a bad parse produces. A stored name consisting solely of one
+ * of the 3779 is not something this project's ingestion path can create.
+ *
+ * **Both names on the line go through it.** `teams.name` carries an identical
+ * `NOT NULL UNIQUE`-with-no-`CHECK` constraint, and a blank one would render the whole entry as a
+ * bare parenthetical with a leading space. Reachability differs between the two and is worth knowing:
+ * a blank EVENT name is unreachable (`addEvent` is the only writer of that table and trims and
+ * refuses one), while a blank TEAM name is **not** — neither `upsertTeam` nor `resolveTeam`
+ * validates, and team names come from scraped pages.
+ *
+ * Display uses the SANITIZED value untrimmed, so surrounding whitespace inside the quotes stays
+ * visible as itself; only the emptiness DECISION folds.
+ */
+function displayName(raw: string | null, fallback: string, options?: { quoted: boolean }): string {
+  if (raw === null) return fallback;
+  if (nameKey(raw) === "" || formatName(raw).trim() === "") return fallback;
+  return options?.quoted === true ? `"${formatName(raw)}"` : formatName(raw);
+}
+
+/** One roster context's label, marked when that context has been soft-retired. Takes the decided
+ * boolean rather than a `retiredAt` string, so the caller owns "what counts as retired for this
+ * context" in one place — the season context decides it over a set of rows, an event context over
+ * its single row. An em dash rather than a second parenthesis, so the marker cannot be misread as
+ * closing the group. */
+function withRetirement(label: string, retired: boolean): string {
+  return retired ? `${label} — former` : label;
+}
+
+/**
+ * The `(aka …)` suffix of `tn player show` (#131, folded adjacent defect) — or `null` when there is
+ * nothing worth saying, so the caller omits the parenthesis entirely rather than printing `(aka )`.
+ *
+ * Every player-creating path seeds an alias row equal to the new player's own canonical name
+ * (`src/ingest/identity.ts`, `src/ingest/disambiguate.ts`), because `player_aliases.name_key` is the
+ * index `findPlayerByNameOrAlias` resolves against. Measured on the live database: 1745 players,
+ * 1745 alias rows, **1745 of them exactly equal to their own canonical name** — so this suffix
+ * printed on every profile in the database and had never once carried information.
+ *
+ * The alias rows are correct and are not touched: deleting a self-alias would break the resolver
+ * that reads them. This is a presenter fix, exactly as the `teams:` line above is.
+ *
+ * Compared through `nameKey` (src/db/name-key.ts) rather than by string equality, so "the same name"
+ * means here what it means in the database — a future alias differing only in case, in surrounding
+ * whitespace, or by an invisible character is suppressed by the same fold the rows were keyed with.
+ * A second notion of name equality in this codebase is the "one ladder, two notions of a name"
+ * defect #31 closed.
+ */
+export function formatAliases(canonicalName: string, aliases: string[]): string | null {
+  // Deduped BY KEY among themselves, not only filtered against the canonical name — the same reason
+  // the `teams:` line above groups on `teamId`. `player_alias_unique` is on (`player_id`, `alias`),
+  // the RAW string, so the DATABASE permits two rows whose spellings fold to one name; only
+  // `recordAlias` guards that, in application code, and the two creation paths each insert once. No
+  // current writer produces such a pair — but a presenter whose entire purpose is to stop printing
+  // one name twice should not rest on an invariant enforced one table over and not by its index.
+  // Seeding the set with the player's own key makes the self-alias filter fall out of the same pass.
+  const seen = new Set<string>([nameKey(canonicalName)]);
+  const distinct: string[] = [];
+  for (const alias of aliases) {
+    const key = nameKey(alias);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    distinct.push(alias);
+  }
+  if (distinct.length === 0) return null;
+  return distinct.map(formatName).join(", ");
 }
 
 function courtMatchCount(n: number): string {
