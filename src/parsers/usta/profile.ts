@@ -126,9 +126,21 @@ function contextLines(
 
   const genderIndex = segments.findIndex((segment) => segment.startsWith(`${GENDER_LABEL}:`));
   const labelled = genderIndex !== -1;
+  // The unlabelled fallback is positional, so it needs the SAME guard `location` applies below: a
+  // page whose identity paragraph is missing entirely leaves `Section: ...` as the first surviving
+  // segment, and taking it positionally would return a labelled field AS the gender — a real-looking
+  // wrong value, which is exactly what the block comment above says is worse than failing. Guarding
+  // only `location` (which is what the first cut of this change did) fixes the instance and leaves
+  // the class: both fallbacks are positional, so both need it.
+  const unlabelledCandidate = segments[0] ?? "";
+  const unlabelledIsAnotherField = KNOWN_LABELS.some((label) =>
+    unlabelledCandidate.startsWith(`${label}:`),
+  );
   const genderRaw = labelled
     ? collapse(segments[genderIndex]!.slice(GENDER_LABEL.length + 1))
-    : (segments[0] ?? "");
+    : unlabelledIsAnotherField
+      ? ""
+      : unlabelledCandidate;
 
   if (genderRaw === "") {
     throw new ParseError("player context block has no identity line", `${CONTEXT} p`, source.url);

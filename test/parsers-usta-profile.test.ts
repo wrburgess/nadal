@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadFixture } from "./helpers/fixtures.js";
 import { parseUstaProfile } from "../src/parsers/usta/profile.js";
 import { ParseError } from "../src/parsers/types.js";
+import { normalizeGender } from "../src/ingest/normalize-gender.js";
 
 const fixture = loadFixture("usta/profile-wtn-both");
 
@@ -143,5 +144,33 @@ describe("parseUstaProfile — gender label (#130)", () => {
 
   it("still parses the OLD unlabelled shape to MALE (must not regress the fixture as captured)", () => {
     expect(parseUstaProfile(fixture.html, fixture.source).gender).toBe("MALE");
+  });
+
+  it("refuses rather than returning a labelled field AS the gender when the identity paragraph is gone", () => {
+    // Both fallbacks in `contextLines` are positional. `location` guards against landing on a
+    // `Section:`/`District:`/`Nationality:` segment; the unlabelled gender fallback needs the same
+    // guard, or a page missing its identity paragraph entirely returns `Section: Missouri Valley`
+    // as the gender — a real-looking wrong value, which the block's own comment says is worse than
+    // failing. Verified against the un-guarded code: it returned exactly that string.
+    const gone = fixture.html.replace(OLD_IDENTITY_P, "");
+    expect(gone).not.toBe(fixture.html);
+
+    expect(() => parseUstaProfile(gone, fixture.source)).toThrow(ParseError);
+  });
+
+  it("contains the residual positional ambiguity at the ingest boundary, where it fails closed", () => {
+    // The one case no guard can catch: with the identity paragraph present but its gender segment
+    // absent AND no `Competition Category:` label, the location sits in the gender position and is
+    // indistinguishable from a gender by position alone. Every live capture carries the label
+    // (109 of 109), so this is the stale shape only. It is contained rather than fixed: the value
+    // never reaches `players.gender`, because the ingest normalizer refuses anything that is not a
+    // spelled-out gender. Asserting the containment, not endorsing the parse.
+    const noGender = fixture.html.replace(
+      OLD_IDENTITY_P,
+      '<p>Rivermont, MO<br aria-hidden="true" role="presentation"></p>',
+    );
+    expect(noGender).not.toBe(fixture.html);
+
+    expect(normalizeGender(parseUstaProfile(noGender, fixture.source).gender)).toBeNull();
   });
 });
