@@ -62,10 +62,11 @@ describe("pullArchivedWtnProfile", () => {
   });
 
   it("creates a new player via the name-tier fallback and links wtnTennisId, when no id match exists on file", async () => {
-    // The exceptional path — nothing on file yet has this wtnTennisId, so resolution falls to the
-    // page's own name. `resolvePlayer` itself does the create; this route's job (mirroring
-    // `pullArchivedUstaProfile`) is only to make sure the just-resolved id ends up persisted even
-    // on that fallback path, so a second pull of the same profile hits the id tier directly.
+    // The exceptional path — nothing on file has this wtnTennisId AND no name matches, so
+    // `resolvePlayer` CREATES the player and sets `wtnTennisId` from its own input. That is why this
+    // case still succeeds under the id-tier guard added in round 1 of review: a created row already
+    // carries the id, so the guard's comparison passes by construction. The guard refuses only a
+    // NAME-tier match onto a row that already existed — see the collision test below.
     runMigrations();
     const { db, sqlite } = openDb();
     try {

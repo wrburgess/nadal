@@ -14,7 +14,7 @@ import {
 import { dispositionOfThrown, type FailureDisposition } from "./failure-disposition.js";
 import type { PageFetcher } from "./fetch.js";
 import { findPlayerByName, resolvePlayer } from "./identity.js";
-import { normalizeGender } from "./normalize-gender.js";
+import { genderWrite } from "./normalize-gender.js";
 import { ParseError, parseMatchHistory, parseTennisRecordHeader, type CourtMatchRecord } from "../parsers/index.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers, upsertPlayer, upsertRatingObservation } from "./upsert.js";
 
@@ -343,7 +343,7 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
         // Routed through `normalizeGender` anyway (issue #130): it is the ONE place every writer of
         // `players.gender` meets, and leaving this site out is exactly how the column ended up with
         // two writers that disagreed in the first place (`src/ingest/archived.ts` wrote raw).
-        gender: normalizeGender(header.gender),
+        gender: genderWrite(header.gender),
       });
 
       if (header.ntrp !== null) {

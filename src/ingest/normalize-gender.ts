@@ -35,6 +35,25 @@ const LABEL_PREFIX = /^competition category:\s*/i;
  * Idempotent by construction: every value this function can return (`"Male"`, `"Female"`, `null`)
  * normalizes to itself, so re-running it — as the backfill does — is always safe.
  */
+/**
+ * What a WRITER passes to `upsertPlayer`. `undefined` means "leave whatever is already there",
+ * because `upsertPlayer` only assigns a field it was actually given (`src/ingest/upsert.ts`).
+ *
+ * The rule both this and `src/db/gender-backfill.ts` implement is one rule, not two:
+ * **never downgrade knowledge.** An unrecognised source value means "I have no opinion", and a
+ * writer with no opinion must not overwrite a value someone else established. Returning `null`
+ * here instead would erase it — a fresh row still ends up `NULL` either way, since there is nothing
+ * to preserve, so skipping costs nothing and only ever protects a value already on disk.
+ *
+ * Round 2 of the adversarial review on PR #138 caught exactly that gap: the backfill had been fixed
+ * to preserve an unmapped value, and the write path would then destroy the same value on the next
+ * pull — making the preservation rationale true of one half of the system and false of the other.
+ * This is the generalisation that covers both.
+ */
+export function genderWrite(raw: string | null | undefined): "Male" | "Female" | undefined {
+  return normalizeGender(raw) ?? undefined;
+}
+
 export function normalizeGender(raw: string | null | undefined): "Male" | "Female" | null {
   if (raw === null || raw === undefined) return null;
 

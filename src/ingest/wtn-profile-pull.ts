@@ -6,7 +6,7 @@ import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
 import { AmbiguousIdentityError, type AmbiguousIdentity } from "./errors.js";
 import { resolvePlayer } from "./identity.js";
-import { normalizeGender } from "./normalize-gender.js";
+import { genderWrite } from "./normalize-gender.js";
 import { slugFromUrl } from "./player-pull.js";
 import { upsertPlayer } from "./upsert.js";
 
@@ -117,7 +117,7 @@ export async function pullArchivedWtnProfile(
         // write still routes through `normalizeGender` (issue #130) rather than trusting that: it
         // is the one place every writer of `players.gender` meets, and skipping a writer here is
         // exactly how the column ended up with two that disagreed in the first place.
-        gender: normalizeGender(profile.gender),
+        gender: genderWrite(profile.gender),
       });
     });
 

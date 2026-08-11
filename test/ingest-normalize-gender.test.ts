@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeGender } from "../src/ingest/normalize-gender.js";
+import { genderWrite, normalizeGender } from "../src/ingest/normalize-gender.js";
 
 /**
  * Issue #130. `players.gender` holds the source LABEL on all 77 rows that have a gender at all —
@@ -38,4 +38,36 @@ describe("normalizeGender", () => {
       expect(normalizeGender(once)).toBe(once);
     }
   });
+});
+
+/**
+ * The WRITER-side rule, which is the same rule the backfill implements: never downgrade knowledge.
+ * `undefined` is what `upsertPlayer` treats as "leave this field alone" — so an unrecognised source
+ * value can never enter the column AND can never erase a value already in it.
+ *
+ * Codex adversarial review round 2 on PR #138 found the gap this closes: round 1's fix taught the
+ * backfill to preserve an unmapped value, and the write path would then destroy that same value on
+ * the next pull, making the preservation rationale true of one half of the system and false of the
+ * other.
+ */
+describe("genderWrite", () => {
+  it.each([
+    ["MALE", "Male"],
+    ["FEMALE", "Female"],
+    ["Male", "Male"],
+    ["female", "Female"],
+    ["Competition Category: MALE", "Male"],
+  ] as const)("maps %j to %j, exactly as normalizeGender does", (input, expected) => {
+    expect(genderWrite(input)).toBe(expected);
+  });
+
+  it.each([[""], ["   "], [null], [undefined], ["Mixed"], ["M"], ["Non-binary"]] as const)(
+    "returns undefined (leave it alone) rather than null (erase it) for %j",
+    (input) => {
+      // The distinction is the whole point: `upsertPlayer` assigns `gender` only when it is not
+      // `undefined`, so `null` here would overwrite whatever the row already held.
+      expect(genderWrite(input)).toBeUndefined();
+      expect(genderWrite(input)).not.toBeNull();
+    },
+  );
 });
