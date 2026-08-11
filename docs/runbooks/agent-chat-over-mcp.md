@@ -152,8 +152,6 @@ left is only what this repo can actually verify:
 - **Neither step can conclude "this is the protocol case."** They establish that the server side
   works; every remaining cause — client config, client environment, a strict client refusing a v1
   reply — lives where this repo cannot see. That is what the issue is for.
-5. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named,
-   which of steps 1–4 you completed, and what each returned.
 
 ## Tools available
 
