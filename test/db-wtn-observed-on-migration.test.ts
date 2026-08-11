@@ -141,6 +141,29 @@ describe("migration 0012 — re-dating WTN observations to their publication dat
     ]);
   });
 
+  it("resolves a DIFFERING-value collision to the fixed parser's row, deterministically", () => {
+    // The collision test above seeds the same value on both rows, so it only ever proved the easy
+    // half. Codex round 1 (claim-vs-code, rated High) pointed out that the DELETE matches on the
+    // KEY, not the value — so when the two disagree, one value is discarded and the migration
+    // comment's "exact duplicates … nothing is lost" was false.
+    //
+    // The behaviour is right and the comment was wrong, so this pins the behaviour: a row dated
+    // 2026-08-05 cannot have come from the old parser (which could only write a capture date, and
+    // no capture happened that day), so the survivor is by construction the fixed parser's reading
+    // and the legacy value is the superseded one. What must not happen is a coin flip.
+    const path = freshDbPath();
+    seedPreMigrationDb(path, [
+      { source: "wtn_singles", value: 30.35, observedOn: WRONG_DATE },
+      { source: "wtn_singles", value: 30.5, observedOn: PUBLISHED_DATE },
+    ]);
+
+    runMigrations(path);
+
+    expect(readRatings(path)).toEqual([
+      { source: "wtn_singles", value: 30.5, observedOn: PUBLISHED_DATE },
+    ]);
+  });
+
   it("lets a genuinely later publication become the latest observation, which is the point", () => {
     // Recording a correction to this PR's own plan, which claimed "no trajectory reorders". True of
     // the live database — every WTN row there sits alone at 2026-08-10 — but false in general, and

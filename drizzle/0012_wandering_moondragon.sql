@@ -20,18 +20,30 @@
 -- (player_id, source, observed_on), so on a database already re-pulled under the fixed parser both
 -- rows exist and a bare UPDATE would violate that index — aborting this transaction and, since
 -- `applyMigrations` wraps the run in BEGIN IMMEDIATE and records nothing on failure, blocking every
--- later migration on that database until someone edits it by hand. The two rows are the same ITF
--- publication seen twice, so the capture-stamped one is the duplicate. Against the live database
--- the DELETE matches 0 rows and the UPDATE matches 133.
+-- later migration on that database until someone edits it by hand. Against the live database the
+-- DELETE matches 0 rows and the UPDATE matches 133.
+--
+-- WHICH ROW WINS, AND WHAT THAT COSTS — stated precisely, because an earlier draft of this comment
+-- claimed the DELETE only ever removed "exact duplicates" and the SQL does not enforce that (Codex
+-- adversarial review round 1, claim-vs-code lens, rated High). The DELETE matches on the KEY, not
+-- on the value, so if the two rows carry DIFFERENT values the legacy one is discarded and its value
+-- is gone. That is deliberate and it is the right row to drop: a row dated 2026-08-05 cannot have
+-- come from the old parser, which could only ever write a capture date, and no capture happened on
+-- that day — so the surviving row is by construction the fixed parser's reading of the ITF's own
+-- 08/05/2026 publication, and the legacy row is the same publication mis-dated. Deterministic in
+-- either case; lossy only in the differing-value case, and only of a value the fixed parser has
+-- already superseded.
 --
 -- Narrow by construction, and the limit is stated rather than papered over: this corrects the
 -- instance it can IDENTIFY. A database whose WTN rows were captured on some other day carries the
 -- same defect, and a capture-dated row is indistinguishable from a correctly-dated one without the
 -- capture that produced it — so those are left alone rather than guessed at.
 --
--- Reversible: `UPDATE rating_observations SET observed_on = '2026-08-10'
--- WHERE source IN ('wtn_singles','wtn_doubles') AND observed_on = '2026-08-05'` restores the prior
--- state for every row this touches. The rows the DELETE removed were exact duplicates of rows that
--- remain, so nothing they carried is lost.
+-- REVERSIBILITY IS PARTIAL, and the two statements differ. The UPDATE reverses exactly:
+-- `UPDATE rating_observations SET observed_on = '2026-08-10'
+-- WHERE source IN ('wtn_singles','wtn_doubles') AND observed_on = '2026-08-05'`. The DELETE does
+-- NOT reverse — a removed row cannot be restored from what remains when the values differed. On
+-- the live database that is moot (it matches 0 rows), but the general statement is what a reader of
+-- this file needs, so it is the one written here.
 DELETE FROM `rating_observations` WHERE `source` IN ('wtn_singles', 'wtn_doubles') AND `observed_on` = '2026-08-10' AND EXISTS (SELECT 1 FROM `rating_observations` `existing` WHERE `existing`.`player_id` = `rating_observations`.`player_id` AND `existing`.`source` = `rating_observations`.`source` AND `existing`.`observed_on` = '2026-08-05');--> statement-breakpoint
 UPDATE `rating_observations` SET `observed_on` = '2026-08-05' WHERE `source` IN ('wtn_singles', 'wtn_doubles') AND `observed_on` = '2026-08-10';

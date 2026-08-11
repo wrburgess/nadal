@@ -161,6 +161,33 @@ describe("parseWtnWidget — the publisher's own dates (#132)", () => {
     expect(() => parseWtnWidget(noDate, doublesOnly.source)).toThrow(ParseError);
   });
 
+  it("refuses a subtitle that merely STARTS with Updated but carries a different date", () => {
+    // `startsWith("UPDATED")` accepts `Updated from Last Played 08/14/2025` and stores the
+    // last-played date as the ITF publication date — a real value, from the real page, in the wrong
+    // field, and nothing downstream can tell. Randy's own singles section really does carry a
+    // Last Played nearly a year before its Updated date, so the two are not interchangeable.
+    // (Codex adversarial review round 1, guard-completeness lens.)
+    const relabelled = both.html.replace(
+      '<p class="v-form-wtn-widget__section-subtitle">Updated 11/26/2025</p>',
+      '<p class="v-form-wtn-widget__section-subtitle">Updated from Last Played 08/14/2025</p>',
+    );
+    expect(relabelled).not.toBe(both.html);
+
+    expect(() => parseWtnWidget(relabelled, both.source)).toThrow(ParseError);
+  });
+
+  it("ignores an unrecognised extra subtitle instead of refusing the page", () => {
+    // The other side of the anchor: the guard constrains what is ACCEPTED. A widget that grows a
+    // third subtitle is not drift that should stop a pull, so long as the Updated date still reads.
+    const extra = both.html.replace(
+      '<p class="v-form-wtn-widget__section-subtitle">Updated 11/26/2025</p>',
+      '<p class="v-form-wtn-widget__section-subtitle">Updated 11/26/2025</p><p class="v-form-wtn-widget__section-subtitle">Verified 01/02/2026</p>',
+    );
+    expect(extra).not.toBe(both.html);
+
+    expect(parseWtnWidget(extra, both.source)?.singles?.updatedOn).toBe("2025-11-26");
+  });
+
   it("throws on a section carrying two Updated subtitles rather than silently picking one", () => {
     // The same reasoning as the duplicate-title and duplicate-widget guards below: `.first()`
     // would let a stale or responsive second subtitle decide, by DOM order, which date the binder

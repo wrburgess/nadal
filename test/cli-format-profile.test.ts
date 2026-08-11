@@ -275,14 +275,40 @@ describe("formatWtnProvenanceLine (#132)", () => {
     expect(line).not.toContain("2015");
   });
 
-  it("covers a WTN source the vocabulary grows later, not just the two on file today", () => {
-    // The guard-completeness check, with the input #132's own option 3 would have supplied: adding
-    // a second, source-attributed WTN singles reading. An enumerated set would silently describe
-    // only the old source while the roster table printed both numbers.
-    const line = formatWtnProvenanceLine([[entry("wtn_singles_itf", 32.6, "2026-09-01")]]);
+  it("notices a WTN source the vocabulary grows later instead of dropping it", () => {
+    // Guard completeness, with the input #132's own option 3 supplies: a second, source-attributed
+    // WTN reading. An enumerated-only set would omit it from the disclosure entirely while the
+    // roster table printed the number.
+    const line = formatWtnProvenanceLine([
+      [entry("wtn_singles", 30.35, "2026-08-05"), entry("wtn_worldtennisnumber_singles", 32.6, "2026-09-01")],
+    ]);
 
-    expect(line).toContain("published 2026-09-01");
-    expect(line).not.toContain("none on file");
+    expect(line).toContain("does not identify their publisher");
+  });
+
+  it("never attributes an unrecognised WTN source to the USTA profile", () => {
+    // The defect the *fix* for the test above nearly introduced, and the sharper one: option 3's
+    // second source comes FROM worldtennisnumber.com — the publisher this line says the number is
+    // not from. A bare `startsWith("wtn_")` would have stamped "shown on the USTA player profile"
+    // onto exactly that figure, manufacturing a false attribution in the one sentence whose whole
+    // job is attribution. A roster carrying ONLY such a source claims nothing about USTA.
+    // (Codex adversarial review round 1, guard-completeness lens.)
+    const line = formatWtnProvenanceLine([[entry("wtn_worldtennisnumber_singles", 32.6, "2026-09-01")]]);
+
+    expect(line).not.toContain("USTA");
+    expect(line).not.toContain("published 2026-09-01");
+    expect(line).toContain("does not identify their publisher");
+  });
+
+  it("keeps the USTA date claim scoped to the USTA-sourced rows when both are present", () => {
+    // The mixed case: the dated claim must describe only the rows it is about. An unrecognised
+    // source dated 2026-09-01 must not widen or move the USTA publication date.
+    const line = formatWtnProvenanceLine([
+      [entry("wtn_singles", 30.35, "2026-08-05"), entry("wtn_worldtennisnumber_singles", 32.6, "2026-09-01")],
+    ]);
+
+    expect(line).toContain("published 2026-08-05");
+    expect(line).not.toContain("published between");
   });
 
   it("distinguishes 'no WTN at all' from 'WTN we cannot date'", () => {

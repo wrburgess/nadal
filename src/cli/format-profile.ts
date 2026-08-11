@@ -130,15 +130,25 @@ export function ratingSourceLabel(source: string): string {
 }
 
 /**
- * Which sources this disclosure is about — **derived from the source name, not enumerated.**
+ * The WTN sources this disclosure can name a publisher for: the two that `src/ingest/archived.ts`
+ * writes out of the ITF widget embedded in a USTA profile.
  *
- * The enumerated form (`new Set(["wtn_singles", "wtn_doubles"])`) is the shape that fails silently
- * here, and #132's own rejected option 3 names the input that would break it: "store both,
- * source-attributed" adds a second WTN singles source, and a two-element set would go on describing
- * only the old one while the binder printed both. A prefix test covers whatever `wtn_*` source the
- * open vocabulary grows next. (`rating_observations.source` is deliberately an open vocabulary —
- * see `src/db/schema.ts`.)
+ * **Both halves of this pair matter, and each fixes a different defect.** An enumeration alone
+ * fails silently when the vocabulary grows — #132's own rejected option 3 ("store both,
+ * source-attributed") adds a WTN source, and a two-element set would describe only the old one
+ * while the roster table printed both. But a bare `startsWith("wtn_")` fails *worse*: the second
+ * source that option contemplates comes **from worldtennisnumber.com**, the very publisher this
+ * line says the number is *not* from, so a prefix test would attach "shown on the USTA player
+ * profile" to a figure that is nothing of the kind. Widening the net to avoid an omission would
+ * have manufactured a false attribution — in the one sentence whose whole job is attribution.
+ * (Found by Codex adversarial review round 1, guard-completeness lens, rated Medium.)
+ *
+ * So: attribute only what is known, and **notice** the rest rather than swallowing it. An
+ * unrecognised `wtn_*` source is disclosed as present-but-unattributed, which needs no maintenance
+ * and cannot lie. Adding it to this set is then a deliberate act by whoever adds the source.
  */
+const USTA_WIDGET_WTN_SOURCES: ReadonlySet<string> = new Set(["wtn_singles", "wtn_doubles"]);
+
 function isWtnSource(source: string): boolean {
   return source.startsWith("wtn_");
 }
@@ -174,7 +184,12 @@ export function formatWtnProvenanceLine(trajectories: RatingTrajectoryResult[]):
   const wtn = trajectories.flat().filter((entry) => isWtnSource(entry.source));
   if (wtn.length === 0) return "none on file for this roster";
 
-  const dates = wtn
+  const attributed = wtn.filter((entry) => USTA_WIDGET_WTN_SOURCES.has(entry.source));
+  const unattributed = [...new Set(wtn.filter((e) => !USTA_WIDGET_WTN_SOURCES.has(e.source)).map((e) => e.source))]
+    .map((source) => formatName(ratingSourceLabel(source)))
+    .sort();
+
+  const dates = attributed
     .map((entry) => formatName(entry.latest.observedOn).trim())
     .filter((date) => date !== "")
     .sort();
@@ -187,11 +202,22 @@ export function formatWtnProvenanceLine(trajectories: RatingTrajectoryResult[]):
       : first === last
         ? `published ${first}`
         : `published between ${first} and ${last}`;
-  return (
-    `the ITF World Tennis Number shown on the USTA player profile, ${when}. ` +
-    "worldtennisnumber.com may show a different number for the same player; this dossier prints " +
-    "the USTA figure and does not reconcile the two"
-  );
+
+  // The USTA-attributed sentence is stated only when there is something to attribute it to; a
+  // roster carrying ONLY unrecognised WTN sources must not be told its numbers came from a page
+  // none of them came from.
+  const usta =
+    attributed.length === 0
+      ? ""
+      : `the ITF World Tennis Number shown on the USTA player profile, ${when}. ` +
+        "worldtennisnumber.com may show a different number for the same player; this dossier prints " +
+        "the USTA figure and does not reconcile the two";
+
+  if (unattributed.length === 0) return usta;
+  const others =
+    `${unattributed.join(", ")} ${unattributed.length === 1 ? "is" : "are"} also on file and ` +
+    "this line does not identify their publisher";
+  return usta === "" ? others : `${usta}. Separately, ${others}`;
 }
 
 /**

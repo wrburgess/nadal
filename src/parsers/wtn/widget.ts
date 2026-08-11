@@ -150,6 +150,18 @@ function ratingFrom(
  * "Last Played" as the publication date on whichever sections happen to be ordered the other way.
  * That failure is silent — both are valid dates.
  *
+ * **The match is the WHOLE subtitle — label, then a date, then nothing** — not a `startsWith` on
+ * the label. A prefix test accepts `Updated from Last Played 08/14/2025`, whose date is the
+ * last-played date wearing the other label's prefix, and stores it as the ITF publication date:
+ * a real value, from the real page, in the wrong field, with nothing downstream able to notice.
+ * Anchoring on the shape means a subtitle whose grammar drifts matches *nothing* and the section
+ * refuses, which is the direction this module always fails.
+ * (Found by Codex adversarial review round 1, guard-completeness lens, rated Medium.)
+ *
+ * A subtitle that matches no known label is ignored rather than refused — the widget may
+ * legitimately grow a third one, and this guard's job is to constrain what is *accepted*, not to
+ * enumerate what may appear.
+ *
  * A section carrying the same label twice throws, on the same reasoning the duplicate-title and
  * duplicate-widget guards above are written from: `.first()` would let a stale or responsive second
  * subtitle silently decide which date a dossier prints.
@@ -160,9 +172,10 @@ function subtitleDate(
   label: string,
   source: SourceRef,
 ): string | null {
+  const shape = new RegExp(`^${label}\\s+\\d{1,2}/\\d{1,2}/(?:\\d{4}|\\d{2})$`);
   const matching = section
     .find(SUBTITLE)
-    .filter((_, el) => collapse($(el).text()).toUpperCase().startsWith(label))
+    .filter((_, el) => shape.test(collapse($(el).text()).toUpperCase()))
     .get();
   if (matching.length === 0) return null;
   if (matching.length > 1) {
