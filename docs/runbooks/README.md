@@ -50,6 +50,9 @@ Verify with `tn --help` before starting anything else — a runbook is not the p
 command is missing.
 
 - [login-assisted-scrape.md](login-assisted-scrape.md) — USTA/WTN pull with HC standing by to log in
+- [capture-wtn-profile.md](capture-wtn-profile.md) — age range + gender off a player's own
+  worldtennisnumber.com profile. Public, so **not** the login case above: the barrier is that the
+  page is client-rendered and a plain fetch returns a data-less shell
 - [capture-fixtures.md](capture-fixtures.md) — turn a live page into a committed test fixture; the
   HC-driven variant for login-gated pages, and the refusal loop that is most of the work
 - [build-and-print-dossiers.md](build-and-print-dossiers.md) — `tn report build` → browser → courtside binder
