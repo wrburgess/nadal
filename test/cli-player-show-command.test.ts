@@ -38,6 +38,40 @@ describe("tn player show (end-to-end via dispatch)", () => {
     expect(printed.split("\n").length).toBeGreaterThan(1);
   });
 
+  // Issues #128/#130. Neither field had a real value to render before this PR (`ageRange` was NULL
+  // for all 1745 players; `gender` held a raw source label on the 77 that had one). `player show`
+  // is the ONLY render site for `gender` (task 8's audit) and one of four for `ageRange` — this
+  // pins the printed line end to end, present and absent, so a future edit to the same line cannot
+  // silently drop one field while leaving the other's test green.
+  it("prints a real age and gender when present on the player row", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const player = db
+      .insert(players)
+      .values({ canonicalName: "Micah Merrivale", nameKey: nameKey("Micah Merrivale"), ageRange: "41-50", gender: "Male" })
+      .returning()
+      .get();
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "show", player.canonicalName]);
+
+    expect(code).toBe(0);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    expect(printed).toContain("age: 41-50   gender: Male");
+  });
+
+  it("prints 'unknown' for age and gender when neither is on file — the permanent no-WTN-profile case", async () => {
+    const player = seedPlayer("Noel Nobody");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "show", player.canonicalName]);
+
+    expect(code).toBe(0);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    expect(printed).toContain("age: unknown   gender: unknown");
+  });
+
   it("includes aliases in the human profile text when the player has any on file", async () => {
     const player = seedPlayer("JT Martin");
     const { db, sqlite } = openDb();

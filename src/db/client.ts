@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { errorMessage } from "../error-message.js";
 import { repoDefault } from "../fs/package-root.js";
+import { backfillGenders } from "./gender-backfill.js";
 import { backfillNameKeys } from "./name-key.js";
 
 // Stays a BARE directory name — issue #111's anchoring goes in the ACCESSOR (`dbPath()` below),
@@ -550,6 +551,11 @@ export function runMigrations(
     // Issue #32: keys every row `migrate()` didn't (a fresh DB has none to backfill; an existing
     // DB upgrading past migration 0004 does). JS-side, idempotent — see backfillNameKeys's doc.
     backfillNameKeys(db);
+    // Issue #130: corrects every row a pre-fix pull already wrote with a raw, unmapped gender
+    // label. Run after the name-key backfill above on the same "every migrate call, idempotent"
+    // reasoning — see backfillGenders's own doc for why its scope is every NON-NULL row, not only
+    // unfilled ones.
+    backfillGenders(db);
   } finally {
     sqlite.close();
   }

@@ -1460,6 +1460,23 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(textOf(result)).toContain("login-assisted");
   });
 
+  it("player_pull over MCP routes wtn-profile: to the saved-page path, not the live fetcher, and says it needs no login", async () => {
+    // Parity with src/cli/commands/player-pull.ts, pinned because it was briefly broken and the
+    // breakage was silent: `startsWith("wtn:")` does not match `wtn-profile:…` (`-` vs `:`), so
+    // adding the target to the CLI alone left THIS surface dropping it through to the live-fetch
+    // branch. An agent driving nadal over MCP would have had a saved-page target attempted as a
+    // network fetch. Asserting the error names the missing inputs proves it reached the saved-page
+    // branch at all; asserting "login" is absent proves it did not inherit usta:/wtn:'s reason.
+    runMigrations();
+    const client = await connectedClient();
+    const result = await client.callTool({ name: "player_pull", arguments: { target: "wtn-profile:MER9000003" } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("requires from and sourceUrl");
+    expect(textOf(result)).toContain("no login needed");
+    expect(textOf(result)).not.toContain("login-assisted");
+  });
+
   it("player_note with a pairTarget records a pairing note via MCP, resolving the SECOND name the same way as the first", async () => {
     runMigrations();
     const { db, sqlite } = openDb();

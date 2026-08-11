@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
 import { players, ratingObservations } from "../src/db/schema.js";
@@ -39,6 +40,73 @@ describe("pullArchivedUstaProfile", () => {
 
       const rows = db.select().from(players).all();
       expect(rows).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("stores gender normalized, not the raw label (#130) — MALE (as printed) becomes Male", async () => {
+    // The fixture's identity paragraph is the OLD unlabelled shape (`parseUstaProfile` still emits
+    // it exactly as printed, "MALE" — see test/parsers-usta-profile.test.ts). The write path is
+    // where that raw source spelling meets the one stored vocabulary: this is the "ingest
+    // decision, made once where both sources meet" `normalizeGender`'s doc comment describes.
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const savedPath = join(raw.path(), "saved-usta-profile-gender.html");
+      writeFileSync(savedPath, fixture.html, "utf8");
+
+      const result = await pullArchivedUstaProfile({ db, path: savedPath, sourceUrl: fixture.source.url });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.player.gender).toBe("Male");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("does not ERASE an existing unmapped gender when the page supplies one it cannot map", async () => {
+    // Codex adversarial review round 2 on PR #138, class B. The USTA parser emits gender AS PRINTED
+    // and does not police the vocabulary, so this route is the one that can be handed a value
+    // `normalizeGender` cannot map. An earlier cut passed `null` to `upsertPlayer`, which assigns
+    // any field that is not `undefined` — so a legitimate-but-unmapped spelling already on the row
+    // was erased, and the backfill could never recover it because it only selects
+    // `WHERE gender IS NOT NULL`. Round 1's fix taught the BACKFILL to preserve such a value; this
+    // is the same rule applied to the WRITE path, which is where round 2 found the hole.
+    //
+    // (The WTN route cannot reach this state at all: `parseWtnProfile` fails closed on a gender it
+    // does not recognise, so the page is refused before any write.)
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Derived from real captured bytes, per convention — never hand-authored markup.
+      const unmappable = fixture.html.replace(
+        '<span class="aem-form-text--text-transform--capitalize">MALE</span>',
+        '<span class="aem-form-text--text-transform--capitalize">Non-binary</span>',
+      );
+      expect(unmappable).not.toBe(fixture.html);
+
+      const first = join(raw.path(), "saved-usta-unmapped-1.html");
+      writeFileSync(first, unmappable, "utf8");
+      const seeded = await pullArchivedUstaProfile({ db, path: first, sourceUrl: fixture.source.url });
+      expect(seeded.kind).toBe("ok");
+
+      // A brand-new row genuinely has nothing to preserve, so it stays NULL — "no opinion" is the
+      // right stored value when nobody has ever supplied a mappable one.
+      if (seeded.kind !== "ok") throw new Error("expected ok");
+      expect(seeded.player.gender).toBeNull();
+
+      // Now put a real value on the row, then re-pull the unmappable page over it.
+      db.update(players).set({ gender: "Non-binary" }).where(eq(players.id, seeded.player.id)).run();
+
+      const second = join(raw.path(), "saved-usta-unmapped-2.html");
+      writeFileSync(second, unmappable, "utf8");
+      const again = await pullArchivedUstaProfile({ db, path: second, sourceUrl: fixture.source.url });
+      expect(again.kind).toBe("ok");
+
+      const row = db.select().from(players).where(eq(players.id, seeded.player.id)).all()[0];
+      expect(row?.gender).toBe("Non-binary");
     } finally {
       sqlite.close();
     }

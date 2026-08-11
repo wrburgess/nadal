@@ -17,7 +17,10 @@ const VOCAB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "tools", 
 
 const standIns = loadStandIns(join(VOCAB_ROOT, "stand-ins.txt"));
 
-const FIXTURES: { source: "tennisrecord" | "usta"; name: string }[] = [
+// The union is widened whenever a detector set is added to tools/capture-fixture.ts — a fixture from
+// a source this type does not admit cannot be registered here, and an unregistered fixture is one
+// nothing re-checks (docs/runbooks/capture-fixtures.md § Adding a detector set for a new source).
+const FIXTURES: { source: "tennisrecord" | "usta" | "wtn"; name: string }[] = [
   { source: "tennisrecord", name: "profile.html" },
   { source: "tennisrecord", name: "player-stats.html" },
   { source: "tennisrecord", name: "match-history.html" },
@@ -25,6 +28,7 @@ const FIXTURES: { source: "tennisrecord" | "usta"; name: string }[] = [
   { source: "tennisrecord", name: "team.html" },
   { source: "usta", name: "profile-wtn-both.html" },
   { source: "usta", name: "profile-wtn-doubles-only.html" },
+  { source: "wtn", name: "profile-full.html" },
 ];
 
 // The 30s budget these cases need is now set ONCE for the whole suite in vitest.config.ts, not

@@ -6,6 +6,7 @@ import { archivePage } from "./archive.js";
 import type { Db } from "./db-types.js";
 import { AmbiguousIdentityError, type AmbiguousIdentity } from "./errors.js";
 import { resolvePlayer } from "./identity.js";
+import { genderWrite } from "./normalize-gender.js";
 import { slugFromUrl } from "./player-pull.js";
 import { upsertPlayer, upsertRatingObservation } from "./upsert.js";
 
@@ -83,7 +84,11 @@ export async function pullArchivedUstaProfile(
         canonicalName: usta.name,
         ustaUaid: usta.uaid,
         wtnTennisId,
-        gender: usta.gender,
+        // Issue #130: `usta.gender` is the source value AS PRINTED (`MALE`, and — before the
+        // parser fix — the whole `Competition Category: MALE` label on live pages). This is the
+        // one meeting point where that raw spelling becomes the column's own vocabulary; see
+        // `normalizeGender`'s doc comment for why storing the raw string here was the defect.
+        gender: genderWrite(usta.gender),
       });
 
       if (usta.ntrp !== null) {

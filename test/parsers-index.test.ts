@@ -15,6 +15,7 @@ describe("src/parsers public surface", () => {
       "parseTennisRecordProfile",
       "parseTennisRecordTeam",
       "parseUstaProfile",
+      "parseWtnProfile",
       "parseWtnWidget",
       "playerRefSchema",
       "ratingObservationSchema",
@@ -29,6 +30,7 @@ describe("src/parsers public surface", () => {
       "tennisRecordTeamSchema",
       "ustaProfileSchema",
       "winLossSchema",
+      "wtnPlayerProfileSchema",
       "wtnProfileSchema",
       "wtnRatingSchema",
     ]);

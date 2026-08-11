@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadFixture } from "./helpers/fixtures.js";
 import { parseUstaProfile } from "../src/parsers/usta/profile.js";
 import { ParseError } from "../src/parsers/types.js";
+import { normalizeGender } from "../src/ingest/normalize-gender.js";
 
 const fixture = loadFixture("usta/profile-wtn-both");
 
@@ -81,5 +82,95 @@ describe("parseUstaProfile — context block", () => {
     const noContext = fixture.html.replace(/nameGenderAddress/g, "somethingElse");
 
     expect(() => parseUstaProfile(noContext, fixture.source)).toThrow(ParseError);
+  });
+});
+
+/**
+ * Issue #130. `players.gender` holds `Competition Category: MALE` — the source LABEL, not the
+ * value — on all 77 rows that have a gender at all. Root cause: FIXTURE DRIFT. Live USTA markup
+ * prefixes the identity paragraph's gender segment with a `Competition Category:` label; the
+ * committed fixture predates that change and has never exercised the label-stripping path.
+ *
+ * Both live shapes below are derived from the committed fixture's own identity paragraph via
+ * `.replace()`, never hand-authored, per this project's fixture convention — and per
+ * rules/testing.md, the `&nbsp;` a live shape needs is written as the JS escape for U+00A0
+ * (the six source characters backslash, u, 0, 0, A, 0), never a literal non-breaking-space
+ * character, so an editor cannot silently collapse it to a plain space and make this test share
+ * the bug's own failure mode.
+ */
+describe("parseUstaProfile — gender label (#130)", () => {
+  // The exact identity paragraph the fixture prints today, appearing twice in the captured
+  // document (desktop + mobile variants — see the WTN widget's duplicate-block comment). Cheerio
+  // reads only `.first()`, and a bare `.replace()` touches only the first occurrence, so rewriting
+  // this string edits exactly the paragraph the parser consumes.
+  const OLD_IDENTITY_P =
+    '<p><span class="aem-form-text--text-transform--capitalize">MALE</span> | Rivermont, MO<br aria-hidden="true" role="presentation"></p>';
+
+  it("is present in the fixture exactly where this test assumes it is", () => {
+    // Guards the two tests below against silently matching zero occurrences (and therefore
+    // testing the OLD shape twice) if the fixture is ever re-captured.
+    expect(fixture.html).toContain(OLD_IDENTITY_P);
+  });
+
+  it("strips the label from the live single-paragraph shape (Competition Category:\\u00A0MALE | location)", () => {
+    const live = fixture.html.replace(
+      OLD_IDENTITY_P,
+      '<p>Competition Category:\u00A0<span class="aem-form-text--text-transform--capitalize">MALE</span> | ' +
+        '<span class="aem-form-text--text-transform--capitalize">Rivermont</span>, MO' +
+        '<br aria-hidden="true" role="presentation"></p>',
+    );
+
+    const parsed = parseUstaProfile(live, fixture.source);
+    expect(parsed.gender).toBe("MALE");
+    expect(parsed.location).toBe("Rivermont, MO");
+  });
+
+  it("strips the label from the live split-paragraph shape (label and location on separate <p>s, no pipe)", () => {
+    const live = fixture.html.replace(
+      OLD_IDENTITY_P,
+      "<p>Competition Category: MALE</p><p></p><p>Rivermont, MO</p>",
+    );
+
+    const parsed = parseUstaProfile(live, fixture.source);
+    expect(parsed.gender).toBe("MALE");
+    expect(parsed.location).toBe("Rivermont, MO");
+  });
+
+  it("throws when the Competition Category label is present but carries no value", () => {
+    const live = fixture.html.replace(OLD_IDENTITY_P, "<p>Competition Category: </p><p>Rivermont, MO</p>");
+
+    expect(() => parseUstaProfile(live, fixture.source)).toThrow(ParseError);
+  });
+
+  it("still parses the OLD unlabelled shape to MALE (must not regress the fixture as captured)", () => {
+    expect(parseUstaProfile(fixture.html, fixture.source).gender).toBe("MALE");
+  });
+
+  it("refuses rather than returning a labelled field AS the gender when the identity paragraph is gone", () => {
+    // Both fallbacks in `contextLines` are positional. `location` guards against landing on a
+    // `Section:`/`District:`/`Nationality:` segment; the unlabelled gender fallback needs the same
+    // guard, or a page missing its identity paragraph entirely returns `Section: Missouri Valley`
+    // as the gender — a real-looking wrong value, which the block's own comment says is worse than
+    // failing. Verified against the un-guarded code: it returned exactly that string.
+    const gone = fixture.html.replace(OLD_IDENTITY_P, "");
+    expect(gone).not.toBe(fixture.html);
+
+    expect(() => parseUstaProfile(gone, fixture.source)).toThrow(ParseError);
+  });
+
+  it("contains the residual positional ambiguity at the ingest boundary, where it fails closed", () => {
+    // The one case no guard can catch: with the identity paragraph present but its gender segment
+    // absent AND no `Competition Category:` label, the location sits in the gender position and is
+    // indistinguishable from a gender by position alone. Every live capture carries the label
+    // (109 of 109), so this is the stale shape only. It is contained rather than fixed: the value
+    // never reaches `players.gender`, because the ingest normalizer refuses anything that is not a
+    // spelled-out gender. Asserting the containment, not endorsing the parse.
+    const noGender = fixture.html.replace(
+      OLD_IDENTITY_P,
+      '<p>Rivermont, MO<br aria-hidden="true" role="presentation"></p>',
+    );
+    expect(noGender).not.toBe(fixture.html);
+
+    expect(normalizeGender(parseUstaProfile(noGender, fixture.source).gender)).toBeNull();
   });
 });

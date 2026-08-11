@@ -12,6 +12,7 @@ import { useTnRawPath } from "./helpers/tn-raw.js";
 
 const matchHistory = loadFixture("tennisrecord/match-history");
 const usta = loadFixture("usta/profile-wtn-both");
+const wtnProfile = loadFixture("wtn/profile-full");
 
 function requestLogRows(dbPath: string) {
   const sqlite = new Database(dbPath);
@@ -133,6 +134,53 @@ describe("tn player pull (end-to-end via dispatch)", () => {
 
     expect(code).toBe(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("login-assisted"));
+  });
+
+  it("a wtn-profile: target with --from ingests from the saved page (#128) — public, not login-gated — without calling the fetcher", async () => {
+    // Issue #128's new route: enriching `ageRange`/`gender` off a player's OWN WTN profile page —
+    // a different page from the `wtn:` target above, which names the USTA-embedded ITF widget and
+    // is unchanged by this issue (its meaning is documented and this test does not touch it).
+    runMigrations();
+    const raw = process.env.TN_RAW_PATH ?? "raw";
+    const savedPath = join(raw, "saved-wtn-profile.html");
+    writeFileSync(savedPath, wtnProfile.html, "utf8");
+    const fetchSpy = vi.spyOn(fetchModule, "fetchPage");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch([
+      "player",
+      "pull",
+      "wtn-profile:MER9000003",
+      "--from",
+      savedPath,
+      "--source-url",
+      wtnProfile.source.url,
+    ]);
+
+    expect(code).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // No player named "micah merrivale" is on file, so identity resolution creates one from the
+    // page's own spelling (`resolvePlayer`'s name-tier fallback) — the same outcome an unmatched
+    // `usta:`/`wtn:` pull would report.
+    expect(logSpy.mock.calls[0]?.[0]).toMatch(/^player pull status=ok player="micah merrivale"/);
+  });
+
+  it("a wtn-profile: target with no --from exits 1, and says WHY without claiming a login is needed", async () => {
+    // Codex adversarial review round 3, class C. This target still requires a saved page, but for a
+    // different reason than `usta:`/`wtn:` do: the page is PUBLIC and merely client-rendered. The
+    // error used to say "login-assisted path", which sends an operator to sign in to a site that
+    // needs no account — and contradicted docs/runbooks/capture-wtn-profile.md, shipped in the same
+    // PR, which says explicitly not to.
+    runMigrations();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "pull", "wtn-profile:MER9000003"]);
+
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--from"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("no login needed"));
+    // The false claim must be gone, not merely accompanied by a true one.
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("login-assisted"));
   });
 
   it("an unknown target exits 1 with a message on stderr and writes no player row", async () => {

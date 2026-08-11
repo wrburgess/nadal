@@ -20,7 +20,13 @@
 # location) and is already known-synthetic by how the file was generated, so a per-line human
 # justification would be theatre, not review.
 #
-# Regenerate by re-running the detector sweep over test/fixtures/{tennisrecord,usta}/*.html.
+# Regenerate by re-running the detector sweep over test/fixtures/{tennisrecord,usta,wtn}/*.html.
+#
+# The WTN entries were added for the profile fixture (issue #128). That page renders its subject's
+# name lower-case under a CSS text-transform, so the value the displayed-name detector captures — and
+# therefore the value fixture-policy.ts must elide — is the lower-case form. The capitalised form is
+# listed alongside it so the name-shape gate has a capitalised token to resolve against; both are
+# synthetic by construction, exactly like every other line here.
 Arden Ashcroft
 Avery Ashby
 Bellamy Birchall
@@ -58,6 +64,9 @@ Lumen Lockhart
 Marek Melbourne
 Marlow Marchetti
 Melbourne, Marek
+MER9000003
+Micah Merrivale
+micah merrivale
 Nolan Northcote
 Norbury, Nova
 Northcote, Nolan
