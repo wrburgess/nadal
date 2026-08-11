@@ -136,7 +136,7 @@ describe("tn player pull (end-to-end via dispatch)", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("login-assisted"));
   });
 
-  it("a wtn-profile: target with --from ingests via the login-assisted archived path (#128), without calling the fetcher", async () => {
+  it("a wtn-profile: target with --from ingests from the saved page (#128) — public, not login-gated — without calling the fetcher", async () => {
     // Issue #128's new route: enriching `ageRange`/`gender` off a player's OWN WTN profile page —
     // a different page from the `wtn:` target above, which names the USTA-embedded ITF widget and
     // is unchanged by this issue (its meaning is documented and this test does not touch it).

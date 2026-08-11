@@ -28,7 +28,11 @@ export type ArchivedWtnProfilePullResult =
   | { kind: "error"; message: string };
 
 /**
- * The login-assisted ingestion path for a player's OWN WTN profile page (issue #128) — a
+ * The saved-page ingestion path for a player's OWN WTN profile page (issue #128). NOT a
+ * login-assisted one, unlike its sibling `pullArchivedUstaProfile`: this page is **public** — no
+ * login, no account, no token — and needs a saved copy only because it is client-rendered, so a
+ * plain fetch returns a data-less shell with no rating, no gender and no age range. See
+ * `docs/runbooks/capture-wtn-profile.md`, which tells the operator explicitly not to sign in. It is a
  * DIFFERENT page and a different fetch from the ITF widget USTA embeds inside its own profile
  * (`pullArchivedUstaProfile`, issue #132's rating source of record). Modeled on that function's
  * shape: archive first, parse the archived bytes (never the live network), resolve identity, and
