@@ -59,17 +59,42 @@ function nearNeighbours(db: Db, name: string, key: string): PlayerRow[] {
   });
 }
 
-export type DeclareDistinctInput = { name: string };
+export type DeclareDistinctInput = {
+  name: string;
+  /**
+   * The counterpart the pull's warning named, for the case where NEITHER side is on file (#142).
+   *
+   * A pull is one transaction and the fuzzy tier compares an incoming name against the names seen
+   * so far *within* it, so two names first appearing in the same pull can be reported ambiguous
+   * against each other and then both roll back. `nearNeighbours` reads committed rows, finds
+   * nothing, and the typo guard below refuses — permanently, since every re-run rolls back again.
+   *
+   * Supplying the counterpart moves the guard from "does this name have a committed neighbour?" to
+   * "are these two names actually near each other?", which is the question the typo guard was
+   * always standing in for. Omit it and this function behaves exactly as it did before.
+   */
+  nearName?: string;
+};
 
 export type DeclareDistinctResult =
-  /** Created. `distinctFrom` names the neighbours this ruling separates it from. */
-  | { kind: "created"; player: PlayerRow; distinctFrom: string[] }
-  /** Already on file under this name — the end state asked for, so a no-op rather than a refusal. */
-  | { kind: "already-on-file"; player: PlayerRow }
-  /** Two rows already share this name. A third cannot fix that; it needs a merge. */
-  | { kind: "already-ambiguous"; candidates: string[] }
+  /** Created. `distinctFrom` names the neighbours this ruling separates it from; `alsoCreated`
+   * names the counterpart minted alongside it, which is empty for the single-name form. */
+  | { kind: "created"; player: PlayerRow; distinctFrom: string[]; alsoCreated: string[] }
+  /** Already on file under this name — the end state asked for, so a no-op rather than a refusal.
+   * `alsoCreated` can still be non-empty: the counterpart may have been the only missing side. */
+  | { kind: "already-on-file"; player: PlayerRow; alsoCreated: string[] }
+  /** Two rows already share this name. A third cannot fix that; it needs a merge. `name` says
+   * WHICH of the two arguments is the unusable one — in the pair form it can be the counterpart,
+   * and a message that always named the target would send the caller after the wrong row. */
+  | { kind: "already-ambiguous"; name: string; candidates: string[] }
   /** Near nothing, so nothing was ever refused for it — almost certainly a mistyped name. */
   | { kind: "not-ambiguous" }
+  /** Pair form: the two names are further apart than the fuzzy radius, so no pull ever reported
+   * them together — the typo guard, in the only form available when neither side is on file. */
+  | { kind: "not-near" }
+  /** Pair form: the two spellings fold to ONE comparison key, so they are not two people any
+   * ladder could tell apart. Creating both would manufacture a permanent exact-tier ambiguity. */
+  | { kind: "same-name" }
   | { kind: "empty-name" };
 
 /**
@@ -89,34 +114,136 @@ export function declareDistinctPlayer(db: Db, input: DeclareDistinctInput): Decl
   const name = input.name;
   if (name.trim() === "") return { kind: "empty-name" };
 
+  const nearName = input.nearName;
+  // A blank counterpart is refused rather than silently demoted to the single-name form: the caller
+  // passed a second argument, so they meant to name someone, and the single-name form would then
+  // refuse `not-ambiguous` for a completely unrelated reason.
+  if (nearName !== undefined && nearName.trim() === "") return { kind: "empty-name" };
+
   assertPlayersKeyed(db);
   assertPlayerAliasesKeyed(db);
 
   const key = nameKey(name);
-  const exactIds = exactIdsFor(db, key);
-  if (exactIds.length > 1) {
-    return {
-      kind: "already-ambiguous",
-      candidates: db.select().from(players).where(inArray(players.id, exactIds)).all().map((p) => p.canonicalName),
+
+  // The pair form's guards, both BEFORE any read of the two names' rows — a refusal here is about
+  // the arguments themselves, and nothing on disk can change the answer.
+  let counterpartKey: string | undefined;
+  if (nearName !== undefined) {
+    counterpartKey = nameKey(nearName);
+    // Checked on the KEY, not the raw strings: "Maria Negron" and "maria negron" are two edits
+    // apart and so pass the nearness test below, while folding to one key. Creating both would put
+    // two ids behind a single `name_key` — the `already-ambiguous` state this module refuses to
+    // repair, manufactured by the command meant to prevent it.
+    if (counterpartKey === key) return { kind: "same-name" };
+    const distance = editDistance(name, nearName);
+    if (distance === 0 || distance > FUZZY_MAX_DISTANCE) return { kind: "not-near" };
+  }
+
+  // EVERY read below decides whether to mint a player, so all of them run inside the same
+  // `immediate` transaction as the writes (#144 review round 1, class A). Read-then-write across
+  // separate statements is check-then-act against a WAL database: two concurrent
+  // `tn player distinct` processes both observed an empty band, both minted, and the result was two
+  // ids behind one `name_key` — the permanent exact-tier ambiguity this module has no merge
+  // operation to repair, manufactured by the command whose whole purpose is preventing it.
+  //
+  // `immediate` takes the write lock at BEGIN rather than on first write, so the second process is
+  // serialised behind the first and then reads what it committed, instead of proceeding on a
+  // snapshot taken before it. Same idiom and same reason as `src/query/availability.ts` and
+  // `src/query/events.ts`.
+  //
+  // **Within better-sqlite3's 5s `busy_timeout`, and not beyond it** — the qualifier
+  // `src/db/client.ts` already carries for `db migrate`. Past that budget the second process gets
+  // `SQLITE_BUSY` instead of the serialised read.
+  //
+  // ACCEPTED cost: every outcome decided by a READ is now decided under the write lock, so a call
+  // that would have read through — `already-on-file` most of all — can fail under sustained
+  // contention. The argument-only refusals above (`empty-name`, `same-name`, `not-near`) never
+  // reach it. The alternative, a fast-path check outside the lock, puts a second notion of the same
+  // question one branch from the authoritative one, which is the class this issue is about.
+  //
+  // The race PREDATES the pair form — `main`'s single-name path has the identical shape — so this
+  // is not a regression being repaired but a widened window being closed: the pair form mints two
+  // rows per call, so an interleaving corrupted two identities instead of one.
+  //
+  // Refusal paths return out of the transaction having written nothing; SQLite ends a read-only
+  // `immediate` transaction with no work to commit.
+  return db.transaction((tx): DeclareDistinctResult => {
+    const exactIds = exactIdsFor(tx, key);
+    if (exactIds.length > 1) {
+      return {
+        kind: "already-ambiguous",
+        name,
+        candidates: tx.select().from(players).where(inArray(players.id, exactIds)).all().map((p) => p.canonicalName),
+      };
+    }
+
+    // The counterpart's own exact tier, checked before anything is written. A counterpart already
+    // held by two rows cannot take this ruling either, and discovering that half-way through would
+    // otherwise leave `name` minted against a ruling that was never applied.
+    let counterpartIds: number[] = [];
+    if (counterpartKey !== undefined) {
+      counterpartIds = exactIdsFor(tx, counterpartKey);
+      if (counterpartIds.length > 1) {
+        return {
+          kind: "already-ambiguous",
+          name: nearName!,
+          candidates: tx
+            .select()
+            .from(players)
+            .where(inArray(players.id, counterpartIds))
+            .all()
+            .map((p) => p.canonicalName),
+        };
+      }
+    }
+
+    const existing =
+      exactIds.length === 1
+        ? tx.select().from(players).where(eq(players.id, exactIds[0]!)).all()[0]
+        : undefined;
+    const needsCounterpart = counterpartKey !== undefined && counterpartIds.length === 0;
+
+    // Unchanged for the single-name form: a name already on file is the end state asked for. The
+    // pair form only reaches past this when the counterpart is the missing side.
+    if (existing !== undefined && !needsCounterpart) {
+      return { kind: "already-on-file", player: existing, alsoCreated: [] };
+    }
+
+    const neighbours = nearNeighbours(tx, name, key);
+    // The typo guard, and the one line #142 turns on: with a counterpart named, the ambiguity is
+    // the argument itself, so an empty committed band is no longer evidence that nothing was
+    // refused.
+    if (neighbours.length === 0 && nearName === undefined) return { kind: "not-ambiguous" };
+
+    // A player with no alias row would resolve through the fuzzy tier on the next pull instead of
+    // the exact one, which is the state this whole operation exists to leave behind. Both sides
+    // land together for the same reason — half a ruling leaves the pull still refusing.
+    const mint = (mintName: string, mintKey: string): PlayerRow => {
+      const row = tx.insert(players).values({ canonicalName: mintName, nameKey: mintKey }).returning().get();
+      tx.insert(playerAliases).values({ playerId: row.id, alias: mintName, nameKey: mintKey }).run();
+      return row;
     };
-  }
-  if (exactIds.length === 1) {
-    const player = db.select().from(players).where(eq(players.id, exactIds[0]!)).all()[0];
-    if (player !== undefined) return { kind: "already-on-file", player };
-  }
+    const target = existing === undefined ? mint(name, key) : existing;
+    const counterpart = needsCounterpart ? mint(nearName!, counterpartKey!) : undefined;
+    const alsoCreated = counterpart === undefined ? [] : [counterpart.canonicalName];
 
-  const neighbours = nearNeighbours(db, name, key);
-  if (neighbours.length === 0) return { kind: "not-ambiguous" };
+    // Who this ruling separates `name` from: its committed neighbours, plus the counterpart named
+    // on the command line. Deduped — a counterpart already on file is BOTH.
+    const counterpartOnFile =
+      counterpartIds.length === 1
+        ? tx.select().from(players).where(eq(players.id, counterpartIds[0]!)).all()[0]?.canonicalName
+        : undefined;
+    const distinctFrom = Array.from(
+      new Set([
+        ...neighbours.map((p) => p.canonicalName),
+        ...(counterpartOnFile !== undefined ? [counterpartOnFile] : []),
+        ...(nearName !== undefined && counterpartOnFile === undefined ? [nearName] : []),
+      ]),
+    );
 
-  // One transaction: a player with no alias row would resolve through the fuzzy tier on the next
-  // pull instead of the exact one, which is the state this whole operation exists to leave behind.
-  const player = db.transaction((tx) => {
-    const created = tx.insert(players).values({ canonicalName: name, nameKey: key }).returning().get();
-    tx.insert(playerAliases).values({ playerId: created.id, alias: name, nameKey: key }).run();
-    return created;
-  });
-
-  return { kind: "created", player, distinctFrom: neighbours.map((p) => p.canonicalName) };
+    if (existing !== undefined) return { kind: "already-on-file", player: existing, alsoCreated };
+    return { kind: "created", player: target, distinctFrom, alsoCreated };
+  }, { behavior: "immediate" });
 }
 
 export type RecordAliasInput = {

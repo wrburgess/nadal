@@ -10,9 +10,10 @@
 
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
-import { backfillNameKeys } from "../src/db/name-key.js";
+import { backfillNameKeys, nameKey } from "../src/db/name-key.js";
 import { playerAliases, players } from "../src/db/schema.js";
 import { declareDistinctPlayer, recordPlayerAlias } from "../src/ingest/disambiguate.js";
+import type { Db } from "../src/ingest/db-types.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -160,6 +161,284 @@ describe("declareDistinctPlayer", () => {
     try {
       expect(declareDistinctPlayer(db, { name: "   " }).kind).toBe("empty-name");
       expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// Issue #142. A pull is ONE transaction, rolled back on refusal, and the ladder's fuzzy tier
+// compares an incoming name against the names seen so far in that same transaction. So two names
+// that first appear in the SAME pull can be reported ambiguous against each other and then both
+// roll back — leaving a reported ambiguity with neither side on disk.
+//
+// The single-name form cannot settle that: `nearNeighbours` reads committed rows, finds none, and
+// takes the typo-guard branch on a name a pull genuinely refused. Found live on NE/Penland, where
+// `Maria Negron` and `Marie Negron` both first appeared in one player's 2025 match history — and it
+// is deterministic, so that player's history could not be ingested at all.
+//
+// The second name is what makes it rulable: the caller supplies the counterpart the warning named,
+// and the guard moves from "does it have a committed neighbour?" to "are these two actually near
+// each other?" — which is the question the typo guard was always a proxy for.
+describe("declareDistinctPlayer — the pair form (#142)", () => {
+  useTnDbPath();
+
+  // The reproduction, and the thing that must change. Both halves are asserted together so the
+  // second cannot be read as passing for some reason unrelated to the first.
+  it("settles an ambiguity whose BOTH sides rolled back, which the single-name form cannot", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // Nothing on file: exactly the state a rolled-back pull leaves behind.
+      expect(db.select().from(players).all()).toHaveLength(0);
+      expect(declareDistinctPlayer(db, { name: "Maria Negron" }).kind).toBe("not-ambiguous");
+
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(result.kind).toBe("created");
+      if (result.kind !== "created") throw new Error("expected created");
+      expect(result.player.canonicalName).toBe("Maria Negron");
+      expect(result.distinctFrom).toEqual(["Marie Negron"]);
+      // The counterpart is MINTED, not merely named — a ruling that two people are different is a
+      // claim about both of them, and the pull will meet both names again on its next run.
+      expect(result.alsoCreated).toEqual(["Marie Negron"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The claim that matters operationally: the pull stops refusing. Asserted through the ladder the
+  // pull actually runs, not by counting rows.
+  it("makes BOTH names resolve afterwards, to two different players", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      const maria = resolvePlayer(db, { name: "Maria Negron" });
+      const marie = resolvePlayer(db, { name: "Marie Negron" });
+      expect(maria.kind).toBe("matched");
+      expect(marie.kind).toBe("matched");
+      if (maria.kind !== "matched" || marie.kind !== "matched") throw new Error("expected matched");
+      expect(maria.row.id).not.toBe(marie.row.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Both rows get their own alias row, the same as every other creation path — a player with no
+  // alias row resolves through the FUZZY tier next time, which is the state this exists to leave.
+  it("records each name as its own first alias, so the exact tier answers for both", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      const aliases = db.select().from(playerAliases).all().map((a) => a.alias).sort();
+      expect(aliases).toEqual(["Maria Negron", "Marie Negron"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The typo guard, preserved in the form the pair makes possible. Without this the second argument
+  // would be a way to mint any two people at will, which is exactly what the single-name form
+  // refuses to allow.
+  it("REFUSES two names that are not near each other — nothing would have reported them together", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const result = declareDistinctPlayer(db, {
+        name: "Maria Negron",
+        nearName: "Wilhelmina Fotheringay",
+      });
+
+      expect(result.kind).toBe("not-near");
+      expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Two spellings folding to ONE comparison key are not two people the ladder can ever tell apart:
+  // creating both would put two ids behind one `name_key`, which is a PERMANENT exact-tier
+  // ambiguity — the `already-ambiguous` state, manufactured by the very command meant to prevent it.
+  it("REFUSES two spellings that fold to the same key — that would mint a permanent ambiguity", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "maria negron" });
+
+      expect(result.kind).toBe("same-name");
+      expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REFUSES a blank counterpart rather than treating it as the single-name form", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "   " });
+
+      expect(result.kind).toBe("empty-name");
+      expect(db.select().from(players).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // The counterpart already committed is the ORDINARY case the single-name form handles, and naming
+  // it explicitly must not change the outcome or mint a duplicate.
+  it("creates only the missing side when the counterpart is already on file", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      resolvePlayer(db, { name: "Marie Negron" });
+
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(result.kind).toBe("created");
+      if (result.kind !== "created") throw new Error("expected created");
+      expect(result.alsoCreated).toEqual([]);
+      expect(db.select().from(players).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("is idempotent — a re-run adds no third row", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      const again = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(again.kind).toBe("already-on-file");
+      if (again.kind !== "already-on-file") throw new Error("expected already-on-file");
+      expect(again.player.canonicalName).toBe("Maria Negron");
+      expect(again.alsoCreated).toEqual([]);
+      expect(db.select().from(players).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // #144 review round 1, class A. The defect was check-then-act: every read that decides whether to
+  // mint ran OUTSIDE the write transaction, so a second process committing the same names in
+  // between left the first process acting on a stale snapshot. Two ids behind one `name_key` is the
+  // permanent exact-tier ambiguity this module has no merge operation to repair.
+  //
+  // What this does and does NOT reproduce, stated precisely because the distinction decides what a
+  // pass here is worth: a SECOND real connection commits the competing rows, so the stale-read the
+  // old code acted on is genuine and so is the cross-connection visibility. The two calls do NOT
+  // overlap in time — the proxy commits B's writes and returns before A's transaction opens — so
+  // this is a deterministic simulation of the interleaving's EFFECT, not a lock-contention test.
+  // That is deliberate: a truly overlapping test would depend on scheduler timing and go
+  // false-green whenever the race happened not to occur. The test below covers the other half, by
+  // asserting the transaction is requested with `immediate`.
+  //
+  // Reverted against rather than assumed to discriminate: hoisting only the target's `exactIdsFor`
+  // back outside the transaction turns this red at the first assertion — **3 player rows carrying 2
+  // distinct `name_key`s**, i.e. `Maria Negron` minted a second time over the winner's row. Note it
+  // is three and not four: the counterpart's read is a separate statement, so it still sees the
+  // committed `Marie Negron` and stands down for that half. One hoisted read is enough to corrupt
+  // one identity, which is why the fix moves ALL of them rather than the obvious one.
+  it("does not double-mint when another connection commits the same names between check and write", () => {
+    runMigrations();
+    const a = openDb();
+    const b = openDb();
+    try {
+      let injected = false;
+      const racing = new Proxy(a.db, {
+        get(target, prop, receiver) {
+          if (prop !== "transaction") return Reflect.get(target, prop, receiver);
+          return (fn: unknown, config: unknown) => {
+            if (!injected) {
+              injected = true;
+              // The other process wins the race and commits BOTH names first.
+              for (const person of ["Maria Negron", "Marie Negron"]) {
+                const row = b.db
+                  .insert(players)
+                  .values({ canonicalName: person, nameKey: nameKey(person) })
+                  .returning()
+                  .get();
+                b.db
+                  .insert(playerAliases)
+                  .values({ playerId: row.id, alias: person, nameKey: nameKey(person) })
+                  .run();
+              }
+            }
+            return (target.transaction as (f: unknown, c: unknown) => unknown)(fn, config);
+          };
+        },
+      }) as Db;
+
+      const result = declareDistinctPlayer(racing, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      // Asserted FIRST because it is the damage, not the symptom: no comparison key may answer to
+      // two ids, which is the state `already-ambiguous` reports and nothing in this codebase can
+      // undo. The row list is included in the failure message so a regression names the duplicate.
+      const rows = a.db.select().from(players).all();
+      expect(new Set(rows.map((p) => p.nameKey)).size).toBe(rows.length);
+      expect(rows.map((p) => p.canonicalName).sort()).toEqual(["Maria Negron", "Marie Negron"]);
+      // ...and the losing process SAW the winner's rows and stood down, rather than minting over them.
+      expect(result.kind).toBe("already-on-file");
+    } finally {
+      a.sqlite.close();
+      b.sqlite.close();
+    }
+  });
+
+  // A regression guard on the requested configuration, not an observation of SQLite's locking:
+  // it asserts what drizzle is asked for, never that `BEGIN IMMEDIATE` was issued. Worth having
+  // anyway — `deferred` (the drizzle default) takes its read lock on first read and upgrades only
+  // at the write, which is the window the race lived in, so an edit dropping this config would
+  // reopen it while every behavioural test above still passed.
+  it("asks drizzle for an immediate transaction", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      let seen: unknown;
+      const spy = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop !== "transaction") return Reflect.get(target, prop, receiver);
+          return (fn: unknown, config: unknown) => {
+            seen = config;
+            return (target.transaction as (f: unknown, c: unknown) => unknown)(fn, config);
+          };
+        },
+      }) as Db;
+
+      declareDistinctPlayer(spy, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(seen).toEqual({ behavior: "immediate" });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // Nothing partially written on a refusal that happens after the first insert would be possible —
+  // both rows land in ONE transaction, so a failure minting the second must not leave the first.
+  it("writes both players in one transaction, or neither", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      db.insert(players).values({ canonicalName: "Marie Negron" }).run();
+      db.insert(players).values({ canonicalName: "marie negron" }).run();
+      backfillNameKeys(db);
+
+      // The counterpart is itself already ambiguous, so the ruling cannot be applied to it.
+      const result = declareDistinctPlayer(db, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(result.kind).toBe("already-ambiguous");
+      // ...and `Maria Negron` was NOT created on the way to discovering that.
+      expect(db.select().from(players).all().map((p) => p.canonicalName).sort()).toEqual([
+        "Marie Negron",
+        "marie negron",
+      ]);
     } finally {
       sqlite.close();
     }

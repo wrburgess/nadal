@@ -80,3 +80,6 @@ the USTA login form itself.
   **near** (#94). Rule on it with `tn player distinct "<incoming>"` (different people) or
   `tn player alias "<candidate>" "<incoming>"` (same person, two spellings), then re-run. Nothing is
   ever silently merged, and neither command merges two existing rows — that is still an HC job.
+  If `distinct` answers `is not ambiguous` for a name that was just reported, both sides rolled back
+  with the refused write and neither is on file: re-run it as
+  `tn player distinct "<incoming>" "<candidate>"`, which mints both (#142).

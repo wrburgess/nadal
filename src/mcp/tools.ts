@@ -605,28 +605,42 @@ export const MCP_TOOLS: McpToolDef[] = [
   {
     name: "player_distinct",
     cliCommand: "player distinct",
-    description: "Declare a name a different person from its near-matches, creating that player",
-    inputShape: { target: z.string().min(1) },
+    description: "Declare similar names different people, creating any of them not yet on file",
+    inputShape: { target: z.string().min(1), nearName: z.string().min(1).optional() },
     handler: async (rawArgs) => {
-      const { target } = rawArgs as { target: string };
+      const { target, nearName } = rawArgs as { target: string; nearName?: string };
       const { db, sqlite } = openDb();
       try {
         // No `requireResolved`, matching `event_add`/`match_add`: this is a WRITER that creates the
         // identity, so resolving the name against existing rows first is precisely the refusal it
         // exists to settle.
-        const result = declareDistinctPlayer(db, { name: target });
+        const result = declareDistinctPlayer(db, { name: target, nearName });
         if (result.kind === "created") {
-          return { player: result.player.canonicalName, created: true, distinctFrom: result.distinctFrom };
+          return {
+            player: result.player.canonicalName,
+            created: true,
+            distinctFrom: result.distinctFrom,
+            alsoCreated: result.alsoCreated,
+          };
         }
         if (result.kind === "already-on-file") {
-          return { player: result.player.canonicalName, created: false, distinctFrom: [] };
+          return {
+            player: result.player.canonicalName,
+            created: false,
+            distinctFrom: [],
+            alsoCreated: result.alsoCreated,
+          };
         }
         throw new McpToolError(
           result.kind === "empty-name"
             ? "a player name cannot be blank"
-            : result.kind === "not-ambiguous"
-              ? `"${target}" is not ambiguous — it matches no player on file and is near none, so nothing refused it. Check the spelling against the reported name, or use the player_pull tool to create it.`
-              : `"${target}" is already on file more than once (${result.candidates.join(", ")}) — those rows need merging, which this tool cannot do`,
+            : result.kind === "not-near"
+              ? `"${target}" and "${nearName}" are further apart than the fuzzy radius, so no pull ever reported them together. Check both spellings against the warning that named them.`
+              : result.kind === "same-name"
+                ? `"${target}" and "${nearName}" are the same name to the identity ladder, so they cannot be declared different people — creating both would make that name ambiguous permanently.`
+                : result.kind === "not-ambiguous"
+                  ? `"${target}" is not ambiguous — it matches no player on file and is near none, so nothing refused it. If a pull DID report it, the name it was near rolled back with that pull and is not on file either; re-run passing that counterpart as nearName. Otherwise check the spelling against the reported name, or use the player_pull tool to create it.`
+                  : `"${result.name}" is already on file more than once (${result.candidates.join(", ")}) — those rows need merging, which this tool cannot do`,
         );
       } finally {
         sqlite.close();

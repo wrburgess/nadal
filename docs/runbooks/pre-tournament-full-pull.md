@@ -308,6 +308,21 @@ cause; each one names the identity that actually failed **and why** (#96). Every
   tn player alias "<candidate>" "<incoming>"  # the same person, spelled two ways
   ```
 
+  **When `distinct` answers `is not ambiguous` for a name the warning just named, add the candidate
+  as a second argument** (#142):
+
+  ```sh
+  tn player distinct "<incoming>" "<candidate>"   # neither side is on file
+  ```
+
+  That is not a typo on your part. The pull is one transaction and rolls back on refusal, so when
+  BOTH names first appeared in that pull — `<incoming>` and the `near:` candidate alike — neither is
+  on disk afterwards, and the one-name form has no committed neighbour to check against. Naming the
+  candidate mints both as separate people in one write; the summary reports the second as
+  `alsoCreated=`. Found live on `NE/Penland`, where it cost a registered player's entire 2025
+  history until it was fixed. **Check the candidate against the warning before running this** — it
+  creates a person, so a mistyped counterpart puts someone on file who does not exist.
+
   **Rule on every identity the warning listed before re-running.** One pass reports all of them
   (#96), so the ruling session is one sitting rather than one round trip per name — this used to
   cost a full re-fetch of every roster member to reach each next ambiguity (`NE/Penland` took three
