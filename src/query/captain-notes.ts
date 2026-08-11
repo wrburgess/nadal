@@ -71,6 +71,10 @@ function isOnHomeRoster(db: Db, playerId: number, homeTeamId: number): boolean {
  * team designated at all.
  */
 export function addCaptainNote(db: Db, input: AddCaptainNoteInput): CaptainNoteRow {
+  // These two decide on the INPUT alone and read no row, so they stay outside the transaction: a
+  // malformed call is rejected without taking the write lock. #142/PR #144 accepted the availability
+  // cost of an `immediate` transaction where a READ decides the outcome; it is not owed where
+  // nothing is read.
   if (input.text.trim().length === 0) {
     throw new EmptyCaptainNoteError("captain note text may not be empty or whitespace-only");
   }
@@ -78,27 +82,49 @@ export function addCaptainNote(db: Db, input: AddCaptainNoteInput): CaptainNoteR
     throw new SelfPairingCaptainNoteError("a pairing note's pair may not be the player themselves");
   }
 
-  const homeTeam = requireHomeTeam(db);
-  if (!isOnHomeRoster(db, input.playerId, homeTeam.id)) {
-    throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`, input.playerId);
-  }
-  if (input.pairPlayerId !== undefined && !isOnHomeRoster(db, input.pairPlayerId, homeTeam.id)) {
-    throw new PlayerNotOnHomeRosterError(
-      `player ${input.pairPlayerId} is not on the home team's roster`,
-      input.pairPlayerId,
-    );
-  }
+  // `immediate`, and the whole check-then-act inside one transaction — the same shape
+  // `setAvailability` already uses (src/query/availability.ts:240), which is the sibling write
+  // service this codebase's own comments name as parallel to this one. Captain notes were the half
+  // of that pair still doing its reads unserialized.
+  //
+  // A PAIRING note is what makes it load-bearing rather than tidy. The solo form asserts ONE fact
+  // and then writes; the pair form asserts TWO, and without a transaction they are read at different
+  // instants — so a `tn team pull` retiring one endpoint between them lands a pairing whose two
+  // members were never simultaneously on the roster. The designation itself was never the exposure
+  // (it is read once into `homeTeam` and both checks use that one value); the exposure is the two
+  // membership reads. nadal runs `tn mcp serve` beside the CLI on one WAL file, so the second writer
+  // is ordinary rather than hypothetical.
+  //
+  // NOTE for a future caller, copied from `setAvailability`'s own: this takes a connection, not a
+  // transaction handle. Nesting would become a savepoint and the `immediate` behavior would not
+  // apply — if this ever needs to compose inside a larger transaction, that outer transaction must
+  // itself be `IMMEDIATE`.
+  return db.transaction(
+    (tx) => {
+      const homeTeam = requireHomeTeam(tx);
+      if (!isOnHomeRoster(tx, input.playerId, homeTeam.id)) {
+        throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`, input.playerId);
+      }
+      if (input.pairPlayerId !== undefined && !isOnHomeRoster(tx, input.pairPlayerId, homeTeam.id)) {
+        throw new PlayerNotOnHomeRosterError(
+          `player ${input.pairPlayerId} is not on the home team's roster`,
+          input.pairPlayerId,
+        );
+      }
 
-  return db
-    .insert(captainNotes)
-    .values({
-      playerId: input.playerId,
-      pairPlayerId: input.pairPlayerId ?? null,
-      note: input.text,
-      createdAt: new Date().toISOString(),
-    })
-    .returning()
-    .get();
+      return tx
+        .insert(captainNotes)
+        .values({
+          playerId: input.playerId,
+          pairPlayerId: input.pairPlayerId ?? null,
+          note: input.text,
+          createdAt: new Date().toISOString(),
+        })
+        .returning()
+        .get();
+    },
+    { behavior: "immediate" },
+  );
 }
 
 export type CaptainNoteEntry = {
