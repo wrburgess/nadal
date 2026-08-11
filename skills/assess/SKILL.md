@@ -1,155 +1,71 @@
 ---
 name: assess
-description: Stage 1 of the development lifecycle. Research a tracked issue and prepare an assessment for the Human Contributor — problem summary, codebase findings, 2-3 genuinely different options with trade-offs and risk, and a recommendation. Use when starting work on an issue, before any plan or code.
+description: Stage 1 of the deuce lifecycle. The HC has pointed the AC at an issue; research it and post the Assessment — the options the HC chooses between at the Direction gate. Nothing is planned or built until that gate has an Assessment in front of it.
 ---
 
-<what-to-do>
+# assess — Stage 1 of the lifecycle
 
-Review the tracked issue named in the invocation and prepare an assessment for the Human Contributor
-(HC). This is **Stage 1 (Assess)** of the [development lifecycle](../../docs/standards/development-lifecycle.md).
+The packaged procedure for
+[Chapter 1 → Stage 1 — Assess](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-1--assess). This body
+carries the verbs and links the variables; the stage itself — trigger, work, terminal artifact,
+exit — is canon and is not restated here.
 
-Read host-specific values — the lifecycle host and its artifact map, the attribution/model, the review
-severities, the quality-check commands, and the **human-gate policy** — from
-[`PROJECT.md`](../../PROJECT.md). Never hardcode them here. **Baseline: plan approval is `auto`,
-and it covers this stage's option pick** — the AC posts the assessment and then proceeds on its own
-stated recommendation. A Host App may set it back to `required` in `PROJECT.md` → *Human Gates*, where
-the AC instead waits for a chosen option; read that section before writing the Next Step. Name the
-lifecycle *verb* ("read the issue", "post the assessment to the
-issue"); the concrete mechanism (which platform, which command) is set in `PROJECT.md` →
-*Lifecycle Host* (GitHub is the default).
+## When it is invoked
 
-</what-to-do>
+The HC points the AC at an issue —
+[the Stage 1 trigger](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-1--assess).
 
-<procedure>
+## Procedure
 
-1. **Read the issue** — title, description, labels, milestone, and every existing comment. A prior
-   comment may already carry constraints or a partial decision; fold it in.
-2. **Check for duplicates and related work** — search open/closed issues and PRs for the issue's
-   keywords. If you find overlapping or superseding work, note it and ask the HC whether to proceed or
-   consolidate.
-3. **Read the architecture context** the Host App provides — its top-level docs (e.g. `README`, any
-   `docs/architecture/`), and the matching [Rules Layer](../../rules/) file for each subsystem the
-   issue touches (`rules/backend.md`, `rules/frontend.md`, `rules/testing.md`, `rules/security.md`,
-   `rules/scripting.md`). These three steps stay inline.
-4. **Explore the codebase** — for any non-trivial issue, offload the open-ended trace to a **read-only
-   sub-agent** so the file-by-file reading stays out of the orchestrator's context; it returns
-   conclusions, not file dumps. Its prompt: the affected area drawn from the issue, and the
-   **required output = the exploration-summary** below. Fold the returned summary into the assessment.
-   A tightly-scoped issue touching one or two already-known files may be read inline instead.
+1. **Read the issue from the tracker** — title, body, labels, and every existing comment.
+2. **Set `status:in-progress`**
+   ([Chapter 1 → Binding to the Work Tracking System](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#binding-to-the-work-tracking-system)).
+3. **Read the stage's routing** — which model and effort runs this stage is
+   [`config/models.md`](../../config/models.md); what may be offloaded, and in what shape, is
+   [`config/delegation.md`](../../config/delegation.md).
+4. **Search the tracker for duplicates and related work** — open and closed issues and pull
+   requests, on the issue's key terms. Overlap or superseding work found goes into the Assessment
+   as an open question — proceed-or-consolidate is the HC's call, never a silent proceed.
+5. **Research what the change would touch** — the repository as it is, not as the issue describes
+   it. While there, **read what already covers the affected area**: the tests over it show what is
+   protected and what gap the change would open, and a gap the change would widen is a risk the
+   Assessment names.
+6. **Check what already exists before any option proposes custom construction** — the platform's
+   built-ins first, then an established, maintained library. List what was considered in the
+   Assessment even when rejected: "I couldn't find a fit" is acceptable; "I didn't look" is not.
+7. **Read [`rules/authoring.md`](../../rules/authoring.md)** at the moment of writing.
+8. **Draft the Assessment as a Readout** — content per
+   [Stage 1](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-1--assess), shape per
+   [Chapter 1 → The Readout](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#the-readout).
+9. **Hold the draft to the pre-post pass before it leaves.** Researched, or guessed from the issue
+   text? Do the options genuinely differ
+   ([Stage 1](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-1--assess))? Are the named risks the ones
+   that would waste implementation time? What would a critical reviewer flag in this analysis?
+   Fix it now — once posted, the Assessment is the record.
+10. **Post the Assessment on the issue before proceeding on it**, carrying the rejected options and
+   why they were rejected —
+   [the Direction gate's floor](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#the-direction-gate-graduated),
+   clauses 1 and 2.
+11. **Hold at the Direction gate per its current setting**
+   ([`config/gates.md`](../../config/gates.md)). The setting is read there, never from this file;
+   the floor no setting reaches is canon
+   ([Chapter 1 → The Direction gate, graduated](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#the-direction-gate-graduated)).
 
-   *Graceful degradation ([ADR 0003](../../docs/adr/0003-skills-canonical-body-thin-shims-graceful-degradation.md)):*
-   on a tool without a read-only sub-agent, run the same exploration **inline** and produce the same
-   summary. The mechanism degrades; the summary and its rigor do not.
+## Terminal artifact
 
-   ### exploration-summary (sub-agent → assessor)
-   ```
-   { relevant_files: [ { path, role } ], existing_patterns: [str], dependencies: [str],
-     test_coverage: { covered: [str], gaps: [str] }, risks: [str] }
-   ```
-5. **Check test coverage** for the affected area — read existing tests to see what's covered and what
-   gap a change would introduce ([`rules/testing.md`](../../rules/testing.md)). If the Host App
-   enforces a coverage floor, note the risk of dropping below it.
-6. **Identify project-specific concerns** — walk the checklist and consult the matching Rules Layer
-   file for each that applies:
-   - A data-model or schema change? → the host's migration/data-integrity rules; is it reversible/safe?
-   - Authorization? → the host's authorization patterns; does the change alter who can do what?
-   - New persisted state, soft-delete, or audit-trail expectations? → the host's model conventions.
-   - New status/type/enumerated values? → the host's enumeration pattern.
-   - UI / templates / client behavior? → [`rules/frontend.md`](../../rules/frontend.md).
-   - Search, background work, or an external service? → the matching backend rule + reindex/retry
-     implications.
-7. **Research ecosystem solutions before proposing custom code** — check whether the framework's
-   built-ins or an established, well-maintained library already solves the problem
-   ([`rules/backend.md`](../../rules/backend.md)). List what you considered in the assessment, even if
-   rejected. "I couldn't find a fit" is acceptable; "I didn't look" is not.
-8. **Identify unknowns** — list anything ambiguous or underspecified in the issue.
-9. **Ask clarifying questions** — if requirements have gaps, ask the HC before proceeding. Ask, don't
-   guess.
+The Assessment, posted on the issue
+([Stage 1](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-1--assess)).
 
-## Complexity criteria
+## When it stops and asks
 
-- **Small** — a handful of files, no schema/migration, no authorization change, single subsystem.
-- **Medium** — a moderate file count, may include a schema change, touches 2–3 subsystems, single agent.
-- **Large** — many files, multiple schema changes, authorization changes, or cross-cutting concerns →
-  recommend parallel agents if the host supports them.
+On any of the four standing triggers —
+[Chapter 1 → Stops](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stops). The question and its answer are
+recorded on the issue before the answer is acted on.
 
-**Compressed workflows** (the HC decides, not the AC): a trivial fix may skip Plan; a
-documentation-only change may skip Assess and Plan (see the
-[lifecycle doc](../../docs/standards/development-lifecycle.md)).
+## Prior art
 
-</procedure>
-
-<output>
-
-Post the assessment to the issue via the lifecycle host's issue-comment mechanism
-([`PROJECT.md`](../../PROJECT.md) → *Lifecycle Host*), and also display it in the conversation so the
-HC can discuss before choosing. Use this template:
-
-```markdown
-## Issue Assessment
-
-### Summary
-[What the issue asks for, in clear terms]
-
-### Systems Affected
-| System | Files/Areas | Impact |
-|--------|-------------|--------|
-| [e.g. Data model] | [e.g. `path/to/file`] | [e.g. new field + backfill] |
-
-### Complexity: [Small | Medium | Large]
-- [Key factors driving the estimate]
-
-### Related Issues/PRs
-- [Related work found, or "None found"]
-
-### Project-Specific Considerations
-- [Schema/migration safety, authorization, persistence/soft-delete, search/index, deployment — or "None"]
-
-### Open Questions
-- [Anything ambiguous needing HC input — or "None"]
-
-### Risk Assessment
-- [What could go wrong; the blast radius of the change]
-
-### Implementation Options
-
-#### Option A: [Name]
-- **Approach:** [Description]
-- **Pros / Cons / Risk:** […]
-- **Estimated scope:** [files, tests, schema changes]
-
-#### Option B: [Name]
-- **Approach / Pros / Cons / Risk / Estimated scope:** […]
-
-### Recommendation
-Option [X] because [rationale].
-
-### Next Step
-[plan approval `auto` — the shipped baseline]
-Plan approval is `auto` in PROJECT.md -> Human Gates (the shipped baseline), so I am proceeding on my own
-recommendation above (Option [X]) without waiting for a choice; this comment is the record of what was
-selected. Next: the plan skill (`devise`) for the same issue.
-
-[plan approval `required` — only if PROJECT.md -> Human Gates sets it back]
-HC: send this assessment to the Reviewer, then reply with your chosen option and run the plan skill
-(`devise`) for the same issue.
-```
-
-Emit **one** of those two variants — the one the host's setting selects — never both.
-
-Sign the comment with the attribution footer from [`PROJECT.md`](../../PROJECT.md) → *Attribution &
-Model Declaration* (e.g. `— Claude Code (Opus 4.8)`), using your runtime-actual model.
-
-**Terminal artifact:** the assessment posted on the issue — posted under **every** setting. **Exit:** an
-option is chosen. Under the baseline **`auto`** the AC proceeds on its **own stated recommendation** and
-says so in the posted comment, which is then the only record of the choice; where a host set it back to
-`required` the HC chooses the option and the AC does not proceed without one. The recommendation must
-therefore be written to stand on its own — under `auto` nothing else vouches for it.
-
-## Quality standard
-
-Before posting, self-review: did I research the codebase or guess from the issue text? Are my options
-*genuinely different* approaches, not variations of one? Did I name risks that could waste
-implementation time? Would a critical reviewer find a gap in this analysis?
-
-</output>
+Re-authored from a reading of
+[ace's `assess`](https://github.com/wrburgess/ace/blob/main/skills/assess/SKILL.md), per
+[ADR 0006](https://github.com/wrburgess/deuce/blob/main/adr/0006-skills-self-contained.md) — read and attributed, never vendored.
+Steps 4–6 and the pre-post pass are MPIAS-era craft, re-authored from a reading of markaz's
+`/assess` and restored on the HC's direction of 2026-08-04, recorded on #64.
