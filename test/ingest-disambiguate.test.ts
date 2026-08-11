@@ -10,9 +10,10 @@
 
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
-import { backfillNameKeys } from "../src/db/name-key.js";
+import { backfillNameKeys, nameKey } from "../src/db/name-key.js";
 import { playerAliases, players } from "../src/db/schema.js";
 import { declareDistinctPlayer, recordPlayerAlias } from "../src/ingest/disambiguate.js";
+import type { Db } from "../src/ingest/db-types.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -320,6 +321,94 @@ describe("declareDistinctPlayer — the pair form (#142)", () => {
       expect(again.player.canonicalName).toBe("Maria Negron");
       expect(again.alsoCreated).toEqual([]);
       expect(db.select().from(players).all()).toHaveLength(2);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  // #144 review round 1, class A. The defect was check-then-act: every read that decides whether to
+  // mint ran OUTSIDE the write transaction, so a second process committing the same names in
+  // between left the first process acting on a stale snapshot. Two ids behind one `name_key` is the
+  // permanent exact-tier ambiguity this module has no merge operation to repair.
+  //
+  // The interleaving is injected at the exact instant the old code was vulnerable — the moment the
+  // transaction opens, i.e. after the old code had finished reading. A SECOND CONNECTION does the
+  // competing write, so this is real cross-connection concurrency, not a simulation of it.
+  //
+  // Reverted against rather than assumed to discriminate: hoisting only the target's `exactIdsFor`
+  // back outside the transaction turns this red at the first assertion — **3 player rows carrying 2
+  // distinct `name_key`s**, i.e. `Maria Negron` minted a second time over the winner's row. Note it
+  // is three and not four: the counterpart's read is a separate statement, so it still sees the
+  // committed `Marie Negron` and stands down for that half. One hoisted read is enough to corrupt
+  // one identity, which is why the fix moves ALL of them rather than the obvious one.
+  it("does not double-mint when another connection commits the same names between check and write", () => {
+    runMigrations();
+    const a = openDb();
+    const b = openDb();
+    try {
+      let injected = false;
+      const racing = new Proxy(a.db, {
+        get(target, prop, receiver) {
+          if (prop !== "transaction") return Reflect.get(target, prop, receiver);
+          return (fn: unknown, config: unknown) => {
+            if (!injected) {
+              injected = true;
+              // The other process wins the race and commits BOTH names first.
+              for (const person of ["Maria Negron", "Marie Negron"]) {
+                const row = b.db
+                  .insert(players)
+                  .values({ canonicalName: person, nameKey: nameKey(person) })
+                  .returning()
+                  .get();
+                b.db
+                  .insert(playerAliases)
+                  .values({ playerId: row.id, alias: person, nameKey: nameKey(person) })
+                  .run();
+              }
+            }
+            return (target.transaction as (f: unknown, c: unknown) => unknown)(fn, config);
+          };
+        },
+      }) as Db;
+
+      const result = declareDistinctPlayer(racing, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      // Asserted FIRST because it is the damage, not the symptom: no comparison key may answer to
+      // two ids, which is the state `already-ambiguous` reports and nothing in this codebase can
+      // undo. The row list is included in the failure message so a regression names the duplicate.
+      const rows = a.db.select().from(players).all();
+      expect(new Set(rows.map((p) => p.nameKey)).size).toBe(rows.length);
+      expect(rows.map((p) => p.canonicalName).sort()).toEqual(["Maria Negron", "Marie Negron"]);
+      // ...and the losing process SAW the winner's rows and stood down, rather than minting over them.
+      expect(result.kind).toBe("already-on-file");
+    } finally {
+      a.sqlite.close();
+      b.sqlite.close();
+    }
+  });
+
+  // The mechanism, pinned separately from the outcome above. `deferred` (the drizzle default) takes
+  // its read lock on first read and only upgrades at the write, which is the window that made the
+  // interleaving possible at all — so a future edit dropping this config would reopen the race
+  // while every behavioural test above still passed.
+  it("takes the write lock at BEGIN, not at first write", () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      let seen: unknown;
+      const spy = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop !== "transaction") return Reflect.get(target, prop, receiver);
+          return (fn: unknown, config: unknown) => {
+            seen = config;
+            return (target.transaction as (f: unknown, c: unknown) => unknown)(fn, config);
+          };
+        },
+      }) as Db;
+
+      declareDistinctPlayer(spy, { name: "Maria Negron", nearName: "Marie Negron" });
+
+      expect(seen).toEqual({ behavior: "immediate" });
     } finally {
       sqlite.close();
     }
