@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
@@ -23,6 +23,11 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**", "tools/**"],
+      // deuce's seeded gate/review tools are dormant until the gate is wired: their tests are
+      // node:test suites this runner never executes, so counting the sources toward the floor
+      // would red the gate on code nothing here runs. The day-one adoption issue tracks lifting
+      // this carve-out alongside wiring the gate.
+      exclude: [...coverageConfigDefaults.exclude, "tools/gate/**", "tools/review/**"],
       thresholds: { lines: 75, functions: 75 },
     },
   },

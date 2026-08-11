@@ -4,7 +4,9 @@
 # `dirname "$0"` names that bin directory rather than this repo — so $DIR pointed at the Node
 # installation and the tsx exec below failed with "No such file or directory" (issue #87).
 #
-# POSIX sh only, per rules/scripting.md: `readlink -f` would do this in one line but is not POSIX
+# POSIX sh only, a discipline this repo keeps (the ace-era scripting rule that stated it is read at
+# https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/scripting.md):
+# `readlink -f` would do this in one line but is not POSIX
 # (BSD only gained -f in macOS 12.3), and a bundled script may not add a dependency.
 #
 # EVERY path split here uses parameter expansion rather than `dirname`, so the only external

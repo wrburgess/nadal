@@ -9,5 +9,9 @@
     "types": ["node"],
     "outDir": "dist"
   },
-  "include": ["src", "test", "tools", "vitest.config.ts", "eslint.config.js", "drizzle.config.ts"]
+  "include": ["src", "test", "tools", "vitest.config.ts", "eslint.config.js", "drizzle.config.ts"],
+  // deuce's seeded gate/review tools are dormant until the gate is wired (they use
+  // allowImportingTsExtensions-style .ts imports this config rejects); the day-one adoption
+  // issue tracks lifting this carve-out.
+  "exclude": ["tools/gate", "tools/review"]
 }
