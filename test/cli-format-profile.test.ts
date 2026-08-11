@@ -346,7 +346,10 @@ const ESC_BYTE = String.fromCharCode(0x1b); // ANSI CSI introducer
 const RLO_BYTE = String.fromCharCode(0x202e); // RIGHT-TO-LEFT OVERRIDE
 const ZWSP_BYTE = String.fromCharCode(0x200b); // ZERO WIDTH SPACE
 const CGJ_BYTE = String.fromCharCode(0x034f); // COMBINING GRAPHEME JOINER — category Mn, NOT Cc/Cf
-const VS16_BYTE = String.fromCharCode(0xfe0f); // VARIATION SELECTOR-16
+const VS16_BYTE = String.fromCharCode(0xfe0f); // VARIATION SELECTOR-16 — also Mn
+const MVS_BYTE = String.fromCharCode(0x180e); // MONGOLIAN VOWEL SEPARATOR — Cf, but Mongolian script
+const FVS1_BYTE = String.fromCharCode(0x180b); // MONGOLIAN FREE VARIATION SELECTOR ONE — Mn + Mongolian
+const HANGUL_FILLER_BYTE = String.fromCharCode(0x3164); // HANGUL FILLER — Lo, NFKC-maps to U+1160
 const CONTROL_OR_BIDI = new RegExp(`[${BACKSLASH}p{Cc}${BACKSLASH}p{Cf}]`, "u");
 
 // Issue #131. `team_memberships` is `player <-> team <-> event` by design, so a player on both a
@@ -496,12 +499,16 @@ describe("formatTeamMemberships", () => {
     ["a whitespace-only event name", "   ", "Team (registered for event #7)"],
     ["an event name of nothing but a control character", ESC_BYTE, "Team (registered for event #7)"],
     ["an event name of nothing but a bidi override", RLO_BYTE, "Team (registered for event #7)"],
-    // Fix-verification pass 1's case, and the one that decided the predicate. U+034F is category Mn,
-    // so `sanitizeValue` (Cc/Cf/Zl/Zp) leaves it and `.trim()` does not remove it — the previous
-    // version of this fallback rendered `registered for "<invisible>"`. `nameKey` folds it to "",
-    // because its INVISIBLE class is `Default_Ignorable_Code_Point`, which reaches Mn.
+    // Fix-verification pass 1's case: U+034F is category Mn, so `sanitizeValue` (Cc/Cf/Zl/Zp) leaves
+    // it and `.trim()` does not remove it. Caught by the `nameKey` half of the union, whose INVISIBLE
+    // class is `Default_Ignorable_Code_Point` and therefore reaches Mn.
     ["an event name of nothing but a combining grapheme joiner", CGJ_BYTE, "Team (registered for event #7)"],
     ["an event name of nothing but a variation selector", VS16_BYTE, "Team (registered for event #7)"],
+    // Fix-verification pass 2's case, and the reason the predicate is a UNION. `nameKey` deliberately
+    // RETAINS U+180E — its script scope exempts complex-script invisibles, because deleting one
+    // changes what a reader sees. So the `nameKey` half misses it and the sanitization half catches
+    // it: each half is blind exactly where the other sees.
+    ["an event name of nothing but a Mongolian vowel separator", MVS_BYTE, "Team (registered for event #7)"],
     ["a real event name, which must be unaffected", "Springfield", 'Team (registered for "Springfield")'],
     // The refutation of the fold: these are visible names and must survive it.
     ["a single-character event name", "X", 'Team (registered for "X")'],
@@ -524,6 +531,27 @@ describe("formatTeamMemberships", () => {
     expect(formatTeamMemberships([membership({ teamId: 4, teamName, eventId: 1, eventName: "E" })])).toBe(
       `${expected} (registered for "E")`,
     );
+  });
+
+  // The two ACCEPTED RESIDUALS of the union predicate, pinned as tests so they are a recorded
+  // limitation rather than an untested belief — and so that a future change to `nameKey` or to
+  // `sanitizeValue` that happens to close one of them shows up here as a failing expectation to
+  // update, instead of silently changing behavior nobody was watching.
+  //
+  // Both are inherited from `src/db/name-key.ts`, whose own doc records why this predicate class is
+  // undecidable: there is no Unicode property equal to "deleting this cannot change what a reader
+  // sees". U+180B is Mn AND Mongolian, so neither half of the union reaches it; U+3164 is Lo and
+  // NFKC-normalizes to U+1160 rather than folding away. Escalated to the HC at the fix-verification
+  // bound (PROJECT.md -> Review Lenses) and settled there: union the two partial predicates, name
+  // what they still miss, stop.
+  it.each([
+    ["U+180B Mongolian free variation selector one (Mn + Mongolian)", FVS1_BYTE],
+    ["U+3164 Hangul filler (Lo, NFKC-maps to U+1160)", HANGUL_FILLER_BYTE],
+  ])("KNOWN RESIDUAL: an event name of nothing but %s still renders blank", (_label, eventName) => {
+    const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })]);
+
+    expect(line).not.toBe("Team (registered for event #7)");
+    expect(line).toBe(`Team (registered for "${eventName}")`);
   });
 
   it("keeps surrounding whitespace inside the quotes of a real event name", () => {

@@ -160,37 +160,46 @@ export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]
  * perfectly ordinary string. `registered for ""` then reads as an event whose name nobody filled in,
  * which is exactly the ordinary-looking output the null branch existed to prevent.
  *
- * **The emptiness test is `nameKey`, and that is the whole point of this helper.** This predicate
- * went through three versions and only the third is right, because only the third stopped being a
- * local predicate at all:
+ * **The emptiness test is a UNION of two partial predicates, and that is the decision here.** It went
+ * through three single-predicate versions, each of which a review pass broke:
  *
- * 1. `raw === null` — caught a broken foreign key, missed an empty stored name.
- * 2. `formatName(raw).trim() === ""` — caught empty, whitespace and control characters, and still
- *    missed U+034F COMBINING GRAPHEME JOINER (Codex fix-verification pass 1). `sanitizeValue`
- *    strips Cc/Cf/Zl/Zp; U+034F is Mn, so it survived, and `.trim()` does not remove it.
- * 3. `nameKey(raw) === ""` — the repo's SINGLE definition of a name (`src/db/name-key.ts`), whose
- *    `""` return means exactly "this folds to nothing". Measured against every case above: empty,
- *    whitespace, ESC, RLO, ZWSP, U+034F and VS16 all fold to `""`, while `"."`, `"x"`,
- *    `"Springfield"` and `"team #4"` do not.
+ * 1. `raw === null` — caught a dangling foreign key, missed an empty stored name (Codex round 1).
+ * 2. `formatName(raw).trim() === ""` — caught empty, whitespace and Cc/Cf controls; missed U+034F
+ *    COMBINING GRAPHEME JOINER and U+FE0F, which are **Mn**, so `sanitizeValue` (Cc/Cf/Zl/Zp) leaves
+ *    them and `.trim()` does not remove them (fix-verification pass 1).
+ * 3. `nameKey(raw) === ""` — caught those, and REGRESSED on U+180E MONGOLIAN VOWEL SEPARATOR, which
+ *    `nameKey` deliberately retains because its script scope exempts complex-script invisibles
+ *    (fix-verification pass 2).
  *
- * The third version is not a third guess at the predicate — it is the deletion of the predicate.
- * Inventing a second notion of "the same name" is the defect #31 closed, and inventing a second
- * notion of "no name" is the same mistake one field over. Its accepted residuals become this
- * function's residuals too, named rather than re-derived: the Hangul filler U+3164 folds to itself
- * (`nameKey` exempts complex-script invisibles by script scope, deliberately), so a name of nothing
- * but one still renders as blank here. That is a documented limit of the shared fold, not a new hole.
+ * The two predicates ask **different questions** — `nameKey` asks *"is this a name?"*, sanitization
+ * asks *"does this render?"* — and each is correct about its own and blind to the other's. That is
+ * the recorded signature of partial predicates rather than a wrong one
+ * (`docs/findings.md`, #133/PR #139: *"when two successive fixes to one line each fix the other's
+ * blind spot, stop replacing and start conjoining — the second fix's failing case is the first fix's
+ * passing case"*). v3's failing case is exactly v2's passing case, so this unions them rather than
+ * guessing a fourth time. Escalated to the HC at the fix-verification bound and decided there, not
+ * iterated past it.
+ *
+ * **Two residuals, named rather than implied, both measured.** A name consisting only of
+ * **U+180B** MONGOLIAN FREE VARIATION SELECTOR ONE (Mn *and* Mongolian, so neither half catches it)
+ * or only of **U+3164** HANGUL FILLER (Lo, NFKC-normalized by `nameKey` to U+1160 — it does *not*
+ * fold away) still renders blank. Both are already accepted residuals of `src/db/name-key.ts`, whose
+ * own doc records why this predicate class is undecidable: there is no Unicode property equal to
+ * *"deleting this cannot change what a reader sees"*. These are inherited limits, not new holes.
  *
  * **Both names on the line go through it.** `teams.name` carries an identical
  * `NOT NULL UNIQUE`-with-no-`CHECK` constraint, and a blank one would render the whole entry as a
- * bare parenthetical with a leading space. The review flagged one of the two; they are the same
- * defect on the same line, and fixing the reported instance while leaving its sibling is the failure
- * mode this module's own header records.
+ * bare parenthetical with a leading space. Reachability differs between the two and is worth knowing:
+ * a blank EVENT name is unreachable (`addEvent` is the only writer of that table and trims and
+ * refuses one), while a blank TEAM name is **not** — neither `upsertTeam` nor `resolveTeam`
+ * validates, and team names come from scraped pages.
  *
  * Display uses the SANITIZED value untrimmed, so surrounding whitespace inside the quotes stays
  * visible as itself; only the emptiness DECISION folds.
  */
 function displayName(raw: string | null, fallback: string, options?: { quoted: boolean }): string {
-  if (raw === null || nameKey(raw) === "") return fallback;
+  if (raw === null) return fallback;
+  if (nameKey(raw) === "" || formatName(raw).trim() === "") return fallback;
   return options?.quoted === true ? `"${formatName(raw)}"` : formatName(raw);
 }
 
