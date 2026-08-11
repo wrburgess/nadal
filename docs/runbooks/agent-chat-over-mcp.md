@@ -123,39 +123,35 @@ about any particular client's behavior.
 tools.* That is the fallback failing, and it turns this from a currency question into a bug. If you
 see it:
 
-1. **Make the client's binary unambiguous, because you cannot verify it from your own shell.** Read
-   the command your client is configured to launch (Claude Code: `claude mcp get nadal`). **If it is
-   a bare `tn`, stop and change it to an absolute path**, then restart the client:
-
-   ```sh
-   claude mcp remove nadal
-   claude mcp add nadal -- "$(readlink -f "$(command -v tn)")" mcp serve
-   ```
-
-   This is not a diagnostic, it is the remedy for the commonest cause — a stale `npm link`, a global
-   install, or a wrapper all start *an* MCP server, and the client resolves `tn` in **its own**
-   environment, not yours. `command -v tn` in your terminal answers a different question than the one
-   you are asking, so no amount of resolving it here rules this out. **An absolute path in the client
-   config is what makes steps 2–4 mean anything.** If the tool list comes back after this, that was
-   the whole problem.
-2. From the nadal checkout, run `npx vitest run test/mcp-protocol-negotiation.test.ts`. **Read what
-   green does and does not prove:** it exercises the `McpServer` object and its tool registrations
-   over an in-process transport, so green says this checkout's server would serve a newer-revision
-   client and that all tools registered. It does **not** exercise the stdio transport, the binary, or
-   your client — so green narrows the cause, it does not identify one.
-3. **Probe the stdio surface of the exact path from step 1** — the layer step 2 skips. Use that
-   absolute path, not `tn`; running a different binary than the client runs is the mistake this whole
-   sequence exists to avoid:
+1. **From the nadal checkout**, run `npx vitest run test/mcp-protocol-negotiation.test.ts`. Green says
+   this checkout's `McpServer` and all its tool registrations serve a newer-revision client over an
+   in-process transport. It does **not** exercise the stdio transport, any binary, or your client.
+2. **Probe the stdio surface**, which is the layer step 1 skips. Use the command your client is
+   configured to launch — Claude Code prints it with `claude mcp get nadal` — rather than whatever
+   `tn` happens to mean in your terminal:
    ```sh
    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | /abs/path/to/tn mcp serve
    ```
    A JSON-RPC line listing tools means that binary's whole server side — transport and registrations
    — is working.
-4. **Only with steps 1–3 all clean is this the protocol case.** All three must hold: the client is
-   configured with an absolute path, the tests are green, and the stdio probe of **that same path**
-   listed tools — and the client still shows none. Any one of them unchecked and the likelier answer
-   is configuration, not the spec revision. One observation cannot select a v2 migration on its own;
-   these three can make it the only explanation left.
+
+**If both pass, the server side is intact and the cause is on the client side.** Reopen
+[#106](https://github.com/wrburgess/nadal/issues/106) with your client, its version, the exact
+command it is configured to launch, and what these two steps returned.
+
+**Two limits, stated rather than engineered around** — this section was three steps longer and an
+independent review found a defect in the extra steps in each of three successive rounds, so what is
+left is only what this repo can actually verify:
+
+- **If your client's configured command is a bare `tn` rather than an absolute path, step 2 cannot
+  tell you which binary the client runs** — it resolves in the client's environment, not your shell.
+  Say so in the issue; do not assume the two agree. (Configuring the client with an absolute path
+  removes the ambiguity, but that is a change to *your* setup and this runbook will not script it for
+  you — a `remove`-then-`add` silently drops any `--env` and `--scope` the entry had, which is the
+  two-databases failure `docs/findings.md` already records.)
+- **Neither step can conclude "this is the protocol case."** They establish that the server side
+  works; every remaining cause — client config, client environment, a strict client refusing a v1
+  reply — lives where this repo cannot see. That is what the issue is for.
 5. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named,
    which of steps 1–4 you completed, and what each returned.
 
