@@ -54,7 +54,7 @@ This is the half that cannot be fixed on site, and the dry run's hardest finding
   # The read-only guard every sqlite3 read in this runbook carries; the venue preflight below
   # explains why a bare `?mode=ro` is not enough, and names the one residual it cannot close.
   RO="mode=ro"
-  sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+  [ -e "$DB-wal" ] || sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
   sqlite3 "file:$DB?$RO" "select count(*) as roster,
     sum(p.usta_uaid is not null) as has_usta
     from team_memberships tm join players p on p.id = tm.player_id
@@ -92,7 +92,7 @@ from the wrong directory and you silently get a fresh, empty database that still
 DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
 RO="mode=ro"
-sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+[ -e "$DB-wal" ] || sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select count(*) as teams from teams;
 select count(*) as court_matches from court_matches;"
 ```
@@ -116,23 +116,31 @@ The database is fine. The `[ -f "$DB" ]` guard every runbook uses passes happily
 is right there. This is the ordinary path, not an edge case — it is what you will hit at the venue
 one command after a successful ingest.
 
-The two-line guard tries the plain read first and falls back only when it actually refuses:
+The guard reaches `immutable=1` only when **both** conditions hold:
 
 ```sh
 RO="mode=ro"
-sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+[ -e "$DB-wal" ] || sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 ```
 
-Plain `mode=ro` succeeding means the WAL was readable at open time, so the read cannot go stale. Only
-a genuine refusal falls through to `immutable=1`. **Never hardcode `immutable=1`**: with a live `-wal`
-it silently reads stale data instead of failing loudly, trading a visible error for an invisible wrong
-answer.
+Read it as a short-circuit chain, because each link is load-bearing and **neither alone is safe**:
 
-> **Residual, named rather than papered over.** This probes in one process and reads in the next, so
-> it is a check-then-act across two processes: a writer that starts in between can create a WAL that
-> the `immutable=1` read then ignores, reporting your match as absent when it is there. A shell
-> snippet cannot close that window, and an earlier draft of this section wrongly claimed the `-wal`
-> test made staleness impossible.
+| State | Where the chain stops | Chosen | Why |
+|---|---|---|---|
+| `-wal` present | at `[ -e … ]` | `mode=ro` | A WAL exists, so `immutable=1` would skip real committed rows. **Never** reached, whatever else fails. |
+| No `-wal`, opens fine | at the probe | `mode=ro` | It works; nothing to fix. |
+| No `-wal`, open refuses | at the fallback | `mode=ro&immutable=1` | The expected sidecar-less case, and there is genuinely no WAL to skip. |
+
+**The `[ -e … ]` link is what keeps an unrelated failure from choosing the dangerous branch.** An
+earlier draft of this section used the probe *alone*: a busy writer, a locked database, a permissions
+error or a broken `sqlite3` all make the plain open fail, and the probe-only form read every one of
+them as "no WAL, safe to go immutable" — selecting stale reads in precisely the situation the guard
+exists for. **Never hardcode `immutable=1`** for the same reason, one step further along.
+
+> **Residual, named rather than papered over.** The chain still tests in one process and reads in the
+> next, so a writer starting in between can create a WAL the `immutable=1` read then ignores,
+> reporting your match as absent when it is there. A shell snippet cannot close a cross-process
+> check-then-act, and two earlier drafts of this section each claimed a version of it could.
 >
 > **The operator rule is what actually closes it, and at a venue it matters**: `immutable=1` is only
 > safe while **nothing is writing**. The agent chat in step 1 talks to a running `tn mcp serve`, which
@@ -203,7 +211,7 @@ it copy the card.** There is no `tn` command that will find a team by partial na
 DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
 RO="mode=ro"
-sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+[ -e "$DB-wal" ] || sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select id, name from teams order by name"
 ```
 
@@ -299,7 +307,7 @@ esac
 # `tn match add` has just run and closed, so the `-wal` is gone and a bare `?mode=ro` exits 14
 # ("unable to open database file") on the ordinary success path. Measured on three databases.
 RO="mode=ro"
-sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+[ -e "$DB-wal" ] || sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select cm.slot, cm.discipline, cm.winner_side, cm.score
   from court_matches cm
   where cm.team_match_id = $TMID
@@ -348,7 +356,7 @@ and diffing them.
 | **Partner frequency** | Same rule as records. |
 | **Predicted lineup** | **Yes — regardless of the card's date.** The lineup is restricted to this team's own schedule, not to the window. |
 | **Evidence-scope disclosure** | Yes; the ingested courts appear under **`no league recorded`**, because the payload carries no league field. They are *retained*, not scoped out. |
-| **Team record (`6-0`)** | **Depends on who created the parent fixture.** If this ingest created it, `6-0 (1 undecided)` — the payload carries no team score. If `tn team pull` had already recorded the fixture *with* its court counts, the ingest reuses that row and leaves them alone, so the record reads as a win or a loss. See *Known limitations*. |
+| **Team record (`6-0`)** | **Depends on who created the parent fixture.** If this ingest created it, `6-0 (1 undecided)` — the payload carries no team score. If `tn team pull` had already recorded the fixture with **unequal** court counts, the ingest reuses that row and leaves them alone, so the record reads as a win or a loss. A pulled **tie** (2-2 on four courts) is still `undecided`. See *Known limitations*. |
 
 **The two rows worth internalising before Saturday morning:**
 
@@ -358,7 +366,7 @@ and diffing them.
 2. **The team-record line will usually say `(1 undecided)` for a tie you ingest.** That is expected,
    and it is **not** a sign the courts failed to land — check the court-level readback in step 3
    instead. It reads as a real win or loss only when a `tn team pull` had already recorded that same
-   fixture with its court counts; at a venue, ingesting the evening's play, it will not have.
+   fixture with **unequal** court counts; at a venue, ingesting the evening's play, it will not have.
 
 ## [dry run] Failure modes and recovery
 
@@ -415,7 +423,10 @@ Both measured, on the same tie:
   - **`tn team pull` already recorded that fixture**, counts and all: the ingest resolves that same
     parent and **leaves those columns untouched** — `addMatchFromScorecard` "never computes them …
     so it has nothing honest to write over whatever another writer already recorded"
-    (`src/ingest/match-add.ts`). The pulled counts survive and the record reads as a win or a loss.
+    (`src/ingest/match-add.ts`). The pulled counts survive, and the record then reads as a win or a
+    loss **when they are unequal**. Equal counts — a 2-2 tie on four courts — are classified
+    `undecided` too (`src/query/derive.ts`: `homeCourtsWon === visitingCourtsWon`), so "has counts"
+    is not the same as "has a result".
 
   Either way the court-level data — which is what the dossier's records, tendencies and prior
   meetings are built from — is unaffected. *(Corrected after the Codex review: this section

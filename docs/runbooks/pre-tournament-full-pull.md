@@ -61,7 +61,7 @@ current."
   # `-wal` sidecar — the state EVERY `tn` command leaves behind on exit. Step 2's block carries the
   # full reasoning; this is the same two-line guard.
   RO="mode=ro"
-  sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+  [ -e "$DB-wal" ] || sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
   sqlite3 "file:$DB?$RO" "select name, tennisrecord_url, is_home from teams order by name"
   ```
 - You know which players' dossiers need NTRP/WTN specifically (step 4 below), since that path is
@@ -125,11 +125,15 @@ DB="${TN_DB_PATH:-data/nadal.db}"
 # and removes both sidecars on exit. So the reads below try the plain form first and fall back only
 # on a genuine refusal (the two lines after the path guard below).
 #
-# Plain `mode=ro` succeeding means the WAL was readable at open time, so that read cannot go stale;
-# only a real refusal reaches `immutable=1`. Do NOT hardcode `immutable=1`: against a live `-wal` it
-# silently reads stale data instead of failing loudly.
+# The guard is a short-circuit chain and BOTH links matter. `-wal` present -> stop immediately and
+# keep plain `mode=ro`, because a WAL exists and `immutable=1` would skip real rows. No `-wal` ->
+# probe; the open succeeding means it works, and only a genuine refusal reaches `immutable=1`, where
+# there is nothing to skip. Do NOT hardcode `immutable=1`, and do NOT drop the `[ -e ]` link for the
+# probe alone: a busy writer, a locked database or a broken `sqlite3` all make the plain open fail,
+# and a probe-only form reads every one of them as "safe to go immutable" — stale reads in exactly
+# the situation this guard exists for.
 #
-# RESIDUAL: the probe and the read are separate processes, so a writer starting between them can
+# RESIDUAL: the test and the read are separate processes, so a writer starting between them can
 # create a WAL the `immutable=1` read then ignores. A shell snippet cannot close that; the operator
 # rule is what does. Do not run this block while a `tn` pull or an MCP server may be writing.
 case "$DB" in
@@ -138,7 +142,7 @@ esac
 # Derived AFTER the path guard above, deliberately: these lines interpolate $DB into a database URI,
 # so they must not run against a path the guard is about to refuse.
 RO="mode=ro"
-sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+[ -e "$DB-wal" ] || sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 
 # Anything stored that is NOT a TennisRecord URL — shown, never auto-pulled. Investigate before
 # refreshing: a row here means some earlier pull targeted another host.
