@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAbsentRosterMember,
+  formatAliases,
   formatDataGapsLine,
   formatName,
   formatPartnerFrequency,
@@ -8,8 +9,10 @@ import {
   formatRecord,
   formatRosterSourceLine,
   formatSlotTendencies,
+  formatTeamMemberships,
   formatWtnProvenanceLine,
 } from "../src/cli/format-profile.js";
+import type { PlayerTeamMembershipSummary } from "../src/query/player-profile.js";
 import type { AbsentRosterMember } from "../src/query/team-profile.js";
 import type { DataGapsResult, PartnerFrequencyEntry, RatingTrajectoryResult, SlotTendency, WindowedRecordResult } from "../src/query/types.js";
 
@@ -329,5 +332,213 @@ describe("formatWtnProvenanceLine (#132)", () => {
     const line = formatWtnProvenanceLine([[entry("wtn_singles", 30.35, "2026-08-05\nInjected")]]);
 
     expect(line).not.toMatch(/[\r\n]/);
+  });
+});
+
+/** Control and bidi characters built from CODE POINTS — never from a literal byte and never from
+ * a `backslash-u` escape, which this repo's tooling has been observed to resolve into the byte
+ * itself before the file is written. `src/sanitize.ts` uses the identical device on its own
+ * property escapes, for the identical reason: a literal invisible character in a source file
+ * shares the exact failure mode these assertions exist to probe, and one has already inverted a
+ * review outcome here (docs/findings.md). */
+const BACKSLASH = String.fromCharCode(0x5c);
+const ESC_BYTE = String.fromCharCode(0x1b); // ANSI CSI introducer
+const RLO_BYTE = String.fromCharCode(0x202e); // RIGHT-TO-LEFT OVERRIDE
+const ZWSP_BYTE = String.fromCharCode(0x200b); // ZERO WIDTH SPACE
+const CONTROL_OR_BIDI = new RegExp(`[${BACKSLASH}p{Cc}${BACKSLASH}p{Cf}]`, "u");
+
+// Issue #131. `team_memberships` is `player <-> team <-> event` by design, so a player on both a
+// season/district roster (`event_id IS NULL`) and an event's registered roster (`event_id = N`)
+// legitimately holds two rows for ONE team — 49 such pairs on the live database, spread across all
+// five Sectionals teams. The old renderer mapped rows straight to strings and printed the team name
+// twice with byte-identical text.
+//
+// These tests pin the whole grouping contract, not just the dedupe, because the issue's own framing
+// is that collapsing to one name would DISCARD the season-vs-registered distinction — and on the
+// measured data that distinction is a scouting fact about opponents, not roster admin.
+describe("formatTeamMemberships", () => {
+  function membership(
+    over: Partial<PlayerTeamMembershipSummary> & Pick<PlayerTeamMembershipSummary, "teamId" | "teamName">,
+  ): PlayerTeamMembershipSummary {
+    return { eventId: null, eventName: null, retiredAt: null, ...over };
+  }
+
+  const SEASON = { teamId: 1, teamName: "HOA/Burgess-Zingg/40&over3.5M" };
+  const REGISTERED = {
+    teamId: 1,
+    teamName: "HOA/Burgess-Zingg/40&over3.5M",
+    eventId: 1,
+    eventName: "Springfield Sectionals",
+  };
+
+  /** Substring COUNTING, deliberately: `toContain` passes just as happily on the buggy output, so an
+   * occurrence count is the only assertion that distinguishes "printed once" from "printed twice". */
+  function occurrences(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1;
+  }
+
+  it("prints one entry for a team the player holds both a season and an event row on (the #131 defect)", () => {
+    const line = formatTeamMemberships([membership(SEASON), membership(REGISTERED)]);
+
+    expect(occurrences(line, "HOA/Burgess-Zingg/40&over3.5M")).toBe(1);
+  });
+
+  it("names BOTH roster contexts rather than collapsing the distinction away", () => {
+    // The half of the issue a plain `DISTINCT` would silently lose. `season roster` / `registered
+    // for` is #113's vocabulary (`resolveRoster`, `formatRosterSourceLine`), reused rather than
+    // reinvented so one distinction has one wording across the CLI.
+    const line = formatTeamMemberships([membership(SEASON), membership(REGISTERED)]);
+
+    expect(line).toBe('HOA/Burgess-Zingg/40&over3.5M (season roster; registered for "Springfield Sectionals")');
+  });
+
+  it("keeps two genuinely different teams as two entries", () => {
+    // The issue's second acceptance clause. Grouping is on `teamId`, so nothing here may merge.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Alpha" }),
+      membership({ teamId: 2, teamName: "Beta" }),
+    ]);
+
+    expect(line).toBe("Alpha, Beta");
+  });
+
+  it("renders a lone current season membership bare — byte-identical to the pre-#131 output", () => {
+    // 1696 of 1745 players. Naming "season roster" when it is the only context adds nothing, so the
+    // parenthetical is elided. This is the case a regression would be least likely to notice.
+    expect(formatTeamMemberships([membership({ teamId: 1, teamName: "Solo Team" })])).toBe("Solo Team");
+  });
+
+  it("renders a lone retired season membership '(former)' — the #49 behavior, unchanged", () => {
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: "Former Team", retiredAt: "2026-07-01T00:00:00.000Z" }),
+    ]);
+
+    expect(line).toBe("Former Team (former)");
+  });
+
+  it("attaches 'former' to the RETIRED context, not to the whole team, when a registration still stands", () => {
+    // The corner no live row exercises (`retired_at` is non-null on 0 of 126 rows today) and the one
+    // this change could most easily get wrong: reading any single row's `retiredAt` for the whole
+    // team would label a player who is still registered for Springfield as a former member.
+    // Reachable in practice — `setEventRoster` requires a current season membership at registration
+    // time, but a later `tn team pull` retires the season row and correctly leaves the registration
+    // standing (see `formatRosterSourceLine`'s own note on the same asymmetry).
+    const line = formatTeamMemberships([
+      membership({ ...SEASON, retiredAt: "2026-07-01T00:00:00.000Z" }),
+      membership(REGISTERED),
+    ]);
+
+    expect(line).toBe(
+      'HOA/Burgess-Zingg/40&over3.5M (season roster — former; registered for "Springfield Sectionals")',
+    );
+    expect(line).not.toContain("40&over3.5M (former)");
+  });
+
+  it("attaches 'former' to a retired REGISTRATION while the season membership stands", () => {
+    // The mirror of the case above — `retireAbsentEventMemberships` produces it when a re-issued
+    // roster payload drops a player who is still on the season roster.
+    const line = formatTeamMemberships([
+      membership(SEASON),
+      membership({ ...REGISTERED, retiredAt: "2026-07-01T00:00:00.000Z" }),
+    ]);
+
+    expect(line).toBe(
+      'HOA/Burgess-Zingg/40&over3.5M (season roster; registered for "Springfield Sectionals" — former)',
+    );
+  });
+
+  it("renders an event row with no season row without inventing a season claim", () => {
+    // No current writer produces this state (`setEventRoster` refuses a player with no current
+    // season membership), so it is asserted at the FORMATTER tier only — a presenter must be total
+    // over its input type, not merely correct over the states today's writers happen to reach.
+    const line = formatTeamMemberships([membership(REGISTERED)]);
+
+    expect(line).toBe('HOA/Burgess-Zingg/40&over3.5M (registered for "Springfield Sectionals")');
+    expect(line).not.toContain("season roster");
+  });
+
+  it("names every event when a player is registered for more than one on the same team", () => {
+    const line = formatTeamMemberships([
+      membership(SEASON),
+      membership(REGISTERED),
+      membership({ ...REGISTERED, eventId: 2, eventName: "District Playoffs" }),
+    ]);
+
+    expect(occurrences(line, "HOA/Burgess-Zingg/40&over3.5M")).toBe(1);
+    expect(line).toContain('registered for "Springfield Sectionals"');
+    expect(line).toContain('registered for "District Playoffs"');
+  });
+
+  it("makes a broken event foreign key visible rather than blank", () => {
+    // `eventName` is null only when `eventId` is. A non-null id whose left join found no row means
+    // the referenced event is gone; printing `registered for ""` would read as a nameless event
+    // rather than as a data fault, so the id is printed instead.
+    const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName: null })]);
+
+    expect(line).toBe("Team (registered for event #7)");
+  });
+
+  it("returns 'none' for a player on no team", () => {
+    expect(formatTeamMemberships([])).toBe("none");
+  });
+
+  it("sanitizes the event name as well as the team name", () => {
+    // Team names are scraped; event names are operator-supplied via `tn event add`. Both reach a TTY
+    // here, so both go through `formatName` — the Trojan-Source class this module's header
+    // documents. The event name is reaching terminal output for the first time in this change, so it
+    // is the one with no prior coverage.
+    const line = formatTeamMemberships([
+      membership({ teamId: 1, teamName: `Team${ESC_BYTE}[2J`, eventId: 1, eventName: `Event${RLO_BYTE}Name` }),
+    ]);
+
+    expect(line).not.toMatch(CONTROL_OR_BIDI);
+    expect(line).toContain("Team");
+    expect(line).toContain("Event");
+  });
+});
+
+// Issue #131, folded adjacent defect. Every player-creating path seeds an alias row equal to the new
+// player's own canonical name (`src/ingest/identity.ts`, `src/ingest/disambiguate.ts`), because
+// `player_aliases.name_key` is the lookup index `findPlayerByNameOrAlias` queries. Measured on the
+// live database: 1745 players, 1745 alias rows, 1745 of them exactly equal to their own canonical
+// name — so `tn player show` printed `Randy Burgess (aka Randy Burgess)` on EVERY profile and the
+// suffix had never once carried information. The alias rows are correct and stay; the presenter is
+// what must stop repeating the name it just printed.
+describe("formatAliases", () => {
+  it("returns null when the only alias is the player's own name (the 1745-of-1745 case)", () => {
+    expect(formatAliases("Randy Burgess", ["Randy Burgess"])).toBeNull();
+  });
+
+  it("returns null for an alias differing only by case or surrounding whitespace", () => {
+    // Folded with `nameKey` — the repo's single definition of "the same name" — rather than raw
+    // string equality, so the suppression rule is the one the database itself keys by. A second
+    // notion of sameness here is exactly the "one ladder, two notions of a name" defect #31 closed.
+    expect(formatAliases("Randy Burgess", ["randy burgess"])).toBeNull();
+    expect(formatAliases("Randy Burgess", ["  RANDY BURGESS  "])).toBeNull();
+  });
+
+  it("returns null for an alias differing only by an invisible character", () => {
+    // The same fold that keeps `Versteeg` and `Versteeg<U+202E>` one identity in the database keeps
+    // them one name here. Built from a code point, never written as a literal byte.
+    expect(formatAliases("Randy Burgess", [`Randy Burgess${ZWSP_BYTE}`])).toBeNull();
+  });
+
+  it("keeps a genuinely different spelling", () => {
+    expect(formatAliases("JT Martin", ["Jerry Martin"])).toBe("Jerry Martin");
+  });
+
+  it("drops the self-alias and keeps the real one from a mixed list", () => {
+    expect(formatAliases("JT Martin", ["JT Martin", "Jerry Martin"])).toBe("Jerry Martin");
+  });
+
+  it("returns null for a player with no aliases at all", () => {
+    expect(formatAliases("Nova Norbury", [])).toBeNull();
+  });
+
+  it("sanitizes a surviving alias", () => {
+    const rendered = formatAliases("JT Martin", [`Jerry${ESC_BYTE}[2JMartin`]);
+
+    expect(rendered).not.toMatch(CONTROL_OR_BIDI);
+    expect(rendered).toContain("Jerry");
   });
 });

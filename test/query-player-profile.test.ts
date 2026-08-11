@@ -122,8 +122,11 @@ describe("getPlayerProfile", () => {
         expect.arrayContaining([{ slot: "S1", count: 1 }, { slot: "D1", count: 1 }]),
       );
       expect(profile.partnerFrequency).toEqual([{ partnerId: partner.id, count: 1, canonicalName: "Kai Kestrel" }]);
+      // #131: `eventName` is the LEFT-joined `events.name`, null here because this is a season row.
+      // Pinned in the exact-shape assertion deliberately — `toEqual` is what makes a silently added
+      // or silently dropped field fail, and this is the read every presenter of the profile sits on.
       expect(profile.teamMemberships).toEqual([
-        { teamId: team.id, teamName: "Team A", eventId: null, retiredAt: null },
+        { teamId: team.id, teamName: "Team A", eventId: null, eventName: null, retiredAt: null },
       ]);
     } finally {
       sqlite.close();
@@ -215,7 +218,13 @@ describe("getPlayerProfile", () => {
       const profile = getPlayerProfile(db, player.id, { window: windowSince("2027-01-01") });
 
       expect(profile.teamMemberships).toEqual([
-        { teamId: team.id, teamName: "Former Team", eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" },
+        {
+          teamId: team.id,
+          teamName: "Former Team",
+          eventId: null,
+          eventName: null, // #131
+          retiredAt: "2026-07-01T00:00:00.000Z",
+        },
       ]);
     } finally {
       sqlite.close();

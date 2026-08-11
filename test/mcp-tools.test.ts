@@ -194,8 +194,19 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(textOf(result)) as { teamMemberships: { teamId: number; retiredAt: string | null }[] };
 
+    // #131 added `eventName` (the LEFT-joined `events.name`) to this shape. Pinned here as well as
+    // in `test/query-player-profile.test.ts` on purpose: this test's own header says nothing else in
+    // the suite would notice a silent regression on the MCP wire, and the CLI's `--json` and this
+    // tool return the SAME object — so a field that reaches one door and not the other is guarded by
+    // nothing. `eventName` is null on a season row and never on a registration.
     expect(payload.teamMemberships).toEqual([
-      { teamId: team.id, teamName: "Former Team", eventId: null, retiredAt: "2026-07-01T00:00:00.000Z" },
+      {
+        teamId: team.id,
+        teamName: "Former Team",
+        eventId: null,
+        eventName: null,
+        retiredAt: "2026-07-01T00:00:00.000Z",
+      },
     ]);
   });
 

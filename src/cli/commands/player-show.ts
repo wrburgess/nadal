@@ -9,6 +9,7 @@ import { UnknownEventError, resolveEvent } from "../../query/lineup.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitJson, emitSummary } from "../emit.js";
 import {
+  formatAliases,
   formatDataGapsLine,
   formatEvidenceScopeLine,
   formatName,
@@ -17,6 +18,7 @@ import {
   formatRecord,
   formatRetainedLeaguesLine,
   formatSlotTendencies,
+  formatTeamMemberships,
 } from "../format-profile.js";
 import { evidenceWindow, windowSnapshot } from "../window.js";
 
@@ -44,7 +46,11 @@ function isEventRefusal(err: unknown): err is UnknownEventError | InvalidLeagueS
  */
 function formatPlayerProfileText(profile: PlayerProfile, label: string, eventName: string | null): string {
   const id = profile.identity;
-  const aliasSuffix = id.aliases.length > 0 ? ` (aka ${id.aliases.map(formatName).join(", ")})` : "";
+  // #131 (folded): `formatAliases` returns null when nothing survives dropping the player's own
+  // name, which every creation path seeds as an alias row — before this, all 1745 profiles on the
+  // live database printed `(aka <the name already on the line>)`.
+  const aliases = formatAliases(id.canonicalName, id.aliases);
+  const aliasSuffix = aliases === null ? "" : ` (aka ${aliases})`;
   const gapsLine = formatDataGapsLine(profile.dataGaps);
 
   const lines = [
@@ -57,11 +63,11 @@ function formatPlayerProfileText(profile: PlayerProfile, label: string, eventNam
     `  partners: ${formatPartnerFrequency(profile.partnerFrequency)}`,
     // Issue #49: a retired membership is history, not hidden (player-profile.ts never filters it) —
     // labelled "(former)" so a captain reading the profile can tell a former team from a current one.
-    `  teams: ${
-      profile.teamMemberships
-        .map((m) => `${formatName(m.teamName)}${m.retiredAt !== null ? " (former)" : ""}`)
-        .join(", ") || "none"
-    }`,
+    // Issue #131: the assembly moved into `formatTeamMemberships`, beside every other line on this
+    // page, because it needs real logic now — one entry per TEAM with its roster contexts named,
+    // rather than one entry per membership ROW, which printed the same team twice for the 49 players
+    // holding both a season membership and an event registration.
+    `  teams: ${formatTeamMemberships(profile.teamMemberships)}`,
     // #97. Printed unconditionally, scoped or not — a reader who cannot tell a scoped profile from
     // an unscoped one has learned nothing from the records two lines up. The second line is the
     // accepted residual made concrete: what is STILL counted after the scope ran.

@@ -10,6 +10,7 @@ import {
   captainNotes,
   courtMatchPlayers,
   courtMatches,
+  events,
   playerAliases,
   players,
   ratingObservations,
@@ -134,11 +135,29 @@ export type PlayerTeamMembershipSummary = {
   teamId: number;
   teamName: string;
   eventId: number | null;
+  /** Issue #131: the `events.name` behind `eventId`, resolved by a LEFT join so a season row
+   * (`event_id IS NULL`) is kept rather than dropped. Additive — no row is filtered and no existing
+   * field changed. It exists because a presenter cannot name a registration from an integer: before
+   * this, `tn player show` printed the team twice with identical text (49 such `(player, team)`
+   * pairs on the live database, across all five Sectionals teams) and neither `--json` nor the MCP
+   * `player_show` tool gave a caller any way to resolve `eventId` to the event it means.
+   *
+   * `null` **only** when `eventId` is null. A non-null `eventId` reaching here with a null name is a
+   * broken foreign key, and presenters render the id rather than a blank so the fault is visible —
+   * a nameless registration must not read as an unnamed event. */
+  eventName: string | null;
   /** Issue #49: NOT filtered — unlike the current-roster reads in team-profile.ts/lineup.ts/
    * availability.ts/captain-notes.ts, "teams this player has been on" is a legitimately historical
    * statement, and their court matches are untouched (`court_match_players` is a separate table
    * this change never reads or writes). Non-null when this membership has been soft-retired, so a
-   * presenter can label a former team distinctly (`tn player show`'s "(former)" suffix). */
+   * presenter can label a former team distinctly (`tn player show`'s "(former)" suffix).
+   *
+   * Issue #131: read **per row**, never collapsed to one value for a team. A player may hold a
+   * retired season membership beside a live event registration — `setEventRoster` requires a current
+   * season membership at registration time, but a later `tn team pull` retires the season row and
+   * correctly leaves the registration standing (`formatRosterSourceLine` records the same
+   * asymmetry from the count side). Labelling the whole team "(former)" off any single row would
+   * call a player who is still registered for Springfield a former member. */
   retiredAt: string | null;
 };
 
@@ -356,16 +375,29 @@ export function getPlayerProfile(
   // everything else that must match.
   const windowedRows = rowsWithin(window.since)(courtRows);
 
+  // #131. The `teams` join stays INNER (`team_id` is NOT NULL, so every membership has one); the
+  // `events` join is LEFT, because `event_id` is nullable and a null one is the ORDINARY case — a
+  // season/district roster row. An inner join here would silently drop the only membership of every
+  // season-only player (1696 of 1745 on the live database) while still looking like a correct
+  // dedupe for the 49 who also hold a registration.
+  //
+  // `orderBy` is the ONE ordering, applied here rather than in a presenter: SQLite sorts NULL
+  // first, so a team's season row always precedes its event rows and no renderer has to re-sort
+  // (two sorts are two things that can disagree). It also makes `--json` and the MCP `player_show`
+  // tool deterministic, which they were not before — this read carried no `ORDER BY` at all.
   const membershipRows: PlayerTeamMembershipSummary[] = db
     .select({
       teamId: teamMemberships.teamId,
       eventId: teamMemberships.eventId,
+      eventName: events.name,
       teamName: teams.name,
       retiredAt: teamMemberships.retiredAt,
     })
     .from(teamMemberships)
     .innerJoin(teams, eq(teamMemberships.teamId, teams.id))
+    .leftJoin(events, eq(teamMemberships.eventId, events.id))
     .where(eq(teamMemberships.playerId, playerId))
+    .orderBy(teams.name, teamMemberships.eventId)
     .all();
 
   const partnerCounts = partnerFrequency(windowedRows, playerId);

@@ -5,6 +5,8 @@ import { dispatch } from "../src/cli/router.js";
 import { runMigrations, openDb } from "../src/db/client.js";
 import { nameKey } from "../src/db/name-key.js";
 import { playerAliases, players, teamMemberships, teams } from "../src/db/schema.js";
+import { resolvePlayer } from "../src/ingest/identity.js";
+import { seedTeamWithRosters } from "./helpers/roster.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 function requestLogRows(dbPath: string) {
@@ -209,5 +211,100 @@ describe("tn player show (end-to-end via dispatch)", () => {
     const commands = rows.map((r) => r.command);
     expect(commands.filter((c) => c === "player show")).toHaveLength(2);
     expect(rows.map((r) => r.outcome)).toEqual(expect.arrayContaining(["ok", "error:exit-1"]));
+  });
+
+  // Issue #131, end to end. The formatter's own contract is pinned in
+  // `test/cli-format-profile.test.ts`; these four assert the WIRING — that the command actually
+  // calls it, that the query hands it a named event, and that the surfaces beside the human line
+  // (`--json`, and the MCP tool that returns the same object) neither lose rows nor lose the field.
+  // A formatter test alone stays green while `player-show.ts` still runs its old inline `.map()`.
+  it("prints a team ONCE when the player holds both a season and an event membership on it (#131)", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    seedTeamWithRosters(db, {
+      teamName: "HOA/Burgess-Zingg/40&over3.5M",
+      season: ["Rowan Rushworth"],
+      registered: { eventName: "Springfield Sectionals", names: ["Rowan Rushworth"] },
+    });
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "show", "Rowan Rushworth"]);
+
+    expect(code).toBe(0);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    // Occurrence count, not `toContain` — the buggy output contains the name too.
+    expect(printed.split("HOA/Burgess-Zingg/40&over3.5M").length - 1).toBe(1);
+    expect(printed).toContain('registered for "Springfield Sectionals"');
+  });
+
+  // Guards the one mistake that would make this change LOSE data: an inner join to `events` drops
+  // every `event_id IS NULL` row, i.e. the entire `teams:` line for the 1696 players who hold only
+  // a season membership — and it would look like a working dedupe in every test that seeds an event.
+  it("still shows the team of a player who holds only a season membership", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    seedTeamWithRosters(db, { teamName: "Season Only Team", season: ["Kai Kestrel"] });
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "show", "Kai Kestrel"]);
+
+    expect(code).toBe(0);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    const teamsLine = printed.split("\n").find((l) => l.startsWith("  teams: "));
+    // Scoped to the `teams:` LINE, not the whole profile — several other lines legitimately read
+    // "none"/"none on file" for a player with no ratings and no matches, so a whole-profile
+    // assertion would be about the wrong line and pass or fail for the wrong reason.
+    expect(teamsLine).toBe("  teams: Season Only Team");
+  });
+
+  it("--json keeps both membership rows and names the event on the registered one", async () => {
+    // The presenter fix must NOT reach the structured surface: `--json` and the MCP `player_show`
+    // tool return the same `PlayerProfile`, and a caller integrating against them needs the rows
+    // the database actually holds. What they gain is `eventName` — before this change the row
+    // carried a bare `eventId` integer no caller could resolve to a name.
+    runMigrations();
+    const { db, sqlite } = openDb();
+    seedTeamWithRosters(db, {
+      teamName: "HOA/Burgess-Zingg/40&over3.5M",
+      season: ["Rowan Rushworth"],
+      registered: { eventName: "Springfield Sectionals", names: ["Rowan Rushworth"] },
+    });
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "show", "Rowan Rushworth", "--json"]);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(parsed.teamMemberships).toHaveLength(2);
+    // Ordered by the query (`teams.name`, then `event_id` — SQLite sorts NULL first), so the season
+    // row precedes its registration deterministically rather than by luck of the scan.
+    expect(parsed.teamMemberships[0]).toMatchObject({ eventId: null, eventName: null });
+    expect(parsed.teamMemberships[1]).toMatchObject({ eventName: "Springfield Sectionals" });
+  });
+
+  // Issue #131's folded adjacent defect. Every player-creating path seeds an alias equal to the new
+  // player's own canonical name, so `(aka <same name>)` printed on all 1745 live profiles. Seeded
+  // here through the real writer (`resolvePlayer` creates the row AND its self-alias) rather than by
+  // hand, so the test cannot drift from what production actually writes.
+  it("omits the '(aka …)' suffix when the only alias is the player's own name", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const resolution = resolvePlayer(db, { name: "Nova Norbury" });
+    expect(resolution.kind).toBe("created");
+    const aliasCount = db.select().from(playerAliases).all().length;
+    sqlite.close();
+    // The premise of the fix, asserted rather than assumed: the real writer DID seed a self-alias.
+    expect(aliasCount).toBe(1);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "show", "Nova Norbury"]);
+
+    expect(code).toBe(0);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    expect(printed).not.toContain("aka");
+    expect(printed).toContain("Nova Norbury");
   });
 });
