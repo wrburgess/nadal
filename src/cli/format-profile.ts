@@ -130,6 +130,97 @@ export function ratingSourceLabel(source: string): string {
 }
 
 /**
+ * The WTN sources this disclosure can name a publisher for: the two that `src/ingest/archived.ts`
+ * writes out of the ITF widget embedded in a USTA profile.
+ *
+ * **Both halves of this pair matter, and each fixes a different defect.** An enumeration alone
+ * fails silently when the vocabulary grows — #132's own rejected option 3 ("store both,
+ * source-attributed") adds a WTN source, and a two-element set would describe only the old one
+ * while the roster table printed both. But a bare `startsWith("wtn_")` fails *worse*: the second
+ * source that option contemplates comes **from worldtennisnumber.com**, the very publisher this
+ * line says the number is *not* from, so a prefix test would attach "shown on the USTA player
+ * profile" to a figure that is nothing of the kind. Widening the net to avoid an omission would
+ * have manufactured a false attribution — in the one sentence whose whole job is attribution.
+ * (Found by Codex adversarial review round 1, guard-completeness lens, rated Medium.)
+ *
+ * So: attribute only what is known, and **notice** the rest rather than swallowing it. An
+ * unrecognised `wtn_*` source is disclosed as present-but-unattributed, which needs no maintenance
+ * and cannot lie. Adding it to this set is then a deliberate act by whoever adds the source.
+ */
+const USTA_WIDGET_WTN_SOURCES: ReadonlySet<string> = new Set(["wtn_singles", "wtn_doubles"]);
+
+function isWtnSource(source: string): boolean {
+  return source.startsWith("wtn_");
+}
+
+/**
+ * Issue #132's disclosure: **which** publisher's World Tennis Number the dossier is printing, and
+ * **when** that publisher published it.
+ *
+ * The issue's complaint was that two sources give a different WTN singles number for one player —
+ * 30.35 on the USTA profile widget, 32.6 on worldtennisnumber.com — and the dossier "prints one of
+ * them without saying which". The decision was to keep the USTA-embedded value; this line is the
+ * other half of that decision, and without it the decision is invisible to the person holding the
+ * binder.
+ *
+ * **Derived from the observations actually printed, never hardcoded** — the same rule
+ * `formatRetainedLeaguesLine` states one field over: a hardcoded sentence quietly rots as the data
+ * moves. Specifically it reads each entry's `latest`, because `latest` is what
+ * `formatRatingTrajectory` renders; describing the whole `series` would date numbers the page does
+ * not show.
+ *
+ * **Every branch prints**, per the #97/#113 precedent — a disclosure that disappears when there is
+ * nothing to disclose leaves a reader unable to tell "no WTN on file" from "this dossier forgot to
+ * mention it". "No WTN at all" and "WTN whose date we cannot state" are kept **separate**, and
+ * neither borrows the other's sentence: `observed_on` is an unconstrained TEXT column, so a blank
+ * one is reachable, and collapsing that case into "none on file" would deny ratings the page is
+ * visibly printing, while letting it fall through to the dated branch would render a contentless
+ * `published .`.
+ *
+ * It does **not** claim the two publishers were reconciled, because they were not: the 30.35/32.6
+ * gap is unexplained, and saying so is the honest content of the line.
+ */
+export function formatWtnProvenanceLine(trajectories: RatingTrajectoryResult[]): string {
+  const wtn = trajectories.flat().filter((entry) => isWtnSource(entry.source));
+  if (wtn.length === 0) return "none on file for this roster";
+
+  const attributed = wtn.filter((entry) => USTA_WIDGET_WTN_SOURCES.has(entry.source));
+  const unattributed = [...new Set(wtn.filter((e) => !USTA_WIDGET_WTN_SOURCES.has(e.source)).map((e) => e.source))]
+    .map((source) => formatName(ratingSourceLabel(source)))
+    .sort();
+
+  const dates = attributed
+    .map((entry) => formatName(entry.latest.observedOn).trim())
+    .filter((date) => date !== "")
+    .sort();
+
+  const first = dates[0];
+  const last = dates[dates.length - 1];
+  const when =
+    first === undefined || last === undefined
+      ? "publication date not recorded"
+      : first === last
+        ? `published ${first}`
+        : `published between ${first} and ${last}`;
+
+  // The USTA-attributed sentence is stated only when there is something to attribute it to; a
+  // roster carrying ONLY unrecognised WTN sources must not be told its numbers came from a page
+  // none of them came from.
+  const usta =
+    attributed.length === 0
+      ? ""
+      : `the ITF World Tennis Number shown on the USTA player profile, ${when}. ` +
+        "worldtennisnumber.com may show a different number for the same player; this dossier prints " +
+        "the USTA figure and does not reconcile the two";
+
+  if (unattributed.length === 0) return usta;
+  const others =
+    `${unattributed.join(", ")} ${unattributed.length === 1 ? "is" : "are"} also on file and ` +
+    "this line does not identify their publisher";
+  return usta === "" ? others : `${usta}. Separately, ${others}`;
+}
+
+/**
  * Every rating source renders at a FIXED precision, never a variable one — these are scouting
  * numbers read side by side in print, and a WTN of exactly `4` rendering as `"4"` next to a `"4.2"`
  * reads as a different (smaller-magnitude) quantity than it is, not merely a formatting quirk.

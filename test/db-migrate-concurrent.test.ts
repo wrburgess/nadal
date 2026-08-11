@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,16 @@ const EXPECTED_TABLES = [
   "team_matches", "court_matches", "court_match_players",
   "rating_observations", "availability", "captain_notes", "request_log",
 ].sort();
+
+/** How many migrations exist, read from the same journal `applyMigrations` walks. The assertion
+ * below is "one journal row per migration", and reading the count here is what makes it say that
+ * rather than restate today's total as a literal. */
+function migrationCount(): number {
+  const journal = JSON.parse(
+    readFileSync(join(REPO_ROOT, "drizzle", "meta", "_journal.json"), "utf8"),
+  ) as { entries: unknown[] };
+  return journal.entries.length;
+}
 
 /**
  * Eight rounds, and the number is derived rather than picked. Measured against the pre-fix code,
@@ -135,7 +145,11 @@ describe("two concurrent `tn db migrate` processes on one new database (#117)", 
         uncontendedSchema,
       );
       // Each migration recorded exactly once: two processes must not both write journal rows.
-      expect(applied.count, `round ${round}`).toBe(12);
+      // Counted from the journal rather than hardcoded — the claim is "one row per migration", and
+      // a literal states a different, weaker thing that happens to coincide until the next
+      // migration is added, at which point it fails for a reason unrelated to concurrency (it did,
+      // on #132's migration 0012).
+      expect(applied.count, `round ${round}`).toBe(migrationCount());
     }
   }, TIMEOUT_MS);
 });

@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import type { CheerioAPI } from "cheerio";
-import { collapse, hrefParam } from "../dom.js";
+import { collapse, findUsDate, hrefParam } from "../dom.js";
 import {
   ParseError,
   ntrpRatingTypeSchema,
@@ -112,9 +112,9 @@ function contextLines(
 /**
  * `3.5 C` plus `Updated Date 12/31/24` → a dated NTRP observation.
  *
- * The year is two digits. Read literally it is the year 24; read as what it is — an NTRP
- * effective date, always a 31 December — it is 2024, and that date is the axis a rating
- * trajectory is plotted on.
+ * The date conversion (including the two-digit-year rule this block's `12/31/24` needs) lives in
+ * `findUsDate`, shared with the WTN widget's section subtitles — issue #132. It used to be an
+ * inline copy here, which is how one page ends up with two answers for what `/25` means.
  */
 function parseNtrp($: CheerioAPI, source: SourceRef): RatingObservation | null {
   const block = $(NTRP).first();
@@ -125,11 +125,8 @@ function parseNtrp($: CheerioAPI, source: SourceRef): RatingObservation | null {
   );
   if (rating === null) return null;
 
-  const date = /(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})/.exec(
-    collapse(block.find(".readonly-text__subtext").text()),
-  );
-  if (date === null) return null;
-  const year = (date[3] ?? "").length === 2 ? `20${date[3]}` : date[3];
+  const observedOn = findUsDate(block.find(".readonly-text__subtext").text());
+  if (observedOn === null) return null;
 
   let ratingType: string | null = null;
   if (rating[2] !== undefined) {
@@ -144,6 +141,6 @@ function parseNtrp($: CheerioAPI, source: SourceRef): RatingObservation | null {
     source: "ntrp",
     value: Number(rating[1]),
     ratingType,
-    observedOn: `${year}-${date[1]?.padStart(2, "0")}-${date[2]?.padStart(2, "0")}`,
+    observedOn,
   } as RatingObservation;
 }

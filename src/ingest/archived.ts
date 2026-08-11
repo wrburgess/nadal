@@ -58,7 +58,9 @@ export async function pullArchivedUstaProfile(
     throw err;
   }
 
-  const observedOn = source.fetchedAt.slice(0, 10);
+  // No capture-date fallback is derived here any more, deliberately: every rating this function
+  // writes is dated by its own publisher (issue #132). A binding holding "the day we fetched it"
+  // sitting beside those writes is the shape the old defect had, so it is gone rather than unused.
 
   try {
     const player = db.transaction((tx) => {
@@ -93,15 +95,22 @@ export async function pullArchivedUstaProfile(
           observedOn: usta.ntrp.observedOn,
         });
       }
-      // WTN carries no date of its own (the widget shows only a current value), so the capture
-      // date is the only honest `observedOn` available.
+      // Each discipline is dated by the ITF's own `Updated` stamp on its own widget section — the
+      // same rule the NTRP write above already follows, and the two are deliberately alike.
+      //
+      // This used to stamp the capture date, on the strength of a comment claiming the widget
+      // "shows only a current value". Every one of the 194 WTN sections in this project's captures
+      // carries an `Updated` date, so the claim was false against all of them and the effect was
+      // 133 rows dated five days after the number they held (issue #132). The date is read
+      // per-section rather than once for the widget: the two disciplines are recalculated
+      // independently, and reading one date for both would be invisible on a page where they agree.
       if (wtn?.singles !== null && wtn?.singles !== undefined) {
         upsertRatingObservation(tx, {
           playerId: updated.id,
           source: "wtn_singles",
           value: wtn.singles.value,
           ratingType: null,
-          observedOn,
+          observedOn: wtn.singles.updatedOn,
         });
       }
       if (wtn?.doubles !== null && wtn?.doubles !== undefined) {
@@ -110,7 +119,7 @@ export async function pullArchivedUstaProfile(
           source: "wtn_doubles",
           value: wtn.doubles.value,
           ratingType: null,
-          observedOn,
+          observedOn: wtn.doubles.updatedOn,
         });
       }
 

@@ -137,12 +137,56 @@ export function parseNumber(raw: string | undefined): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-/** `11/15/2025` → `2025-11-15`. Returns null when the cell is not a US-format date. */
+/**
+ * The one place US month/day/year parts become an ISO date, so the two entry points below cannot
+ * disagree about the format or about the two-digit-year rule.
+ *
+ * A two-digit year is read as `20xx`. Read literally `24` is the year 24; read as what these pages
+ * mean by it — a rating's effective date — it is 2024, and that date is the axis a rating
+ * trajectory is plotted on.
+ */
+function isoFromUsParts(month: string, day: string, year: string): string {
+  return `${year.length === 2 ? `20${year}` : year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+/**
+ * `11/15/2025` → `2025-11-15`, and **only** when the whole cell is that date.
+ *
+ * Anchored on purpose, and the anchoring is the contract its TennisRecord callers depend on: these
+ * are positionally-decoded table cells, so a cell carrying a date *plus* other text is a cell this
+ * parser has misidentified, not a date to salvage. `findUsDate` below asks the deliberately
+ * different question, and widening this one to match it would start reading dates out of prose.
+ */
 export function parseUsDate(raw: string | undefined): string | null {
   const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(collapse(raw ?? ""));
   if (match === null) return null;
   const [, month, day, year] = match;
-  return `${year}-${month?.padStart(2, "0")}-${day?.padStart(2, "0")}`;
+  return isoFromUsParts(month ?? "", day ?? "", year ?? "");
+}
+
+/**
+ * `Updated Date 12/31/24` → `2024-12-31`: the date **inside** a longer label.
+ *
+ * The other shape these pages use, and the one two different callers now meet — USTA's NTRP block
+ * labels its date (`Updated Date 12/31/24`) and the WTN widget's section subtitles do the same
+ * (`Updated 08/05/2026`, `Last Played 06/10/2025`). Both accept a two-digit year, which
+ * `parseUsDate` does not, because both of these labels carry one in the wild.
+ *
+ * Returns `null` rather than a partially-built string when there is no date, so a caller that must
+ * refuse can tell "no date" from "some date" — see `parseWtnWidget`, which throws on the former.
+ *
+ * **`\d{4}` is tried before `\d{2}`, and the order is load-bearing.** JS alternation is
+ * leftmost-wins, not longest-match, so `(\d{2}|\d{4})` matches the `20` of `2026` and yields
+ * `2020-08-05` — a plausible date, five years wrong, from a page that printed the right one. This
+ * function was extracted from `parseNtrp`, which carried the reversed order; it was latent there
+ * only because USTA's NTRP block always prints a two-digit year, and the WTN subtitles this now
+ * also serves print four. (Issue #132.)
+ */
+export function findUsDate(raw: string | undefined): string | null {
+  const match = /(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})/.exec(collapse(raw ?? ""));
+  if (match === null) return null;
+  const [, month, day, year] = match;
+  return isoFromUsParts(month ?? "", day ?? "", year ?? "");
 }
 
 /** `10-5` → `{ wins: 10, losses: 5 }`; anything else → null. `0-0` is a record, not an absence. */

@@ -25,6 +25,7 @@ import {
   formatRetainedLeaguesLine,
   formatRosterSourceLine,
   formatSlotTendencies,
+  formatWtnProvenanceLine,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
 import { sanitizeValue } from "../sanitize.js";
@@ -60,6 +61,15 @@ function renderRosterSourceLineHtml(dossier: TeamDossier): string {
     dossier.team.seasonCount,
   );
   return `<p><strong>Roster:</strong> ${escapeHtml(line)}.</p>`;
+}
+
+/** The WTN provenance disclosure (#132) — the twin of `renderWtnProvenanceLineMarkdown`. The
+ * sentence comes from the one shared `formatWtnProvenanceLine`, never re-derived here; escaped like
+ * every other interpolation in this file, because `observed_on` is an unconstrained TEXT column and
+ * therefore as untrusted as a scraped name. */
+function renderWtnProvenanceLineHtml(dossier: TeamDossier): string {
+  const line = formatWtnProvenanceLine(dossier.players.map((p) => p.ratingTrajectory));
+  return `<p><strong>WTN ratings:</strong> ${escapeHtml(line)}.</p>`;
 }
 
 /** The NOT REGISTERED block (#113) — the twin of `renderNotRegisteredSectionMarkdown`. Renders
@@ -460,6 +470,7 @@ export function renderDossier(dossier: TeamDossier): string {
     `<h1>${escapeHtml(dossier.team.teamName)} <span class="v0-badge">dossier — v0 layout</span></h1>` +
     '<section id="roster"><h2>Roster</h2>' +
     renderRosterSourceLineHtml(dossier) +
+    renderWtnProvenanceLineHtml(dossier) +
     renderRosterTableHtml(dossier) +
     renderTeamRecordHtml(dossier) +
     "</section>" +
