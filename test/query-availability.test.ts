@@ -13,6 +13,7 @@ import {
   NoHomeTeamError,
   PlayerNotOnHomeRosterError,
   getAvailabilityForEvent,
+  resolveEventForDay,
   setAvailability,
 } from "../src/query/availability.js";
 import { setHomeTeam } from "../src/query/home-team.js";
@@ -806,4 +807,154 @@ describe("getAvailabilityForEvent", () => {
   // and `getTeamProfile` builds `team.roster` through it, so a retired player never reaches this
   // call in production. The end-to-end guarantee is asserted in test/report-write.test.ts, at the
   // layer that actually owns it; asserting it here would test a filter this function does not have.
+});
+
+// #127 Task 3: `resolveEventForDay` is the day -> event resolution `setAvailability` performed
+// inline (`requireIsoDay` + `eventsForDay` + `selectEvent`), extracted so `tn lineup build` asks the
+// SAME question the same way rather than growing a second answer to it. Every `setAvailability` test
+// above is unchanged, which is how the extraction is proven pure; these cover the exported
+// function's OWN refusal surface, including the part `setAvailability` cannot show — that this
+// resolver is the three steps and nothing else, so it neither requires nor consults a home team.
+describe("resolveEventForDay", () => {
+  useTnDbPath();
+
+  it("resolves the one event whose range contains the day", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      const event = resolveEventForDay(db, "2026-08-29");
+      expect(event.id).toBe(fixture.eventId);
+      expect(event.name).toBe("Springfield Sectionals 2026");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("resolves with NO home team designated at all — this is the day->event step, not the write path", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const event = db
+        .insert(events)
+        .values({ name: "Homeless Event", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .returning()
+        .get();
+
+      // `setAvailability` refuses here (NoHomeTeamError, asserted above). The resolver does not,
+      // because resolving which event a day belongs to is not a question about our team — and
+      // `tn lineup build` needs exactly this half.
+      expect(resolveEventForDay(db, "2026-08-29").id).toBe(event.id);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("rejects a malformed day (InvalidAvailabilityDayError), asserted by class", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedHomeTeamFixture(db);
+      for (const day of ["2026-08-29 ", "2026-8-29", "tuesday", ""]) {
+        expect(() => resolveEventForDay(db, day)).toThrow(InvalidAvailabilityDayError);
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("rejects a well-shaped day that is not a real calendar date (InvalidAvailabilityDayError)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedHomeTeamFixture(db);
+      expect(() => resolveEventForDay(db, "2026-02-31")).toThrow(InvalidAvailabilityDayError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a day covered by no event refuses (NoEventForDayError)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedHomeTeamFixture(db);
+      expect(() => resolveEventForDay(db, "2099-01-01")).toThrow(NoEventForDayError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a day covered by two events refuses with both candidates named (AmbiguousEventForDayError)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedHomeTeamFixture(db, { eventStartsOn: "2026-08-01", eventEndsOn: "2026-08-31" });
+      db.insert(events)
+        .values({ name: "Overlapping Event", kind: "league", startsOn: "2026-08-15", endsOn: "2026-09-15" })
+        .run();
+
+      let caught: unknown;
+      try {
+        resolveEventForDay(db, "2026-08-20");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(AmbiguousEventForDayError);
+      expect((caught as AmbiguousEventForDayError).candidates.map((c) => c.name).sort()).toEqual([
+        "Overlapping Event",
+        "Springfield Sectionals 2026",
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a supplied name picks one of an ambiguous day's candidates rather than refusing", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedHomeTeamFixture(db, { eventStartsOn: "2026-08-01", eventEndsOn: "2026-08-31" });
+      const other = db
+        .insert(events)
+        .values({ name: "Overlapping Event", kind: "league", startsOn: "2026-08-15", endsOn: "2026-09-15" })
+        .returning()
+        .get();
+
+      expect(resolveEventForDay(db, "2026-08-20", "Overlapping Event").id).toBe(other.id);
+      expect(resolveEventForDay(db, "2026-08-20", "Springfield Sectionals 2026").name).toBe(
+        "Springfield Sectionals 2026",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a supplied name that exists but does not cover the day refuses (EventDoesNotCoverDayError)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedHomeTeamFixture(db);
+      db.insert(events)
+        .values({ name: "Some Other Event", kind: "league", startsOn: "2026-05-01", endsOn: "2026-05-02" })
+        .run();
+
+      expect(() => resolveEventForDay(db, "2026-08-29", "Some Other Event")).toThrow(EventDoesNotCoverDayError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a supplied name no event carries refuses distinctly (UnknownEventError)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      seedHomeTeamFixture(db);
+      expect(() => resolveEventForDay(db, "2026-08-29", "No Such Event")).toThrow(UnknownEventError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("honors a supplied name even when the day is unambiguous, rather than ignoring it", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const fixture = seedHomeTeamFixture(db);
+      expect(resolveEventForDay(db, "2026-08-29", "Springfield Sectionals 2026").id).toBe(fixture.eventId);
+      expect(() => resolveEventForDay(db, "2026-08-29", "No Such Event")).toThrow(UnknownEventError);
+    } finally {
+      sqlite.close();
+    }
+  });
 });

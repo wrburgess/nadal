@@ -27,7 +27,7 @@ one database file, one machine.
 | `src/db/` | **Model** (schema + connection) | Table definitions (`src/db/schema.ts`), opening the database (`src/db/client.ts`), and the name-comparison primitives identity resolution depends on (`src/db/name-key.ts`). | Business rules. This layer says what a table *is*, not what it *means*. |
 | `src/parsers/` | **Model** (input adapters) | Turning fetched HTML into typed records — one subdirectory per source. Pure functions over a document. | Fetching, database access, or filesystem access. This purity is real today and is the layer's whole contract. |
 | `src/ingest/` | **Model** (writes) | Everything that brings the outside world in: fetching, archiving, identity resolution, and every write primitive. | Rendering for a human. Its errors are formatted once, in `src/ingest/errors.ts`, for both doors. |
-| `src/query/` | **Model** (reads + domain services) | The derived-value layer: records, slot tendencies, partner frequency, rating trajectory, and the lineup prediction itself (`src/query/derive.ts`). | Fetching or parsing. Note the name undersells it — four files here also write (§6). |
+| `src/query/` | **Model** (reads + domain services) | The derived-value layer: records, slot tendencies, partner frequency, rating trajectory, the lineup prediction itself (`src/query/derive.ts`), and the availability-driven lineup builder (`src/query/derive-lineup-build.ts`). | Fetching or parsing. Note the name undersells it — four files here also write (§6). |
 | `src/report/` | **View** | The dossier: assembly and disk-writing (`src/report/write.ts`) and two renderers, `src/report/html.ts` and `src/report/markdown.ts`. | Deciding *what is true* — it renders a struct the model layer produced. |
 | `src/fs/` | **Cross-cutting** | `src/fs/output-root.ts` — the single hardened path for every file this app writes: containment checks, exclusive creation, symlink and inode re-verification. | Nothing domain-specific. It is a security kernel, not a layer of the map. |
 | `src/telemetry/` | **Cross-cutting** | `src/telemetry/request-log.ts` — one row per invocation, from either door. | Affecting the operation it wraps. A logging failure prints a line and is swallowed. |
@@ -40,13 +40,13 @@ one database file, one machine.
 
 **The `tn` CLI.** `bin/tn` launches `src/cli/main.ts`, which hands the arguments to the dispatcher in
 `src/cli/router.ts`. Commands are a flat list — adding one means adding an import and an array entry.
-There are **15**. The authoritative surface is `docs/cli/GRAMMAR.md`, which is guarded by an executable
+There are **18**. The authoritative surface is `docs/cli/GRAMMAR.md`, which is guarded by an executable
 test (`test/cli-grammar-parity.test.ts`); this document deliberately does **not** restate the command
 table, because a second copy would drift from the guarded one.
 
 **The MCP server.** `tn mcp serve` starts the server in `src/mcp/server.ts`, which registers the
-**14** tools declared in `src/mcp/tools.ts`. Each tool's handler calls the *same model function* its
-CLI sibling calls.
+**17** tools declared in `src/mcp/tools.ts` — one per command except `tn mcp serve` itself. Each
+tool's handler calls the *same model function* its CLI sibling calls.
 
 > **The invariant: front doors route and translate. Scouting and lineup logic lives in the model layer
 > and is shared, never duplicated per door.**
@@ -56,8 +56,13 @@ Two pieces of evidence that it holds, and one that shows what breaking it costs:
 - **Enforced, not merely intended.** `test/mcp-tool-parity.test.ts` asserts a two-way mapping between
   the CLI registry and the tool table, with `tn mcp serve` the single declared exception — the server
   cannot register itself as a tool of itself.
-- **One brain, both doors.** The lineup heuristic exists once, in `src/query/derive.ts`; both doors
-  reach it through the same wrapper in `src/query/lineup.ts`.
+- **One brain, both doors.** The lineup rules exist once and are reached identically from each door:
+  the opponent-prediction heuristic in `src/query/derive.ts` through `src/query/lineup.ts`, and our
+  own availability-driven builder (#127) in `src/query/derive-lineup-build.ts` through
+  `src/query/lineup-build.ts`. Two brains because they answer two different questions — one predicts
+  from history, the other assembles from who said yes — but neither is duplicated per door, and the
+  small factual primitives they share (rating-source selection, partner frequency) live in
+  `src/query/derive.ts` and are imported rather than re-derived.
 - **What it costs when violated.** The "this name is ambiguous" message used to live in the CLI
   directory. The MCP door had no reason to reach into the CLI for it, so it shipped a stale version.
   The formatter now lives in `src/ingest/errors.ts` — below both doors — and both call it.

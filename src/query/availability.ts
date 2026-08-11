@@ -157,6 +157,38 @@ function selectEvent(db: Db, day: string, candidates: EventRow[], eventName?: st
   return candidates[0]!;
 }
 
+/** An `events` row as stored — what `resolveEventForDay` hands back. Named for the question it
+ * answers ("which event is this day part of") rather than for the table, since that is the only way
+ * this module produces one. */
+export type DayEvent = EventRow;
+
+/**
+ * Which event `day` belongs to: `requireIsoDay` + `eventsForDay` + `selectEvent`, composed.
+ *
+ * This is the whole of the day -> event resolution `setAvailability` performs (and now performs by
+ * calling this), extracted for #127 so `tn lineup build` — which asks the identical question from
+ * the identical positional grammar, a bare day plus an optional trailing disambiguator — reaches the
+ * same answer through the same code rather than growing a second, subtly different one. The refusal
+ * classes are already exported and become the shared day->event taxonomy; their `Availability`-
+ * flavored names are a wart carried deliberately, since renaming them would churn every CLI refusal
+ * list for no behavior change.
+ *
+ * Deliberately NOT part of it: the home team, the roster check, and the transaction. Those are
+ * `setAvailability`'s own concerns as a WRITER — resolving which event a day belongs to is not a
+ * question about our team, and a reader that only needs the event must not be made to require a
+ * designated home team to ask it. `setAvailability` still calls this INSIDE its `IMMEDIATE`
+ * transaction, so the serialization that closes the event-range race is unchanged: this function
+ * takes whatever handle it is given and reads through it.
+ */
+export function resolveEventForDay(db: Db, day: string, eventName?: string): DayEvent {
+  const isoDay = requireIsoDay(day);
+  const candidates = eventsForDay(db, isoDay);
+  if (candidates.length === 0) {
+    throw new NoEventForDayError(`no event on file covers day "${isoDay}"`);
+  }
+  return selectEvent(db, isoDay, candidates, eventName);
+}
+
 /**
  * Records `playerId`'s availability for the event day resolved from `input.day`, upserting on the
  * schema's existing `(player_id, event_id, day)` unique index — idempotent per spec § Ingestion
@@ -227,12 +259,10 @@ export function setAvailability(db: Db, input: SetAvailabilityInput): SetAvailab
       throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);
     }
 
-    const candidateEvents = eventsForDay(tx, day);
-    if (candidateEvents.length === 0) {
-      throw new NoEventForDayError(`no event on file covers day "${day}"`);
-    }
-
-    const event = selectEvent(tx, day, candidateEvents, input.eventName);
+    // `day` is already `requireIsoDay`'d above, so that guard fires BEFORE the transaction (and so
+    // before `NoHomeTeamError`) exactly as it always has; re-running it inside this composition is
+    // a pure re-check of an already-valid value, not a second rule.
+    const event = resolveEventForDay(tx, day, input.eventName);
 
     // #129: the SAME roster the dossier's availability grid will render for this event, resolved
     // inside this transaction alongside the `onRoster` check above — never a second, separate read

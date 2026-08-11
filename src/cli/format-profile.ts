@@ -230,8 +230,15 @@ export function formatWtnProvenanceLine(trajectories: RatingTrajectoryResult[]):
  * rounds rather than truncates, so a value carrying more precision than the display allows (e.g. a
  * raw `21.567`) still renders a value consistent with the others rather than silently dropping
  * digits.
+ *
+ * Exported for #127's `format-lineup-build.ts`, which prints a COURT's rating — the sum of the
+ * placed players' values, in the same scale. A sum belongs at the same precision as its terms (two
+ * NTRP values are each `x.0`/`x.5`, so their sum is too), and the alternative was a second precision
+ * convention in a sibling presenter — exactly the drift `ratingSourceLabel` was shared to prevent,
+ * one field over. It is also what keeps a float sum (`4.2 + 4.1 === 8.299999999999999`) from
+ * reaching a captain's page as a 16-digit number.
  */
-function formatRatingValue(value: number, source: string): string {
+export function formatRatingValue(value: number, source: string): string {
   const decimals = source === "ntrp" ? 1 : 2;
   return value.toFixed(decimals);
 }

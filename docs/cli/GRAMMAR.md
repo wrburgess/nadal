@@ -154,6 +154,7 @@ looks for `--help` then depends on whether that resolved:
 | `tn roster set` | Replace an event's registered roster from a payload file |
 | `tn match add` | Record a scorecard's results from an agent-extracted payload |
 | `tn lineup plan` | Predict an opponent's lineup from court-assignment history and ratings |
+| `tn lineup build` | Build the home team's lineup for an event day from who is available |
 | `tn report build` | Render per-opponent scouting dossiers (HTML + markdown) to disk |
 | `tn mcp serve` | Run the MCP server over stdio, mirroring the CLI grammar as tools |
 
@@ -251,8 +252,8 @@ is the defect #97 was opened for, and an unfiltered record a reader cannot disti
 filtered one is that same defect one step out. An unknown event **refuses** rather than quietly
 falling back to unscoped, for the same reason `tn report build` refuses one.
 
-Unlike `tn lineup plan`/`tn report build`, these two do **not** require the event to have a `format`
-on file — they read its `league_scope`, never its court list. `tn team show`'s own `record:` line is
+Unlike `tn lineup plan`/`tn lineup build`/`tn report build`, these two do **not** require the event to
+have a `format` on file — they read its `league_scope`, never its court list. `tn team show`'s own `record:` line is
 never scoped: it comes from `team_matches`, which carries no league context at all, and the printed
 line says so.
 
@@ -273,7 +274,9 @@ The fifth positional, `[format]` (#63), is the event's own court list: a comma-s
 `slot:discipline` list, e.g. `"S1:singles,D1:doubles,D2:doubles,D3:doubles"` — `discipline` is
 exactly `singles` or `doubles`, never inferred from the slot's own spelling. It is what
 `tn lineup plan`/`tn report build`'s optional trailing `event` argument reads to replace their
-derived slot set (see below). **Omitted on a repeat, it PRESERVES whatever format is already
+derived slot set (see below), and it is the **only** court list `tn lineup build` will use — that
+command has no derived fallback and refuses an event without a format rather than inventing courts
+from history. **Omitted on a repeat, it PRESERVES whatever format is already
 stored** — the same "never clobber a stored value with an incoming null" rule
 `upsertTeamMatch` already runs for `scheduledTime`/`site` — so a routine date correction never
 silently deletes a format recorded earlier. Given, it REPLACES the stored value outright; there is
@@ -400,6 +403,82 @@ from the team's own league page. Measured on the live database when #97 landed, 
 command's evidence rows were already `Adult 40+ 3.5`. Adding a league filter on top would remove
 nothing and would imply a correctness this command gets from the team linkage instead. The scope
 governs `tn report build`'s records, `tn player show` and `tn team show`; it does not govern this.
+
+`tn lineup build <YYYY-MM-DD> [event] [--json]` (#127) — builds **our own** lineup for one day of an
+event out of who has said they are available. The sibling of `tn lineup plan`, and the inverse of it:
+that command predicts an *opponent's* lineup from history, this one assembles *ours* from
+availability.
+
+**The target is the DAY, not a team**, which is the one surprise in this grammar and is deliberate.
+Availability and captain notes are our-team-only by design (spec § Domain model), so the team comes
+from `tn team home` and there is no way to ask this question about an opponent — asking it would be
+`tn lineup plan`, which is unchanged. The event is resolved *from* the day; the optional trailing
+`[event]` is the same disambiguator `tn player avail`, `tn lineup plan` and `tn report build` accept,
+needed only when the day falls inside more than one event's range and still checked *against* the day
+when supplied (a named event that does not cover the day refuses, rather than being trusted).
+
+**Two hard constraints, both enforced by construction and both stated on the page.** Only a player
+whose recorded answer for that day is `available` is fielded, and **no player is ever placed on two
+courts**. When there are not enough available bodies, a court is left **unfilled** and the leftover
+body **sits** — a doubles court is filled with two or with none, never with one, and never by
+double-booking somebody from another court. Note the two numbers that go with that, which count
+different things: `shortfall` counts **bodies** (how many more people you need), while a scenario's
+`unfilledSeats` counts **seats** (how much of the court list is empty). One body short of a doubles
+court is a shortfall of 1 and 2 empty seats, with one person sitting.
+
+**`uncertain` and "never answered" are NOT fielded, and neither is silently folded into
+"unavailable".** The output carries a four-bucket eligibility ledger — available / unavailable /
+uncertain / no answer on file — naming every roster member in exactly one bucket, because those are
+three different absences and a captain chases them three different ways: one is settled, and the
+other two are still a phone call away from changing.
+
+**Three strategies run over the same available set, and each prints the rule it ran.**
+`strength-first` gives singles to the strongest available player and then fills each doubles court, in
+the event's format order, with the two strongest left — stacking the top courts. `history-first` gives
+singles to the most-played singles player and then takes the pairs with the most matches together
+**for this team** — keeping established partnerships intact. `balanced` does singles as
+`strength-first`, then re-partitions the remaining players across the doubles courts to make the
+courts as even as possible — spreading strength rather than stacking it. Strength is the rating
+normalized for direction, so `balanced` does not silently invert on a WTN roster; the number printed
+beside each court is the **raw** value in the named scale.
+
+**Identical scenarios collapse.** Two or three strategies that produce the same court assignments are
+printed **once**, under all of their names, with a line saying so. Three identical tables must never
+read as three options — and the degenerate case is real: with nothing rated and nothing played, all
+three fall through to the same stable ordering, and the output says the ordering was not strength.
+
+**Only this team's own matches count as shared history, and only this team's side of them.** A
+partnership formed on a different team says nothing about how *this* team fields courts, so evidence
+is restricted to court matches linked to one of this team's `team_matches` rows. That restriction
+alone is not enough, which is why there are **two** `excluded:` counts rather than one: a player on
+this roster *now* may have played one of those very courts **against** us, before changing teams, and
+two such players share the opposing side with each other — so participants are additionally
+restricted to the side this team was on. The two exclusions stay separate sentences because they are
+different facts: *this match was not ours*, versus *this match was ours and these players were on the
+other half of it*. `evidence:` counts only what survived both, so it never offers a court as support
+for a count that court took no part in.
+
+`tn lineup plan` applies the first restriction and not the second; that difference is deliberate for
+now, since #127 leaves its behavior unchanged. Unlike `tn lineup plan`, a roster with **no** history at all does
+**not** refuse — availability is the input and history is only a soft signal, so every pair simply
+reads *no shared history* and the scenarios still emit. That matters for the case this command exists
+to serve: a newly-assembled sectionals roster that has never played together.
+
+**Captain notes are displayed, never scored.** Notes touching a placed player or pair are printed
+beside the scenarios and the page says they were not used by any strategy; notes about people this
+build did not place are counted rather than shown, so the page never implies the journal is empty.
+
+Two standing limits, printed on every run rather than left in the docs. **The event's court list is
+one list for all of its days** — nadal stores no per-day court set, so a three-day event fields the
+same courts on each day. And **deliberate double-duty is out of scope for v1**: there is no way to ask
+this command to field one player twice, even where a real format would allow it.
+
+Refuses, exit 1, one distinct reason per message: no home team designated; a day that is not a real
+`YYYY-MM-DD` date; a day inside no event; a day inside more than one event with no `[event]` given;
+an `[event]` that is unknown or does not cover the day; an event with no `format` on file; and a
+stored `format`, league scope, or availability status our own writers could not have produced.
+A roster with nobody available is **not** a refusal — every slot prints unfilled, everyone is named in
+the ledger, and the command exits 0.
 
 `tn report build [sectionals|<team>] [event] [--json]` — `<team>` renders that one team's dossier;
 `sectionals`, and bare (no target), render one dossier per team **in the event's field** plus a
