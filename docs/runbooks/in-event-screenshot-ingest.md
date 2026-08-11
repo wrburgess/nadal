@@ -1,5 +1,10 @@
 # Runbook: in-event screenshot ingest
 
+> **Walked end to end on 2026-08-11** against a real TennisLink scorecard, on a copy of the live
+> database (#133). Every command, message and timing below was executed, not drafted. Where this
+> runbook previously said something the run contradicted, the correction is marked **[dry run]** so
+> you can tell a measured claim from an inherited one.
+
 ## When to use this
 
 At a Sectionals site (or any tournament), when a scorecard photo needs to be in the system before
@@ -9,18 +14,99 @@ OCR or image-decoding dependency in this repo (see the assessment for #18), and 
 already puts here is **agent vision → a structured payload → a deterministic writer**. The model
 sees the photo; `tn` validates and writes.
 
-## Before you start
+**It works, and it is fast.** The deterministic half of the loop measured **~2 seconds** end to end
+(see *Measured timings*). Everything that can go wrong goes wrong in the preflight, not the write.
 
+## Preflight — before you leave for the venue
+
+This is the half that cannot be fixed on site, and the dry run's hardest finding is here.
+
+- **Both teams must already be on file, with their rosters pulled** — the prompt form in
+  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2, or the equivalent
+  `team_pull`/`player_pull` MCP calls. `tn match add` / `match_add` **never creates a team**, and
+  every player name resolves ONLY against the named team's own roster (never a global lookup).
+- **[dry run] There is no offline recovery for a missing team or a missing player.** There is no
+  `tn team add`; `tn roster set` requires the team to exist already; `tn player alias` and
+  `tn player distinct` cannot put someone on a roster. The only path is `tn team pull`, which needs
+  the network. A card naming anyone your rosters do not carry is **unfixable in a building with no
+  wifi.** Pull complete rosters before you travel; that is the mitigation, and there is no other.
+- **[dry run] Check your prefix-ID coverage before you rely on it.** The *Failure modes and recovery*
+  table below offers `usta:`/`tr:`/`wtn:` prefix-IDs, which only exist if the player row carries
+  that id. Measured on the live database: **all 49 Sectionals-registered players carry both a
+  `usta_uaid` and a `tennisrecord_url`** — so at Springfield this path is available for every name on
+  every card. Across the whole database it is not: **1668 of 1745 players (95.6%) carry no source id
+  at all**, so away from the registered rosters the prefix-ID recovery simply does not exist. Confirm
+  with:
+
+  ```sh
+  # The two-line read-only guard every sqlite3 read in this runbook carries; the venue preflight
+  # below explains why a bare `?mode=ro` is not enough. Copy it as-is.
+  DB="$TN_DB_PATH"; RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+  sqlite3 "file:$DB?$RO" "select count(*) as roster,
+    sum(p.usta_uaid is not null) as has_usta
+    from team_memberships tm join players p on p.id = tm.player_id
+    where tm.event_id = (select id from events where name = 'Springfield Sectionals')
+      and tm.retired_at is null"
+  ```
+
+- If the match belongs to a tracked event, the event is already on file (`tn event add`). Naming an
+  unknown event in the payload is a refusal, not a create.
 - The database is migrated (`tn db migrate`).
-- **Both teams are already on file, with their rosters pulled** (the prompt form in
-  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2 — never paste a scraped team
-  name between quotes
-  for each side, or the equivalent `team_pull`/`player_pull` MCP calls). `tn match add` / `match_add`
-  never creates a team, and every player name resolves ONLY against the named team's own roster
-  (never a global lookup) — a team or a roster that does not exist yet cannot be matched into, no
-  matter how clearly the photo reads.
-- If the match belongs to a tracked event (a Sectionals or league season), the event is already on
-  file (`tn event add`). Naming an unknown event in the payload is a refusal, not a create.
+
+## Preflight — at the venue, before the first card
+
+**[dry run] Set all four paths, absolutely, on every single invocation.** Not once per session — `tn`
+reads them per process, and the run below lost a photo archive to exactly this by dropping one
+variable on one command.
+
+```sh
+export TN_DB_PATH=/absolute/path/to/data/nadal.db
+export TN_RAW_PATH=/absolute/path/to/raw
+export TN_REPORTS_PATH=/absolute/path/to/reports
+export TN_SCORECARD_PHOTOS_PATH=/absolute/path/to/scorecard-photos
+```
+
+`TN_DB_PATH` is resolved against the caller's cwd and **SQLite creates on open** (issue #111): run
+from the wrong directory and you silently get a fresh, empty database that still reports
+`status=ok`. Confirm you are pointed at the real one before the first write:
+
+```sh
+DB="$TN_DB_PATH"; RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+sqlite3 "file:$DB?$RO" "select count(*) as teams from teams;
+select count(*) as court_matches from court_matches;"
+```
+
+Non-zero counts are the check. Zero means you just created a decoy — stop and fix the path.
+
+### [dry run] The read-only guard, and why every read below carries it
+
+**A bare `sqlite3 "file:$DB?mode=ro"` fails against any database `tn` has touched.** Measured on
+three independent databases: `tn` closes cleanly and removes **both** WAL sidecars on exit — after a
+read (`tn team show`) and after a write (`tn match add`) alike — and a read-only connection to a
+WAL-mode database can create the `-shm` but **never** the `-wal`. So the very next verification
+command exits 14:
+
+```
+Error: in prepare, unable to open database file (14)
+```
+
+The database is fine. The `[ -f "$DB" ]` guard every runbook uses passes happily, because the file
+is right there. This is the ordinary path, not an edge case — it is what you will hit at the venue
+one command after a successful ingest.
+
+The two-line guard picks the correct form and is tested in both directions:
+
+```sh
+RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+```
+
+`-wal` present → plain `mode=ro`, which reads the WAL and cannot go stale. `-wal` absent → add
+`immutable=1`, safe precisely because there is no WAL to skip. **Never hardcode `immutable=1`**: with
+a live `-wal` it silently reads stale data instead of failing loudly, which trades a visible error
+for an invisible wrong answer.
+
+Take a backup before the first write of the day (`tn db backup`) — note that it is itself a write
+(it appends a `request_log` row) and it leaves the source database sidecar-less like everything else.
 
 ## Steps
 
@@ -37,6 +123,23 @@ The agent's job is to produce ONE JSON object matching `src/ingest/scorecard.ts`
 `discipline`, `homePlayers`/`visitingPlayers` by name, and — when the card shows them — `winnerSide`
 and `score`). The slot set is whatever the card actually shows (`S1`/`D1`-`D3` at a four-court
 event, `S1`/`D1`-`D4` at a five-court one like Tulsa 2025) — it is never assumed to be exactly four.
+
+**[dry run] The team names on the card are usually not the names on file.** The card that walked
+this runbook printed `HOA/Burgess/40&over3.5M`; the database holds `HOA/Burgess-Zingg/40&over3.5M`.
+Team resolution is exact — no prefix match, no fuzzy fallback — so this refuses. **Give the agent the
+on-file spelling in the prompt (as the example above does) rather than letting it copy the card.**
+There is no `tn` command that will find a team by partial name (`tn team show "HOA/Burgess"` →
+`unknown target`), so look the spelling up directly if you need it:
+
+```sh
+DB="$TN_DB_PATH"; RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+sqlite3 "file:$DB?$RO" "select id, name from teams order by name"
+```
+
+**[dry run] Read the winner off the card's own tick column, not off the score.** Scores print
+winner-first regardless of side. On the card used here every set read like a home win (`6-3 6-4`)
+while the visiting team won 4-0; the arithmetic check is the card's own game-winning percentage —
+summing the games gave 44-28 = 61.11% / 38.89%, matching what the card printed.
 
 ### 2. The agent calls `match_add`
 
@@ -61,6 +164,19 @@ arbitrary local-file-read primitive (rated Critical):
   (`match_add` returns `archiveError` alongside a normal successful result) rather than pretending
   nothing happened, since the match rows genuinely exist either way.
 
+> **[dry run] `status=partial` exits 1. The match still landed.** This is the single most dangerous
+> signal in the loop, because exit 1 reads as "it failed" and invites a re-run. Observed verbatim
+> when `TN_SCORECARD_PHOTOS_PATH` was dropped from one invocation:
+>
+> ```
+> match add status=partial home="HOA/Burgess-Zingg/40&over3.5M" visiting="IA/Versteeg/40&Over3.5M"
+>   playedOn="2026-08-28" teamMatchId="121" courts=4
+>   archiveError="refusing: the configured source root does not exist: .../scorecard-photos"
+> ```
+>
+> `teamMatchId` and `courts` are populated: the four courts are in the database. **Read `status=`,
+> never `$?`.** Only the photo archive failed, and a photo can be archived later.
+
 ### Alternative: a payload file, from the CLI
 
 If the payload already exists as a JSON file (an agent wrote it out, or you are replaying a captured
@@ -74,6 +190,13 @@ tn match add /path/to/payload.json
 JSON matching the schema, refuses (exit 1) with a message pointing at the `match_add` MCP tool —
 this is a stated capability split, not a bug: only the agent's vision call can turn a photo into a
 payload.
+
+A successful run prints, verbatim:
+
+```
+match add status=ok home="HOA/Burgess-Zingg/40&over3.5M" visiting="IA/Versteeg/40&Over3.5M"
+  playedOn="2026-08-28" teamMatchId="121" courts=4 archivedPath="…/raw/scorecard/….png"
+```
 
 ### 3. Verify what actually landed
 
@@ -101,7 +224,11 @@ case "$TMID" in
 esac
 
 # Read-only: verifying a write must never itself write.
-sqlite3 "file:$DB?mode=ro" "select cm.slot, cm.discipline, cm.winner_side, cm.score
+# [dry run] THE READ-ONLY GUARD — not optional here, and this is the exact spot that proves it.
+# `tn match add` has just run and closed, so the `-wal` is gone and a bare `?mode=ro` exits 14
+# ("unable to open database file") on the ordinary success path. Measured on three databases.
+RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+sqlite3 "file:$DB?$RO" "select cm.slot, cm.discipline, cm.winner_side, cm.score
   from court_matches cm
   where cm.team_match_id = $TMID
   order by cm.slot"
@@ -111,41 +238,105 @@ Confirm the slot, discipline, winner, and score against the photo itself, not ju
 call returned ok" — the same discipline this repo's own findings log names for the identical shape
 (`docs/findings.md`: reading back what a write actually recorded, not merely that it succeeded).
 
-## When a name is flagged
+The dry run's readback, for shape:
 
-If any player name on the card cannot be resolved against the named team's roster — misspelled,
-not on the roster at all, or ambiguous against more than one roster name within a couple of
-characters — the **whole ingest refuses and writes nothing**, listing every flagged name together
-(not just the first one hit). This is deliberate: spec § Ingestion requires "every extracted name
-must resolve against known rosters or is flagged, never guessed," and a partial write would leave a
-court's participants half-recorded with no signal that anything was wrong.
+```
+D1|doubles|home|6-3 1-6 1-0
+D2|doubles|home|6-3 6-2
+D3|doubles|visiting|6-3 6-4
+S1|singles|visiting|6-3 6-4
+```
 
-To fix a flagged name, either:
+### 4. Rebuild the binder
 
-- **Correct the spelling** in the payload to match the roster exactly (or an existing alias), and
-  re-run; or
-- **Supply a prefix-ID** instead of the bare name — `usta:<uaid>`, `tr:<tennisrecord-url>`, or
-  `wtn:<tennis-id>` — the same disambiguation idiom every other target in this grammar uses. It
-  looks the identity up globally by source id, which is exactly what you want when the card's
-  handwriting is ambiguous but you know who it is. It does **not** bypass roster scoping: an id
-  naming someone who is not on this team's current roster is flagged `off-roster`, same as a bare
-  name would be (PR #54, High finding 1 — this line used to say a prefix-ID "overrides roster
-  scoping entirely", which stopped being true when that hole was closed and nothing here noticed); or
-- **Record the card's spelling as an alias** of the roster player it belongs to —
-  `tn player alias "<roster name>" "<what the card says>"` (#94) — when the same variant will keep
-  turning up. Unlike the two fixes above, this one is durable: it settles the spelling once, for
-  every future scorecard and pull, rather than for this payload.
+```sh
+tn report build sectionals "Springfield Sectionals"
+```
 
-Re-running the corrected payload is safe: the ingest is idempotent on `(playedOn, the team pair,
-slot)`, so a retry after a fix does not create a second row for the courts that already resolved
-correctly the first time — it simply succeeds where it previously refused.
+Check the summary line's own disclosure before reading the pages:
+
+```
+report build status=ok target="sectionals" teams=5 files=12 root="…"
+  since="2025-08-28" anchoredTo="event" field="registered"
+```
+
+`anchoredTo="event"` means the 12-month window came from the event's `starts_on`, not from today's
+clock. `since=` is the boundary that decides the next section.
+
+## [dry run] What the ingest changes on the page — and what it does not
+
+Measured by building the full dossier set twice — once from a pristine copy, once after the ingest —
+and diffing them.
+
+| Section | Moves on a Friday-night ingest? |
+|---|---|
+| **Prior meetings vs our players** | **Yes** — and for a card of *any* age; this section is explicitly unwindowed ("all meetings on file"). |
+| **Per-player records** | Yes, **only if `playedOn` is on or after `since=`**. |
+| **Per-player court-slot tendencies** | Same rule as records — same window, by construction. |
+| **Partner frequency** | Same rule as records. |
+| **Predicted lineup** | **Yes — regardless of the card's date.** The lineup is restricted to this team's own schedule, not to the window. |
+| **Evidence-scope disclosure** | Yes; the ingested courts appear under **`no league recorded`**, because the payload carries no league field. They are *retained*, not scoped out. |
+| **Team record (`6-0`)** | Changes, but **never into a win or a loss** — it becomes `6-0 (1 undecided)`. See *Known limitations*. |
+
+**The two rows worth internalising before Saturday morning:**
+
+1. **A card older than `since=` still moves prior meetings and the predicted lineup, but changes no
+   record or tendency on the same page.** At Springfield this is a non-issue — every card you ingest
+   is same-week — but it is why a *backfilled* old card can look like it "did nothing".
+2. **The team-record line will say `(1 undecided)` for every tie you ingest.** That is expected, and
+   it is not a sign the courts failed to land — check the court-level readback in step 3 instead.
+
+## [dry run] Failure modes and recovery
+
+Every message below was produced by the dry run, verbatim. All of them exit 1 and, except for
+`partial`, **write nothing at all**.
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `unknown team "Craig, John"` | The team is not on file. `match add` never creates one. | Correct the name to the on-file spelling (step 1). If the team genuinely is not on file, you need `tn team pull` and therefore the network — there is no offline fix. |
+| A second `unknown team "…"` after fixing the first | **Team refusals are reported one at a time**, unlike name flags. | Fix and re-run. Budget two round trips when both names came off the card. |
+| `unresolved player name(s): "A" unresolved; "B" unresolved; …` | Every flagged name, collected in **one** round trip. `unresolved` means "not on this team's roster" — which covers both a misread name *and* a real player who is simply not on the roster you pulled. | Compare against the roster (`tn team show "<team>"`). Nothing is written, so fix them all and re-run once. |
+| `"Randy Burges" ambiguous (Randy Burgess)` | A near miss. It **never** auto-corrects — the candidate is named for you. | Use the candidate's exact spelling, or `tn player alias "Randy Burgess" "Randy Burges"` if this variant will recur. |
+| `"usta:2019367719" resolved to Jamie Johnson, who is not on this team's roster` | A prefix-ID that names a real person on the *wrong* side. A prefix-ID does not bypass roster scoping. | Put the name on the correct side, or check you used the right id. |
+| `status=partial … archiveError=…` | **The match landed.** Only the photo archive failed. Exits 1 anyway. | Do not re-run in a panic. Fix the photo path and re-run only if you want the archive — the re-run is safe (see below). |
+| `unable to open database file (14)` from a `sqlite3 …?mode=ro` read | The `-wal` sidecar is absent, which is the state **every** `tn` command leaves behind. Not a database problem. | Use the read-only guard (`RO="mode=ro"; [ -e "$DB-wal" ] \|\| RO="mode=ro&immutable=1"`). Every read in this runbook already carries it. |
+
+### [dry run] Re-running a card is safe — and a correction really does correct
+
+Both measured, on the same tie:
+
+- **Re-submitting the identical payload is idempotent.** Second run: same `teamMatchId`, `courts=4`,
+  and the database unchanged — one parent row, four court rows, fourteen participants, before and
+  after. (It does write a second archived copy of the photo.)
+- **Re-submitting a corrected payload replaces that court's participants**, it does not accumulate
+  them. Swapping one name on D3 left D3 with exactly the corrected pair and the total participant
+  count unchanged. A scorecard payload is a complete replacement for every court it names.
+
+  **This corrects a warning you may have been given.** Residual
+  [#73](https://github.com/wrburgess/nadal/issues/73) — "`upsertCourtMatchPlayers` adds but never
+  retracts" — is real, but it describes the **`tn player pull` re-pull path**, not this one:
+  `addMatchFromScorecard` clears each named court's participants immediately before writing the
+  fresh set. Correcting a misread name here is safe.
 
 ## Known limitations
 
 - **No in-process image reading.** This repo has no OCR/vision/image dependency; a photo must go
   through an agent's own vision, never `tn` directly.
 - **A team must already exist and carry the roster the card names.** Neither `tn match add` nor
-  `match_add` creates a team or a roster entry — that stays `team pull`'s job.
+  `match_add` creates a team or a roster entry — that stays `team pull`'s job. **[dry run]** And
+  there is no offline substitute; see the travel preflight.
+- **[dry run] The team-level score on the card is discarded.** `scorecardPayloadSchema` has no field
+  for it, so `team_matches.home_courts_won` / `visiting_courts_won` stay NULL and every
+  screenshot-ingested tie counts as `undecided` in the team-record line — even though all four court
+  winners were recorded. The court-level data, which is what the dossier's records, tendencies and
+  prior meetings are built from, is unaffected.
+- **[dry run] A card whose courts a pull has already captured will double them.** Court matches
+  arriving from `player pull` are unlinked (`team_match_id IS NULL`) and carry the pull's own
+  side labels, which are *not* real home/away (accepted residual
+  [#72](https://github.com/wrburgess/nadal/issues/72)). A screenshot ingest of the same real courts
+  creates a second, linked set with the card's true sides. Nothing reconciles the two. In practice
+  this only bites when back-filling an old card that a roster pull already covered — not at a venue,
+  where you are ingesting today's play.
 - **The general event↔team association is out of scope here** (`docs/findings.md`): a payload
   naming a known event links the match to it; naming none writes a match with no event at all,
   same as every other id-less team match on file today.
@@ -153,3 +344,17 @@ correctly the first time — it simply succeeds where it previously refused.
   extension, up to 25 MiB. HEIC (the default format on many phones) and WEBP are not yet supported —
   convert or re-save the photo first, or supply the payload without `sourceImage` and archive it
   separately.
+
+## [dry run] Measured timings
+
+macOS, warm cache, the live database's own scale (32 teams, 1745 players, 1419 court matches):
+
+| Command | Wall clock |
+|---|---|
+| `tn match add` — 4 courts, with photo archive | **0.87 s** |
+| `tn report build sectionals "Springfield Sectionals"` — 5 teams, 12 files | **1.01 s** |
+| `tn db backup` | **0.95 s** |
+
+The deterministic half of the loop is **under two seconds**. The variable cost is the agent's vision
+extraction and any round trips a refusal forces — which is why the preflight above is where the time
+is actually spent, and why getting the team spelling into the prompt is worth doing once.

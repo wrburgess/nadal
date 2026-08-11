@@ -57,7 +57,11 @@ current."
     *'?'*|*'#'*|*'%'*) echo "STOP: database path must not contain ? , # or % ; got '$DB'" >&2; exit 1 ;;
   esac
   # Read-only: an enumeration should never be able to create the thing it is enumerating.
-  sqlite3 "file:$DB?mode=ro" "select name, tennisrecord_url, is_home from teams order by name"
+  # A bare `?mode=ro` exits 14 ("unable to open database file") against a WAL-mode database with no
+  # `-wal` sidecar — the state EVERY `tn` command leaves behind on exit. Step 2's block carries the
+  # full reasoning; this is the same two-line guard.
+  RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+  sqlite3 "file:$DB?$RO" "select name, tennisrecord_url, is_home from teams order by name"
   ```
 - You know which players' dossiers need NTRP/WTN specifically (step 4 below), since that path is
   manual per player, not a blanket re-pull.
@@ -105,17 +109,35 @@ anything it skipped rather than silently dropping it:
 DB="${TN_DB_PATH:-data/nadal.db}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
 # The reads below use SQLite's `file:` URI form (`mode=ro`, so they cannot modify the DATABASE —
-# note SQLite may still create `-wal`/`-shm` sidecars for a read-only connection, so this is a
+# note SQLite may still create a `-shm` sidecar for a read-only connection, so this is a
 # no-change guarantee about your data, not a no-file-touched one), and that
 # form is its own parser: `?` starts the query string, `#` a fragment, `%` an escape. A database path
 # containing one would silently open a DIFFERENT file with `mode=ro` dropped.
+#
+# `-shm`, NOT `-wal` — the distinction decides whether these reads run at all. A read-only
+# connection can create the `-shm` but never the `-wal`, so against a WAL-mode database with no
+# `-wal` beside it every bare `?mode=ro` read fails with `unable to open database file (14)` while
+# the `[ -f "$DB" ]` guard above passes happily.
+#
+# That is the NORMAL state here, not an edge case: measured on three databases during #133's dry
+# run, EVERY `tn` command — read (`tn team show`) and write (`tn match add`) alike — closes cleanly
+# and removes both sidecars on exit. So the reads below carry a guard that picks the right form:
+#
+#   RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+#
+# `-wal` present -> plain `mode=ro`, which reads the WAL and cannot go stale. `-wal` absent ->
+# `immutable=1`, safe precisely because there is no WAL to skip. Do NOT hardcode `immutable=1`:
+# against a live `-wal` it silently reads stale data instead of failing loudly.
 case "$DB" in
   *'?'*|*'#'*|*'%'*) echo "STOP: database path must not contain ? , # or % ; got '$DB'" >&2; exit 1 ;;
 esac
+# Derived AFTER the path guard above, deliberately: this line interpolates $DB into a filename test,
+# so it must not run against a path the guard is about to refuse.
+RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
 
 # Anything stored that is NOT a TennisRecord URL — shown, never auto-pulled. Investigate before
 # refreshing: a row here means some earlier pull targeted another host.
-sqlite3 "file:$DB?mode=ro" "select name, tennisrecord_url from teams
+sqlite3 "file:$DB?$RO" "select name, tennisrecord_url from teams
   where tennisrecord_url is not null
     and tennisrecord_url not like 'https://www.tennisrecord.com/%'
     and tennisrecord_url not like 'https://tennisrecord.com/%'"
@@ -131,7 +153,7 @@ urls="$(mktemp)" || exit 1
 # to actually cancel it.
 trap 'rm -f "$urls"' EXIT
 trap 'rm -f "$urls"; echo "ABORTED — refresh is PARTIAL" >&2; exit 130' HUP INT TERM
-sqlite3 "file:$DB?mode=ro" "select tennisrecord_url from teams
+sqlite3 "file:$DB?$RO" "select tennisrecord_url from teams
   where tennisrecord_url like 'https://www.tennisrecord.com/%'
      or tennisrecord_url like 'https://tennisrecord.com/%'
   order by name" > "$urls" \
