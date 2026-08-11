@@ -131,10 +131,26 @@ only when you took the backup by hand in step 1's fallback, or want independent 
 # database, and the very next command would then certify that fresh emptiness as `ok`. Verifying a
 # backup by opening it is only meaningful once you know you are opening the backup.
 [ -f "$BAK" ] || { echo "STOP: no backup file at $BAK — step 1 did not produce one" >&2; exit 1; }
-# `immutable=1` on top of `mode=ro`: a finished backup is not being written by anyone, and telling
-# SQLite so is what makes this open genuinely side-effect-free. `mode=ro` ALONE still lets SQLite
-# create `-wal`/`-shm` sidecars beside the file when they are absent and the directory is writable —
-# so "read-only" is a promise about your DATA, not about the filesystem, unless you add this.
+# `immutable=1` on top of `mode=ro` — and it is load-bearing, not merely tidy. Measured during
+# #133's dry run, on IDENTICAL database bytes in one writable directory:
+#
+#   .db alone, no `-wal` beside it    -> `mode=ro` FAILS: "unable to open database file (14)"
+#   .db plus its (0-byte) `-wal`      -> `mode=ro` succeeds, creating the `-shm` itself
+#   .db alone, `mode=ro&immutable=1`  -> succeeds
+#
+# A read-only connection to a WAL-mode database can create the `-shm` but NOT the `-wal`. (The
+# older note here said `mode=ro` "still lets SQLite create `-wal`/`-shm`": half right, and wrong in
+# the half that decides whether the command runs at all.)
+#
+# `tn db backup` DOES write a `-wal` beside each backup file, so this check would usually pass
+# without the flag. It is kept because the failure it prevents is a `cp`/`mv` of the `.db` alone.
+# That is a SECOND, independent reason for the rule "Why `.backup`, never `cp`" states above: there,
+# copying only the main file risks MISSING rows that sit in `-wal`; here, it means the copy cannot
+# be opened read-only at all. Same instruction, two different failures behind it.
+#
+# `immutable=1` is safe on exactly this file, and is NOT a default to reach for: a finished backup
+# is being written by nobody. Do not carry the flag to a live database — with a non-empty `-wal` it
+# silently reads stale data instead of failing loudly.
 sqlite3 "file:$BAK?mode=ro&immutable=1" "PRAGMA integrity_check;"
 ```
 
@@ -228,7 +244,21 @@ Don't stop at exit 0 above — confirm the counts from step 2 survived the round
 case "$TARGET" in
   *'?'*|*'#'*|*'%'*) echo "STOP: path must not contain ? , # or % ; got '$TARGET'" >&2; exit 1 ;;
 esac
-sqlite3 -header -column "file:$TARGET?mode=ro" "select count(*) as teams from teams;
+# NOT an unconditional `immutable=1`, even though the readback in step 3 uses one: $TARGET is a
+# database about to go back into service, and if it has a `-wal` that flag would skip it and certify
+# a stale row count as the restore's result. So the guard reaches `immutable=1` only when BOTH hold:
+# no `-wal` beside the file (nothing to skip) AND the plain open genuinely refuses. The `[ -e ]` link
+# is not redundant with the probe — a busy or unreadable database also makes the probe fail, and a
+# probe-only form would read that as "safe to go immutable". Without the fallback at all this exits
+# 14 ("unable to open database file") whenever the restore landed a `.db` with no `-wal` beside it,
+# which is the common case.
+#
+# RESIDUAL: probe and read are separate processes, so a writer starting between them could create a
+# WAL the immutable read ignores. Nothing pasteable closes that. Here it is nearly moot — you are
+# restoring, so `tn` should not be running at all — but do check that before trusting these counts.
+RO="mode=ro"
+[ -e "$TARGET-wal" ] || sqlite3 "file:$TARGET?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
+sqlite3 -header -column "file:$TARGET?$RO" "select count(*) as teams from teams;
 select count(*) as players from players;
 select count(*) as court_matches from court_matches;"
 ```
