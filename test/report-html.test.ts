@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { formatWtnProvenanceLine } from "../src/cli/format-profile.js";
 import { escapeHtml, renderDossier } from "../src/report/html.js";
+import { renderDossierMarkdown } from "../src/report/markdown.js";
 import {
   buildDossier,
   buildEmptyDossier,
@@ -390,5 +392,49 @@ describe("own-team book (HTML)", () => {
 
     expect(html).not.toContain(nastyName);
     expect(html).toContain(escapeHtml(nastyName));
+  });
+});
+
+describe("renderDossier — WTN provenance disclosure (#132)", () => {
+  const withWtn = (observedOn: string, playerId = 1) =>
+    buildPlayerProfile({
+      identity: { playerId, canonicalName: `Player ${playerId}`, aliases: [], ageRange: null, gender: null, ustaUaid: null, wtnTennisId: null, tennisrecordUrl: null },
+      ratingTrajectory: [
+        { source: "wtn_singles", latest: { id: playerId, value: 30.35, ratingType: null, observedOn }, series: [] },
+      ],
+    });
+
+  it("names the publisher, its publication date, and that the two are not reconciled", () => {
+    const html = renderDossier(buildDossier({ players: [withWtn("2026-08-05")] }));
+
+    expect(html).toContain("USTA player profile");
+    expect(html).toContain("published 2026-08-05");
+    expect(html).toContain("worldtennisnumber.com");
+    expect(html).toContain("does not reconcile");
+  });
+
+  it("still renders, claiming nothing, when no player has a WTN", () => {
+    const html = renderDossier(buildDossier());
+
+    expect(html).toContain("none on file");
+  });
+
+  it("escapes a hostile observed_on rather than emitting it into the markup", () => {
+    // `observed_on` is an unconstrained TEXT column, so it is as untrusted as a scraped name.
+    const html = renderDossier(buildDossier({ players: [withWtn('2026-08-05"><script>x</script>')] }));
+
+    expect(html).not.toContain("<script>x</script>");
+  });
+
+  it("says the same sentence as the markdown dossier, from the one shared derivation", () => {
+    // The guard on this repo's most-repeated defect class: the same fact derived independently in
+    // two renderers, which has now shipped four times (docs/findings.md; PR #134 three times, PR
+    // #135 once). Comparing the two OUTPUTS catches a second copy in a way that comparing each
+    // against its own literal never would.
+    const dossier = buildDossier({ players: [withWtn("2026-08-05")] });
+    const sentence = formatWtnProvenanceLine(dossier.players.map((p) => p.ratingTrajectory));
+
+    expect(renderDossier(dossier)).toContain(escapeHtml(sentence));
+    expect(renderDossierMarkdown(dossier)).toContain(sentence);
   });
 });

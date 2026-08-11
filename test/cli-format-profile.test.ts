@@ -8,6 +8,7 @@ import {
   formatRecord,
   formatRosterSourceLine,
   formatSlotTendencies,
+  formatWtnProvenanceLine,
 } from "../src/cli/format-profile.js";
 import type { AbsentRosterMember } from "../src/query/team-profile.js";
 import type { DataGapsResult, PartnerFrequencyEntry, RatingTrajectoryResult, SlotTendency, WindowedRecordResult } from "../src/query/types.js";
@@ -212,5 +213,74 @@ describe("formatAbsentRosterMember", () => {
   it("sanitizes a hostile player name", () => {
     const member: AbsentRosterMember = { playerId: 5, canonicalName: "Dan\nKestrel", rating: null };
     expect(formatAbsentRosterMember(member, null)).not.toMatch(/[\r\n]/);
+  });
+});
+
+describe("formatWtnProvenanceLine (#132)", () => {
+  /** One trajectory entry, shaped like the real one. Only `latest` is populated, because only
+   * `latest` is what `formatRatingTrajectory` prints — the line has to describe the numbers on
+   * the page, not every number on file. */
+  const entry = (source: string, value: number, observedOn: string): RatingTrajectoryResult[number] => ({
+    source,
+    latest: { id: 1, value, ratingType: null, observedOn },
+    series: [],
+  });
+
+  it("names the publisher and the one date every WTN row shares", () => {
+    const line = formatWtnProvenanceLine([
+      [entry("wtn_singles", 30.35, "2026-08-05"), entry("ntrp", 3.5, "2025-12-31")],
+      [entry("wtn_doubles", 29.69, "2026-08-05")],
+    ]);
+
+    expect(line).toContain("USTA player profile");
+    expect(line).toContain("2026-08-05");
+    expect(line).toContain("worldtennisnumber.com");
+  });
+
+  it("states a range rather than collapsing two different publication dates into one", () => {
+    // Collapsing is the failure this branch exists for: printing one date over a roster whose rows
+    // carry two is a new false claim of the same shape as the one #132 removes.
+    const line = formatWtnProvenanceLine([
+      [entry("wtn_singles", 30.35, "2026-08-05")],
+      [entry("wtn_singles", 31.4, "2026-09-01")],
+    ]);
+
+    expect(line).toContain("2026-08-05");
+    expect(line).toContain("2026-09-01");
+  });
+
+  it("still prints when nothing on the roster has a WTN, and claims nothing", () => {
+    // #97/#113's discipline: a disclosure that vanishes when there is nothing to disclose leaves
+    // the reader unable to tell "no WTN on file" from "this dossier forgot to say".
+    const line = formatWtnProvenanceLine([[entry("ntrp", 3.5, "2025-12-31")]]);
+
+    expect(line).not.toBe("");
+    expect(line).toContain("none on file");
+    // No publication claim can be made, so none is made.
+    expect(line).not.toContain("published");
+  });
+
+  it("prints on a completely empty roster rather than throwing", () => {
+    expect(formatWtnProvenanceLine([])).toContain("none on file");
+  });
+
+  it("ignores non-WTN sources when choosing the dates", () => {
+    // The date printed must be the date of the numbers the line is ABOUT. An NTRP row dated 2015
+    // must not widen the WTN range — that would be a true-looking sentence about the wrong rows.
+    const line = formatWtnProvenanceLine([
+      [entry("ntrp", 3.5, "2015-12-31"), entry("wtn_singles", 30.35, "2026-08-05")],
+    ]);
+
+    expect(line).toContain("2026-08-05");
+    expect(line).not.toContain("2015");
+  });
+
+  it("survives a hostile observed_on without emitting a line break", () => {
+    // `observed_on` is a TEXT column with no format constraint, so it reaches this line as
+    // arbitrary bytes. Every other formatter in this module refuses to emit a newline; so does
+    // this one, or a one-line CLI summary and a markdown paragraph both break.
+    const line = formatWtnProvenanceLine([[entry("wtn_singles", 30.35, "2026-08-05\nInjected")]]);
+
+    expect(line).not.toMatch(/[\r\n]/);
   });
 });

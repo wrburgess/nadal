@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import type { Cheerio, CheerioAPI } from "cheerio";
 import type { AnyNode } from "domhandler";
-import { collapse, hrefParam } from "../dom.js";
+import { collapse, findUsDate, hrefParam } from "../dom.js";
 import {
   ParseError,
   wtnProfileSchema,
@@ -16,6 +16,7 @@ const TITLE = ".v-form-wtn-widget__section-title";
 const VALUE = ".v-form-wtn-widget__section-value";
 const CONFIDENCE = ".v-form-wtn-widget__section-confidence";
 const ZONE = ".v-form-wtn-widget__section-zone";
+const SUBTITLE = ".v-form-wtn-widget__section-subtitle";
 const ITF_TEXT = ".v-form-wtn-widget__itf-text";
 const ITF_LINK = "a.v-form-wtn-widget__navigation-link";
 
@@ -33,6 +34,12 @@ const ITF_LINK = "a.v-form-wtn-widget__navigation-link";
  * The widget also carries **confidence** and **game zone**, which the spreadsheet workflow this
  * replaces never captured. At 3.5 a low-confidence WTN and a high-confidence one are very
  * different evidence about the same number.
+ *
+ * And it carries **two dates per section** — `Updated` (the ITF's publication date for the number)
+ * and `Last Played`. Both were skipped until issue #132, on the strength of a code comment saying
+ * the widget "shows only a current value"; every one of the 194 WTN sections in this project's
+ * captures carries both, so the ingest was stamping the *capture* date onto a number the page had
+ * dated itself. `Updated` is what `rating_observations.observed_on` is for.
  */
 export function parseWtnWidget(html: string, source: SourceRef): WtnProfile | null {
   const $ = cheerio.load(html);
@@ -59,6 +66,8 @@ export function parseWtnWidget(html: string, source: SourceRef): WtnProfile | nu
       return {
         title: collapse($el.find(TITLE).first().text()).toUpperCase(),
         rawValue: collapse($el.find(VALUE).first().text()),
+        updatedOn: subtitleDate($, $el, "UPDATED", source),
+        lastPlayedOn: subtitleDate($, $el, "LAST PLAYED", source),
         el: $el,
       };
     })
@@ -89,21 +98,77 @@ export function parseWtnWidget(html: string, source: SourceRef): WtnProfile | nu
 
   return wtnProfileSchema.parse({
     tennisId: tennisId($, widget),
-    singles: ratingFrom($, sections, "WTN SINGLES"),
-    doubles: ratingFrom($, sections, "WTN DOUBLES"),
+    singles: ratingFrom($, sections, "WTN SINGLES", source),
+    doubles: ratingFrom($, sections, "WTN DOUBLES", source),
   });
 }
 
-type WtnSection = { title: string; rawValue: string; el: Cheerio<AnyNode> };
+type WtnSection = {
+  title: string;
+  rawValue: string;
+  updatedOn: string | null;
+  lastPlayedOn: string | null;
+  el: Cheerio<AnyNode>;
+};
 
-function ratingFrom($: CheerioAPI, sections: WtnSection[], title: string): WtnRating | null {
+/**
+ * The date guard lives **here**, at the one place the value is consumed, rather than beside the
+ * value/title guards in the loop above. A section this function never reads is one whose date
+ * nothing will ever store, and refusing a page over it would be a guard with no consequence to
+ * protect; checking in both places would mean two conditions that must be kept agreeing.
+ *
+ * It fails closed, exactly like a recognised section whose value cannot be read. The alternative —
+ * falling back to the capture date — is the defect #132 closes: downstream it is indistinguishable
+ * from a genuine publication date, so nothing after this point could ever tell the two apart.
+ * `lastPlayedOn` gets no such guard; nothing persists it, so it has no wrong value to produce.
+ */
+function ratingFrom(
+  $: CheerioAPI,
+  sections: WtnSection[],
+  title: string,
+  source: SourceRef,
+): WtnRating | null {
   const found = sections.find((s) => s.title === title);
   if (found === undefined) return null;
+  if (found.updatedOn === null) {
+    throw new ParseError(`"${title}" section has no readable Updated date`, SUBTITLE, source.url);
+  }
   return {
     value: Number(found.rawValue),
     confidence: collapse(found.el.find(CONFIDENCE).first().text()) || null,
     zone: parseZone(collapse(found.el.find(ZONE).first().text())),
+    updatedOn: found.updatedOn,
+    lastPlayedOn: found.lastPlayedOn,
   };
+}
+
+/**
+ * The date out of the section subtitle labelled `label` — `Updated 08/05/2026` → `2026-08-05`.
+ *
+ * Selected by its **label**, never by its position among the subtitles: the two labels appear in
+ * different orders on different sections of the same page, and picking `:nth-child` would read
+ * "Last Played" as the publication date on whichever sections happen to be ordered the other way.
+ * That failure is silent — both are valid dates.
+ *
+ * A section carrying the same label twice throws, on the same reasoning the duplicate-title and
+ * duplicate-widget guards above are written from: `.first()` would let a stale or responsive second
+ * subtitle silently decide which date a dossier prints.
+ */
+function subtitleDate(
+  $: CheerioAPI,
+  section: Cheerio<AnyNode>,
+  label: string,
+  source: SourceRef,
+): string | null {
+  const matching = section
+    .find(SUBTITLE)
+    .filter((_, el) => collapse($(el).text()).toUpperCase().startsWith(label))
+    .get();
+  if (matching.length === 0) return null;
+  if (matching.length > 1) {
+    throw new ParseError(`duplicate "${label}" subtitle in one WTN section`, SUBTITLE, source.url);
+  }
+  return findUsDate($(matching[0]).text());
 }
 
 function tennisId($: CheerioAPI, widget: Cheerio<AnyNode>): string | null {

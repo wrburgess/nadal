@@ -409,3 +409,66 @@ describe("own-team book (markdown)", () => {
     expect(md).not.toContain("fast | flat");
   });
 });
+
+describe("renderDossierMarkdown — WTN provenance disclosure (#132)", () => {
+  const withWtn = (observedOn: string, playerId = 1) =>
+    buildPlayerProfile({
+      identity: { playerId, canonicalName: `Player ${playerId}`, aliases: [], ageRange: null, gender: null, ustaUaid: null, wtnTennisId: null, tennisrecordUrl: null },
+      ratingTrajectory: [
+        { source: "wtn_singles", latest: { id: playerId, value: 30.35, ratingType: null, observedOn }, series: [] },
+      ],
+    });
+
+  it("names the publisher and the publication date of the numbers it prints", () => {
+    const md = renderDossierMarkdown(buildDossier({ players: [withWtn("2026-08-05")] }));
+
+    expect(md).toContain("USTA player profile");
+    expect(md).toContain("published 2026-08-05");
+  });
+
+  it("says plainly that the other publisher may disagree and that this is not reconciled", () => {
+    // The issue's actual complaint: the dossier "prints one of them without saying which". A date
+    // alone would not answer it.
+    const md = renderDossierMarkdown(buildDossier({ players: [withWtn("2026-08-05")] }));
+
+    expect(md).toContain("worldtennisnumber.com");
+    expect(md).toContain("does not reconcile");
+  });
+
+  it("sits above the roster table it qualifies, not below it", () => {
+    // The placement rule `renderEvidenceScopeMarkdown` is commented with: a scope a reader meets
+    // only after they have read the numbers has not scoped their reading of them.
+    const md = renderDossierMarkdown(buildDossier({ players: [withWtn("2026-08-05")] }));
+
+    expect(md.indexOf("USTA player profile")).toBeLessThan(md.indexOf("| Player | Age range |"));
+  });
+
+  it("still renders, claiming nothing, when no player has a WTN", () => {
+    // The default fixture carries ntrp + tr_dynamic and no WTN at all.
+    const md = renderDossierMarkdown(buildDossier());
+
+    expect(md).toContain("none on file");
+    expect(md).not.toContain("published");
+  });
+
+  it("escapes a hostile observed_on so it cannot break the table below it", () => {
+    // `observed_on` is an unconstrained TEXT column, so it is as untrusted as a scraped name — and
+    // this line sits immediately above a pipe-delimited table, where a stray `|` is not cosmetic.
+    // The HTML twin escapes; this asserts the markdown side does too rather than assuming symmetry.
+    const md = renderDossierMarkdown(
+      buildDossier({ players: [withWtn("2026-08-05 | injected `code`")] }),
+    );
+
+    expect(md).not.toContain("2026-08-05 | injected");
+    expect(md).toContain("\\|");
+  });
+
+  it("does not collapse two publication dates into one", () => {
+    const md = renderDossierMarkdown(
+      buildDossier({ players: [withWtn("2026-08-05", 1), withWtn("2026-09-01", 2)] }),
+    );
+
+    expect(md).toContain("2026-08-05");
+    expect(md).toContain("2026-09-01");
+  });
+});

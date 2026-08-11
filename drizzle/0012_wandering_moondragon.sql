@@ -1,0 +1,37 @@
+-- Issue #132: every WTN observation ever written by this project was stamped with the date the
+-- page was CAPTURED, not the date the ITF published the number. `src/parsers/wtn/widget.ts` skipped
+-- the widget's `Updated <date>` subtitle, and `src/ingest/archived.ts` justified the substitute with
+-- a comment asserting that "WTN carries no date of its own (the widget shows only a current
+-- value)". That claim is false against every capture on file.
+--
+-- Measured, not assumed. In `raw/usta/` there are 109 captures carrying 194 WTN value sections, and
+-- 194 of 194 carry both an `Updated` and a `Last Played` subtitle; every one of those `Updated`
+-- stamps reads `08/05/2026` (one ITF publication date across the whole capture set). The database
+-- holds 133 WTN rows and `MIN(observed_on) = MAX(observed_on) = '2026-08-10'`, the capture day. So
+-- the binder dated every WTN number five days after the publisher did — and the discrepancy #132
+-- was opened to settle ("or they are measuring on different dates") could not even be tested,
+-- because the date that would test it was discarded at parse.
+--
+-- The parser fix corrects every future pull and cannot reach a row already written, which is why
+-- this is a migration rather than a re-ingest. It is scoped by an exact match on BOTH the source
+-- and the wrong date, so a row written correctly by the fixed parser is never re-dated.
+--
+-- The DELETE runs FIRST and is not optional. `rating_obs_unique` is
+-- (player_id, source, observed_on), so on a database already re-pulled under the fixed parser both
+-- rows exist and a bare UPDATE would violate that index — aborting this transaction and, since
+-- `applyMigrations` wraps the run in BEGIN IMMEDIATE and records nothing on failure, blocking every
+-- later migration on that database until someone edits it by hand. The two rows are the same ITF
+-- publication seen twice, so the capture-stamped one is the duplicate. Against the live database
+-- the DELETE matches 0 rows and the UPDATE matches 133.
+--
+-- Narrow by construction, and the limit is stated rather than papered over: this corrects the
+-- instance it can IDENTIFY. A database whose WTN rows were captured on some other day carries the
+-- same defect, and a capture-dated row is indistinguishable from a correctly-dated one without the
+-- capture that produced it — so those are left alone rather than guessed at.
+--
+-- Reversible: `UPDATE rating_observations SET observed_on = '2026-08-10'
+-- WHERE source IN ('wtn_singles','wtn_doubles') AND observed_on = '2026-08-05'` restores the prior
+-- state for every row this touches. The rows the DELETE removed were exact duplicates of rows that
+-- remain, so nothing they carried is lost.
+DELETE FROM `rating_observations` WHERE `source` IN ('wtn_singles', 'wtn_doubles') AND `observed_on` = '2026-08-10' AND EXISTS (SELECT 1 FROM `rating_observations` `existing` WHERE `existing`.`player_id` = `rating_observations`.`player_id` AND `existing`.`source` = `rating_observations`.`source` AND `existing`.`observed_on` = '2026-08-05');--> statement-breakpoint
+UPDATE `rating_observations` SET `observed_on` = '2026-08-05' WHERE `source` IN ('wtn_singles', 'wtn_doubles') AND `observed_on` = '2026-08-10';

@@ -7,18 +7,22 @@ const both = loadFixture("usta/profile-wtn-both");
 const doublesOnly = loadFixture("usta/profile-wtn-doubles-only");
 
 describe("parseWtnWidget", () => {
-  it("parses both ratings with their confidence bands and game zones", () => {
+  it("parses both ratings with their confidence bands, game zones and dates", () => {
     expect(parseWtnWidget(both.html, both.source)).toEqual({
       tennisId: "BRA9000002",
       singles: {
         value: 31.65,
         confidence: "Medium Confidence",
         zone: { from: 33.4, to: 29.9 },
+        updatedOn: "2025-11-26",
+        lastPlayedOn: "2025-06-10",
       },
       doubles: {
         value: 30.15,
         confidence: "High Confidence",
         zone: { from: 31.84, to: 28.47 },
+        updatedOn: "2025-11-26",
+        lastPlayedOn: "2025-11-15",
       },
     });
   });
@@ -33,6 +37,8 @@ describe("parseWtnWidget", () => {
       value: 29.13,
       confidence: "Medium Confidence",
       zone: { from: 30.87, to: 27.4 },
+      updatedOn: "2025-11-05",
+      lastPlayedOn: "2025-09-27",
     });
   });
 
@@ -91,6 +97,96 @@ describe("parseWtnWidget — partial section drift", () => {
     // The other side of the same guard: failing closed must not reject the real page that has one
     // section because that player has one rating.
     expect(parseWtnWidget(doublesOnly.html, doublesOnly.source)?.singles).toBeNull();
+  });
+});
+
+describe("parseWtnWidget — the publisher's own dates (#132)", () => {
+  it("reads each discipline's date from its own section, not once for the whole widget", () => {
+    // The load-bearing shape. The real captures happen to stamp both disciplines with the same
+    // ITF publication date, so a parser that read ONE date for the widget would look correct
+    // against every page on file and be wrong the first time the two diverge. `Last Played`
+    // already differs per discipline in the unmodified fixture above, which is the same evidence
+    // one step weaker.
+    const skewed = both.html.replace(
+      '<p class="v-form-wtn-widget__section-subtitle">Last Played 11/15/2025</p><p class="v-form-wtn-widget__section-subtitle">Updated 11/26/2025</p>',
+      '<p class="v-form-wtn-widget__section-subtitle">Last Played 11/15/2025</p><p class="v-form-wtn-widget__section-subtitle">Updated 12/03/2025</p>',
+    );
+    expect(skewed).not.toBe(both.html);
+
+    const parsed = parseWtnWidget(skewed, both.source);
+
+    expect(parsed?.singles?.updatedOn).toBe("2025-11-26");
+    expect(parsed?.doubles?.updatedOn).toBe("2025-12-03");
+  });
+
+  it("reads a two-digit year the same way the NTRP date does", () => {
+    const shortYear = both.html.replace(/Updated 11\/26\/2025/g, "Updated 11/26/25");
+    expect(shortYear).not.toBe(both.html);
+
+    expect(parseWtnWidget(shortYear, both.source)?.singles?.updatedOn).toBe("2025-11-26");
+  });
+
+  it("throws when a recognised section carries no Updated date", () => {
+    // Failing closed rather than degrading, the same bargain every other guard in this module
+    // makes. A section that prints a rating but no date is page drift, and the alternative —
+    // silently substituting the capture date — is exactly the defect #132 exists to close: it
+    // produced 133 rows dated five days after the number they carry, and nothing could tell.
+    const noDate = both.html.replace(
+      '<p class="v-form-wtn-widget__section-subtitle">Updated 11/26/2025</p>',
+      "",
+    );
+    expect(noDate).not.toBe(both.html);
+
+    expect(() => parseWtnWidget(noDate, both.source)).toThrow(ParseError);
+  });
+
+  it("throws when a recognised section's Updated date is unreadable", () => {
+    // Distinct from the case above: the subtitle is present, so a null-check on the node passes.
+    // Only reading the value catches it.
+    const unreadable = both.html.replace("Updated 11/26/2025", "Updated soon");
+    expect(unreadable).not.toBe(both.html);
+
+    expect(() => parseWtnWidget(unreadable, both.source)).toThrow(ParseError);
+  });
+
+  it("still throws for the doubles-only page, whose one section must also be dated", () => {
+    // The guard has to cover the single-section page too — 24 of the 109 real captures have one
+    // section, and a guard written only against the two-section shape would miss all of them.
+    const noDate = doublesOnly.html.replace(
+      '<p class="v-form-wtn-widget__section-subtitle">Updated 11/05/2025</p>',
+      "",
+    );
+    expect(noDate).not.toBe(doublesOnly.html);
+
+    expect(() => parseWtnWidget(noDate, doublesOnly.source)).toThrow(ParseError);
+  });
+
+  it("throws on a section carrying two Updated subtitles rather than silently picking one", () => {
+    // The same reasoning as the duplicate-title and duplicate-widget guards below: `.first()`
+    // would let a stale or responsive second subtitle decide, by DOM order, which date the binder
+    // prints — and both candidates are valid dates, so nothing downstream could notice.
+    const duplicated = both.html.replace(
+      '<p class="v-form-wtn-widget__section-subtitle">Updated 11/26/2025</p>',
+      '<p class="v-form-wtn-widget__section-subtitle">Updated 11/26/2025</p><p class="v-form-wtn-widget__section-subtitle">Updated 01/02/2026</p>',
+    );
+    expect(duplicated).not.toBe(both.html);
+
+    expect(() => parseWtnWidget(duplicated, both.source)).toThrow(ParseError);
+  });
+
+  it("does not require a Last Played date, which is not persisted", () => {
+    // Only `updatedOn` reaches the database, so only `updatedOn` fails closed. Refusing a page
+    // over a field nothing reads would be a guard with no consequence to protect.
+    const noLastPlayed = both.html.replace(
+      /<p class="v-form-wtn-widget__section-subtitle">Last Played [0-9/]+<\/p>/g,
+      "",
+    );
+    expect(noLastPlayed).not.toBe(both.html);
+
+    const parsed = parseWtnWidget(noLastPlayed, both.source);
+
+    expect(parsed?.singles?.lastPlayedOn).toBeNull();
+    expect(parsed?.singles?.updatedOn).toBe("2025-11-26");
   });
 });
 

@@ -129,6 +129,52 @@ export function ratingSourceLabel(source: string): string {
   return RATING_SOURCE_LABELS[source] ?? source;
 }
 
+/** The two sources that come from the ITF widget embedded in a USTA profile — the ones this
+ * disclosure is about. Named once, beside the labels above, rather than re-listed per caller. */
+const WTN_SOURCES: ReadonlySet<string> = new Set(["wtn_singles", "wtn_doubles"]);
+
+/**
+ * Issue #132's disclosure: **which** publisher's World Tennis Number the dossier is printing, and
+ * **when** that publisher published it.
+ *
+ * The issue's complaint was that two sources give a different WTN singles number for one player —
+ * 30.35 on the USTA profile widget, 32.6 on worldtennisnumber.com — and the dossier "prints one of
+ * them without saying which". The decision was to keep the USTA-embedded value; this line is the
+ * other half of that decision, and without it the decision is invisible to the person holding the
+ * binder.
+ *
+ * **Derived from the observations actually printed, never hardcoded** — the same rule
+ * `formatRetainedLeaguesLine` states one field over: a hardcoded sentence quietly rots as the data
+ * moves. Specifically it reads each entry's `latest`, because `latest` is what
+ * `formatRatingTrajectory` renders; describing the whole `series` would date numbers the page does
+ * not show.
+ *
+ * **All three branches print**, per the #97/#113 precedent — a disclosure that disappears when
+ * there is nothing to disclose leaves a reader unable to tell "no WTN on file" from "this dossier
+ * forgot to mention it". The empty branch deliberately makes no publication claim.
+ *
+ * It does **not** claim the two publishers were reconciled, because they were not: the 30.35/32.6
+ * gap is unexplained, and saying so is the honest content of the line.
+ */
+export function formatWtnProvenanceLine(trajectories: RatingTrajectoryResult[]): string {
+  const dates = trajectories
+    .flat()
+    .filter((entry) => WTN_SOURCES.has(entry.source))
+    .map((entry) => formatName(entry.latest.observedOn))
+    .sort();
+
+  if (dates.length === 0) return "none on file for this roster";
+
+  const first = dates[0]!;
+  const last = dates[dates.length - 1]!;
+  const when = first === last ? `published ${first}` : `published between ${first} and ${last}`;
+  return (
+    `the ITF World Tennis Number shown on the USTA player profile, ${when}. ` +
+    "worldtennisnumber.com may show a different number for the same player; this dossier prints " +
+    "the USTA figure and does not reconcile the two"
+  );
+}
+
 /**
  * Every rating source renders at a FIXED precision, never a variable one — these are scouting
  * numbers read side by side in print, and a WTN of exactly `4` rendering as `"4"` next to a `"4.2"`
