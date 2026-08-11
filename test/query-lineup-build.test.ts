@@ -502,6 +502,57 @@ describe("getLineupBuild — the evidence is this team's own", () => {
     }
   });
 
+  it("a court kept only by a NON-roster player on our side is not evidence either", () => {
+    // Codex fix-verification pass 3, class A — the same defect one step sideways, which is what
+    // moved the fix from "filter harder" to "ask a different question". `courtMatchRowsForPlayers`
+    // pre-joins EVERY participant, so a court retained because a roster member played it on the
+    // OPPOSING side can still keep a NON-roster team-mate of ours on our side. A predicate of "did
+    // the filter leave anybody standing" counts that court as evidence; it contributes to nothing,
+    // because every count on the page is computed over this roster's ids.
+    const { db, sqlite } = freshDb();
+    try {
+      const names = TEN.slice(0, 6);
+      const fixture = seedBuild(db, { season: names, format: FORMAT });
+      const ids = names.map((n) => fixture.ids[n]!);
+      allAvailable(db, ids);
+
+      // Somebody who plays for us but is NOT on this roster — no `team_memberships` row at all.
+      const outsider = db.insert(players).values({ canonicalName: "Zed Zephyr" }).returning().get();
+      backfillNameKeys(db);
+
+      // Two courts under OUR match: a roster member on the opponent's side, the outsider on ours.
+      // Retained because ids[0] is in the query set; emptied of roster members by the side filter;
+      // still non-empty, because the outsider survives it.
+      playDoubles(db, [ids[0]!, ids[1]!], 2, fixture.ourMatch.id, "visiting");
+      const court = upsertCourtMatch(db, {
+        teamMatchId: fixture.ourMatch.id,
+        slot: "D1",
+        discipline: "doubles",
+        winnerSide: "home",
+        score: "6-1 6-1",
+        leagueContext: "40+ 3.5",
+        playedOn: "2026-05-02",
+        sourceMatchId: "outsider-court",
+      });
+      upsertCourtMatchPlayers(db, { courtMatchId: court.id, playerId: ids[0]!, side: "visiting" });
+      upsertCourtMatchPlayers(db, { courtMatchId: court.id, playerId: outsider.id, side: "home" });
+
+      const build = getLineupBuild(db, { day: SATURDAY });
+
+      // Three of our courts are retained; NONE of them puts one of these players on our side, so
+      // none is evidence. Counting the outsider's court would offer support for a count nobody made.
+      expect(build.observedCourtMatches).toBe(0);
+      expect(build.excludedOpposingSideMatches).toBe(3);
+      expect(build.excludedOtherTeamMatches).toBe(0);
+      const positive = build.scenarios
+        .flatMap((s) => s.courts.map((c) => c.sharedMatches))
+        .filter((n): n is number => n !== null && n > 0);
+      expect(positive).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("a roster with NO court-match history at all still produces scenarios — it does not refuse", () => {
     const { db, sqlite } = freshDb();
     try {

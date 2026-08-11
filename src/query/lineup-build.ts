@@ -74,11 +74,11 @@ export type LineupBuild = {
    * at least one of these players was on THIS TEAM's side. Reported so an honest zero is legible as
    * a scoped zero.
    *
-   * Counts the rows that **survived** the side filter, not every row that was ours. Before the
-   * filter existed the two were the same number; after it they are not, and reporting the wider one
-   * here would have made the denominator overstate the support beneath it — a court that
-   * contributed nothing to any count would still have been offered as evidence for the counts. The
-   * difference is not dropped, it moves to `excludedOpposingSideMatches` below.
+   * Counts the rows that retain **one of these players on this team's side**, not every row that was
+   * ours and not merely every row the side filter left non-empty. Reporting anything wider makes the
+   * denominator overstate the support beneath it — a court that contributed to no count would still
+   * be offered as evidence for the counts. The difference is not dropped, it moves to
+   * `excludedOpposingSideMatches` below.
    */
   observedCourtMatches: number;
   /** Court matches these players appeared in that belong to some OTHER team, set aside rather than
@@ -221,11 +221,24 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
     ...row,
     participants: row.participants.filter((p) => p.side === ourSideByCourtMatch.get(row.id)),
   }));
-  // A row the filter emptied is one of OUR courts on which none of these players was on our side.
-  // It survives as a row and contributes to nothing, so it is counted separately rather than left
-  // inside `observedCourtMatches` — see both fields' doc comments for why the two exclusions stay
-  // distinct.
-  const contributingRows = ourRows.filter((row) => row.participants.length > 0);
+  // WHICH ROWS ARE ACTUALLY EVIDENCE. The predicate is "does this row retain one of THESE PLAYERS",
+  // not "did the filter leave anybody standing" — and the difference is the whole finding.
+  //
+  // `courtMatchRowsForPlayers` pre-joins EVERY participant, including people who are not on this
+  // roster at all. So a court can be retained because a roster member played it on the OPPOSING
+  // side, keep a non-roster team-mate of ours on our side, and survive a bare `participants.length
+  // > 0` test — while contributing to nothing, because every count below is computed over this
+  // roster's ids. An earlier revision used exactly that bare test and was wrong for exactly that
+  // shape (Codex pass 3, class A).
+  //
+  // Stated as the lesson rather than patched again: the two previous versions of this line each
+  // asked a PROXY for the real question ("is the row non-empty after filtering?"), and a proxy can
+  // always be made wrong by a case it does not model. This asks the question the page's own numbers
+  // answer — a court is evidence when somebody whose counts we report was on our side of it — so
+  // there is no gap left between the counter and the thing it counts. It also subsumes the earlier
+  // case, since a row the filter emptied retains nobody at all.
+  const memberIdSet = new Set(memberIds);
+  const contributingRows = ourRows.filter((row) => row.participants.some((p) => memberIdSet.has(p.playerId)));
 
   const observationRows =
     memberIds.length === 0
