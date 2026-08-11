@@ -180,12 +180,25 @@ export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]
  * guessing a fourth time. Escalated to the HC at the fix-verification bound and decided there, not
  * iterated past it.
  *
- * **Two residuals, named rather than implied, both measured.** A name consisting only of
- * **U+180B** MONGOLIAN FREE VARIATION SELECTOR ONE (Mn *and* Mongolian, so neither half catches it)
- * or only of **U+3164** HANGUL FILLER (Lo, NFKC-normalized by `nameKey` to U+1160 — it does *not*
- * fold away) still renders blank. Both are already accepted residuals of `src/db/name-key.ts`, whose
- * own doc records why this predicate class is undecidable: there is no Unicode property equal to
- * *"deleting this cannot change what a reader sees"*. These are inherited limits, not new holes.
+ * **The residual is a CLASS, not a list, and an earlier revision of this comment listed two.** That
+ * enumeration was wrong by three orders of magnitude and a review pass blocked the merge on it.
+ * Swept over the whole code-point space: **3779** `Default_Ignorable_Code_Point` characters are NOT
+ * treated as blank here — every Hangul filler (U+115F, U+1160, U+3164, U+FFA0), Mongolian
+ * FVS1/2/3/4, the Khmer inherent vowels, and the entire U+E0000 tag block among them.
+ *
+ * The rule, which generalizes where a list cannot: **a name is caught only when `nameKey` strips it
+ * (invisibles whose script is Common, Inherited or Latin) or `sanitizeValue` flattens it (Cc, Cf, Zl,
+ * Zp). An invisible character in a complex script is deliberately retained by both** — `nameKey`
+ * exempts them because deleting one re-groups or re-shapes the text around it, which is a decision
+ * `src/db/name-key.ts` reached over five revisions and which the HC accepted with its residuals
+ * named. This function inherits that boundary exactly; it does not widen or narrow it, and it cannot
+ * close it, because — as that file states — **there is no Unicode property equal to "deleting this
+ * cannot change what a reader sees"**.
+ *
+ * What that costs here is proportionate and worth stating plainly: the cases this DOES catch are the
+ * reachable ones — an empty string, whitespace, and ASCII/Latin control characters, i.e. what a
+ * scraper or a bad parse actually produces. What it misses is a stored name consisting solely of a
+ * complex-script invisible, which nothing in this project's ingestion path can produce.
  *
  * **Both names on the line go through it.** `teams.name` carries an identical
  * `NOT NULL UNIQUE`-with-no-`CHECK` constraint, and a blank one would render the whole entry as a

@@ -350,6 +350,8 @@ const VS16_BYTE = String.fromCharCode(0xfe0f); // VARIATION SELECTOR-16 — also
 const MVS_BYTE = String.fromCharCode(0x180e); // MONGOLIAN VOWEL SEPARATOR — Cf, but Mongolian script
 const FVS1_BYTE = String.fromCharCode(0x180b); // MONGOLIAN FREE VARIATION SELECTOR ONE — Mn + Mongolian
 const HANGUL_FILLER_BYTE = String.fromCharCode(0x3164); // HANGUL FILLER — Lo, NFKC-maps to U+1160
+const HANGUL_JUNGSEONG_FILLER_BYTE = String.fromCharCode(0x1160); // Lo + Hangul
+const KHMER_AQ_BYTE = String.fromCharCode(0x17b4); // KHMER VOWEL INHERENT AQ — Mn + Khmer
 const CONTROL_OR_BIDI = new RegExp(`[${BACKSLASH}p{Cc}${BACKSLASH}p{Cf}]`, "u");
 
 // Issue #131. `team_memberships` is `player <-> team <-> event` by design, so a player on both a
@@ -533,25 +535,42 @@ describe("formatTeamMemberships", () => {
     );
   });
 
-  // The two ACCEPTED RESIDUALS of the union predicate, pinned as tests so they are a recorded
-  // limitation rather than an untested belief — and so that a future change to `nameKey` or to
-  // `sanitizeValue` that happens to close one of them shows up here as a failing expectation to
-  // update, instead of silently changing behavior nobody was watching.
+  // The ACCEPTED RESIDUAL CLASS of the union predicate, pinned so it is a recorded limitation rather
+  // than an untested belief, and so a future change to `nameKey` or `sanitizeValue` surfaces here as
+  // an expectation to update instead of silently changing behavior nobody was watching.
   //
-  // Both are inherited from `src/db/name-key.ts`, whose own doc records why this predicate class is
-  // undecidable: there is no Unicode property equal to "deleting this cannot change what a reader
-  // sees". U+180B is Mn AND Mongolian, so neither half of the union reaches it; U+3164 is Lo and
-  // NFKC-normalizes to U+1160 rather than folding away. Escalated to the HC at the fix-verification
-  // bound (PROJECT.md -> Review Lenses) and settled there: union the two partial predicates, name
-  // what they still miss, stop.
+  // THESE ARE A SAMPLE, NOT THE SET, and the distinction is the point: an earlier revision of this
+  // block asserted there were exactly two, and a review pass blocked the merge on it. Swept over the
+  // whole code-point space, **3779** `Default_Ignorable_Code_Point` characters are not treated as
+  // blank here. The rule, which is what a list cannot express: a name is caught only when `nameKey`
+  // strips it (invisibles of script Common/Inherited/Latin) or `sanitizeValue` flattens it
+  // (Cc/Cf/Zl/Zp); an invisible in a COMPLEX SCRIPT is deliberately retained by both, because
+  // deleting one re-shapes the text around it. That boundary is `src/db/name-key.ts`'s, reached over
+  // five revisions and accepted by the HC with its residuals named; this formatter inherits it
+  // exactly and cannot close it — there is no Unicode property equal to "deleting this cannot change
+  // what a reader sees".
   it.each([
     ["U+180B Mongolian free variation selector one (Mn + Mongolian)", FVS1_BYTE],
     ["U+3164 Hangul filler (Lo, NFKC-maps to U+1160)", HANGUL_FILLER_BYTE],
-  ])("KNOWN RESIDUAL: an event name of nothing but %s still renders blank", (_label, eventName) => {
+    ["U+1160 Hangul jungseong filler (Lo)", HANGUL_JUNGSEONG_FILLER_BYTE],
+    ["U+17B4 Khmer vowel inherent aq (Mn + Khmer)", KHMER_AQ_BYTE],
+  ])("KNOWN RESIDUAL (sample of a 3779-member class): %s still renders blank", (_label, eventName) => {
     const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })]);
 
     expect(line).not.toBe("Team (registered for event #7)");
     expect(line).toBe(`Team (registered for "${eventName}")`);
+  });
+
+  it("catches every REACHABLE blank case — which is what the union is actually for", () => {
+    // The complement of the residual class above, stated as its own assertion so the two are read
+    // together: what a scraper or a bad parse actually produces (empty, whitespace, ASCII/Latin
+    // controls) IS caught. Nothing in this project's ingestion path can produce a name consisting
+    // solely of a complex-script invisible.
+    for (const eventName of ["", " ", "\t", "   ", ESC_BYTE, RLO_BYTE, ZWSP_BYTE, CGJ_BYTE, VS16_BYTE, MVS_BYTE]) {
+      expect(formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })])).toBe(
+        "Team (registered for event #7)",
+      );
+    }
   });
 
   it("keeps surrounding whitespace inside the quotes of a real event name", () => {
