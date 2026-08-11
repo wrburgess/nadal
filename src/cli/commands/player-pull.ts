@@ -3,6 +3,7 @@ import { openDb } from "../../db/client.js";
 import { pullArchivedUstaProfile } from "../../ingest/archived.js";
 import { fetchPage } from "../../ingest/fetch.js";
 import { pullPlayer } from "../../ingest/player-pull.js";
+import { pullArchivedWtnProfile } from "../../ingest/wtn-profile-pull.js";
 import { ambiguousMessage, type AmbiguousIdentity } from "../../ingest/errors.js";
 import { globalFlags, parseArgs } from "../args.js";
 import { emitSummary, type EmitOpts } from "../emit.js";
@@ -67,7 +68,14 @@ export const playerPull: Command = {
       // fetch, two parsers — see src/ingest/archived.ts), so both route through the archived,
       // login-assisted path rather than a live fetch. That path REQUIRES `--from`/`--source-url`
       // since this tool never automates a login.
-      const isLoginGated = parsed.target.startsWith("usta:") || parsed.target.startsWith("wtn:");
+      //
+      // `wtn-profile:` (issue #128) is a THIRD, distinct login-gated source: a player's own WTN
+      // profile page (worldtennisnumber.com), not the ITF widget embedded in the USTA page above —
+      // `wtn:` keeps its existing, documented meaning unchanged, and this is a new target
+      // altogether rather than a second spelling of it. `.startsWith("wtn:")` does not also match
+      // `wtn-profile:…` (the fourth character differs, `-` vs `:`), so the two never collide.
+      const isWtnProfile = parsed.target.startsWith("wtn-profile:");
+      const isLoginGated = parsed.target.startsWith("usta:") || parsed.target.startsWith("wtn:") || isWtnProfile;
       if (isLoginGated) {
         if (typeof from !== "string" || typeof sourceUrl !== "string") {
           emitSummary(
@@ -78,7 +86,9 @@ export const playerPull: Command = {
           );
           return 1;
         }
-        const result = await pullArchivedUstaProfile({ db, path: from, sourceUrl });
+        const result = isWtnProfile
+          ? await pullArchivedWtnProfile({ db, path: from, sourceUrl })
+          : await pullArchivedUstaProfile({ db, path: from, sourceUrl });
         return report(result, opts);
       }
 

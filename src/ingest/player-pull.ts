@@ -14,6 +14,7 @@ import {
 import { dispositionOfThrown, type FailureDisposition } from "./failure-disposition.js";
 import type { PageFetcher } from "./fetch.js";
 import { findPlayerByName, resolvePlayer } from "./identity.js";
+import { normalizeGender } from "./normalize-gender.js";
 import { ParseError, parseMatchHistory, parseTennisRecordHeader, type CourtMatchRecord } from "../parsers/index.js";
 import { upsertCourtMatch, upsertCourtMatchPlayers, upsertPlayer, upsertRatingObservation } from "./upsert.js";
 
@@ -337,7 +338,12 @@ export async function pullPlayer(options: PlayerPullOptions): Promise<PlayerPull
         // a player who has NO handle yet from being left unreachable by name. See `storeProfileUrl`.
         tennisrecordUrl:
           options.storeProfileUrl === "only-if-missing" && resolved.row.tennisrecordUrl !== null ? undefined : url,
-        gender: header.gender,
+        // `header.gender` is already `"Male" | "Female" | null` — `genderOf()` in
+        // `src/parsers/tennisrecord/header.ts` normalizes at parse time, so this is a no-op today.
+        // Routed through `normalizeGender` anyway (issue #130): it is the ONE place every writer of
+        // `players.gender` meets, and leaving this site out is exactly how the column ended up with
+        // two writers that disagreed in the first place (`src/ingest/archived.ts` wrote raw).
+        gender: normalizeGender(header.gender),
       });
 
       if (header.ntrp !== null) {

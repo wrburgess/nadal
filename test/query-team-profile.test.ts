@@ -100,6 +100,31 @@ describe("getTeamProfile", () => {
     }
   });
 
+  // Issue #128: `ageRange` was NULL for every one of 1745 players before this PR, and nothing on
+  // the roster read side had ever been exercised against a real value. Pins that a roster member's
+  // `ageRange` is read straight off the player row, present and absent side by side.
+  it("roster member ageRange is read from the player row — present and absent", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const team = seedTeam(db, "Team Age Range");
+      const withRange = seedPlayer(db, "Micah Merrivale");
+      const withoutRange = seedPlayer(db, "Noel Nobody");
+      db.update(players).set({ ageRange: "41-50" }).where(eq(players.id, withRange.id)).run();
+      seedMembership(db, withRange.id, team.id);
+      seedMembership(db, withoutRange.id, team.id);
+
+      const profile = getTeamProfile(db, team.id, { window: windowSince("2027-01-01") });
+
+      const rangeRow = profile.roster.find((r) => r.canonicalName === "Micah Merrivale");
+      const noRangeRow = profile.roster.find((r) => r.canonicalName === "Noel Nobody");
+      expect(rangeRow?.ageRange).toBe("41-50");
+      // The permanent case (#128): no WTN profile on file means this stays NULL forever.
+      expect(noRangeRow?.ageRange).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("a player with NO memberships row is excluded from the roster", () => {
     const { db, sqlite } = freshDb();
     try {

@@ -24,3 +24,4 @@ export { parseTennisRecordTeam } from "./tennisrecord/team.js";
 export { parseMatchHistory } from "./tennisrecord/match-history.js";
 export { parseUstaProfile } from "./usta/profile.js";
 export { parseWtnWidget } from "./wtn/widget.js";
+export { parseWtnProfile } from "./wtn/profile.js";

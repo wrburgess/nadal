@@ -59,13 +59,42 @@ function uaidFrom(url: string): string | null {
   return /[#&?]uaid=(\d+)/.exec(url)?.[1] ?? null;
 }
 
+// The label USTA prints ahead of the gender value on live pages — `Competition Category: MALE`.
+// The committed fixture predated this label entirely (issue #130): `players.gender` held this
+// whole labelled string, verbatim, on all 77 rows that had a gender, because `contextLines` read
+// `identity[0]` raw instead of stripping it. Kept alongside `KNOWN_LABELS` below rather than
+// merged into it, because it is searched for FIRST and positionally, not merely stripped like
+// `Section:`/`District:`/`Nationality:` are — see `GENDER_INDEX` in the block comment below.
+const GENDER_LABEL = "Competition Category";
+
+// The labels `labelled()` already strips. Also used to recognise a labelled field that has landed
+// in the *location* position (see `location` below) so a page missing a location paragraph does
+// not silently mistake `Section: ...` for it.
+const KNOWN_LABELS = [GENDER_LABEL, "Section", "District", "Nationality"];
+
 /**
- * The context block is two paragraphs: `MALE | Rivermont, MO` and
- * `Section: Missouri Valley | District: Heart of America | Nationality: USA`.
+ * The context block is the identity paragraph(s) — gender and location — followed by
+ * `Section:`/`District:`/`Nationality:` fields. Historically all of this arrived as exactly two
+ * paragraphs: `MALE | Rivermont, MO` and `Section: Missouri Valley | District: Heart of America |
+ * Nationality: USA`. Live USTA markup (issue #130) instead prefixes the gender segment with a
+ * `Competition Category:` label, `&nbsp;`-separated from its value, and sometimes spreads the
+ * identity across several one-field-per-`<p>` paragraphs (with an empty spacer `<p></p>` between
+ * them) rather than one pipe-joined line — two shapes seen in the SAME live document.
  *
- * Gender is emitted exactly as printed (`MALE`), like every other identity-adjacent value here —
- * mapping the sources' different spellings onto one vocabulary is an ingest decision, made once
- * where both sources meet, not twice inside two parsers.
+ * Every paragraph is flattened into one ordered list of pipe-delimited, non-empty segments —
+ * `collapse()` already turns the `&nbsp;` (U+00A0) after the label's colon into an ordinary space,
+ * since JS's `\s` treats U+00A0 as whitespace — so gender and location are found the same way
+ * regardless of which paragraph or how many pipes they arrived on:
+ *
+ *  - **Gender** is the segment labelled `Competition Category:`, with the label stripped, if one
+ *    exists; otherwise (the OLD, still-live shape) it is positionally the FIRST segment. Either
+ *    way the value is emitted exactly as printed (`MALE`), like every other identity-adjacent
+ *    value here — mapping the sources' different spellings onto one vocabulary is an ingest
+ *    decision, made once where both sources meet (`src/ingest/normalize-gender.ts`, issue #130),
+ *    not twice inside two parsers.
+ *  - **Location** is positionally the segment right after gender's, UNLESS that segment is itself
+ *    one of `KNOWN_LABELS` — which means the location paragraph is simply absent, not that
+ *    `Section: ...` is the location.
  *
  * The block is **required**, and so is its identity paragraph. Letting it go missing produced a
  * record with a real name and uaid, an empty gender, and null location/section/district — a
@@ -90,20 +119,33 @@ function contextLines(
     .map((_, p) => collapse($(p).text()))
     .get();
 
-  const identity = (paragraphs[0] ?? "").split("|").map(collapse);
-  if ((identity[0] ?? "") === "") {
+  const segments = paragraphs
+    .flatMap((line) => line.split("|"))
+    .map(collapse)
+    .filter((segment) => segment !== "");
+
+  const genderIndex = segments.findIndex((segment) => segment.startsWith(`${GENDER_LABEL}:`));
+  const labelled = genderIndex !== -1;
+  const genderRaw = labelled
+    ? collapse(segments[genderIndex]!.slice(GENDER_LABEL.length + 1))
+    : (segments[0] ?? "");
+
+  if (genderRaw === "") {
     throw new ParseError("player context block has no identity line", `${CONTEXT} p`, source.url);
   }
-  const fields = paragraphs
-    .slice(1)
-    .flatMap((line) => line.split("|"))
-    .map(collapse);
+
+  const locationCandidate = segments[(labelled ? genderIndex : 0) + 1];
+  const location =
+    locationCandidate !== undefined &&
+    !KNOWN_LABELS.some((label) => locationCandidate.startsWith(`${label}:`))
+      ? locationCandidate
+      : null;
 
   return {
-    gender: identity[0] ?? null,
-    location: identity[1] ?? null,
+    gender: genderRaw,
+    location,
     labelled: (label) => {
-      const found = fields.find((field) => field.startsWith(`${label}:`));
+      const found = segments.find((field) => field.startsWith(`${label}:`));
       return found === undefined ? null : collapse(found.slice(label.length + 1));
     },
   };

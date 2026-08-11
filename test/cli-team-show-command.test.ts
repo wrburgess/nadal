@@ -48,6 +48,36 @@ describe("tn team show (end-to-end via dispatch)", () => {
     expect(printed.split("\n").length).toBeGreaterThan(1);
   });
 
+  // Issue #128: `ageRange` was NULL for every player before this PR, so the roster line's `age:`
+  // segment had never rendered a real value end to end. One of the four `ageRange` render sites
+  // task 8's audit named.
+  it("prints a real age range for a roster member who has one, and 'unknown' for one who doesn't", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    const team = db.insert(teams).values({ name: "Team Age Range", nameKey: nameKey("Team Age Range") }).returning().get();
+    const withRange = db
+      .insert(players)
+      .values({ canonicalName: "Micah Merrivale", nameKey: nameKey("Micah Merrivale"), ageRange: "41-50" })
+      .returning()
+      .get();
+    const withoutRange = db
+      .insert(players)
+      .values({ canonicalName: "Noel Nobody", nameKey: nameKey("Noel Nobody") })
+      .returning()
+      .get();
+    db.insert(teamMemberships).values({ playerId: withRange.id, teamId: team.id, eventId: null }).run();
+    db.insert(teamMemberships).values({ playerId: withoutRange.id, teamId: team.id, eventId: null }).run();
+    sqlite.close();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await dispatch(["team", "show", team.name]);
+
+    expect(code).toBe(0);
+    const printed = logSpy.mock.calls[0]?.[0] as string;
+    expect(printed).toContain("Micah Merrivale — age: 41-50");
+    expect(printed).toContain("Noel Nobody — age: unknown");
+  });
+
   it("--json emits the TeamProfile verbatim, parseable, as the only console.log call", async () => {
     const team = seedTeamWithRoster("Team A", ["Player One"]);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);

@@ -303,6 +303,31 @@ describe("getPlayerProfile", () => {
     }
   });
 
+  // Issues #128/#130. Neither field had a writer before this PR (`ageRange` was NULL for all 1745
+  // players; `gender` held a raw source label rather than the stored vocabulary on the 77 that had
+  // one at all) — this pins that the query layer reads BOTH straight off the player row, present
+  // and absent, so `player show` (the one site that prints `gender`) and every `ageRange` render
+  // site downstream of this profile get the real value rather than a stale null.
+  it("identity carries ageRange and gender exactly as stored on the player row — present and absent", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const withBoth = seedPlayer(db, { canonicalName: "Micah Merrivale", ageRange: "41-50", gender: "Male" });
+      const withNeither = seedPlayer(db, { canonicalName: "Noel Nobody" });
+
+      const profileWithBoth = getPlayerProfile(db, withBoth.id, { window: windowSince("2027-01-01") });
+      const profileWithNeither = getPlayerProfile(db, withNeither.id, { window: windowSince("2027-01-01") });
+
+      expect(profileWithBoth.identity.ageRange).toBe("41-50");
+      expect(profileWithBoth.identity.gender).toBe("Male");
+      // The permanent 1668-of-1745 case (#128): no WTN profile on file means no source ever
+      // produces a value, so this must stay NULL forever, not print a manufactured default.
+      expect(profileWithNeither.identity.ageRange).toBeNull();
+      expect(profileWithNeither.identity.gender).toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("dataGaps reports all three sections as empty (never not-collected) once every section has a writer (#113)", () => {
     const { db, sqlite } = freshDb();
     try {

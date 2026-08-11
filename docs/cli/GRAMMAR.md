@@ -190,6 +190,18 @@ the flag can only mean the operator believes they asked for one; the refusal nam
 a stale roster snapshot, and reconciling against one would soft-retire every player who joined since.
 The team page is fetched exactly once, at its own season, whatever `--since` says.
 
+`tn player pull <name|url|usta:…|wtn:…|wtn-profile:…> [--from … --source-url …]` — a bare name or a
+TennisRecord URL fetches live. The three prefixed targets are **login-gated**: this tool never
+automates a login, so each REQUIRES `--from <path>` (a page the HC already saved from their own
+logged-in session) together with `--source-url <url>` (the real page URL, since a saved file carries
+none of its own); the id after the prefix is not itself read back — the real identity comes from the
+saved page. `usta:…` and `wtn:…` name the SAME page and route to the SAME archived pull: a USTA
+profile, which embeds the ITF WTN rating widget on that one page (issue #132 settled the widget as
+the WTN rating source of record) — one fetch, two parsers, per `src/parsers/wtn/widget.ts`'s own doc
+comment. `wtn-profile:…` (issue #128) is a DIFFERENT page entirely — a player's own profile at
+worldtennisnumber.com — and supplies the two fields only that page prints, `age` and `gender`; it
+carries no rating at all, so it never competes with `wtn:…`'s widget-sourced number.
+
 `tn player avail <name> <YYYY-MM-DD> <status> [event]` — the fourth positional is **optional** and
 names which event the day belongs to. It is needed only when the day falls inside more than one
 event's range, which is ordinary rather than exceptional: a district league season runs Mar–Jun and

@@ -83,3 +83,65 @@ describe("parseUstaProfile — context block", () => {
     expect(() => parseUstaProfile(noContext, fixture.source)).toThrow(ParseError);
   });
 });
+
+/**
+ * Issue #130. `players.gender` holds `Competition Category: MALE` — the source LABEL, not the
+ * value — on all 77 rows that have a gender at all. Root cause: FIXTURE DRIFT. Live USTA markup
+ * prefixes the identity paragraph's gender segment with a `Competition Category:` label; the
+ * committed fixture predates that change and has never exercised the label-stripping path.
+ *
+ * Both live shapes below are derived from the committed fixture's own identity paragraph via
+ * `.replace()`, never hand-authored, per this project's fixture convention — and per
+ * rules/testing.md, the `&nbsp;` a live shape needs is written as the JS escape for U+00A0
+ * (the six source characters backslash, u, 0, 0, A, 0), never a literal non-breaking-space
+ * character, so an editor cannot silently collapse it to a plain space and make this test share
+ * the bug's own failure mode.
+ */
+describe("parseUstaProfile — gender label (#130)", () => {
+  // The exact identity paragraph the fixture prints today, appearing twice in the captured
+  // document (desktop + mobile variants — see the WTN widget's duplicate-block comment). Cheerio
+  // reads only `.first()`, and a bare `.replace()` touches only the first occurrence, so rewriting
+  // this string edits exactly the paragraph the parser consumes.
+  const OLD_IDENTITY_P =
+    '<p><span class="aem-form-text--text-transform--capitalize">MALE</span> | Rivermont, MO<br aria-hidden="true" role="presentation"></p>';
+
+  it("is present in the fixture exactly where this test assumes it is", () => {
+    // Guards the two tests below against silently matching zero occurrences (and therefore
+    // testing the OLD shape twice) if the fixture is ever re-captured.
+    expect(fixture.html).toContain(OLD_IDENTITY_P);
+  });
+
+  it("strips the label from the live single-paragraph shape (Competition Category:\\u00A0MALE | location)", () => {
+    const live = fixture.html.replace(
+      OLD_IDENTITY_P,
+      '<p>Competition Category:\u00A0<span class="aem-form-text--text-transform--capitalize">MALE</span> | ' +
+        '<span class="aem-form-text--text-transform--capitalize">Rivermont</span>, MO' +
+        '<br aria-hidden="true" role="presentation"></p>',
+    );
+
+    const parsed = parseUstaProfile(live, fixture.source);
+    expect(parsed.gender).toBe("MALE");
+    expect(parsed.location).toBe("Rivermont, MO");
+  });
+
+  it("strips the label from the live split-paragraph shape (label and location on separate <p>s, no pipe)", () => {
+    const live = fixture.html.replace(
+      OLD_IDENTITY_P,
+      "<p>Competition Category: MALE</p><p></p><p>Rivermont, MO</p>",
+    );
+
+    const parsed = parseUstaProfile(live, fixture.source);
+    expect(parsed.gender).toBe("MALE");
+    expect(parsed.location).toBe("Rivermont, MO");
+  });
+
+  it("throws when the Competition Category label is present but carries no value", () => {
+    const live = fixture.html.replace(OLD_IDENTITY_P, "<p>Competition Category: </p><p>Rivermont, MO</p>");
+
+    expect(() => parseUstaProfile(live, fixture.source)).toThrow(ParseError);
+  });
+
+  it("still parses the OLD unlabelled shape to MALE (must not regress the fixture as captured)", () => {
+    expect(parseUstaProfile(fixture.html, fixture.source).gender).toBe("MALE");
+  });
+});

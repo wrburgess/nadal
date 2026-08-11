@@ -44,6 +44,27 @@ describe("pullArchivedUstaProfile", () => {
     }
   });
 
+  it("stores gender normalized, not the raw label (#130) — MALE (as printed) becomes Male", async () => {
+    // The fixture's identity paragraph is the OLD unlabelled shape (`parseUstaProfile` still emits
+    // it exactly as printed, "MALE" — see test/parsers-usta-profile.test.ts). The write path is
+    // where that raw source spelling meets the one stored vocabulary: this is the "ingest
+    // decision, made once where both sources meet" `normalizeGender`'s doc comment describes.
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const savedPath = join(raw.path(), "saved-usta-profile-gender.html");
+      writeFileSync(savedPath, fixture.html, "utf8");
+
+      const result = await pullArchivedUstaProfile({ db, path: savedPath, sourceUrl: fixture.source.url });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      expect(result.player.gender).toBe("Male");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("dates a WTN observation from the widget, not from the day we captured the page (#132)", async () => {
     // The defect this pins produced 133 rows in the live database dated `2026-08-10` carrying a
     // number the page itself stamped `08/05/2026`. The two dates have to be far apart in the
