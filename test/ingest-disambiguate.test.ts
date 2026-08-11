@@ -331,9 +331,14 @@ describe("declareDistinctPlayer — the pair form (#142)", () => {
   // between left the first process acting on a stale snapshot. Two ids behind one `name_key` is the
   // permanent exact-tier ambiguity this module has no merge operation to repair.
   //
-  // The interleaving is injected at the exact instant the old code was vulnerable — the moment the
-  // transaction opens, i.e. after the old code had finished reading. A SECOND CONNECTION does the
-  // competing write, so this is real cross-connection concurrency, not a simulation of it.
+  // What this does and does NOT reproduce, stated precisely because the distinction decides what a
+  // pass here is worth: a SECOND real connection commits the competing rows, so the stale-read the
+  // old code acted on is genuine and so is the cross-connection visibility. The two calls do NOT
+  // overlap in time — the proxy commits B's writes and returns before A's transaction opens — so
+  // this is a deterministic simulation of the interleaving's EFFECT, not a lock-contention test.
+  // That is deliberate: a truly overlapping test would depend on scheduler timing and go
+  // false-green whenever the race happened not to occur. The lock itself is pinned by the config
+  // test below instead.
   //
   // Reverted against rather than assumed to discriminate: hoisting only the target's `exactIdsFor`
   // back outside the transaction turns this red at the first assertion — **3 player rows carrying 2
