@@ -5,11 +5,10 @@ The **Project Config**: the one place a Host App declares its host-specific valu
 does not edit `AGENTS.md` to change them. This file ships with **business-neutral placeholders** —
 replace them during Customization.
 
-> Section headings below are a contract: the parity check (`scripts/parity_check.rb`) asserts the
-> **five required** `##` sections are present — *Quality Checks*, *Attribution & Model Declaration*,
-> *Branch & PR Policy*, *Review Severity Framework*, *Lifecycle Host*. Rename one and the check fails.
-> This file ships **more** sections than that floor (*Human Gates*, *Intake Pipeline*, *Tool Roster*);
-> those are additive, so a Host App that predates one of them stays green.
+> The ace-era parity check that asserted this file's section headings left with the deuce cutover
+> (deuce [#86](https://github.com/wrburgess/deuce/issues/86)); the headings are kept for their
+> readers, not for a checker. This host's declarations migrate to its own `config/` as adoption
+> work — until then, this file remains where they are read.
 
 ## Quality Checks
 
@@ -20,23 +19,24 @@ commands during Customization** (e.g. a Rails host: lint `bundle exec rubocop -a
 a JS/TS host: lint `npm run lint`, tests `npm test`, dependency audit `npm audit`). A **Stack Overlay**
 such as `ace-rails` can ship a ready-to-paste command set for its stack.
 
-nadal's Host App gate, replacing the shipped ace config-repo rows during Customization. Only
-**currently-runnable** checks are registered as rows: [`AGENTS.md`](AGENTS.md) → *Quality gate*
-requires every `invoke`/`verify` run to run every row here, so listing a command with no backing
-script would exit "Missing script" on every lifecycle run from Task 3 onward, never reaching green —
-not something an "effective gate" caveat in prose can override.
+nadal's Host App gate. Only **currently-runnable** checks are registered as rows: listing a command
+with no backing script would exit "Missing script" on every lifecycle run, never reaching green —
+not something an "effective gate" caveat in prose can override. (The *Structural parity* row retired
+with its script at the deuce cutover, deuce [#86](https://github.com/wrburgess/deuce/issues/86);
+the vendoring receipt's checksums are the drift mechanism now.)
 
 | Purpose | Command |
 |---------|---------|
-| Structural parity | `ruby scripts/parity_check.rb` |
 | Typecheck | `npm run typecheck` |
 | Lint | `npm run lint` |
 | CLI grammar parity | `npm test -- test/cli-grammar-parity.test.ts` |
 | Tests + coverage floor | `npm run test:coverage` |
 
 All rows are live: the coverage floor is enforced at 75% lines / 75% functions via
-`vitest.config.ts` thresholds, with every file under `src/` in scope and no vitest coverage
-exclusions — `src/cli/main.ts` included. Task 6 turned that floor green by adding real tests that
+`vitest.config.ts` thresholds, with every file under `src/` in scope — `src/cli/main.ts` included.
+The one carve-out is deuce's seeded `tools/gate/` and `tools/review/`: their tests are `node:test`
+suites vitest does not run, so they are excluded from coverage as dormant until the gate is wired
+(the day-one adoption issue tracks lifting this). Task 6 turned that floor green by adding real tests that
 exercise `src/db/schema.ts` and `src/cli/commands/db-migrate.ts` end-to-end via `openDb`/
 `runMigrations` and `dispatch(["db", "migrate"])`, rather than padding with tautological tests — see
 the Task 6 report.
@@ -47,7 +47,7 @@ is unchanged.
 
 ## Attribution & Model Declaration
 
-Single source of truth for agent attribution ([ADR 0007](docs/adr/0007-attribution-includes-model-version-for-audits.md)).
+Single source of truth for agent attribution ([ADR 0007](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0007-attribution-includes-model-version-for-audits.md)).
 Bump the model here — in one place — when the host switches models. Skills sign with the
 **runtime-actual** model when determinable, reconciling against these declared defaults and recording
 the actual if they differ. Use human-readable names, never API ids.
@@ -66,7 +66,7 @@ the actual if they differ. Use human-readable names, never API ids.
 - Attribution shows **per-agent identity** so provenance reflects which agent did the work. The
   *Agent* column names the **harness** (Claude Code · Codex · Copilot · Antigravity · Grok Build); the *Declared
   model* column names the **model** it runs — never the harness — per the naming convention in
-  [ADR 0024](docs/adr/0024-harness-model-naming-convention.md). Copilot's backing model is
+  [ADR 0024](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0024-harness-model-naming-convention.md). Copilot's backing model is
   variable/unknown, so its declared model reads `model varies (GPT / Claude / Gemini)`.
 
 ## Branch & PR Policy
@@ -76,7 +76,7 @@ the actual if they differ. Use human-readable names, never API ids.
   protected branch; agents work on feature branches. A host may trim or extend the backticked list,
   then run `bin/install-git-hooks` to regenerate the derived sidecar `.githooks/protected-branches`.
   Enforcement (git hooks + per-tool fast-fail) is delivered by the guardrails baseline
-  ([ADR 0009](docs/adr/0009-defense-in-depth-branch-protection-all-agents.md)) and sources this list.
+  ([ADR 0009](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0009-defense-in-depth-branch-protection-all-agents.md)) and sources this list.
 - **Branch naming:** `feature/` · `fix/` · `chore/` · `docs/` prefixes (host may extend).
 - **One PR per branch**, opened ready-for-review (not draft).
 - **Issue linking:** `Closes #N` for a leaf issue; `Part of #N` (no closing keyword, even negated) for
@@ -95,8 +95,10 @@ the actual if they differ. Use human-readable names, never API ids.
   incident, and would drop signing for the HC's own interactive commits too — the failure this rule
   exists to avoid is an *unattended stall*, not signing itself.
 
-  Why this is safe here, checked rather than assumed (2026-07-31): nothing requires signed commits —
-  `main` has no branch protection and no rulesets; feature-branch signatures **do not verify on GitHub
+  Why this is safe here, checked rather than assumed (2026-07-31; protection fact updated
+  2026-08-11): nothing requires signed commits — `main`'s branch protection (enabled at the deuce
+  cutover: pull requests only, zero required approvals, admins included) carries **no signed-commits
+  requirement**; feature-branch signatures **do not verify on GitHub
   anyway** (the key is not registered as a *signing* key on the account, so the API reports
   `verified: false, reason: unknown_key`); and squash-merge discards those commits, replacing them with
   a merge commit GitHub signs itself (`verified: true`, `reason: valid`). So an unsigned feature commit
@@ -108,8 +110,8 @@ the actual if they differ. Use human-readable names, never API ids.
 
 ## Review Severity Framework
 
-Generic starter severities for `verify`/`listen`/`final` and human review. A Host App tunes the
-definitions.
+Generic starter severities for the lifecycle's Verify and Deliver stages and human review. A Host
+App tunes the definitions.
 
 | Severity | Meaning | Disposition |
 |----------|---------|-------------|
@@ -133,23 +135,19 @@ to surface it, and it is severity-rated like any other.
 
 - **Host platform:** `GitHub` (default). The issue/PR verbs the Skills use are isolated so a Host App
   on another platform (e.g. GitLab) can remap the artifact targets without rewriting skill bodies
-  ([ADR 0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)).
+  ([ADR 0006](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)).
 - **Artifact map:** assessments/plans → issue comments; implementation → a PR; SOW → a PR comment.
-- **Copilot adapter mode:** `native` (Generic Baseline default) — Copilot reads `AGENTS.md` natively
-  and `.github/copilot-instructions.md` is a discovery marker. Set to `render` (a byte-for-byte
-  `parity:render` block in `.github/copilot-instructions.md`) only if the host drives work through a
-  legacy in-editor Copilot IDE; the parity check enforces the render matches `AGENTS.md`.
 
 ## Reviewer
 
 The **independent second-model Reviewer** the lifecycle summons at the plan and PR gates — declared
 here so a generic Skill body names the *role* while the host names the *identity*
-([ADR 0026](docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md), the same
-argument shape as the lifecycle host in [ADR 0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)
-and the gate policy in [ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md)).
+([ADR 0026](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md), the same
+argument shape as the lifecycle host in [ADR 0006](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)
+and the gate policy in [ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md)).
 The chain settings ship as **business-neutral placeholders** a Host App replaces with its real
 reviewer during Customization; the *Invocation paths* Codex row below is the one exception — it
-carries **this repo's real mechanism** ([ADR 0035](docs/adr/0035-codex-summons-is-the-local-cli-runtime.md)),
+carries **this repo's real mechanism** ([ADR 0035](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0035-codex-summons-is-the-local-cli-runtime.md)),
 which hosts likewise replace.
 
 Like *Human Gates*, this heading is deliberately **absent from the parity check's required sections**,
@@ -166,15 +164,15 @@ and stays green.
 - **The degradation floor is not configurable.** `stop-and-ask` is its only allowed value and the
   parity check hard-fails any other, on the same footing as merge: a run that cannot obtain an
   independent review must not be able to certify itself. The AC stops and asks the HC — it never
-  delivers unreviewed with a footnote ([ADR 0026](docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)
-  decision 3, affirming [ADR 0005](docs/adr/0005-ship-hybrid-delegation-offload-retrieval-protect-judgment.md)).
+  delivers unreviewed with a footnote ([ADR 0026](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)
+  decision 3, affirming [ADR 0005](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0005-ship-hybrid-delegation-offload-retrieval-protect-judgment.md)).
 - **The acting harness is excluded from the chain before any summons.** An AC is never its own
   independent backstop — a same-model review that *appears* to run is worse than none — so the harness a
   run is executing *as* is filtered out of *Primary* + *Fallback order* before the window opens
   (`scripts/reviewer.rb` → `independent_chain`, the runtime sibling of the static
   fallback-names-the-primary invariant). It is a **harness-level** guard: it catches a same-harness
   reviewer and, like the invariant it mirrors, does **not** catch two harnesses serving the same model
-  ([ADR 0027](docs/adr/0027-reviewer-chain-validated-against-invocation-paths.md) decision 7 records why
+  ([ADR 0027](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0027-reviewer-chain-validated-against-invocation-paths.md) decision 7 records why
   the rest is unverifiable from a static declaration). If the exclusion empties the chain, the run is at
   the exhausted-chain floor — `stop-and-ask`.
 - **With `Fallback order: none`, that exclusion is unconditional whenever Codex is the acting
@@ -192,10 +190,10 @@ and stays green.
   review requests and two windows, and makes "did the primary respond?" unanswerable.
 - **At the plan gate the HC forwards** the assessment and plan **when plan approval is `required`** (see
   *Human Gates* below) — a human is already standing at that gate. **The shipped baseline is now `auto`**
-  ([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)), and under `auto` nobody is at the plan
+  ([ADR 0029](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0029-baseline-ships-ungated-to-merge.md)), and under `auto` nobody is at the plan
   gate, so the plan-gate summons has no owner or mechanism yet; that residual risk is tracked in
   [#129](https://github.com/wrburgess/ace/issues/129), and
-  [ADR 0026](docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)
+  [ADR 0026](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)
   decision 2 records it as deliberately unsettled.
 - **A response** is a reply on **any** of the three surfaces — an issue-level PR comment, an **inline
   diff thread**, or a **review body**. Reading only the first makes an automated inline review
@@ -216,13 +214,13 @@ and stays green.
 The mechanism for summoning each harness. **This table is the chain's membership list**: a harness
 named in *Primary* or *Fallback order* with no row here has no summons mechanism, so it is
 **unreachable** — the parity check reports it, and `verify` falls straight past it rather than
-starting a window ([ADR 0027](docs/adr/0027-reviewer-chain-validated-against-invocation-paths.md)).
+starting a window ([ADR 0027](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0027-reviewer-chain-validated-against-invocation-paths.md)).
 The Codex row names **this repo's real mechanism**, not a neutral placeholder
-([ADR 0035](docs/adr/0035-codex-summons-is-the-local-cli-runtime.md)); a Host App replaces these rows
+([ADR 0035](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0035-codex-summons-is-the-local-cli-runtime.md)); a Host App replaces these rows
 with its real commands during Customization.
 
 The **Check** cell is **optional** — host-supplied wherever the baseline declares none — narrowly
-superseding [ADR 0026](docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)
+superseding [ADR 0026](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)
 decision 4's unconditional model:
 
 - **Declared** → run it *before* summoning; an unmet precondition falls back immediately rather than
@@ -235,7 +233,7 @@ decision 4's unconditional model:
 
 **The baseline now ships one executable check** — the Codex row's ready probe, which can run *before*
 summoning without a side effect, so it is declared rather than left host-supplied
-([ADR 0035](docs/adr/0035-codex-summons-is-the-local-cli-runtime.md), narrowly superseding
+([ADR 0035](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0035-codex-summons-is-the-local-cli-runtime.md), narrowly superseding
 ADR 0027 decision 4 for that row only). The Copilot check *is* the summons — it cannot precede one
 without a side effect — so that row's Check stays host-supplied.
 
@@ -327,14 +325,14 @@ is. This is the same rule as *bugs we fix, optimizations we triage*, one level u
 
 Which lifecycle pauses require a human, declared here so a generic Skill body names the *gate* instead
 of hardcoding a policy a host would otherwise have to fork the file to change
-([ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md), the same argument shape as
-the host-platform value in [ADR 0006](docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)).
+([ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md), the same argument shape as
+the host-platform value in [ADR 0006](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0006-baseline-skill-set-and-github-default-lifecycle-host.md)).
 The Generic Baseline now ships **ungated to merge**: plan approval is `auto`, so a hands-off run drives
 itself to the one standing human gate, and every Skill body states that default inline
-([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). **The baseline ships merge `required`**;
+([ADR 0029](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0029-baseline-ships-ungated-to-merge.md)). **The baseline ships merge `required`**;
 **nadal sets it to `attested`** — the AC merges the delivered PR, but only against an independent
 external-model adversarial review bound to the SHA being merged
-([ADR 0037](docs/adr/0037-merge-gate-accepts-attested.md)). (A vendored `PROJECT.md` that predates this
+([ADR 0037](https://github.com/wrburgess/ace/blob/8faa6a5e39e6ace4d436513cf16a9238a08c351b/docs/adr/0037-merge-gate-accepts-attested.md)). (A vendored `PROJECT.md` that predates this
 section still parses to the strict fail-safe — plan approval `required`, merge `required` — through the
 parser default; the flip lives in the shipped file, not in that default.)
 
@@ -357,13 +355,13 @@ parser default; the flip lives in the shipped file, not in that default.)
   must-fix findings, an independent external-model adversarial review on record (see *Reviewer*), and
   that review **bound to a literal SHA equal to the PR head**. Any one of those failing means no merge —
   post the SOW, name the condition that failed, and stop. **`auto` remains forbidden** and the parity
-  check hard-fails it: unconditional self-merge is the claim [ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
+  check hard-fails it: unconditional self-merge is the claim [ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
   refused, and `attested` is not that claim. What makes the difference real rather than semantic is
   *Reviewer* below, which filters the acting harness out of its own review chain and forces
   `stop-and-ask` when no independent review can be obtained — so the AC still cannot certify its own
-  work ([ADR 0037](docs/adr/0037-merge-gate-accepts-attested.md)).
+  work ([ADR 0037](https://github.com/wrburgess/ace/blob/8faa6a5e39e6ace4d436513cf16a9238a08c351b/docs/adr/0037-merge-gate-accepts-attested.md)).
 - **`attested` does not reach the intake and authoring PRs.** `scout` / `clip` / `follow` / `restock` /
-  `create-skill` still end with **a human disposing on the PR** ([ADR 0025](docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
+  `create-skill` still end with **a human disposing on the PR** ([ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
   decision 6, unchanged). Those gates exist for *content judgment*, not code correctness.
 - **The harness must also permit it.** Repo policy and agent-runtime permission are independent layers:
   `attested` authorizes the merge, it does not make the runtime allow the command. If the runtime denies
@@ -376,11 +374,11 @@ parser default; the flip lives in the shipped file, not in that default.)
 - **The plan gate is also a context boundary, and the reset survives the pause being waived.**
   "Plan posted" forces a context reset under either setting — a session boundary under `required` (the
   human crosses), `ship`'s own context reset under `auto`
-  ([ADR 0028](docs/adr/0028-context-reset-boundary-resumable-stops-autonomous-listen.md)):
-  [`invoke`](skills/invoke/SKILL.md) **begins by re-reading the posted plan from the issue** and never
-  continues on conversational memory, and the pre-[`final`](skills/final/SKILL.md) context check still
+  ([ADR 0028](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0028-context-reset-boundary-resumable-stops-autonomous-listen.md)):
+  [`invoke`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/invoke/SKILL.md) **begins by re-reading the posted plan from the issue** and never
+  continues on conversational memory, and the pre-[`final`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/final/SKILL.md) context check still
   applies. `auto` removes the *wait*; it never removes the context firebreak.
-- **[`ship`](skills/ship/SKILL.md)'s four emergency stops** — an unresolvable check failure; a discovery
+- **[`ship`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/ship/SKILL.md)'s four emergency stops** — an unresolvable check failure; a discovery
   that the change touches core logic the plan did not anticipate; an architectural or ambiguous review
   comment; a handoff verdict the orchestrator cannot resolve — always stop and ask the HC.
 - **The lifecycle's "the HC decides when to compress"** remains mandatory for every row of its
@@ -388,18 +386,18 @@ parser default; the flip lives in the shipped file, not in that default.)
   option pick, the Stage-2 plan approval, and the **exploratory (spike-then-plan) election** named
   above, which chooses *how to plan* rather than skipping a stage. The trivial-fix, bug-fix,
   documentation-only and large-change rows each compress away a *stage* and stay the HC's call.
-- **The intake and authoring "a human disposes" gates** — [`scout`](skills/scout/SKILL.md),
-  [`clip`](skills/clip/SKILL.md), [`follow`](skills/follow/SKILL.md),
-  [`restock`](skills/restock/SKILL.md), [`create-skill`](skills/create-skill/SKILL.md)
-  ([ADR 0014](docs/adr/0014-manual-drop-inbox-for-unfetchable-sources.md),
-  [ADR 0016](docs/adr/0016-interactive-sequential-disposition-scout.md)) — are out of scope too.
+- **The intake and authoring "a human disposes" gates** — [`scout`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/scout/SKILL.md),
+  [`clip`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/clip/SKILL.md), [`follow`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/follow/SKILL.md),
+  [`restock`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/restock/SKILL.md), [`create-skill`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/create-skill/SKILL.md)
+  ([ADR 0014](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0014-manual-drop-inbox-for-unfetchable-sources.md),
+  [ADR 0016](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0016-interactive-sequential-disposition-scout.md)) — are out of scope too.
   `auto` is **not** licence to auto-merge any of their review PRs.
 
 ### Rule-suggestion disposition
 
-How [`final`](skills/final/SKILL.md) handles the Rules-Layer / config improvements it learns during
+How [`final`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/final/SKILL.md) handles the Rules-Layer / config improvements it learns during
 implementation, now that a hands-off run reaches the merge gate on its own
-([ADR 0029](docs/adr/0029-baseline-ships-ungated-to-merge.md)). The shipped default is
+([ADR 0029](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0029-baseline-ships-ungated-to-merge.md)). The shipped default is
 `autonomous-fold`; the shipped values are `autonomous-fold | present-to-hc`. **nadal sets it to
 `log-and-continue`, which is deliberately neither of them** — see *How nadal reads it* below. This is a
 **documentary** value — prose, **not** a row in the gate table above (the parser reads a two-row table
@@ -462,7 +460,7 @@ run either of them.**
    never an Issue, PR, rule, or ADR.
 2. **Append as you learn** — in the phase that learned it, committed with that phase's own work, rather
    than batched at delivery. This mirrors the durable-as-it-arrives rule
-   [`ship`](skills/ship/SKILL.md) already applies to its asks-ledger. **A learning from `assess`,
+   [`ship`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/ship/SKILL.md) already applies to its asks-ledger. **A learning from `assess`,
    `devise`, or the orchestrator has no branch yet**: record it in that stage's durable artifact (the
    assessment or plan comment on the issue, where `ship` already records its stops and asks) and
    transcribe it into `docs/findings.md` in the first phase that has a branch — `invoke`.
@@ -502,7 +500,7 @@ run either of them.**
    section is answered rather than left blank or filled with a follow-up link.
 
 **What this does *not* claim, because two drafts claimed it and were wrong.** A learning that arrives
-**after the Reviewer has responded** — during [`listen`](skills/listen/SKILL.md), or at `final` — moves
+**after the Reviewer has responded** — during [`listen`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/listen/SKILL.md), or at `final` — moves
 the head when it is committed, and [*Human Gates*](#human-gates) → `attested` then requires a fresh
 review bound to the new head. **That cost is real and is not avoided by anything on this page.** It is
 also not special: it is the standing lifecycle behavior for **any** post-review change, and a `listen`
@@ -512,7 +510,7 @@ round — not a guarantee that it will.
 
 **And the residual is named rather than papered over.** The lifecycle has no cheap, terminating path for
 a durable append that arrives after the PR-gate summons; `verify` owns the summons
-([ADR 0026](docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)) and
+([ADR 0026](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)) and
 re-entering it is a full stage, not a summon. **That is a gap in the lifecycle, not something a host
 config can legislate**, and trying to legislate it here produced three successive Reviewer findings on
 [PR #55](https://github.com/wrburgess/nadal/pull/55) — a delivery-time append that was never committed,
@@ -528,7 +526,7 @@ before merging, because [*Human Gates*](#human-gates) → `attested` requires th
 being merged. That is the gate working as designed, not a special re-attestation mode — **and no such
 mode is invented here.** Appending per phase is what keeps that case rare.
 
-**If you looked for `log-and-continue` in [`final`](skills/final/SKILL.md) Step 1 and found no matching
+**If you looked for `log-and-continue` in [`final`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/final/SKILL.md) Step 1 and found no matching
 branch: that is expected, and it is not a reason to skip the step.** That body is vendored and ships
 only the two baseline values, so it cannot name this one. **This block is the branch.** A Reviewer
 finding on [PR #55](https://github.com/wrburgess/nadal/pull/55) raised precisely this risk — that an
@@ -549,22 +547,23 @@ does **not** recognize forces a reader to this paragraph, which is the correct o
 
 **This value is nadal-local and wants canonicalizing upstream** — the same destination as the rest of
 this section, tracked at [wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159) and recorded
-in [`docs/ace-sync-manifest.md`](docs/ace-sync-manifest.md). Until an upstream value exists, the
+in [`docs/ace-sync-manifest.md`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/docs/ace-sync-manifest.md). Until an upstream value exists, the
 divergence is stated here in the open rather than hidden inside a redefined word. Everything else the
 shipped values require — **edit no Rules Layer or config without approval** — holds unchanged, and that
 is the part doing the work.
 
 This value governs only `final`'s rule-suggestion step. It does **not** touch the intake/authoring
-"a human disposes" gates — [`scout`](skills/scout/SKILL.md), [`clip`](skills/clip/SKILL.md),
-[`follow`](skills/follow/SKILL.md), [`restock`](skills/restock/SKILL.md),
-[`create-skill`](skills/create-skill/SKILL.md) — whose review PRs a human still disposes.
+"a human disposes" gates — [`scout`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/scout/SKILL.md), [`clip`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/clip/SKILL.md),
+[`follow`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/follow/SKILL.md), [`restock`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/restock/SKILL.md),
+[`create-skill`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/create-skill/SKILL.md) — whose review PRs a human still disposes.
 
 ## Findings-Log Discipline
 
 Where an **operational or process learning** goes in nadal, and — more importantly — where it does
 **not**. This is a Project Config value in the same sense as *Human Gates* above: the spec
 (§ *Factory model and SDLC*) is its origin, and this is the copy an agent actually reaches, since the
-instruction chain is `CLAUDE.md` → [`AGENTS.md`](AGENTS.md) → this file and reaches no spec directory.
+instruction chain is `CLAUDE.md` → this file and reaches no spec directory (since the deuce cutover,
+[`AGENTS.md`](AGENTS.md) is the contractor-reviewer contract, not the AC's instruction source).
 
 **The artifact** is [`docs/findings.md`](docs/findings.md) — append-only, one line per finding. Its
 header states the line format and the type + state vocabularies; read them there rather than from a
@@ -609,7 +608,7 @@ filed as work** — which the state axis now prevents directly, since a residual
 
 **It sits outside the lifecycle and has no trigger.** Every lifecycle stage is scoped to one issue or
 one PR; there is no cross-issue stage, and attaching triage to an invented boundary between units of
-work is the stage split [`docs/standards/development-lifecycle.md`](docs/standards/development-lifecycle.md)
+work is the stage split [`docs/standards/development-lifecycle.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/standards/development-lifecycle.md)
 warns against. It runs when the HC calls it, is interruptible, and blocks nothing — which is safe
 precisely because nothing urgent is in the pile: a broken thing is a defect and never waits for triage.
 
@@ -619,7 +618,7 @@ item ranked has delegated nothing.
 
 **The AC may eliminate only what it can attach a re-runnable check to** — one command the HC can paste
 to confirm the row. Everything else it *proposes*. This is
-[ADR 0033](docs/adr/0033-verification-stays-in-main-agent-loop.md)'s boundary applied to disposition:
+[ADR 0033](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0033-verification-stays-in-main-agent-loop.md)'s boundary applied to disposition:
 mechanical facts are delegable, judgment is not. **Its deliverable is a file, not a message.**
 
 **Sort only as far as the next decision requires.** First pass is binary — before Springfield or not.
@@ -635,10 +634,10 @@ of the following applies:
 
 | Vendored instruction | What it says | Here |
 |---|---|---|
-| [`rules/self-review.md`](rules/self-review.md) → *Anti-Patterns* (Tier-1 Lean Core, resident on every run) | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
-| [`rules/self-review.md`](rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and executable in [`ship`](skills/ship/SKILL.md)'s `asks_ledger` contract as `status: "handed-off"` with a `ref` | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
-| [`final`](skills/final/SKILL.md) Step 1 (executed at every delivery) | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`. |
-| [`scout`](skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
+| [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → *Anti-Patterns* (Tier-1 Lean Core, resident on every run) | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
+| [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and executable in [`ship`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/ship/SKILL.md)'s `asks_ledger` contract as `status: "handed-off"` with a `ref` | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
+| [`final`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/final/SKILL.md) Step 1 (executed at every delivery) | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`. |
+| [`scout`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
 | [`verify`](skills/verify/SKILL.md) Stage 4 (executed on every PR) | an adversarial pass that *"actively tries to **refute** the change"* — stated with **no stopping condition**, so "is anything wrong?" runs until a human stops it | **Bounded here.** See [*Review Lenses*](#review-lenses): a solicited pass declares a lens set of 3–4 plus the permanent lens, each lens runs once, and fix-verification gets two passes before escalation. The adversarial *posture* is unchanged — only its terminus is supplied, because the vendored body supplies none. |
 
 Two of these are easy to miss for opposite reasons. The **last** row is the trained reflex: the only
@@ -679,11 +678,9 @@ instance: opened at explicit HC direction, and therefore **not precedent** for a
 ### The limits of this statement, stated plainly
 
 **Nothing in *Quality Checks* parses this section.** Stated exactly, since a limit stated loosely is the
-failure this whole section is about: `scripts/parity_check.rb` asserts structure — the required `##`
-sections, skill frontmatter, resolvable links, and the gate/reviewer **values**. It does read a little
-prose, but only three fixed patterns: any heading advertising itself as unenforceable (this file's
-headings included), and whether a skill body names the `Human Gates` and *Reviewer* host values. None of
-that reads the rule stated here.
+failure this whole section is about — and stated more absolutely than it once was: the ace-era parity
+check that asserted this file's structure (and even it read none of the rule stated here) retired at
+the deuce cutover. Nothing mechanical reads this section at all.
 
 Nor could a check fully replace it, though **the honest answer is "partly", not "no"**: of the four
 banned spawn targets, a new file under `rules/` or a new ADR would leave an in-repo trace a check
@@ -702,47 +699,23 @@ setting, not by one that had failed to find this rule.
 The canonical fix is upstream — [wrburgess/ace#159](https://github.com/wrburgess/ace/issues/159), which
 names the process-findings log in the Config Bundle and enforces its disposition discipline. When it
 lands and is re-synced, **this section collapses into the canonical statement rather than drifting from
-it**; the re-vendor obligation is recorded in [`docs/ace-sync-manifest.md`](docs/ace-sync-manifest.md)
+it**; the re-vendor obligation is recorded in [`docs/ace-sync-manifest.md`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/docs/ace-sync-manifest.md)
 under *Known local deltas*, which is where a re-sync reconciler looks.
 
-## Intake Pipeline
-
-The artifact locations the [`scout`](skills/scout/SKILL.md) sweep reads and writes, declared here so
-the generic Skill body names no path ([ADR 0012](docs/adr/0012-intake-pipeline-placement.md)). These
-ship as **business-neutral placeholders** pointing at the illustrative reference seed; a Host App
-repoints them during Customization if it relocates its intake artifacts.
-
-| Artifact | Location |
-|----------|----------|
-| **Watchlist** — the machine-readable source list the sweep polls | [`docs/reference/voices.yml`](docs/reference/voices.yml) |
-| **Learnings Log** — the dated, append-only entries + their index | [`docs/reference/learnings/`](docs/reference/learnings/) |
-| **Last-swept marker** — the recency stamp the next sweep reads for its incremental window | the `**Last swept:**` line in the Learnings-Log [`index.md`](docs/reference/learnings/index.md) |
-| **Manual-drop inbox** — human-curated pointers to output the sweep can't fetch (X, paywalled, feed-less) | [`docs/reference/intake-inbox/`](docs/reference/intake-inbox/) |
-
-The *schemas* for these artifacts (the Watchlist fields, the Learnings-Log entry front-matter with its
-required `stance` and `touches`, the drop shape in the manual-drop inbox) are business-neutral mechanism
-and live with the artifacts; only the locations are host-configurable and belong here.
-
-## Tool Roster
-
-The location of the [Tool Roster](docs/reference/tool-roster.yml) artifact the `restock` refresh skill
-reads and writes, declared here so the generic Skill body names no path
-([ADR 0023](docs/adr/0023-tool-roster-facts-tracker-sibling-to-intake.md), mirroring
-[ADR 0012](docs/adr/0012-intake-pipeline-placement.md)). Ships as a **business-neutral placeholder**
-pointing at the illustrative seed; a Host App repoints it during Customization.
-
-| Artifact | Location |
-|----------|----------|
-| **Tool Roster** — the current-state harness/model snapshot | [`docs/reference/tool-roster.yml`](docs/reference/tool-roster.yml) |
-
-The Tool Roster *schema* (the fields, the provenance typing, the inclusion test) is business-neutral
-mechanism and lives with the artifact; only the location is host-configurable and belongs here.
+> **Trimmed surfaces (host Customization):** the ace-era intake pipeline (`scout`, `clip`,
+> `follow`, `restock` and the Watchlist / Learnings Log / Manual-drop inbox / Tool Roster artifacts
+> under `docs/reference/`) left with the deuce cutover
+> (deuce [#86](https://github.com/wrburgess/deuce/issues/86)): every entry predated nadal's
+> vendoring — ace's own record shipped wholesale, read now at its source,
+> [ace `46fdbb8`](https://github.com/wrburgess/ace/tree/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608).
+> The *Intake Pipeline* and *Tool Roster* sections that declared their locations are gone with the
+> artifacts — a location table pointing at deleted files would be a live claim about nothing.
 
 ## Execution Profile
 
 Per-step model/effort routing (spec § Model routing; proving ground for ace#143).
 Ceiling: **Opus / high** — Fable only on explicit HC invocation.
-Executable at delegation boundaries (`.claude/agents/*.md`, subagent spawns) and via the
+Executable at delegation boundaries (subagent spawns) and via the
 project model pin; step-level routing inside one session is advisory.
 
 | Step | Model / effort |

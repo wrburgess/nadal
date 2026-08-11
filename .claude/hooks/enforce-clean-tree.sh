@@ -40,7 +40,8 @@
 # protected-branch guard — there is NO mechanical Layer-1/Layer-2 git-level
 # backstop for these ops. This guard is therefore genuinely Layer-3-ONLY, a
 # deliberate, documented EXCEPTION to ADR 0009's "a Layer-3 accelerator must never
-# be the only guard": the Lean-Core rule (rules/self-review.md) is guidance an
+# be the only guard": the ace-era Lean-Core rule (read at
+# https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) is guidance an
 # agent reads, NOT a mechanical gate, so it is not a lower enforcement layer. This
 # hook is a best-effort, fail-open ACCELERATOR that reduces *accidental* destructive
 # ops on a dirty tree; it is NOT a security boundary and does not defend against

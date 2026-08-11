@@ -1,14 +1,12 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# bin/setup — minimal, business-neutral setup for the Config Bundle.
+# bin/setup — this repo's own setup entry point.
 #
-# The only baseline setup step is activating the protected-branch git hooks (issue #6 / ADR 0009): on
-# a fresh clone the hooks are inactive until core.hooksPath is set, so this must run once. A Host App
-# with its own richer bin/setup (e.g. a Rails app's `bundle install` / `db:prepare`) keeps it —
-# bin/ace-sync PRESERVES an existing bin/setup on re-sync (like PROJECT.md), so vendoring never
-# clobbers the host's version. When adopting the bundle, add `system! "bin/install-git-hooks"` to that
-# existing setup script.
+# The one mandatory step is activating the protected-branch git hooks: on a fresh clone the hooks
+# are inactive until core.hooksPath is set, so this must run once. This file is nadal's own — a
+# seed path deuce's sync skips as already present (config/vendoring-receipt.md records the split),
+# so an upstream update never clobbers it.
 
 require "fileutils"
 
@@ -23,7 +21,8 @@ Dir.chdir(APP_ROOT) do
   # this repo puts it on PATH, so a fresh clone failed at the first command an HC ran. This step is
   # PRINTED, not run: `npm link` writes into a global npm prefix this script does not own, and it
   # must never run from a git worktree, where it would bind the global `tn` to a throwaway checkout.
-  # ASCII only, per rules/scripting.md.
+  # ASCII only, a discipline this repo keeps (stated by the ace-era scripting rule, read now at
+  # https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/scripting.md).
   puts
   puts "== Next: put `tn` on your PATH (not done for you) =="
   puts "  npm install"

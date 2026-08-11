@@ -1,25 +1,44 @@
-@AGENTS.md
+# CLAUDE.md
 
-# Claude-only notes
+nadal runs on **deuce**. The standard is read at its source —
+[github.com/wrburgess/deuce](https://github.com/wrburgess/deuce) — and never vendored; what ships
+here is deuce's payload, and [`config/vendoring-receipt.md`](config/vendoring-receipt.md) records
+the exact commit this repository vendored. [`PROJECT.md`](PROJECT.md) carries this host's own
+values: quality checks, attribution, branch policy, gates, the findings-log discipline.
 
-The line above imports the [Canonical Source](AGENTS.md) — every instruction Claude follows lives in
-`AGENTS.md`, expanded into this file at launch. **Do not duplicate `AGENTS.md` content here.** This
-file holds only Claude-specific configuration notes that have no place in the tool-neutral canonical.
+## The lifecycle
 
-- **Invocation Shims** — Claude reaches each Skill through a thin `.claude/commands/<name>.md`
-  slash-command file that points at the canonical body in `skills/<name>/SKILL.md` (e.g.
-  [`.claude/commands/distill.md`](.claude/commands/distill.md) → `/distill`). The shipped set mirrors
-  the Skill table in [`AGENTS.md`](AGENTS.md) → *Skills*
-  ([ADR 0010](docs/adr/0010-repo-layout-canonical-skills-at-root.md)).
-- **Settings & hooks** — `.claude/settings.json` wires the branch-protection fast-fail
-  ([`.claude/hooks/enforce-branch-creation.sh`](.claude/hooks/enforce-branch-creation.sh)) as a
-  PreToolUse hook — Layer 3 over the portable git hooks in `.githooks/`
-  ([ADR 0009](docs/adr/0009-defense-in-depth-branch-protection-all-agents.md); see
-  [`docs/guides/branch-protection.md`](docs/guides/branch-protection.md)). Activate them on a fresh
-  clone with `bin/setup`.
-- **Sub-agent offload** — where a Skill defines an optional sub-agent enhancement (e.g. `ship`'s phase
-  delegation), Claude uses its native `Task` tool; tools without it run the same procedure inline. The
-  quality bar never changes, only the mechanism
-  ([ADR 0003](docs/adr/0003-skills-canonical-body-thin-shims-graceful-degradation.md)).
-- **Spawn cap** — never delegate review or verification ([ADR 0033](docs/adr/0033-verification-stays-in-main-agent-loop.md));
-  prefer one sub-agent to several; no wide parallel fan-out unless the HC asks for it.
+Work runs through the six shipped Skills. Each is a **contract file** deuce updates by sync pull
+request — read them, never edit them (an edit is drift the receipt's checksums report):
+
+[`skills/assess/SKILL.md`](skills/assess/SKILL.md) ·
+[`skills/devise/SKILL.md`](skills/devise/SKILL.md) ·
+[`skills/implement/SKILL.md`](skills/implement/SKILL.md) ·
+[`skills/verify/SKILL.md`](skills/verify/SKILL.md) ·
+[`skills/deliver/SKILL.md`](skills/deliver/SKILL.md) ·
+[`skills/distill/SKILL.md`](skills/distill/SKILL.md)
+
+[`AGENTS.md`](AGENTS.md) is the contractor-reviewer contract — the file a summoned reviewer reads.
+It is not this file's instruction source.
+
+## Rules
+
+None yet, deliberately. Under deuce a host's rules are born empty and grow one at a time on this
+repository's own receipts; the ace-vendored set left with the cutover
+(deuce [#86](https://github.com/wrburgess/deuce/issues/86)). The findings log
+([`docs/findings.md`](docs/findings.md)) is where the receipts accumulate — its discipline is
+declared in [`PROJECT.md`](PROJECT.md) → *Findings-Log Discipline*.
+
+## The product
+
+nadal is the tennis-team operations CLI, `tn`. Start at
+[`ARCHITECTURE.md`](ARCHITECTURE.md); the operating procedures live in
+[`docs/runbooks/`](docs/runbooks/), the CLI grammar at [`docs/cli/`](docs/cli/), and this host's
+own decision records at [`docs/adr/nadal/`](docs/adr/nadal/).
+
+## Settings & hooks
+
+`.claude/settings.json` wires two PreToolUse fast-fails —
+[`enforce-branch-creation.sh`](.claude/hooks/enforce-branch-creation.sh) and
+[`enforce-clean-tree.sh`](.claude/hooks/enforce-clean-tree.sh) — per-tool accelerators over the git
+hooks in `.githooks/`. Activate everything on a fresh clone with `bin/setup`.
