@@ -57,8 +57,11 @@ the USTA login form itself.
 - The archived raw page lives at the path in `archived="…"` — reopen it to confirm it's the
   complete, rendered page and not a partial/error state.
 - `tn db migrate`'s own `data/nadal.db` now has the player's `usta_uaid`, `wtn_tennis_id` (when the
-  page carried one), and a dated `ntrp`/`wtn_singles`/`wtn_doubles` row in `rating_observations`
-  (WTN carries no date of its own, so it's stamped with the capture date).
+  page carried one), and a dated `ntrp`/`wtn_singles`/`wtn_doubles` row in `rating_observations`.
+  **Every one of those dates is the publisher's own**, not the day you captured the page: NTRP's
+  comes from its `Updated Date` line, and each WTN discipline's from its own `Updated` subtitle in
+  the widget. A capture whose WTN section carries no readable `Updated` date is **refused** rather
+  than stamped with today — see *Known limitations*.
 - Re-running the same command with the same `--source-url` updates the same player in place rather
   than creating a duplicate — `src/ingest/identity.ts`'s tier-1 `usta_uaid`/`wtn_tennis_id` match.
 
@@ -66,6 +69,12 @@ the USTA login form itself.
 
 - This tool never automates the USTA login. If the session expires mid-capture, sign in again and
   re-save.
+- **A WTN section that prints a rating but no readable `Updated` date is refused** (`status=error`,
+  naming the `__section-subtitle` selector) rather than dated with the capture day. Every one of the
+  194 WTN sections captured for this project carries that date, so a refusal here means the page
+  shape changed — read the archived file and fix the parser; do not work around it by re-dating.
+  The alternative was tried and is what issue #132 closed: a capture-stamped date is
+  indistinguishable downstream from a real publication date, so nothing can tell them apart later.
 - An ambiguous player name (ties `src/ingest/identity.ts`'s tier-3 fuzzy match) aborts the write and
   reports three facts: the **incoming** name, **where** it came from, and the candidates it is
   **near** (#94). Rule on it with `tn player distinct "<incoming>"` (different people) or

@@ -15,6 +15,7 @@ import {
   formatRetainedLeaguesLine,
   formatRosterSourceLine,
   formatSlotTendencies,
+  formatWtnProvenanceLine,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
 import { sanitizeValue } from "../sanitize.js";
@@ -69,6 +70,25 @@ function renderRosterSourceLineMarkdown(dossier: TeamDossier): string {
     dossier.team.seasonCount,
   );
   return `**Roster:** ${escapeMarkdownCell(line)}.`;
+}
+
+/**
+ * The WTN provenance disclosure (#132) — the twin of `renderWtnProvenanceLineHtml`, and like the
+ * roster-source line above it renders on **every** branch. Placed here, directly above the roster
+ * table whose Ratings column it qualifies, on `renderEvidenceScopeMarkdown`'s rule: a disclosure a
+ * reader meets only after the numbers has not qualified their reading of them.
+ *
+ * The sentence itself is `formatWtnProvenanceLine`'s, shared with the HTML renderer, so the two
+ * dossiers cannot describe one number two ways.
+ *
+ * Escaped like the roster-source line above, and for the same reason the HTML twin escapes:
+ * `observed_on` is an unconstrained TEXT column, so a date reaches this sentence as untrusted as a
+ * scraped name. The fixed prose contains none of `escapeMarkdownCell`'s characters, so the escape
+ * is invisible on every real input and only bites on a hostile one.
+ */
+function renderWtnProvenanceLineMarkdown(dossier: TeamDossier): string {
+  const line = formatWtnProvenanceLine(dossier.players.map((p) => p.ratingTrajectory));
+  return `**WTN ratings:** ${escapeMarkdownCell(line)}.`;
 }
 
 /**
@@ -407,6 +427,8 @@ export function renderDossierMarkdown(dossier: TeamDossier): string {
     `# ${escapeMarkdownCell(dossier.team.teamName)} — Scouting Dossier _(dossier — v0 layout)_\n\n` +
     "## Roster\n\n" +
     renderRosterSourceLineMarkdown(dossier) +
+    "\n\n" +
+    renderWtnProvenanceLineMarkdown(dossier) +
     "\n\n" +
     renderRosterTableMarkdown(dossier) +
     "\n\n" +

@@ -88,6 +88,11 @@ Open `reports/<team-slug>/index.html` in a browser. Check:
 - The roster is the roster you expect — a player missing here is a pull problem, not a report
   problem.
 - Ratings look like ratings (no blanks where you ran the login-assisted pull).
+- The **`WTN ratings:`** line above the roster table names the publisher and the date the ITF
+  published those numbers (#132). It exists because worldtennisnumber.com can show a *different*
+  WTN than the USTA profile does for the same player — the binder prints the USTA figure and says
+  so rather than picking one silently. A date far in the past means the ratings are stale, not that
+  the line is broken.
 - The **"Not collected yet"** block at the bottom names what has no data source yet. That block is
   load-bearing: it is how you tell *"this opponent has no tournament results"* from *"nadal cannot
   record tournament results yet."* Do not read an absent section as a fact about the opponent.

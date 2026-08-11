@@ -214,11 +214,24 @@ export const ustaProfileSchema = z.object({
 });
 export type UstaProfile = z.infer<typeof ustaProfileSchema>;
 
-/** One half of the WTN widget. `zone` is the "GAME ZONE 30.87 TO 27.40" band the widget prints. */
+/**
+ * One half of the WTN widget. `zone` is the "GAME ZONE 30.87 TO 27.40" band the widget prints.
+ *
+ * `updatedOn` is the ITF's own publication date for this number — the widget's
+ * `Updated 08/05/2026` subtitle — and it is what `rating_observations.observed_on` stores, the same
+ * way NTRP stores its `Updated Date`. It is non-null by construction: `parseWtnWidget` refuses a
+ * dated-looking section it cannot date (issue #132).
+ *
+ * `lastPlayedOn` is the widget's other subtitle and is nullable, because nothing persists it — it
+ * is parsed for the same reason `confidence` and `zone` are, so the parser's output describes the
+ * whole widget rather than only the fields today's writer happens to consume.
+ */
 export const wtnRatingSchema = z.object({
   value: z.number(),
   confidence: z.union([z.string(), z.null()]),
   zone: z.union([z.object({ from: z.number(), to: z.number() }), z.null()]),
+  updatedOn: z.string(),
+  lastPlayedOn: z.union([z.string(), z.null()]),
 });
 export type WtnRating = z.infer<typeof wtnRatingSchema>;
 
