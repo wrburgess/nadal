@@ -40,9 +40,11 @@ export type ArchivedWtnProfilePullResult =
  * already on file (only 77-of-1745 players have a `wtn_tennis_id` at all, and every one of them
  * got it from a USTA/WTN capture that ran first), not a rename from this page's own spelling —
  * worldtennisnumber.com is not this project's source of truth for how a name is cased.
- * `wtnTennisId` IS written back unconditionally: `resolvePlayer`'s id tier only SEARCHES on it, it
- * does not backfill it onto a player found instead via the name tier, and leaving that gap open
- * would mean the very identity this call just resolved is not durably on the row it resolved to.
+ * **This route accepts an ID-tier match only.** An earlier cut wrote `wtnTennisId` back
+ * unconditionally, reasoning that a name-tier match should have the identity it just resolved made
+ * durable. That reasoning is inverted: a name-tier match is precisely the case where the identity
+ * is NOT established, and writing the id there is what makes a same-name mix-up permanent. See the
+ * guard in the transaction below for the full argument.
  */
 export async function pullArchivedWtnProfile(
   options: ArchivedWtnProfilePullOptions,
@@ -81,6 +83,31 @@ export async function pullArchivedWtnProfile(
             context: "archived WTN profile name",
           },
         ]);
+      }
+      // REQUIRE the id tier. `resolvePlayer` reports `matched` without saying which tier produced
+      // it, and an id-tier hit on `wtnTennisId` is exactly the case where the resolved row ALREADY
+      // carries this id — so comparing it here is a faithful test of "was this matched by identity
+      // or by name?" without changing `resolvePlayer`'s contract.
+      //
+      // A name-tier match must be refused rather than written. Two people can share a name, and
+      // this route would otherwise attach one person's ITF id, age range and gender PERMANENTLY to
+      // the other: the write below sets `wtnTennisId`, after which every later pull for the real
+      // owner resolves by id straight onto the wrong row, and `players_wtn_tennis_id_unique` then
+      // blocks the right one from ever taking it. The repo has already ruled that identity is
+      // decided by source evidence and never by name similarity.
+      //
+      // Refusing costs nothing real: `wtn_tennis_id` is written by the USTA capture, which always
+      // runs first, so every player this route is meant to enrich already has one. A player who
+      // does not is telling you the USTA pull has not happened yet, and that is the fix.
+      // (Codex adversarial review round 1, PR #138, class A.)
+      if (resolved.row.wtnTennisId !== profile.tennisId) {
+        throw new Error(
+          `refusing to write: the WTN profile for "${profile.name}" (${profile.tennisId}) resolved by ` +
+            `NAME onto player ${resolved.row.id} ("${resolved.row.canonicalName}"), whose stored ITF id is ` +
+            `${resolved.row.wtnTennisId === null ? "unset" : `"${resolved.row.wtnTennisId}"`}. Two people ` +
+            `can share a name, so this route only accepts a match on the ITF id itself — run the USTA ` +
+            `profile pull for this player first, which is what records the id.`,
+        );
       }
       return upsertPlayer(tx, {
         id: resolved.row.id,

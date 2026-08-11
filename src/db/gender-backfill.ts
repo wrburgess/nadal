@@ -17,11 +17,27 @@ import type { Db } from "../ingest/db-types.js";
  * this twice a no-op (idempotent by comparison, not merely by re-deriving the same answer): a row
  * already holding `"Male"` is read and skipped, never written, on every subsequent pass.
  *
- * FAILS CLOSED, same as `normalizeGender` itself: a value this function does not recognise
- * (`"Mixed"`, a future source's own unmapped label) is written as `NULL`, not left holding the raw
- * string — see `normalizeGender`'s doc comment for why storing the raw value forever, rather than
- * `NULL`, is the defect this whole class of fix exists to close. A `NULL` row is untouched: there
- * is nothing to normalize, and manufacturing a value for it is not this function's job.
+ * **Writes only a POSITIVE normalization, and never nulls a value it cannot map.** This is the one
+ * place where "fail closed" would be the wrong instinct, and the distinction is between two
+ * different jobs that an earlier cut of this function conflated (Codex adversarial review round 1,
+ * PR #138, class B):
+ *
+ *  - `normalizeGender` guards the WRITE path, where failing closed to `NULL` is right: it stops a
+ *    value nobody has taught us — a future source's label — from ENTERING the column, which is the
+ *    defect #130 was.
+ *  - This function corrects DATA ALREADY ON DISK, where failing closed is destructive. A row
+ *    holding a legitimate-but-unmapped spelling (`"Non-binary"`, some future source's own
+ *    vocabulary) is a source fact nobody has mapped yet, not garbage. Nulling it here would
+ *    discard it permanently: the `WHERE gender IS NOT NULL` scope below means a row this function
+ *    nulled is never selected again, so teaching `normalizeGender` that spelling later could NOT
+ *    repair it. `normalizeGender`'s own doc comment used to claim exactly that recovery — the claim
+ *    was false while this function nulled on failure, and it is true now that it does not.
+ *
+ * So an unrecognised value is LEFT EXACTLY AS IT IS, and stays visible to a later run. The 77 rows
+ * #130 identified all normalize positively (`Competition Category: MALE` → `Male`), so the scope
+ * this widened past — every non-null row rather than only the labelled ones — costs nothing and
+ * catches any other writer that got there first. A `NULL` row is untouched: there is nothing to
+ * normalize, and manufacturing a value for it is not this function's job.
  */
 export function backfillGenders(db: Db): void {
   const rows = db
@@ -32,7 +48,7 @@ export function backfillGenders(db: Db): void {
 
   for (const row of rows) {
     const normalized = normalizeGender(row.gender);
-    if (normalized !== row.gender) {
+    if (normalized !== null && normalized !== row.gender) {
       db.update(players).set({ gender: normalized }).where(eq(players.id, row.id)).run();
     }
   }

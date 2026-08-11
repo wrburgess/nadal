@@ -74,7 +74,14 @@ describe("gender backfill", () => {
     }
   });
 
-  it("FAILS CLOSED: an unrecognised value becomes NULL, not left raw", () => {
+  it("LEAVES an unrecognised value exactly as it is — it does not null a source fact it cannot map", () => {
+    // The write path fails closed (`normalizeGender` → null) so an unmapped value cannot ENTER the
+    // column. Correcting data already on disk is the opposite job: a legitimate-but-unmapped
+    // spelling is a source fact nobody has taught us yet, and nulling it here would discard it
+    // permanently, because this backfill only ever selects `WHERE gender IS NOT NULL` and would
+    // never revisit the row. An earlier cut nulled it and `normalizeGender`'s doc claimed the row
+    // could be recovered by re-running the backfill — a claim that was false exactly because of
+    // this. (Codex adversarial review round 1, PR #138.)
     runMigrations();
     rawInsert("Mixed Martin", "Mixed");
 
@@ -83,7 +90,30 @@ describe("gender backfill", () => {
     const { db, sqlite } = openDb();
     try {
       const row = db.select().from(players).where(eq(players.canonicalName, "Mixed Martin")).all()[0];
-      expect(row?.gender).toBeNull();
+      expect(row?.gender).toBe("Mixed");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("can therefore still repair that row once the spelling IS mapped — the recovery the doc claims", () => {
+    // The point of leaving it: the value is still on disk and still selected by the next pass, so
+    // teaching `normalizeGender` the spelling later actually does repair it. Simulated here by
+    // seeding a value the CURRENT normalizer already knows in a casing it must fold, which exercises
+    // the same select-and-correct path a future mapping would take.
+    runMigrations();
+    rawInsert("Recoverable Rita", "fEmAlE");
+
+    runMigrations();
+
+    const { db, sqlite } = openDb();
+    try {
+      const row = db
+        .select()
+        .from(players)
+        .where(eq(players.canonicalName, "Recoverable Rita"))
+        .all()[0];
+      expect(row?.gender).toBe("Female");
     } finally {
       sqlite.close();
     }

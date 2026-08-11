@@ -43,9 +43,11 @@ describe("pullArchivedWtnProfile", () => {
       // stored vocabulary here, unlike USTA's "MALE") and the write path still routes it through
       // `normalizeGender` — the third of the three writers task 4 wires, so it cannot drift later.
       expect(result.player.gender).toBe("Male");
-      // canonicalName is left UNTOUCHED. The fixture's own spelling is lowercase ("micah
-      // merrivale" — a redaction artifact, not necessarily how a real WTN page cases a name), and
-      // this route's job is enrichment, not renaming an already-established player.
+      // canonicalName is left UNTOUCHED. The fixture's lowercase spelling ("micah merrivale") is NOT
+      // a redaction artifact — the live page genuinely renders the name lower-case and capitalizes
+      // it with a CSS text-transform, so lower-case is what any capture of this page contains. That
+      // is precisely why this route does not rename: worldtennisnumber.com is not this project's
+      // source of truth for how a name is cased, and its job here is enrichment.
       expect(result.player.canonicalName).toBe("Micah Merrivale");
 
       expect(result.archivedPath.startsWith(raw.path())).toBe(true);
@@ -78,6 +80,41 @@ describe("pullArchivedWtnProfile", () => {
       expect(result.player.wtnTennisId).toBe("MER9000003");
       expect(result.player.ageRange).toBe("41-50");
       expect(result.player.gender).toBe("Male");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("REFUSES a name-tier match onto an existing player, rather than branding them with another person's ITF id", async () => {
+    // Codex adversarial review round 1, class A. Two people can share a name. Here the database
+    // already holds a DIFFERENT "Micah Merrivale" — one with no ITF id — and the captured profile
+    // belongs to the person whose id is MER9000003. The id tier misses, the name tier hits the
+    // wrong row, and an unconditional write would put MER9000003 plus that stranger's age range and
+    // gender onto them PERMANENTLY: every later pull for the real owner would then resolve by id
+    // straight onto the wrong row, and `players_wtn_tennis_id_unique` would block the right one
+    // from ever taking the id back.
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const stranger = db
+        .insert(players)
+        .values({ canonicalName: "micah merrivale", nameKey: nameKey("micah merrivale") })
+        .returning()
+        .get();
+      expect(stranger.wtnTennisId).toBeNull();
+
+      const savedPath = join(raw.path(), "saved-wtn-profile-collision.html");
+      writeFileSync(savedPath, fixture.html, "utf8");
+
+      const result = await pullArchivedWtnProfile({ db, path: savedPath, sourceUrl: fixture.source.url });
+
+      expect(result.kind).toBe("error");
+
+      // The stranger's row is untouched in every field this route can write.
+      const row = db.select().from(players).where(eq(players.id, stranger.id)).all()[0];
+      expect(row?.wtnTennisId).toBeNull();
+      expect(row?.ageRange).toBeNull();
+      expect(row?.gender).toBeNull();
     } finally {
       sqlite.close();
     }

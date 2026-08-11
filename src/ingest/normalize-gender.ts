@@ -11,14 +11,21 @@ const LABEL_PREFIX = /^competition category:\s*/i;
  * — `"Male"` or `"Female"` — or `null` for anything that is not exactly one of those, spelled out
  * in full (case-insensitively) and with the known USTA label optionally stripped.
  *
- * **Fails closed.** `null` covers every unrecognised input, not just the empty ones: `"Mixed"`,
- * `"M"`, `"F"`, and any future source's label — not only today's `"Competition Category:"` — all
- * return `null` rather than the raw string. This is the deliberate difference from the two
- * writers that predated it (`src/ingest/archived.ts` stored `usta.gender` RAW, verbatim, label and
- * all): storing null on drift means a re-run of the backfill (`src/db/gender-backfill.ts`) can
- * always recover the column later, once the new spelling is taught to this one function; storing
- * an unrecognised raw string means it is silently indistinguishable from an already-normalized
- * value forever after.
+ * **Fails closed on the WRITE path.** `null` covers every unrecognised input, not just the empty
+ * ones: `"Mixed"`, `"M"`, `"F"`, and any future source's label — not only today's
+ * `"Competition Category:"` — all return `null` rather than the raw string. This is the deliberate
+ * difference from the two writers that predated it (`src/ingest/archived.ts` stored `usta.gender`
+ * RAW, verbatim, label and all): an unrecognised raw string in the column is silently
+ * indistinguishable from an already-normalized value forever after, which is the shape of #130.
+ *
+ * **That is a rule about what may ENTER the column, not a licence to destroy what is already in
+ * it.** `src/db/gender-backfill.ts` deliberately does NOT null a stored value this function cannot
+ * map — it leaves it exactly as it is — because a legitimate-but-unmapped spelling on disk is a
+ * source fact nobody has taught us yet, and nulling it discards it permanently. An earlier version
+ * of this comment claimed a nulled row could "always be recovered later by re-running the
+ * backfill"; that was false, because the backfill only ever selects `WHERE gender IS NOT NULL`, so
+ * a row it had nulled was never revisited. The claim is dropped and the backfill is the thing that
+ * changed to make recovery real. (Codex adversarial review round 1, PR #138.)
  *
  * This is the "ingest decision, made once where both sources meet, not twice inside two parsers"
  * that `src/parsers/usta/profile.ts`'s doc comment describes and that issue #130 found had never
