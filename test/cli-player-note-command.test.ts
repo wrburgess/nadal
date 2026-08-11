@@ -431,6 +431,27 @@ describe("tn player note — the pairing positional (#150)", () => {
     }
   });
 
+  // An EMPTY partner argument refuses rather than silently degrading to a solo note. The case is
+  // ordinary rather than exotic — `tn player note Randy "text" "$PARTNER"` with `PARTNER` unset
+  // hands this command an empty string — and the two readings are not equally safe: treating it as
+  // "no partner" writes a note the captain believes is a pairing and cannot tell apart afterwards,
+  // while refusing costs one re-run. Pinned here so the behaviour is decided rather than incidental.
+  it("an EMPTY partner argument refuses instead of degrading to a solo note", async () => {
+    const fixture = seedFixture();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await dispatch(["player", "note", fixture.playerName, "Together.", ""]);
+
+    expect(code).toBe(1);
+    expect(errorSpy.mock.calls[0]?.[0] as string).toContain("pairing partner");
+    const { db, sqlite } = openDb();
+    try {
+      expect(db.select().from(captainNotes).all()).toHaveLength(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("two identical pairing notes append two rows — never an upsert", async () => {
     const fixture = seedFixture();
     const partner = addHomeRosterPlayer(fixture, "Bryan Partner");
