@@ -58,6 +58,26 @@ const DETECTOR_SETS: Record<string, Detector[]> = {
         /data-element-name="nameGenderAddress"[\s\S]{0,400}?<\/span>\s*\|\s*([^<|]+?)\s*<br/g,
     },
   ],
+  // The WTN profile is a client-rendered SPA, so a fixture comes from a saved post-render DOM, never
+  // from `--url` (a live fetch returns a data-less shell — issue #128).
+  //
+  // Its CSS-module class names carry a per-build hash suffix (`playerDetailsHeader___p1yB3`), which
+  // changes on every WTN deploy. Every pattern here therefore anchors on the STABLE prefix and lets
+  // the hash float; a detector written against a whole class name would silently stop matching after
+  // the next deploy, and a detector that stops matching is a sweep that passes while covering nothing.
+  wtn: [
+    { name: "tennis-id", pattern: /tennis-id=([A-Za-z0-9]+)/gi },
+    // The displayed name is the page's most exposed field and is NOT an identifier, so no id sweep
+    // reaches it — the same gap that shipped a real display name on the USTA capture (PR #26 round 3).
+    // Rendered lower-case with a CSS text-transform, so the captured value is `randy burgess`.
+    {
+      name: "displayed name",
+      pattern: /class="[^"]*playerDetailsHeader[^"]*"[\s\S]{0,200}?<h2[^>]*>([^<]+)<\/h2>/g,
+    },
+    // The avatar URL embeds the subject's own account GUID and a photo GUID. Both are per-person
+    // identifiers that no name- or id-shaped sweep above would catch.
+    { name: "avatar asset", pattern: /\/User\/([0-9a-f-]{36})\//gi },
+  ],
   none: [],
 };
 

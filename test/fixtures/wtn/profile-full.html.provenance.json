@@ -1,0 +1,9 @@
+{
+  "sourceUrl": "https://worldtennisnumber.com/eng/player-profile?tennis-id=MER9000003",
+  "fetchedAt": "2026-08-11T01:22:03.968Z",
+  "httpStatus": null,
+  "redacted": true,
+  "bytesBefore": 164903,
+  "bytesAfter": 71559,
+  "note": "Identities substituted in both the page and this sourceUrl; script/style bodies and base64 payloads stripped. Element tree, classes and attributes are unchanged — see tools/redact-fixture.ts."
+}
