@@ -275,6 +275,27 @@ describe("formatWtnProvenanceLine (#132)", () => {
     expect(line).not.toContain("2015");
   });
 
+  it("covers a WTN source the vocabulary grows later, not just the two on file today", () => {
+    // The guard-completeness check, with the input #132's own option 3 would have supplied: adding
+    // a second, source-attributed WTN singles reading. An enumerated set would silently describe
+    // only the old source while the roster table printed both numbers.
+    const line = formatWtnProvenanceLine([[entry("wtn_singles_itf", 32.6, "2026-09-01")]]);
+
+    expect(line).toContain("published 2026-09-01");
+    expect(line).not.toContain("none on file");
+  });
+
+  it("distinguishes 'no WTN at all' from 'WTN we cannot date'", () => {
+    // `observed_on` is unconstrained TEXT, so a blank one is reachable. Collapsing it into "none on
+    // file" would deny ratings the table is visibly printing; letting it reach the dated branch
+    // would print a contentless "published .". Neither is acceptable, so it gets its own branch.
+    const line = formatWtnProvenanceLine([[entry("wtn_singles", 30.35, "   ")]]);
+
+    expect(line).not.toContain("none on file");
+    expect(line).not.toContain("published .");
+    expect(line).toContain("publication date not recorded");
+  });
+
   it("survives a hostile observed_on without emitting a line break", () => {
     // `observed_on` is a TEXT column with no format constraint, so it reaches this line as
     // arbitrary bytes. Every other formatter in this module refuses to emit a newline; so does

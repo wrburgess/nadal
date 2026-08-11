@@ -141,6 +141,33 @@ describe("migration 0012 — re-dating WTN observations to their publication dat
     ]);
   });
 
+  it("lets a genuinely later publication become the latest observation, which is the point", () => {
+    // Recording a correction to this PR's own plan, which claimed "no trajectory reorders". True of
+    // the live database — every WTN row there sits alone at 2026-08-10 — but false in general, and
+    // the general case is the one worth pinning. A row correctly dated 2026-08-07 by the fixed
+    // parser was RANKED BEHIND the mis-dated 2026-08-10 row before this migration, so the dossier
+    // showed the older number as current. Re-dating reorders them, and that reorder is the defect
+    // being fixed rather than a side effect of fixing it.
+    const path = freshDbPath();
+    seedPreMigrationDb(path, [
+      { source: "wtn_singles", value: 30.35, observedOn: WRONG_DATE },
+      { source: "wtn_singles", value: 31.1, observedOn: "2026-08-07" },
+    ]);
+
+    runMigrations(path);
+
+    const singles = readRatings(path)
+      .filter((r) => r.source === "wtn_singles")
+      .sort((a, b) => a.observedOn.localeCompare(b.observedOn));
+    expect(singles).toEqual([
+      { source: "wtn_singles", value: 30.35, observedOn: PUBLISHED_DATE },
+      { source: "wtn_singles", value: 31.1, observedOn: "2026-08-07" },
+    ]);
+    // Both rows survive — they are two different publications, not a duplicate — and the later one
+    // is now genuinely last.
+    expect(singles[singles.length - 1]?.value).toBe(31.1);
+  });
+
   it("is a no-op on a second run", () => {
     const path = freshDbPath();
     seedPreMigrationDb(path, [{ source: "wtn_singles", value: 30.35, observedOn: WRONG_DATE }]);

@@ -49,6 +49,11 @@ describe("parseUsDate", () => {
   it("shares its conversion with findUsDate", () => {
     // One derivation, two questions. If the two ever build the ISO string separately, this is the
     // assertion that notices.
+    //
+    // The concrete value is asserted FIRST and deliberately: `a).toBe(b)` alone is a false green —
+    // it passes just as happily when both sides return `null`, which is exactly what a broken
+    // shared converter would do.
+    expect(parseUsDate("8/5/2026")).toBe("2026-08-05");
     expect(parseUsDate("8/5/2026")).toBe(findUsDate("on 8/5/2026"));
   });
 });

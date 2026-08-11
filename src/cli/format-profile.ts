@@ -129,9 +129,19 @@ export function ratingSourceLabel(source: string): string {
   return RATING_SOURCE_LABELS[source] ?? source;
 }
 
-/** The two sources that come from the ITF widget embedded in a USTA profile — the ones this
- * disclosure is about. Named once, beside the labels above, rather than re-listed per caller. */
-const WTN_SOURCES: ReadonlySet<string> = new Set(["wtn_singles", "wtn_doubles"]);
+/**
+ * Which sources this disclosure is about — **derived from the source name, not enumerated.**
+ *
+ * The enumerated form (`new Set(["wtn_singles", "wtn_doubles"])`) is the shape that fails silently
+ * here, and #132's own rejected option 3 names the input that would break it: "store both,
+ * source-attributed" adds a second WTN singles source, and a two-element set would go on describing
+ * only the old one while the binder printed both. A prefix test covers whatever `wtn_*` source the
+ * open vocabulary grows next. (`rating_observations.source` is deliberately an open vocabulary —
+ * see `src/db/schema.ts`.)
+ */
+function isWtnSource(source: string): boolean {
+  return source.startsWith("wtn_");
+}
 
 /**
  * Issue #132's disclosure: **which** publisher's World Tennis Number the dossier is printing, and
@@ -149,25 +159,34 @@ const WTN_SOURCES: ReadonlySet<string> = new Set(["wtn_singles", "wtn_doubles"])
  * `formatRatingTrajectory` renders; describing the whole `series` would date numbers the page does
  * not show.
  *
- * **All three branches print**, per the #97/#113 precedent — a disclosure that disappears when
- * there is nothing to disclose leaves a reader unable to tell "no WTN on file" from "this dossier
- * forgot to mention it". The empty branch deliberately makes no publication claim.
+ * **Every branch prints**, per the #97/#113 precedent — a disclosure that disappears when there is
+ * nothing to disclose leaves a reader unable to tell "no WTN on file" from "this dossier forgot to
+ * mention it". "No WTN at all" and "WTN whose date we cannot state" are kept **separate**, and
+ * neither borrows the other's sentence: `observed_on` is an unconstrained TEXT column, so a blank
+ * one is reachable, and collapsing that case into "none on file" would deny ratings the page is
+ * visibly printing, while letting it fall through to the dated branch would render a contentless
+ * `published .`.
  *
  * It does **not** claim the two publishers were reconciled, because they were not: the 30.35/32.6
  * gap is unexplained, and saying so is the honest content of the line.
  */
 export function formatWtnProvenanceLine(trajectories: RatingTrajectoryResult[]): string {
-  const dates = trajectories
-    .flat()
-    .filter((entry) => WTN_SOURCES.has(entry.source))
-    .map((entry) => formatName(entry.latest.observedOn))
+  const wtn = trajectories.flat().filter((entry) => isWtnSource(entry.source));
+  if (wtn.length === 0) return "none on file for this roster";
+
+  const dates = wtn
+    .map((entry) => formatName(entry.latest.observedOn).trim())
+    .filter((date) => date !== "")
     .sort();
 
-  if (dates.length === 0) return "none on file for this roster";
-
-  const first = dates[0]!;
-  const last = dates[dates.length - 1]!;
-  const when = first === last ? `published ${first}` : `published between ${first} and ${last}`;
+  const first = dates[0];
+  const last = dates[dates.length - 1];
+  const when =
+    first === undefined || last === undefined
+      ? "publication date not recorded"
+      : first === last
+        ? `published ${first}`
+        : `published between ${first} and ${last}`;
   return (
     `the ITF World Tennis Number shown on the USTA player profile, ${when}. ` +
     "worldtennisnumber.com may show a different number for the same player; this dossier prints " +
