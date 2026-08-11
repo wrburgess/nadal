@@ -16,7 +16,19 @@ type CaptainNoteRow = typeof captainNotes.$inferSelect;
 
 export class EmptyCaptainNoteError extends Error {}
 export class SelfPairingCaptainNoteError extends Error {}
-export class PlayerNotOnHomeRosterError extends Error {}
+/** Carries the id it refused so a caller holding BOTH resolutions can say which name failed (#150).
+ * A pairing note names two players, and the thrown message can only spell an id — the CLI resolved
+ * the names and substitutes them, while MCP (which is handed ids, and has no name to substitute)
+ * keeps the message as-is. Before the pairing positional existed one player was in play and `player
+ * 47 is not on the home team's roster` was merely opaque; with two it could not say which. */
+export class PlayerNotOnHomeRosterError extends Error {
+  constructor(
+    message: string,
+    readonly playerId: number,
+  ) {
+    super(message);
+  }
+}
 
 export type AddCaptainNoteInput = {
   playerId: number;
@@ -68,10 +80,13 @@ export function addCaptainNote(db: Db, input: AddCaptainNoteInput): CaptainNoteR
 
   const homeTeam = requireHomeTeam(db);
   if (!isOnHomeRoster(db, input.playerId, homeTeam.id)) {
-    throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`);
+    throw new PlayerNotOnHomeRosterError(`player ${input.playerId} is not on the home team's roster`, input.playerId);
   }
   if (input.pairPlayerId !== undefined && !isOnHomeRoster(db, input.pairPlayerId, homeTeam.id)) {
-    throw new PlayerNotOnHomeRosterError(`player ${input.pairPlayerId} is not on the home team's roster`);
+    throw new PlayerNotOnHomeRosterError(
+      `player ${input.pairPlayerId} is not on the home team's roster`,
+      input.pairPlayerId,
+    );
   }
 
   return db
