@@ -25,6 +25,13 @@ This is the half that cannot be fixed on site, and the dry run's hardest finding
   [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2, or the equivalent
   `team_pull`/`player_pull` MCP calls. `tn match add` / `match_add` **never creates a team**, and
   every player name resolves ONLY against the named team's own roster (never a global lookup).
+- **Never paste a scraped team or player name into a shell command.** A team name is *scraped data*
+  and lands in the database unaltered, so a `"` in one closes your argument and whatever follows runs;
+  apostrophes in team names are ordinary, not exotic.
+  [pre-tournament-full-pull.md](pre-tournament-full-pull.md) step 2 carries the full reasoning (this
+  repo's #56/#57 lesson) and the URL-driven form that avoids it. **This runbook puts those names in a
+  JSON payload, not a command line, which is the safe direction** — but the lookup below prints names
+  to your terminal, and the moment one goes from that output into a command the hazard is back.
 - **[dry run] There is no offline recovery for a missing team or a missing player.** There is no
   `tn team add`; `tn roster set` requires the team to exist already; `tn player alias` and
   `tn player distinct` cannot put someone on a roster. The only path is `tn team pull`, which needs
@@ -39,9 +46,14 @@ This is the half that cannot be fixed on site, and the dry run's hardest finding
   with:
 
   ```sh
+  # Refuse on an unset/typo'd path BEFORE opening: sqlite3 creates an empty database for a path that
+  # does not exist, and this query would then report a roster of 0 — indistinguishable from "nobody
+  # has an id", which is the opposite of the answer you came for.
+  DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
+  [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
   # The two-line read-only guard every sqlite3 read in this runbook carries; the venue preflight
   # below explains why a bare `?mode=ro` is not enough. Copy it as-is.
-  DB="$TN_DB_PATH"; RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+  RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
   sqlite3 "file:$DB?$RO" "select count(*) as roster,
     sum(p.usta_uaid is not null) as has_usta
     from team_memberships tm join players p on p.id = tm.player_id
@@ -71,12 +83,15 @@ from the wrong directory and you silently get a fresh, empty database that still
 `status=ok`. Confirm you are pointed at the real one before the first write:
 
 ```sh
-DB="$TN_DB_PATH"; RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
+[ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
+RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select count(*) as teams from teams;
 select count(*) as court_matches from court_matches;"
 ```
 
-Non-zero counts are the check. Zero means you just created a decoy — stop and fix the path.
+Non-zero counts are the check. Zero means you just created a decoy — stop and fix the path. The
+`[ -f "$DB" ]` line is what stops this check from *being* the thing that creates the decoy.
 
 ### [dry run] The read-only guard, and why every read below carries it
 
@@ -125,14 +140,26 @@ and `score`). The slot set is whatever the card actually shows (`S1`/`D1`-`D3` a
 event, `S1`/`D1`-`D4` at a five-court one like Tulsa 2025) — it is never assumed to be exactly four.
 
 **[dry run] The team names on the card are usually not the names on file.** The card that walked
-this runbook printed `HOA/Burgess/40&over3.5M`; the database holds `HOA/Burgess-Zingg/40&over3.5M`.
-Team resolution is exact — no prefix match, no fuzzy fallback — so this refuses. **Give the agent the
-on-file spelling in the prompt (as the example above does) rather than letting it copy the card.**
-There is no `tn` command that will find a team by partial name (`tn team show "HOA/Burgess"` →
-`unknown target`), so look the spelling up directly if you need it:
+this runbook printed `HOA/Burgess/40&over3.5M`; the database holds `HOA/Burgess-Zingg/40&over3.5M`,
+and the ingest refused with a bare `unknown team "HOA/Burgess/40&over3.5M"` — **no candidates, no
+"did you mean"**.
+
+That is worth understanding rather than memorising, because the refusal is not always this unhelpful.
+Team lookup has two tiers (`findTeamByName`): an exact match on the normalised name key, then a
+**fuzzy tier with a radius of two edits** (`FUZZY_MAX_DISTANCE = 2`) which never auto-matches but does
+report `ambiguous` **and names every candidate**. A one- or two-character difference therefore tells
+you the right spelling; `-Zingg` is six characters, so it fell past the band into `not-found` with
+nothing to suggest. **The more wrong the name, the less help you get** — which inverts the intuition
+that a big difference is the easy case.
+
+So **give the agent the on-file spelling in the prompt (as the example above does) rather than letting
+it copy the card.** There is no `tn` command that will find a team by partial name
+(`tn team show "HOA/Burgess"` → `unknown target`), so look the spelling up directly if you need it:
 
 ```sh
-DB="$TN_DB_PATH"; RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
+[ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
+RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select id, name from teams order by name"
 ```
 
@@ -290,6 +317,12 @@ and diffing them.
 
 Every message below was produced by the dry run, verbatim. All of them exit 1 and, except for
 `partial`, **write nothing at all**.
+
+**Why a flagged name refuses the whole ingest rather than skipping that court:** spec § Ingestion
+requires that "every extracted name must resolve against known rosters or is flagged, never guessed",
+and a partial write would leave one court's participants half-recorded with no signal that anything
+was wrong. So the ingest collects **every** flagged name across every court, reports them together,
+and writes nothing — one round trip tells you the whole list.
 
 | What you see | What it means | What to do |
 |---|---|---|
