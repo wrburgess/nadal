@@ -60,7 +60,8 @@ current."
   # A bare `?mode=ro` exits 14 ("unable to open database file") against a WAL-mode database with no
   # `-wal` sidecar — the state EVERY `tn` command leaves behind on exit. Step 2's block carries the
   # full reasoning; this is the same two-line guard.
-  RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+  RO="mode=ro"
+  sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
   sqlite3 "file:$DB?$RO" "select name, tennisrecord_url, is_home from teams order by name"
   ```
 - You know which players' dossiers need NTRP/WTN specifically (step 4 below), since that path is
@@ -121,19 +122,23 @@ DB="${TN_DB_PATH:-data/nadal.db}"
 #
 # That is the NORMAL state here, not an edge case: measured on three databases during #133's dry
 # run, EVERY `tn` command — read (`tn team show`) and write (`tn match add`) alike — closes cleanly
-# and removes both sidecars on exit. So the reads below carry a guard that picks the right form:
+# and removes both sidecars on exit. So the reads below try the plain form first and fall back only
+# on a genuine refusal (the two lines after the path guard below).
 #
-#   RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+# Plain `mode=ro` succeeding means the WAL was readable at open time, so that read cannot go stale;
+# only a real refusal reaches `immutable=1`. Do NOT hardcode `immutable=1`: against a live `-wal` it
+# silently reads stale data instead of failing loudly.
 #
-# `-wal` present -> plain `mode=ro`, which reads the WAL and cannot go stale. `-wal` absent ->
-# `immutable=1`, safe precisely because there is no WAL to skip. Do NOT hardcode `immutable=1`:
-# against a live `-wal` it silently reads stale data instead of failing loudly.
+# RESIDUAL: the probe and the read are separate processes, so a writer starting between them can
+# create a WAL the `immutable=1` read then ignores. A shell snippet cannot close that; the operator
+# rule is what does. Do not run this block while a `tn` pull or an MCP server may be writing.
 case "$DB" in
   *'?'*|*'#'*|*'%'*) echo "STOP: database path must not contain ? , # or % ; got '$DB'" >&2; exit 1 ;;
 esac
-# Derived AFTER the path guard above, deliberately: this line interpolates $DB into a filename test,
-# so it must not run against a path the guard is about to refuse.
-RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+# Derived AFTER the path guard above, deliberately: these lines interpolate $DB into a database URI,
+# so they must not run against a path the guard is about to refuse.
+RO="mode=ro"
+sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 
 # Anything stored that is NOT a TennisRecord URL — shown, never auto-pulled. Investigate before
 # refreshing: a row here means some earlier pull targeted another host.

@@ -245,12 +245,17 @@ case "$TARGET" in
   *'?'*|*'#'*|*'%'*) echo "STOP: path must not contain ? , # or % ; got '$TARGET'" >&2; exit 1 ;;
 esac
 # NOT an unconditional `immutable=1`, even though the readback in step 3 uses one: $TARGET is a
-# database about to go back into service, and if it has a `-wal` that flag would skip it and
-# certify a stale row count as the restore's result. The guard below picks per file instead —
-# `-wal` present, read it; `-wal` absent, there is nothing to skip and `immutable=1` is what makes
-# the open possible at all. Without it this exits 14 ("unable to open database file") whenever the
-# restore landed a `.db` with no sidecar beside it, which is the common case.
-RO="mode=ro"; [ -e "$TARGET-wal" ] || RO="mode=ro&immutable=1"
+# database about to go back into service, and if it has a `-wal` that flag would skip it and certify
+# a stale row count as the restore's result. So try the plain read first and fall back only when it
+# genuinely refuses — a plain open that SUCCEEDS proves the WAL was readable, which a filename test
+# never does. Without the fallback this exits 14 ("unable to open database file") whenever the
+# restore landed a `.db` with no `-wal` beside it, which is the common case.
+#
+# RESIDUAL: probe and read are separate processes, so a writer starting between them could create a
+# WAL the immutable read ignores. Nothing pasteable closes that. Here it is nearly moot — you are
+# restoring, so `tn` should not be running at all — but do check that before trusting these counts.
+RO="mode=ro"
+sqlite3 "file:$TARGET?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 sqlite3 -header -column "file:$TARGET?$RO" "select count(*) as teams from teams;
 select count(*) as players from players;
 select count(*) as court_matches from court_matches;"

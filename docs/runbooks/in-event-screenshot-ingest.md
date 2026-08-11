@@ -51,9 +51,10 @@ This is the half that cannot be fixed on site, and the dry run's hardest finding
   # has an id", which is the opposite of the answer you came for.
   DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
   [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
-  # The two-line read-only guard every sqlite3 read in this runbook carries; the venue preflight
-  # below explains why a bare `?mode=ro` is not enough. Copy it as-is.
-  RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+  # The read-only guard every sqlite3 read in this runbook carries; the venue preflight below
+  # explains why a bare `?mode=ro` is not enough, and names the one residual it cannot close.
+  RO="mode=ro"
+  sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
   sqlite3 "file:$DB?$RO" "select count(*) as roster,
     sum(p.usta_uaid is not null) as has_usta
     from team_memberships tm join players p on p.id = tm.player_id
@@ -68,8 +69,13 @@ This is the half that cannot be fixed on site, and the dry run's hardest finding
 ## Preflight — at the venue, before the first card
 
 **[dry run] Set all four paths, absolutely, on every single invocation.** Not once per session — `tn`
-reads them per process, and the run below lost a photo archive to exactly this by dropping one
+reads them **per process**, and the run below lost a photo archive to exactly this by dropping one
 variable on one command.
+
+**"Per process" includes `tn mcp serve`, and that is the version of this mistake that hurts.** The
+server captured its environment when it started; the agent's `match_add` runs in *that* process.
+Exporting these in a new terminal moves your readbacks and leaves the ingest where it was. Step 1
+below has the check — do it before the first card, not after a confusing verification.
 
 ```sh
 export TN_DB_PATH=/absolute/path/to/data/nadal.db
@@ -85,7 +91,8 @@ from the wrong directory and you silently get a fresh, empty database that still
 ```sh
 DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
-RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+RO="mode=ro"
+sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select count(*) as teams from teams;
 select count(*) as court_matches from court_matches;"
 ```
@@ -109,16 +116,29 @@ The database is fine. The `[ -f "$DB" ]` guard every runbook uses passes happily
 is right there. This is the ordinary path, not an edge case — it is what you will hit at the venue
 one command after a successful ingest.
 
-The two-line guard picks the correct form and is tested in both directions:
+The two-line guard tries the plain read first and falls back only when it actually refuses:
 
 ```sh
-RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+RO="mode=ro"
+sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 ```
 
-`-wal` present → plain `mode=ro`, which reads the WAL and cannot go stale. `-wal` absent → add
-`immutable=1`, safe precisely because there is no WAL to skip. **Never hardcode `immutable=1`**: with
-a live `-wal` it silently reads stale data instead of failing loudly, which trades a visible error
-for an invisible wrong answer.
+Plain `mode=ro` succeeding means the WAL was readable at open time, so the read cannot go stale. Only
+a genuine refusal falls through to `immutable=1`. **Never hardcode `immutable=1`**: with a live `-wal`
+it silently reads stale data instead of failing loudly, trading a visible error for an invisible wrong
+answer.
+
+> **Residual, named rather than papered over.** This probes in one process and reads in the next, so
+> it is a check-then-act across two processes: a writer that starts in between can create a WAL that
+> the `immutable=1` read then ignores, reporting your match as absent when it is there. A shell
+> snippet cannot close that window, and an earlier draft of this section wrongly claimed the `-wal`
+> test made staleness impossible.
+>
+> **The operator rule is what actually closes it, and at a venue it matters**: `immutable=1` is only
+> safe while **nothing is writing**. The agent chat in step 1 talks to a running `tn mcp serve`, which
+> is exactly such a writer — so **do not run these shell readbacks while an ingest may be in flight**.
+> Finish the `match_add` call, then verify. If you must have both at once, ask the agent to read back
+> through MCP instead of using these fences.
 
 Take a backup before the first write of the day (`tn db backup`) — note that it is itself a write
 (it appends a `request_log` row) and it leaves the source database sidecar-less like everything else.
@@ -127,11 +147,34 @@ Take a backup before the first write of the day (`tn db backup`) — note that i
 
 ### 1. Hand the photo to an agent chat connected to `tn mcp serve`
 
-See [agent-chat-over-mcp.md](agent-chat-over-mcp.md) for connecting a client. Share the scorecard
-photo in the conversation and ask the agent to extract it — e.g.:
+> **Start `tn mcp serve` with the exports from the preflight above, in a shell that has them — and if
+> it was already running, restart it.** `match_add` executes **inside the server process**, so it uses
+> **that process's** environment, not the environment of the terminal you are typing in. Exporting
+> `TN_DB_PATH` in a fresh shell changes your readbacks and your `report build`, and changes nothing
+> about where the agent's ingest lands. The failure is quiet and maximally confusing at 11pm: the
+> ingest reports `status=ok`, and your verification says the match is not there — because it is in a
+> different database. Check the server is on the right one before the first card:
+>
+> ```sh
+> # In the SAME shell that will launch the server:
+> echo "$TN_DB_PATH"        # must be the absolute path you expect
+> tn mcp serve
+> ```
+
+Then see [agent-chat-over-mcp.md](agent-chat-over-mcp.md) for connecting a client. Share the scorecard
+photo in the conversation and ask the agent to extract it.
+
+**Name BOTH teams in the prompt, with their on-file spellings** — never "the one printed on the card"
+for either side. The card's own names are usually not the names on file (below), so a prompt that
+defers to the card for one side has simply moved the failure to that side:
 
 > "Read this scorecard photo and record the results with `match_add`. Home team is
-> `HOA/Burgess-Zingg/40&over3.5M`, visiting team is the one printed on the card."
+> `HOA/Burgess-Zingg/40&over3.5M`, visiting team is `IA/Versteeg/40&Over3.5M`. Use exactly those two
+> team names — do not use the names printed on the card. Take the players, slots, winners and scores
+> from the card."
+
+Look both spellings up before you start (the query below), and paste them into the prompt. You know
+who you are playing before the photo is taken; this is the one part of the loop you can do in advance.
 
 The agent's job is to produce ONE JSON object matching `src/ingest/scorecard.ts`'s
 `scorecardPayloadSchema`: the played-on date, both team names, and one entry per court (`slot`,
@@ -159,7 +202,8 @@ it copy the card.** There is no `tn` command that will find a team by partial na
 ```sh
 DB="${TN_DB_PATH:?set TN_DB_PATH to the absolute database path first}"
 [ -f "$DB" ] || { echo "STOP: no database at $DB — check TN_DB_PATH" >&2; exit 1; }
-RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+RO="mode=ro"
+sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select id, name from teams order by name"
 ```
 
@@ -254,7 +298,8 @@ esac
 # [dry run] THE READ-ONLY GUARD — not optional here, and this is the exact spot that proves it.
 # `tn match add` has just run and closed, so the `-wal` is gone and a bare `?mode=ro` exits 14
 # ("unable to open database file") on the ordinary success path. Measured on three databases.
-RO="mode=ro"; [ -e "$DB-wal" ] || RO="mode=ro&immutable=1"
+RO="mode=ro"
+sqlite3 "file:$DB?$RO" "select 1" >/dev/null 2>&1 || RO="mode=ro&immutable=1"
 sqlite3 "file:$DB?$RO" "select cm.slot, cm.discipline, cm.winner_side, cm.score
   from court_matches cm
   where cm.team_match_id = $TMID
@@ -303,15 +348,17 @@ and diffing them.
 | **Partner frequency** | Same rule as records. |
 | **Predicted lineup** | **Yes — regardless of the card's date.** The lineup is restricted to this team's own schedule, not to the window. |
 | **Evidence-scope disclosure** | Yes; the ingested courts appear under **`no league recorded`**, because the payload carries no league field. They are *retained*, not scoped out. |
-| **Team record (`6-0`)** | Changes, but **never into a win or a loss** — it becomes `6-0 (1 undecided)`. See *Known limitations*. |
+| **Team record (`6-0`)** | **Depends on who created the parent fixture.** If this ingest created it, `6-0 (1 undecided)` — the payload carries no team score. If `tn team pull` had already recorded the fixture *with* its court counts, the ingest reuses that row and leaves them alone, so the record reads as a win or a loss. See *Known limitations*. |
 
 **The two rows worth internalising before Saturday morning:**
 
 1. **A card older than `since=` still moves prior meetings and the predicted lineup, but changes no
    record or tendency on the same page.** At Springfield this is a non-issue — every card you ingest
    is same-week — but it is why a *backfilled* old card can look like it "did nothing".
-2. **The team-record line will say `(1 undecided)` for every tie you ingest.** That is expected, and
-   it is not a sign the courts failed to land — check the court-level readback in step 3 instead.
+2. **The team-record line will usually say `(1 undecided)` for a tie you ingest.** That is expected,
+   and it is **not** a sign the courts failed to land — check the court-level readback in step 3
+   instead. It reads as a real win or loss only when a `tn team pull` had already recorded that same
+   fixture with its court counts; at a venue, ingesting the evening's play, it will not have.
 
 ## [dry run] Failure modes and recovery
 
@@ -332,7 +379,8 @@ and writes nothing — one round trip tells you the whole list.
 | `"Randy Burges" ambiguous (Randy Burgess)` | A near miss. It **never** auto-corrects — the candidate is named for you. | Use the candidate's exact spelling, or `tn player alias "Randy Burgess" "Randy Burges"` if this variant will recur. |
 | `"usta:2019367719" resolved to Jamie Johnson, who is not on this team's roster` | A prefix-ID that names a real person on the *wrong* side. A prefix-ID does not bypass roster scoping. | Put the name on the correct side, or check you used the right id. |
 | `status=partial … archiveError=…` | **The match landed.** Only the photo archive failed. Exits 1 anyway. | Do not re-run in a panic. Fix the photo path and re-run only if you want the archive — the re-run is safe (see below). |
-| `unable to open database file (14)` from a `sqlite3 …?mode=ro` read | The `-wal` sidecar is absent, which is the state **every** `tn` command leaves behind. Not a database problem. | Use the read-only guard (`RO="mode=ro"; [ -e "$DB-wal" ] \|\| RO="mode=ro&immutable=1"`). Every read in this runbook already carries it. |
+| `match_add` reports `status=ok`, but your readback finds nothing | Almost certainly **two databases**: `tn mcp serve` is using the environment it started with, your shell is using the exports you just set. | Compare them: `echo "$TN_DB_PATH"` in your shell against the path the server was launched with. Restart the server from a shell carrying the right exports (step 1), then re-ingest. Nothing was lost — the match is in the other database. |
+| `unable to open database file (14)` from a `sqlite3 …?mode=ro` read | The `-wal` sidecar is absent, which is the state **every** `tn` command leaves behind. Not a database problem. | Use the read-only guard — probe with plain `mode=ro`, fall back to `mode=ro&immutable=1` only on refusal. Every read in this runbook already carries it. **First make sure nothing is writing** (see the guard's residual). |
 
 ### [dry run] Re-running a card is safe — and a correction really does correct
 
@@ -359,10 +407,20 @@ Both measured, on the same tie:
   `match_add` creates a team or a roster entry — that stays `team pull`'s job. **[dry run]** And
   there is no offline substitute; see the travel preflight.
 - **[dry run] The team-level score on the card is discarded.** `scorecardPayloadSchema` has no field
-  for it, so `team_matches.home_courts_won` / `visiting_courts_won` stay NULL and every
-  screenshot-ingested tie counts as `undecided` in the team-record line — even though all four court
-  winners were recorded. The court-level data, which is what the dossier's records, tendencies and
-  prior meetings are built from, is unaffected.
+  for it, so this ingest never *supplies* `team_matches.home_courts_won` / `visiting_courts_won`.
+  What that means for the team-record line depends on who created the parent fixture, and the
+  distinction is worth holding:
+  - **This ingest created it** (the venue case): both counts stay NULL and the tie counts as
+    `undecided` forever, even though all four court winners were recorded.
+  - **`tn team pull` already recorded that fixture**, counts and all: the ingest resolves that same
+    parent and **leaves those columns untouched** — `addMatchFromScorecard` "never computes them …
+    so it has nothing honest to write over whatever another writer already recorded"
+    (`src/ingest/match-add.ts`). The pulled counts survive and the record reads as a win or a loss.
+
+  Either way the court-level data — which is what the dossier's records, tendencies and prior
+  meetings are built from — is unaffected. *(Corrected after the Codex review: this section
+  previously claimed a screenshot ingest could* never *produce a win or a loss, which is false in the
+  second case.)*
 - **[dry run] A card whose courts a pull has already captured will double them.** Court matches
   arriving from `player pull` are unlinked (`team_match_id IS NULL`) and carry the pull's own
   side labels, which are *not* real home/away (accepted residual
