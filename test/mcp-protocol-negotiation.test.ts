@@ -218,7 +218,7 @@ describe("MCP protocol negotiation (raw JSON-RPC against the real server)", () =
     await conn.close();
   });
 
-  it("serves a fully stateless request that never sends initialize at all — the shape a 2026-07-28 client actually uses", async () => {
+  it("serves a fully stateless request that never sends initialize at all — the shape 2026-07-28 specifies", async () => {
     const conn = await rawConnection();
 
     // `2026-07-28`'s second major change REMOVES the `initialize`/`notifications/initialized`

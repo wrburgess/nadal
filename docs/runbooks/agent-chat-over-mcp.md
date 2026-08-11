@@ -91,28 +91,40 @@ they stay true):
   `isError: true`, never a crash.
 
 **What nadal cannot promise.** Whether a real `2026-07-28` client actually *takes* that fallback is
-the client's obligation, not this server's. The three facts above are nadal's half; they say nothing
+the client's obligation, not this server's. The four facts above are nadal's half; they say nothing
 about any particular client's behavior.
 
 **Trigger to revisit — one observation.** *An MCP client connects to `tn mcp serve` and lists **zero**
 tools.* That is the fallback failing, and it turns this from a currency question into a bug. If you
 see it:
 
-1. Check it is not the ordinary causes first — the server failed to start, `tn` is not on the client's
-   `PATH`, or the client is pointed at a different binary. A crashed server also lists nothing.
-2. If the server is up and the client still lists nothing, run
-   `npx vitest run test/mcp-protocol-negotiation.test.ts`. Green means nadal's half is intact and the
-   client is refusing to negotiate down — that is the trigger, and the answer is the v2 migration
-   #106 declined.
-3. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named.
+1. Check the ordinary causes first — the server failed to start, `tn` is not on the client's `PATH`,
+   or the client is pointed at a different binary. A crashed server also lists nothing, and that is a
+   far commoner cause than a protocol mismatch.
+2. From the nadal checkout, run `npx vitest run test/mcp-protocol-negotiation.test.ts`. **Read what
+   green does and does not prove:** it exercises the `McpServer` object and its tool registrations
+   over an in-process transport, so green says the server would serve a newer-revision client and
+   that all tools registered. It does **not** exercise the stdio transport, the `tn` binary, or your
+   client — so green narrows the cause to those three plus the client, it does not identify one.
+3. If green, the remaining candidates are the stdio wiring and the client. A client that lists other
+   MCP servers' tools but not nadal's, against a server that starts, is the protocol case — that is
+   the trigger, and the answer is the v2 migration #106 declined.
+4. Reopen [#106](https://github.com/wrburgess/nadal/issues/106) with the client and its version named,
+   and say which of the steps above you got to.
 
 ## Tools available
 
 **Every registered `tn <noun> <verb>` is an MCP tool named `noun_verb`** — `tn team pull` is
-`team_pull`, `tn player avail` is `player_avail`, and so on. `tn mcp serve` is the single exception,
-and it is one by construction rather than by omission: starting the server *is* the operation, so
-there is no service function for it to call. `test/mcp-tool-parity.test.ts` enforces the rule in both
-directions, so a command without a tool, or a tool without a command, fails the suite.
+`team_pull`, `tn player avail` is `player_avail`, and so on. `test/mcp-tool-parity.test.ts` enforces
+the rule in both directions, so a command without a tool, or a tool without a command, fails the
+suite.
+
+**The exceptions are the `CLI_ONLY_COMMANDS` set in that same test, and reading it there is the
+point** — naming them here would rebuild, in miniature, the enumeration this section just deleted.
+The test additionally asserts that every member of that set is genuinely CLI-only, so it cannot be
+used to paper over a missing tool. At the time of writing it holds `tn mcp serve` alone, which is
+CLI-only by construction rather than by omission: starting the server *is* the operation, so there is
+no service function for it to call.
 
 **So the tool list is the command list, and it has two live answers** — use one of these rather than a
 list typed out here, which is exactly what went stale before (see the note below):
