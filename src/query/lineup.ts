@@ -18,7 +18,7 @@ import type { LeagueScope } from "./league-scope.js";
 import { readLeagueScope } from "./league-scope.js";
 import { courtMatchRowsForPlayers } from "./player-profile.js";
 import { resolveRoster } from "./roster.js";
-import type { CourtMatchRow, LineupBasis, LineupConfidence, RatingSource } from "./types.js";
+import type { CourtMatchRow, LineupBasis, LineupConfidence, RatingSource, Side } from "./types.js";
 
 export { NoCourtMatchHistoryError };
 
@@ -217,6 +217,28 @@ export type OwnTeamCourtMatches = {
   /** Court matches these players appeared in that belong to some OTHER team (or to no team match on
    * file) and were therefore not used as evidence. */
   excludedOtherTeamMatches: number;
+  /**
+   * For each retained court match, which `side` label THIS team's players carry on it — `"home"`
+   * when the team sits in `team_matches.home_team_id`, `"visiting"` otherwise.
+   *
+   * Needed because "this court match is ours" and "this player was on our side of it" are different
+   * facts, and a roster read only the first way conflates them. A player who is on our roster *now*
+   * may have played a court under one of our team matches **for the opponent** — they changed teams
+   * between seasons — and two such players share a side with each other, so anything counting
+   * same-side partnerships sees a partnership that was never ours. Found by the independent Codex
+   * review of PR #137 (class A).
+   *
+   * Safe to derive despite [#72](https://github.com/wrburgess/nadal/issues/72), which records that
+   * `home`/`visiting` encode *pull perspective* rather than real home/away: that residual is about
+   * the labels not being stable across pull ORDER, and it states that every column flips **together**
+   * so a row stays self-consistent. This map reads `home_team_id` and `side` off the same row, so it
+   * asks only the question the labels can answer — which side is ours *on this row* — never which
+   * team physically hosted.
+   *
+   * Additive: `getLineupPlan` below does not read it, so its evidence set and its output are
+   * unchanged (pinned by its existing tests passing untouched).
+   */
+  ourSideByCourtMatch: Map<number, Side>;
 };
 
 /**
@@ -248,27 +270,37 @@ export type OwnTeamCourtMatches = {
  * exists to hold shut.
  */
 export function ownTeamCourtMatchRows(db: Db, teamId: number, playerIds: number[]): OwnTeamCourtMatches {
-  const ownTeamMatchIds = db
-    .select({ id: teamMatches.id })
+  // `homeTeamId` comes back alongside the id so our SIDE on each team match is read off the same row
+  // that established the match is ours — see `ourSideByCourtMatch` on the return type for why that
+  // co-location is what makes the derivation safe under #72.
+  const ownTeamMatchRows = db
+    .select({ id: teamMatches.id, homeTeamId: teamMatches.homeTeamId })
     .from(teamMatches)
     .where(or(eq(teamMatches.homeTeamId, teamId), eq(teamMatches.visitingTeamId, teamId)))
-    .all()
-    .map((r) => r.id);
+    .all();
+  const ownTeamMatchIds = ownTeamMatchRows.map((r) => r.id);
+  const ourSideByTeamMatch = new Map<number, Side>(
+    ownTeamMatchRows.map((r) => [r.id, r.homeTeamId === teamId ? "home" : "visiting"]),
+  );
 
-  const ownCourtMatchIds = new Set<number>(
+  const ownCourtRows =
     ownTeamMatchIds.length === 0
       ? []
       : db
-          .select({ id: courtMatches.id })
+          .select({ id: courtMatches.id, teamMatchId: courtMatches.teamMatchId })
           .from(courtMatches)
           .where(inArray(courtMatches.teamMatchId, ownTeamMatchIds))
-          .all()
-          .map((r) => r.id),
-  );
+          .all();
+  const ownCourtMatchIds = new Set<number>(ownCourtRows.map((r) => r.id));
+  const ourSideByCourtMatch = new Map<number, Side>();
+  for (const row of ownCourtRows) {
+    const side = row.teamMatchId === null ? undefined : ourSideByTeamMatch.get(row.teamMatchId);
+    if (side !== undefined) ourSideByCourtMatch.set(row.id, side);
+  }
 
   const allPlayerRows = courtMatchRowsForPlayers(db, playerIds).rows;
   const rows = allPlayerRows.filter((row) => ownCourtMatchIds.has(row.id));
-  return { rows, excludedOtherTeamMatches: allPlayerRows.length - rows.length };
+  return { rows, excludedOtherTeamMatches: allPlayerRows.length - rows.length, ourSideByCourtMatch };
 }
 
 export type LineupPlan = LineupSlotProvenance & {

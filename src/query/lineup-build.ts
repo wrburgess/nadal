@@ -20,6 +20,7 @@ import { ratingObservations } from "../db/schema.js";
 import type { Db } from "../ingest/db-types.js";
 import type { AvailabilityStatus } from "./availability.js";
 import {
+  EventDoesNotCoverDayError,
   InvalidAvailabilityStatusError,
   getAvailabilityForEvent,
   resolveEventForDay,
@@ -131,6 +132,28 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
   // which is `tn player avail`'s documented behavior one command over.
   const dayEvent = resolveEventForDay(db, input.day, input.eventName);
   const resolved = resolveEvent(db, dayEvent.name);
+  // RE-ASSERT COVERAGE. `resolveEventForDay` and `resolveEvent` are two separate reads of the
+  // `events` row, so the range can change between them — `tn event add` upserts on name, and nadal
+  // genuinely runs `tn mcp serve` beside the CLI against one WAL file. Without this check the
+  // failure is SILENT rather than loud: every downstream day comes from
+  // `getAvailabilityForEvent`, which enumerates the range it reads, so a shortened event yields a
+  // day list that no longer contains `input.day`, every player reads `status: null` (unrecorded),
+  // and the command exits 0 with a confident "nobody is available" for a day the event no longer
+  // covers. Re-reading the range off the ALREADY-RESOLVED value costs nothing — `recordedAs` is
+  // carried on it — and converts that into the refusal the caller already handles.
+  //
+  // Found by the independent Codex review of this PR, class A. The self-review had recorded the
+  // two-read window as Low on the reasoning that it "fails closed via UnknownEventError" — true for
+  // a RENAME or a delete, and wrong for a RANGE CHANGE, which is the case that produces a wrong
+  // answer instead of an error. Checking one branch of a window and generalizing to the window is
+  // the error worth remembering here.
+  const { startsOn, endsOn } = resolved.recordedAs;
+  if (startsOn === null || endsOn === null || input.day < startsOn || input.day > endsOn) {
+    throw new EventDoesNotCoverDayError(
+      `event "${resolved.event.name}" does not cover ${input.day} (${startsOn ?? "?"}..${endsOn ?? "?"}) — ` +
+        "its dates changed between resolving the day and reading the event",
+    );
+  }
   // The court list is REQUIRED here — there is no observed-slot-set fallback for a built lineup, and
   // silently inventing courts from history would be the silent-lie class this repo has logged
   // before. Called immediately after resolution, before any roster or evidence read, so the refusal
@@ -157,7 +180,26 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
     statusFor.set(player.playerId, player.days.find((d) => d.day === input.day)?.status ?? null);
   }
 
-  const { rows, excludedOtherTeamMatches } = ownTeamCourtMatchRows(db, homeTeam.id, memberIds);
+  const { rows, excludedOtherTeamMatches, ourSideByCourtMatch } = ownTeamCourtMatchRows(db, homeTeam.id, memberIds);
+
+  // OUR SIDE ONLY. "This court match is ours" and "this player was on our side of it" are different
+  // facts, and the rows above answer the first. A player on our roster *now* may have played a court
+  // under one of our team matches **for the opponent**, having changed teams between seasons — and
+  // when two such players shared that side, `partnerFrequency` would count a partnership formed
+  // AGAINST us and this command would print it as "N matches together", under a strategy whose
+  // stated rule says "for this team". Restricting participants here makes the claim the code's
+  // rather than the doc's. Found by the independent Codex review of PR #137 (class A); measured at
+  // 0 of 22 doubles courts on the production database today, so this closes a latent hole rather
+  // than correcting a number now in the binder.
+  //
+  // Done HERE rather than inside `ownTeamCourtMatchRows` on purpose: `getLineupPlan` shares that
+  // function, #127 leaves `tn lineup plan` behaviorally untouched, and `predictedLineup` carries the
+  // same conflation one module over. That sibling instance is real and is recorded rather than
+  // silently fixed under an issue that excludes it.
+  const ourRows = rows.map((row) => ({
+    ...row,
+    participants: row.participants.filter((p) => p.side === ourSideByCourtMatch.get(row.id)),
+  }));
 
   const observationRows =
     memberIds.length === 0
@@ -187,7 +229,7 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
         observedOn: o.observedOn,
       })),
     })),
-    rows,
+    rows: ourRows,
   });
 
   // The team's name comes off the already-resolved home-team ROW below, never a second read:

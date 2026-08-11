@@ -40,8 +40,15 @@ export type BuildDayScenariosInput = {
   slotSet: readonly EventCourt[];
   /** Rating observations per player, in the shape `selectRosterRatingSource` consumes. */
   ratings: { playerId: number; observations: RatingObservationRow[] }[];
-  /** This team's OWN court matches for these players (already scoped by
-   * `ownTeamCourtMatchRows`) — the evidence behind every shared-match count below. */
+  /**
+   * This team's OWN court matches for these players — the evidence behind every shared-match count
+   * below. The caller has already applied BOTH restrictions this layer depends on and cannot check:
+   * the rows are scoped to the team's own `team_matches` (`ownTeamCourtMatchRows`), and each row's
+   * `participants` are restricted to the side THIS team was on. The second matters as much as the
+   * first: a current roster member may appear on the OPPOSING side of one of our own matches, having
+   * changed teams between seasons, and two of them share that side with each other — so an unfiltered
+   * row would let `partnerFrequency` report a partnership formed against us as one formed for us.
+   */
   rows: CourtMatchRow[];
 };
 
@@ -311,11 +318,12 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
 
   // Singles-court appearances per player, from this team's own rows.
   //
-  // Counted for EVERY participant, including the opponents `courtMatchRowsForPlayers` pre-joins onto
-  // each row. An earlier revision filtered to the eligible set first; that guard was provably
-  // redundant — the only reader below is `singlesOrder`, which iterates `eligible`, so an entry for
-  // anyone else can never be read — and a branch no fixture can distinguish reads as coverage while
-  // giving the next reader nothing to check. Recorded here rather than re-added.
+  // Counted for every participant still on the row. Since PR #137's review that is already only OUR
+  // side (see `rows` on the input type), so the opponents this used to count are gone before they
+  // reach here — a change in what the map CONTAINS, and none in what it means, because the only
+  // reader below is `singlesOrder`, which iterates `eligible`. That is also why no filter to the
+  // eligible set is applied here: it would be provably redundant, and a branch no fixture can
+  // distinguish reads as coverage while giving the next reader nothing to check.
   const singlesCount = new Map<number, number>();
   for (const row of input.rows) {
     if (row.discipline !== "singles") continue;

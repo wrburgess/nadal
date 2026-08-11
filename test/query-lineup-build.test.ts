@@ -119,7 +119,15 @@ let nextMid = 0;
 
 /** One doubles court match with `pair` on the same side, linked to `teamMatch` — or unlinked/linked
  * elsewhere when a test needs evidence that is NOT ours. */
-function playDoubles(db: Db, pair: [number, number], times: number, teamMatchId: number | null): void {
+function playDoubles(
+  db: Db,
+  pair: [number, number],
+  times: number,
+  teamMatchId: number | null,
+  /** Which side the pair sat on. Defaults to `"home"`, which `seedBuild` makes OUR side on
+   * `ourMatch`; pass `"visiting"` to place them on the OPPONENT's side of one of our own matches. */
+  side: "home" | "visiting" = "home",
+): void {
   for (let i = 0; i < times; i++) {
     nextMid += 1;
     const court = upsertCourtMatch(db, {
@@ -132,7 +140,26 @@ function playDoubles(db: Db, pair: [number, number], times: number, teamMatchId:
       playedOn: "2026-05-01",
       sourceMatchId: `build-${nextMid}`,
     });
-    for (const playerId of pair) upsertCourtMatchPlayers(db, { courtMatchId: court.id, playerId, side: "home" });
+    for (const playerId of pair) upsertCourtMatchPlayers(db, { courtMatchId: court.id, playerId, side });
+  }
+}
+
+/** Singles courts for one player, on OUR side of `teamMatchId` — used to steer `history-first`'s S1
+ * pick away from a player a doubles assertion needs left in the pool. */
+function playSingles(db: Db, playerId: number, times: number, teamMatchId: number): void {
+  for (let i = 0; i < times; i++) {
+    nextMid += 1;
+    const court = upsertCourtMatch(db, {
+      teamMatchId,
+      slot: "S1",
+      discipline: "singles",
+      winnerSide: "home",
+      score: "6-3 6-4",
+      leagueContext: "40+ 3.5",
+      playedOn: "2026-05-01",
+      sourceMatchId: `build-${nextMid}`,
+    });
+    upsertCourtMatchPlayers(db, { courtMatchId: court.id, playerId, side: "home" });
   }
 }
 
@@ -404,6 +431,62 @@ describe("getLineupBuild — the evidence is this team's own", () => {
 
       // And nowhere in any scenario does a borrowed partnership surface as shared history: 3 is the
       // only positive count on the whole page.
+      const positive = build.scenarios
+        .flatMap((s) => s.courts.map((c) => c.sharedMatches))
+        .filter((n): n is number => n !== null && n > 0);
+      expect([...new Set(positive)]).toEqual([3]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a pair who played together AGAINST us, in one of our own matches, reads 0 — not a partnership", () => {
+    // Codex adversarial review of PR #137, class A. "This court match is ours" and "this player was
+    // on our side of it" are different facts. Two players who are on our roster NOW may have played
+    // a court under one of our team matches for the OPPONENT — they changed teams between seasons —
+    // and they share the opposing side with each other, so an unfiltered row lets `partnerFrequency`
+    // count a partnership formed against us. `history-first` would then print it as "N matches
+    // together" under a rule whose own sentence says "for this team".
+    const { db, sqlite } = freshDb();
+    try {
+      const names = TEN.slice(0, 8);
+      const fixture = seedBuild(db, { season: names, format: FORMAT });
+      const ids = names.map((n) => fixture.ids[n]!);
+      allAvailable(db, ids);
+
+      // Six courts under OUR OWN team match, with this pair on the OPPONENT's side.
+      playDoubles(db, [ids[0]!, ids[1]!], 6, fixture.ourMatch.id, "visiting");
+      // And three on our side, so a scoped zero above is legible rather than an empty database.
+      playDoubles(db, [ids[2]!, ids[3]!], 3, fixture.ourMatch.id, "home");
+      // THE FIXTURE DETAIL THAT MAKES THIS TEST MEAN ANYTHING, and it was got wrong first time.
+      // Without singles history the whole roster is unrated, so `history-first`'s S1 falls through to
+      // the lowest playerId and takes ids[0] — which removes half the contaminated pair from the pool
+      // before any doubles court is chosen, and the assertion below then passes whether or not the
+      // side filter exists. Giving ids[7] the singles history sends S1 there instead and leaves
+      // (0,1) free to be picked, so the filter is the only thing that can keep them off D1. These
+      // rows sit on OUR side, so they steer S1 identically with and without the fix.
+      playSingles(db, ids[7]!, 2, fixture.ourMatch.id);
+
+      const build = getLineupBuild(db, { day: SATURDAY });
+
+      // Every one of these courts IS ours, so none is "excluded" — which is exactly why the
+      // team-linkage restriction alone cannot catch this case, and why the side filter is a second,
+      // independent guard rather than a tightening of the first.
+      expect(build.excludedOtherTeamMatches).toBe(0);
+      expect(build.observedCourtMatches).toBe(11);
+      const history0 = build.scenarios.find((s) => s.strategies.includes("history-first"))!;
+      expect(history0.courts.find((c) => c.slot === "S1")!.players.map((p) => p.playerId)).toEqual([ids[7]!]);
+
+      // The counterfactual, stated as the assertion: counted without the side filter, (0,1)'s SIX
+      // against-us courts beat (2,3)'s three and would take D1.
+      const history = build.scenarios.find((s) => s.strategies.includes("history-first"))!;
+      const d1 = history.courts.find((c) => c.slot === "D1")!;
+      expect(d1.players.map((p) => p.playerId).sort((a, b) => a - b)).toEqual(
+        [ids[2]!, ids[3]!].sort((a, b) => a - b),
+      );
+      expect(d1.sharedMatches).toBe(3);
+
+      // 3 is the only positive shared count anywhere on the page — the 6 never becomes a partnership.
       const positive = build.scenarios
         .flatMap((s) => s.courts.map((c) => c.sharedMatches))
         .filter((n): n is number => n !== null && n > 0);
