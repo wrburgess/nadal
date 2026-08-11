@@ -1,13 +1,11 @@
 name: ci
 
-# Structural parity (`ruby scripts/parity_check.rb`) is intentionally NOT a job here — it already
-# runs in the vendored `.github/workflows/parity.yml` (ace baseline, untouched by nadal) on every
-# push and pull_request. Duplicating it here would burn a second runner for zero new signal and,
-# because parity.yml is vendored, would silently diverge from it across future ace re-syncs.
+# The ace-era structural parity check (parity.yml + scripts/parity_check.rb) retired with the
+# deuce cutover (deuce #86): the vendoring receipt's checksums are the drift mechanism now, so
+# there is no parity job anywhere and none is missing.
 #
 # Coverage mapping — PROJECT.md § Quality Checks rows to the step that covers each one, so an
 # absent row here reads as "covered elsewhere," never as "not covered":
-#   Structural parity        -> ruby scripts/parity_check.rb   (separate vendored workflow: parity.yml)
 #   Typecheck                -> npm run typecheck               (this file, `app` job)
 #   Lint                     -> npm run lint                     (this file, `app` job)
 #   CLI grammar parity       -> npm test -- test/cli-grammar-parity.test.ts

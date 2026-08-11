@@ -2,11 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // Guards ARCHITECTURE.md against the one rot mode a reader cannot detect by reading: a path the
-// document names that no longer exists. Nothing else in the repo reads that file — `LINK_CHECKED` in
-// scripts/parity_check.rb is a hand-maintained enumeration of BUNDLE-owned paths (deliberately not a
-// glob, so vendoring never reddens a host's own docs), and every nadal-authored doc sits outside it.
+// document names that no longer exists. Nothing else in the repo reads that file — the ace-era
+// parity check whose `LINK_CHECKED` enumeration deliberately excluded nadal-authored docs retired
+// at the deuce cutover (deuce #86), which leaves this test as the file's only guard.
 //
-// WHAT THIS CHECK HOLDS FOR, STATED NARROWLY (rules/testing.md: never let a check's comment claim
+// WHAT THIS CHECK HOLDS FOR, STATED NARROWLY (a discipline the ace-era testing rule stated —
+// https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/testing.md —
+// never let a check's comment claim
 // coverage the code does not enforce). It is BEST-EFFORT and NOT EXHAUSTIVE. It asserts that tokens
 // shaped like a repo path resolve on disk; it is a heuristic over delimiter-separated text, not a
 // Markdown parser. It does NOT verify that any claim made ABOUT a path is true, that the map is
