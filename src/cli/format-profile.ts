@@ -180,25 +180,30 @@ export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]
  * guessing a fourth time. Escalated to the HC at the fix-verification bound and decided there, not
  * iterated past it.
  *
- * **The residual is a CLASS, not a list, and an earlier revision of this comment listed two.** That
- * enumeration was wrong by three orders of magnitude and a review pass blocked the merge on it.
- * Swept over the whole code-point space: **3779** `Default_Ignorable_Code_Point` characters are NOT
- * treated as blank here — every Hangul filler (U+115F, U+1160, U+3164, U+FFA0), Mongolian
- * FVS1/2/3/4, the Khmer inherent vowels, and the entire U+E0000 tag block among them.
+ * **This predicate does not catch every name that renders as nothing, and the shortfall is stated as
+ * a measurement rather than as a rule.** Two earlier revisions of this comment tried to describe the
+ * gap — first as a list of two characters, then as a derivation — and a review pass falsified each.
+ * Only the numbers below survived, so only the numbers are claimed.
  *
- * The rule, which generalizes where a list cannot: **a name is caught only when `nameKey` strips it
- * (invisibles whose script is Common, Inherited or Latin) or `sanitizeValue` flattens it (Cc, Cf, Zl,
- * Zp). An invisible character in a complex script is deliberately retained by both** — `nameKey`
- * exempts them because deleting one re-groups or re-shapes the text around it, which is a decision
- * `src/db/name-key.ts` reached over five revisions and which the HC accepted with its residuals
- * named. This function inherits that boundary exactly; it does not widen or narrow it, and it cannot
- * close it, because — as that file states — **there is no Unicode property equal to "deleting this
- * cannot change what a reader sees"**.
+ * Swept over the whole code-point space against this exact predicate: of **4174**
+ * `Default_Ignorable_Code_Point` characters, **395** are treated as blank here and **3779** are not.
+ * Representatives of the 3779, each verified individually: U+180B/U+180C/U+180D/U+180F (Mongolian
+ * free variation selectors), U+115F/U+1160/U+3164/U+FFA0 (Hangul fillers), U+17B4/U+17B5 (Khmer
+ * inherent vowels), and 31 of the 128 code points in the U+E0000 tag block — the other 97 of that
+ * block ARE caught.
  *
- * What that costs here is proportionate and worth stating plainly: the cases this DOES catch are the
- * reachable ones — an empty string, whitespace, and ASCII/Latin control characters, i.e. what a
- * scraper or a bad parse actually produces. What it misses is a stored name consisting solely of a
- * complex-script invisible, which nothing in this project's ingestion path can produce.
+ * No rule about *which* characters fall on which side is asserted here. Both attempts were wrong in
+ * ways that looked right: script membership does not decide it (U+180E is Mongolian and IS caught,
+ * because it is also `Cf` and so `sanitizeValue` flattens it), and neither branch's name describes
+ * its own reach (`nameKey` also blanks ordinary whitespace through its `.trim()`, stripping nothing).
+ * `src/db/name-key.ts` explains at length why no such rule is available — *"there is no Unicode
+ * property equal to 'deleting this cannot change what a reader sees'"* — having reached that
+ * conclusion over five revisions of the same class, with its residuals accepted by the HC.
+ *
+ * **What IS guaranteed is asserted as a test, not as prose**: `test/cli-format-profile.test.ts` pins
+ * that every reachable case — empty, whitespace, tab, ESC, RLO, ZWSP, CGJ, VS16, U+180E — falls back
+ * to the id. Those are what a scraper or a bad parse produces. A stored name consisting solely of one
+ * of the 3779 is not something this project's ingestion path can create.
  *
  * **Both names on the line go through it.** `teams.name` carries an identical
  * `NOT NULL UNIQUE`-with-no-`CHECK` constraint, and a blank one would render the whole entry as a

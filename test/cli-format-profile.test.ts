@@ -539,16 +539,12 @@ describe("formatTeamMemberships", () => {
   // than an untested belief, and so a future change to `nameKey` or `sanitizeValue` surfaces here as
   // an expectation to update instead of silently changing behavior nobody was watching.
   //
-  // THESE ARE A SAMPLE, NOT THE SET, and the distinction is the point: an earlier revision of this
-  // block asserted there were exactly two, and a review pass blocked the merge on it. Swept over the
-  // whole code-point space, **3779** `Default_Ignorable_Code_Point` characters are not treated as
-  // blank here. The rule, which is what a list cannot express: a name is caught only when `nameKey`
-  // strips it (invisibles of script Common/Inherited/Latin) or `sanitizeValue` flattens it
-  // (Cc/Cf/Zl/Zp); an invisible in a COMPLEX SCRIPT is deliberately retained by both, because
-  // deleting one re-shapes the text around it. That boundary is `src/db/name-key.ts`'s, reached over
-  // five revisions and accepted by the HC with its residuals named; this formatter inherits it
-  // exactly and cannot close it — there is no Unicode property equal to "deleting this cannot change
-  // what a reader sees".
+  // THESE ARE A SAMPLE, NOT THE SET, and the distinction is the point: an earlier revision asserted
+  // there were exactly two and a review pass blocked the merge on it. Swept against this exact
+  // predicate: of 4174 `Default_Ignorable_Code_Point` characters, 395 are treated as blank and 3779
+  // are not. No rule about which fall on which side is claimed — two attempts at one were both
+  // falsified (script membership does not decide it: U+180E is Mongolian and IS caught, as the
+  // complement test below asserts). See `src/db/name-key.ts` for why no such rule is available.
   it.each([
     ["U+180B Mongolian free variation selector one (Mn + Mongolian)", FVS1_BYTE],
     ["U+3164 Hangul filler (Lo, NFKC-maps to U+1160)", HANGUL_FILLER_BYTE],
