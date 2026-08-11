@@ -151,19 +151,15 @@ export function declareDistinctPlayer(db: Db, input: DeclareDistinctInput): Decl
   // snapshot taken before it. Same idiom and same reason as `src/query/availability.ts` and
   // `src/query/events.ts`.
   //
-  // **Within better-sqlite3's 5s `busy_timeout`, and not beyond it** — stated the way
-  // `src/db/client.ts` states it for `db migrate`, because the unqualified version is false. If the
-  // holding process outlasts that budget the second gets `SQLITE_BUSY` rather than the serialised
-  // read described above.
+  // **Within better-sqlite3's 5s `busy_timeout`, and not beyond it** — the qualifier
+  // `src/db/client.ts` already carries for `db migrate`. Past that budget the second process gets
+  // `SQLITE_BUSY` instead of the serialised read.
   //
-  // ACCEPTED, and the cost is named rather than implied: a call that would have been a pure no-op
-  // (`already-on-file`) or a refusal now takes the write lock to decide that, so under sustained
-  // contention it can fail where it previously read through. That is the identical trade-off
-  // #117/#120 recorded for `db migrate` and the two query modules above already impose on
-  // `tn player avail` — a loud, retryable, true failure in place of a silent stale read. The
-  // alternative, a fast-path check outside the lock, reintroduces a SECOND notion of the same
-  // question one branch away from the authoritative one, which is the class this whole issue is
-  // about.
+  // ACCEPTED cost: every outcome decided by a READ is now decided under the write lock, so a call
+  // that would have read through — `already-on-file` most of all — can fail under sustained
+  // contention. The argument-only refusals above (`empty-name`, `same-name`, `not-near`) never
+  // reach it. The alternative, a fast-path check outside the lock, puts a second notion of the same
+  // question one branch from the authoritative one, which is the class this issue is about.
   //
   // The race PREDATES the pair form — `main`'s single-name path has the identical shape — so this
   // is not a regression being repaired but a widened window being closed: the pair form mints two

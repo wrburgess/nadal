@@ -337,8 +337,8 @@ describe("declareDistinctPlayer — the pair form (#142)", () => {
   // overlap in time — the proxy commits B's writes and returns before A's transaction opens — so
   // this is a deterministic simulation of the interleaving's EFFECT, not a lock-contention test.
   // That is deliberate: a truly overlapping test would depend on scheduler timing and go
-  // false-green whenever the race happened not to occur. The lock itself is pinned by the config
-  // test below instead.
+  // false-green whenever the race happened not to occur. The test below covers the other half, by
+  // asserting the transaction is requested with `immediate`.
   //
   // Reverted against rather than assumed to discriminate: hoisting only the target's `exactIdsFor`
   // back outside the transaction turns this red at the first assertion — **3 player rows carrying 2
@@ -392,11 +392,12 @@ describe("declareDistinctPlayer — the pair form (#142)", () => {
     }
   });
 
-  // The mechanism, pinned separately from the outcome above. `deferred` (the drizzle default) takes
-  // its read lock on first read and only upgrades at the write, which is the window that made the
-  // interleaving possible at all — so a future edit dropping this config would reopen the race
-  // while every behavioural test above still passed.
-  it("takes the write lock at BEGIN, not at first write", () => {
+  // A regression guard on the requested configuration, not an observation of SQLite's locking:
+  // it asserts what drizzle is asked for, never that `BEGIN IMMEDIATE` was issued. Worth having
+  // anyway — `deferred` (the drizzle default) takes its read lock on first read and upgrades only
+  // at the write, which is the window the race lived in, so an edit dropping this config would
+  // reopen it while every behavioural test above still passed.
+  it("asks drizzle for an immediate transaction", () => {
     runMigrations();
     const { db, sqlite } = openDb();
     try {
