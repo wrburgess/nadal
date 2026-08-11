@@ -160,25 +160,38 @@ export function formatTeamMemberships(memberships: PlayerTeamMembershipSummary[]
  * perfectly ordinary string. `registered for ""` then reads as an event whose name nobody filled in,
  * which is exactly the ordinary-looking output the null branch existed to prevent.
  *
- * Two things widen it past the reported instance, because fixing the reported case and leaving its
- * siblings is the failure mode this module's own header records:
+ * **The emptiness test is `nameKey`, and that is the whole point of this helper.** This predicate
+ * went through three versions and only the third is right, because only the third stopped being a
+ * local predicate at all:
  *
- * - **Whitespace and control characters count as nothing too.** `formatName` replaces control
- *   characters with SPACES rather than deleting them, so a name of nothing but an ANSI escape
- *   sanitizes to `" "` and renders blank. The emptiness test therefore runs on the SANITIZED value,
- *   after trimming — never on the raw column.
- * - **The team name gets the same treatment**, falling back to `team #{id}`. `teams.name` is under
- *   an identical `NOT NULL UNIQUE`-with-no-`CHECK` constraint, and a blank one would have rendered
- *   the whole entry as a bare parenthetical with a leading space. The reviewer flagged one of the
- *   two; they are the same defect on the same line.
+ * 1. `raw === null` — caught a broken foreign key, missed an empty stored name.
+ * 2. `formatName(raw).trim() === ""` — caught empty, whitespace and control characters, and still
+ *    missed U+034F COMBINING GRAPHEME JOINER (Codex fix-verification pass 1). `sanitizeValue`
+ *    strips Cc/Cf/Zl/Zp; U+034F is Mn, so it survived, and `.trim()` does not remove it.
+ * 3. `nameKey(raw) === ""` — the repo's SINGLE definition of a name (`src/db/name-key.ts`), whose
+ *    `""` return means exactly "this folds to nothing". Measured against every case above: empty,
+ *    whitespace, ESC, RLO, ZWSP, U+034F and VS16 all fold to `""`, while `"."`, `"x"`,
+ *    `"Springfield"` and `"team #4"` do not.
  *
- * Display uses the sanitized value untrimmed, so surrounding whitespace inside the quotes stays
- * visible as itself; only the emptiness DECISION trims.
+ * The third version is not a third guess at the predicate — it is the deletion of the predicate.
+ * Inventing a second notion of "the same name" is the defect #31 closed, and inventing a second
+ * notion of "no name" is the same mistake one field over. Its accepted residuals become this
+ * function's residuals too, named rather than re-derived: the Hangul filler U+3164 folds to itself
+ * (`nameKey` exempts complex-script invisibles by script scope, deliberately), so a name of nothing
+ * but one still renders as blank here. That is a documented limit of the shared fold, not a new hole.
+ *
+ * **Both names on the line go through it.** `teams.name` carries an identical
+ * `NOT NULL UNIQUE`-with-no-`CHECK` constraint, and a blank one would render the whole entry as a
+ * bare parenthetical with a leading space. The review flagged one of the two; they are the same
+ * defect on the same line, and fixing the reported instance while leaving its sibling is the failure
+ * mode this module's own header records.
+ *
+ * Display uses the SANITIZED value untrimmed, so surrounding whitespace inside the quotes stays
+ * visible as itself; only the emptiness DECISION folds.
  */
 function displayName(raw: string | null, fallback: string, options?: { quoted: boolean }): string {
-  const rendered = raw === null ? "" : formatName(raw);
-  if (rendered.trim() === "") return fallback;
-  return options?.quoted === true ? `"${rendered}"` : rendered;
+  if (raw === null || nameKey(raw) === "") return fallback;
+  return options?.quoted === true ? `"${formatName(raw)}"` : formatName(raw);
 }
 
 /** One roster context's label, marked when that context has been soft-retired. Takes the decided

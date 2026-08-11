@@ -345,6 +345,8 @@ const BACKSLASH = String.fromCharCode(0x5c);
 const ESC_BYTE = String.fromCharCode(0x1b); // ANSI CSI introducer
 const RLO_BYTE = String.fromCharCode(0x202e); // RIGHT-TO-LEFT OVERRIDE
 const ZWSP_BYTE = String.fromCharCode(0x200b); // ZERO WIDTH SPACE
+const CGJ_BYTE = String.fromCharCode(0x034f); // COMBINING GRAPHEME JOINER — category Mn, NOT Cc/Cf
+const VS16_BYTE = String.fromCharCode(0xfe0f); // VARIATION SELECTOR-16
 const CONTROL_OR_BIDI = new RegExp(`[${BACKSLASH}p{Cc}${BACKSLASH}p{Cf}]`, "u");
 
 // Issue #131. `team_memberships` is `player <-> team <-> event` by design, so a player on both a
@@ -490,10 +492,20 @@ describe("formatTeamMemberships", () => {
   // decision is made on the SANITIZED value, so a name of nothing but control characters (which
   // `formatName` turns into spaces, not deletions) is caught by the same test.
   it.each([
-    ["an empty event name — the reviewer's case", "", "Team (registered for event #7)"],
+    ["an empty event name — round 1's case", "", "Team (registered for event #7)"],
     ["a whitespace-only event name", "   ", "Team (registered for event #7)"],
     ["an event name of nothing but a control character", ESC_BYTE, "Team (registered for event #7)"],
+    ["an event name of nothing but a bidi override", RLO_BYTE, "Team (registered for event #7)"],
+    // Fix-verification pass 1's case, and the one that decided the predicate. U+034F is category Mn,
+    // so `sanitizeValue` (Cc/Cf/Zl/Zp) leaves it and `.trim()` does not remove it — the previous
+    // version of this fallback rendered `registered for "<invisible>"`. `nameKey` folds it to "",
+    // because its INVISIBLE class is `Default_Ignorable_Code_Point`, which reaches Mn.
+    ["an event name of nothing but a combining grapheme joiner", CGJ_BYTE, "Team (registered for event #7)"],
+    ["an event name of nothing but a variation selector", VS16_BYTE, "Team (registered for event #7)"],
     ["a real event name, which must be unaffected", "Springfield", 'Team (registered for "Springfield")'],
+    // The refutation of the fold: these are visible names and must survive it.
+    ["a single-character event name", "X", 'Team (registered for "X")'],
+    ["a punctuation-only event name", ".", 'Team (registered for ".")'],
   ])("falls back to the event id for %s", (_label, eventName, expected) => {
     const line = formatTeamMemberships([membership({ teamId: 1, teamName: "Team", eventId: 7, eventName })]);
 
@@ -504,6 +516,7 @@ describe("formatTeamMemberships", () => {
     ["an empty team name", "", "team #4"],
     ["a whitespace-only team name", "  ", "team #4"],
     ["a control-character-only team name", ESC_BYTE, "team #4"],
+    ["a combining-grapheme-joiner-only team name", CGJ_BYTE, "team #4"],
   ])("falls back to the team id for %s", (_label, teamName, expected) => {
     // The sibling of the reviewer's finding, on the same line: a blank team name would have rendered
     // the whole entry as a bare parenthetical with a leading space.
