@@ -272,12 +272,21 @@ host-local statement, and it **overrides** the unbounded adversarial pass the ve
 [*Findings-Log Discipline*](#precedence--this-overrides-five-instructions-that-say-otherwise)).
 
 > **The values moved; the reasoning stayed** (#146). The lens menu, the lens-set size and the
-> fix-verification bound are now **[`config/review.md`](config/review.md)**, where
-> [`tools/review/lenses.ts`](tools/review/lenses.ts) parses them — a lens off the menu is refused at
-> dispatch rather than by a reader noticing. Two things to know before reading on: the menu is
-> stated there as **questions**, which a test enforces; and the range below collapses to the
-> parser's single number, **3**. Where this section and the declaration differ, the declaration is
-> the source.
+> fix-verification bound are now **[`config/review.md`](config/review.md)**, and
+> [`tools/review/lenses.ts`](tools/review/lenses.ts) parses them.
+>
+> **What that does and does not buy, because a first draft of this callout overstated it and the
+> contractor review caught it.** `checkLensSelection` refuses an off-menu lens *when it is called* —
+> and in this repository **nothing calls it**, because the summons that would
+> ([`summon.ts`](tools/review/summon.ts)) reads two deuce files nadal does not hold and cannot run
+> (#155). Nor is the refusal universal even then: canon's four prose lenses are admitted for prose
+> subjects by design. So these bounds are held by **the agent running the summons by hand**, exactly
+> as they were before — what the declaration adds today is one parseable source instead of prose in
+> two files, not enforcement.
+>
+> Two things to know before reading on: the menu is stated there as **questions**, which a test does
+> enforce; and the range below collapses to the parser's single number, **3**. Where this section
+> and the declaration differ, the declaration is the source.
 
 **Two kinds of discovery, one of them bounded.** *Solicited* discovery is commissioned — Stage 4's
 adversarial pass, the Reviewer's response, every re-summons after a fix — and if it is not bounded it

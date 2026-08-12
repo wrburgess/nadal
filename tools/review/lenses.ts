@@ -84,9 +84,15 @@ export function checkLensSelection(
       }
       continue;
     }
+    // The message names where the menu comes from, so a caller knows where to
+    // go. Upstream that is `findings/classes.md`; nadal has no class index —
+    // its menu derives from defect classes recorded in prose — so saying so
+    // here would send a reader to a file this repository does not hold, which
+    // is the class of claim #146 exists to remove. `config/review.md` is the
+    // one place true for both.
     errors.push(
       `lens is not on the menu and cannot be summoned: ${lens} — ` +
-        "the menu derives from the class index and canon names the prose lenses; " +
+        "the menu is declared in config/review.md and canon names the prose lenses; " +
         "a one-off lens enters as a dated menu entry, never as a bypass",
     );
   }

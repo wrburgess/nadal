@@ -1,6 +1,6 @@
 ---
 date: 2026-08-11
-source: the HC's ruling on #146 — "with the adopting of the deuce repo for software factory/SDLC, we are moving away from HC merge gate" — and, for the re-summons rule, the HC's choice on the same thread; supersedes the merge-gate passage in PROJECT.md → Human Gates
+source: the HC's ruling on #146 — "with the adopting of the deuce repo for software factory/SDLC, we are moving away from HC merge gate" — and, for the re-summons rule, the HC's choice on the same thread; the bound's unit fixed to the fix wave by the HC's ruling on PR #153 after this file's first draft counted waves and summonses inconsistently; supersedes the merge-gate passage in PROJECT.md → Human Gates
 ---
 
 # Gate settings
@@ -47,12 +47,24 @@ Read *never re-summoned* for what it says: it bounds one **pass** of Verify. It 
 merging against a review that never saw the code being merged — canon forbids that at any setting.
 When the wave moves the head, the pass is over and a fresh one begins.
 
-| At the Ship gate | Action | Summonses spent |
+**The unit is the fix wave, not the summons.** Read that before the table — the first draft of this
+section counted both and they disagreed, which stopped a run on this pull request until the HC
+resolved it (2026-08-11). A summons is what a wave costs; the **bound** is on waves, because that is
+what [`config/review.md`](review.md) → *Fix-verification* bounds and what the escalation is actually
+about: two attempts at fixing say something about the fixes, whereas two summonses can just mean the
+reviewer looked twice.
+
+| At the Ship gate | Action | Fix waves spent |
 |---|---|---|
-| Head **equals** the review's attested SHA | merge | 1 |
-| Review returned Medium/Low only — findings line or a `docket` issue, head does not move | merge | 1 |
-| Review returned **must-fix** (Critical/High) — fix, then re-summon on the new head | merge once that review is clean | 2 |
-| The second review also returns must-fix | **stop and hand to the HC** | 2 |
+| Head **equals** the review's attested SHA | merge | 0 |
+| Review returned Medium/Low only — findings line or a `docket` issue, head does not move | merge | 0 |
+| Review returned **must-fix** (Critical/High) — fix, then re-summon on the new head | merge if that review is clean | 1 |
+| That review returns must-fix too — fix, then re-summon again | merge if that review is clean | 2 |
+| A **third** wave would be needed | **stop and hand to the HC** — the design is wrong, and that is not another round's problem | 2, spent |
+
+A wave is counted whether its findings came from the reviewer or from the AC's own verification of
+the previous wave: what the bound measures is *how many times this change has been re-cut*, not who
+noticed.
 
 - **The comparison is derived, not enumerated.** `deliver` compares the pull request head to the SHA
   the recorded review attests. Anything that moved the head is caught — a fix wave, a late findings
@@ -63,8 +75,8 @@ When the wave moves the head, the pass is over and a fresh one begins.
   runs today, which is why it survived this issue's disposition of the seeded review tools.
 - **The last row is the fix-verification bound, not a new rule.**
   [`config/review.md`](review.md) → *Fix-verification* gives fixes two passes and then escalates,
-  on nine recorded instances of patching past that point moving a defect sideways. A second
-  must-fix wave means the design is wrong, and that is the HC's call, not another round.
+  on nine recorded instances of patching past that point moving a defect sideways. A **third** wave
+  means the design is wrong, and that is the HC's call, not another round.
 - **Step 7 of `verify` is what keeps row 1 the norm** — fix what the reviewer would flag *before*
   summoning, so the review confirms rather than corrects. Measured upstream at roughly 80% fewer
   contractor findings.
