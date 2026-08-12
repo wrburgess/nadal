@@ -23,7 +23,10 @@
 #     and mechanical maintenance is a `task`.
 #   * TITLE PREFIX AS WELL AS LABEL. Every issue carries its type as BOTH an uppercase title prefix
 #     (`BUG:`, `FEATURE:`) and the matching label. The prefix is what makes `gh issue list` readable;
-#     the label is what makes it filterable.
+#     the label is what makes it filterable. The two always say the same thing -- which is why
+#     `.github/ISSUE_TEMPLATE/{chore,spike}.yml` file under `TASK:`/`task` rather than keeping
+#     deuce's `CHORE:`/`SPIKE:` prefixes over a `task` label. Their forms still prompt for
+#     chore- and spike-shaped work; only the type they file under is nadal's.
 #
 # NOTHING PARSES THIS FILE. It is hand-synced, and it is documentation of the tracker rather than a
 # source the tracker is generated from. Deliberately not given a shape test on #146: a check over a

@@ -1,9 +1,11 @@
 name: "SPIKE — research feeding a decision"
 description: "Research whose terminal artifact is a Readout; it may produce no code"
-title: "SPIKE: "
-# nadal's label set, not deuce's — declared drift against the vendoring receipt (#146). nadal has no
-# `spike` type: research folds into an issue's Assessment. The SPIKE: title prefix is left as deuce's
-# rather than invented away. See labels.yml.
+# nadal's taxonomy, not deuce's — declared drift against the vendoring receipt (#146). nadal has no
+# `spike` type: research folds into an issue's Assessment. The prefix follows the label for the same
+# reason as chore.yml — labels.yml states that an issue's type is BOTH its uppercase prefix and its
+# label, and a `SPIKE:` title carrying a `task` label would make that statement false. The form's
+# name and prompts still describe research work.
+title: "TASK: "
 labels: ["task"]
 body:
   - type: markdown

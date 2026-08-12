@@ -69,10 +69,11 @@ whenever the recorded classes shift.
 
 **3 lenses** per summons, plus the permanent lens that rides along.
 
-[`PROJECT.md`](../PROJECT.md) → *Review Lenses* states the bound as "3–4 per summons". The parser
-reads a single number, so the range collapses to its lower bound: **3**. Taking the lower end is the
-deliberate choice — this is a menu, not a checklist, and running every lens on every change rebuilds
-the unbounded pass in a new costume.
+[`PROJECT.md`](../PROJECT.md) → *Review Lenses* stated the bound as "3–4 per summons" while nothing
+parsed it. The parser reads a single number, so the range collapses to its lower bound: **3**, and
+`PROJECT.md` now says 3 and points here. Taking the lower end is the deliberate choice — this is a
+menu, not a checklist, and running every lens on every change rebuilds the unbounded pass in a new
+costume.
 
 ## Fix-verification
 

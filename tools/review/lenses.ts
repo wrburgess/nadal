@@ -47,10 +47,17 @@ export function parseLensSetSize(markdown: string): number {
   return Number(m[1]);
 }
 
-// Canon's own lenses for prose subjects — pinned copies of the phrases in
-// Chapter 2 → *Verifying prose*, drift-guarded by the test that asserts each
-// against the section. A canon pull request is summoned with these; they are
-// canon-sourced, not menu-derived, so an empty menu strands no canon subject.
+// Canon's own lenses for prose subjects — copies of the phrases in deuce
+// Chapter 2 → *Verifying prose*. A prose pull request is summoned with these;
+// they are canon-sourced, not menu-derived, so an empty menu strands no prose
+// subject.
+//
+// UNGUARDED HERE, and upstream they are not. deuce's copy of this file is
+// drift-guarded by a test that reads `sds/02-review-and-findings.md` and
+// compares the two sets. nadal reads canon at its source and never vendors it
+// (CLAUDE.md), so there is no local file to compare against and that test was
+// dropped on #146. Consequence, stated rather than implied: reword a phrase
+// below, or let canon reword one, and nothing in this repository notices.
 export const PROSE_LENSES: readonly string[] = [
   "restatement of content another document owns",
   "contradiction with ratified canon",
