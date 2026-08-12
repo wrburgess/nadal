@@ -25,15 +25,25 @@ import type { CourtMatchRow, RatingObservationRow } from "../src/query/types.js"
 // ---------------------------------------------------------------------------
 
 type Status = "available" | "unavailable" | "uncertain" | null;
+/** #149: the captain's recorded play-style constraint. `null` and `"both"` are both
+ * unconstrained — only `"doubles-only"` excludes a player from a singles court. */
+type Plays = "both" | "doubles-only" | null;
 
-function player(playerId: number, canonicalName: string, status: Status = "available") {
-  return { playerId, canonicalName, status };
+function player(playerId: number, canonicalName: string, status: Status = "available", plays: Plays = null) {
+  return { playerId, canonicalName, status, plays };
 }
 
 /** `n` available players, ids 1..n, names "Player 01".. so name order and id order agree unless a
- * test deliberately makes them disagree. */
+ * test deliberately makes them disagree. Every player is unconstrained (`plays: null`) unless
+ * overridden with `withPlays`. */
 function availableRoster(n: number) {
   return Array.from({ length: n }, (_, i) => player(i + 1, `Player ${String(i + 1).padStart(2, "0")}`));
+}
+
+/** Overrides specific players' `plays` value on an already-built roster array, by id — so a test
+ * can start from the same shared roster shape and name only the players it cares about. */
+function withPlays<T extends { playerId: number; plays: Plays }>(roster: T[], overrides: Record<number, Plays>): T[] {
+  return roster.map((p) => (p.playerId in overrides ? { ...p, plays: overrides[p.playerId]! } : p));
 }
 
 function ratings(
@@ -109,6 +119,12 @@ function courtIds(scenario: Scenario, slot: string): number[] {
   const court = scenario.courts.find((c) => c.slot === slot);
   if (court === undefined) throw new Error(`no court ${slot}`);
   return court.players.map((p) => p.playerId);
+}
+
+function courtOverride(scenario: Scenario, slot: string): "doubles-only" | null {
+  const court = scenario.courts.find((c) => c.slot === slot);
+  if (court === undefined) throw new Error(`no court ${slot}`);
+  return court.constraintOverride;
 }
 
 const ALL_STRATEGIES: ScenarioStrategy[] = ["strength-first", "history-first", "balanced"];
@@ -644,6 +660,169 @@ describe("buildDayScenarios — determinism", () => {
     const reversed = buildDayScenarios({ ...tied, players: [...tied.players].reverse() });
 
     expect(courtIds(scenarioFor(forward, "strength-first"), "S1")).toEqual([2]);
+    expect(JSON.stringify(reversed)).toBe(JSON.stringify(forward));
+  });
+});
+
+// #149 Task 4: `tn lineup build` must not seat a doubles-only player at the singles court unless
+// no singles-eligible body is left available at all — in which case it seats the strongest
+// available player anyway and RECORDS that it overrode the stated constraint.
+//
+// THE FIXTURE TRAP: every existing route to an unfilled/short court in this suite reaches it by
+// EXHAUSTING bodies (`describe("buildDayScenarios — shortfall"...)` above). A doubles-only fixture
+// with fewer eligible bodies than seats would pass on that existing shortfall path and prove
+// nothing about the new filter. Every fixture below carries STRICTLY MORE eligible bodies than
+// seats (8 for 7, or another ratio with the same property), so the asserted placement is the only
+// thing the new rule can produce.
+describe("buildDayScenarios — the doubles-only constraint (#149)", () => {
+  // 8 available for 7 slots (S1 + D1-D3): one more body than seats, so nothing here is explained
+  // by a shortfall. Player 1 is the strongest overall AND the only doubles-only player.
+  const RATED = { 1: 4.5, 2: 4.4, 3: 4.2, 4: 4.0, 5: 3.9, 6: 3.7, 7: 3.5, 8: 3.3 };
+  const oneDoublesOnly = input({
+    players: withPlays(availableRoster(8), { 1: "doubles-only" }),
+    ratings: ratings("tr_dynamic", RATED),
+  });
+
+  it("S1 goes to the strongest SINGLES-ELIGIBLE player, and the doubles-only player lands on a doubles court rather than sitting", () => {
+    const result = buildDayScenarios(oneDoublesOnly);
+    const scenario = scenarioFor(result, "strength-first");
+
+    // Player 1 is the strongest overall but doubles-only, so S1 must go to player 2 — the
+    // strongest player who is NOT excluded — not to player 1.
+    expect(courtIds(scenario, "S1")).toEqual([2]);
+    expect(courtOverride(scenario, "S1")).toBeNull(); // plenty of singles-eligible bodies existed
+
+    const holding = scenario.courts.find((c) => c.players.some((p) => p.playerId === 1));
+    expect(holding?.discipline).toBe("doubles");
+    expect(scenario.sitting.map((p) => p.playerId)).not.toContain(1);
+  });
+
+  it("every strategy's S1 is singles-eligible on the same fixture", () => {
+    const result = buildDayScenarios(oneDoublesOnly);
+    expect(result.singlesEligibleCount).toBe(7); // 8 eligible minus the one doubles-only player
+
+    for (const strategy of ALL_STRATEGIES) {
+      const scenario = scenarioFor(result, strategy);
+      expect(courtIds(scenario, "S1"), strategy).not.toEqual([1]);
+      expect(courtOverride(scenario, "S1"), strategy).toBeNull();
+    }
+  });
+
+  // The sharpest edge in the task: `strength-first` and `balanced` both draw from ONE mutable
+  // pool via `pool.shift()`, so picking S1 from a FILTERED view of that pool (rather than the pool
+  // itself) requires explicitly splicing the chosen id back out of it — otherwise the same body
+  // fills S1 AND survives into the doubles deal, double-booking them. This is exactly the
+  // fixture this file's own "hard constraint" section built for `pool.shift()` itself; the filter
+  // reopens the identical risk unless the splice is explicit.
+  it("double-booking under the filter: the S1 player appears on exactly one court (strength-first, balanced)", () => {
+    const result = buildDayScenarios(oneDoublesOnly);
+    for (const strategy of ["strength-first", "balanced"] as const) {
+      const scenario = scenarioFor(result, strategy);
+      const placed = scenario.courts.flatMap((c) => c.players.map((p) => p.playerId));
+      expect(new Set(placed).size, strategy).toBe(placed.length);
+
+      const s1 = courtIds(scenario, "S1");
+      const doublesIds = scenario.courts
+        .filter((c) => c.discipline === "doubles")
+        .flatMap((c) => c.players.map((p) => p.playerId));
+      for (const id of s1) expect(doublesIds, strategy).not.toContain(id);
+    }
+  });
+
+  it("every available player is doubles-only: S1 IS filled, constraintOverride is 'doubles-only', singlesEligibleCount is 0", () => {
+    const allDoublesOnly = input({
+      players: availableRoster(8).map((p) => ({ ...p, plays: "doubles-only" as const })),
+      ratings: ratings("tr_dynamic", RATED),
+    });
+    const result = buildDayScenarios(allDoublesOnly);
+    expect(result.singlesEligibleCount).toBe(0);
+
+    for (const strategy of ALL_STRATEGIES) {
+      const scenario = scenarioFor(result, strategy);
+      const s1 = scenario.courts.find((c) => c.slot === "S1")!;
+      expect(s1.filled, strategy).toBe(true);
+      expect(s1.players, strategy).toHaveLength(1);
+      expect(courtOverride(scenario, "S1"), strategy).toBe("doubles-only");
+    }
+    // The strongest overall is who gets seated under the override.
+    expect(courtIds(scenarioFor(result, "strength-first"), "S1")).toEqual([1]);
+  });
+
+  it("each strategy yields within its OWN rule, so the override can name different people", () => {
+    // Everyone doubles-only, so every strategy overrides. Player 1 is the strongest and has never
+    // played singles; player 5 is weaker but has singles history. strength-first must still seat the
+    // strongest, history-first must still seat the most-played — the constraint yields to each
+    // strategy's own ordering rather than to one shared "strongest available" answer. GRAMMAR.md and
+    // capture-availability.md both claimed the latter; this pins what the code actually does.
+    const result = buildDayScenarios(
+      input({
+        players: availableRoster(8).map((p) => ({ ...p, plays: "doubles-only" as const })),
+        ratings: ratings("tr_dynamic", RATED),
+        rows: singlesRows("S1", 5, 3),
+      }),
+    );
+
+    expect(result.singlesEligibleCount).toBe(0);
+    expect(courtIds(scenarioFor(result, "strength-first"), "S1")).toEqual([1]);
+    expect(courtIds(scenarioFor(result, "history-first"), "S1")).toEqual([5]);
+    // Both are overrides — a different pick is not a different rule about the constraint.
+    expect(courtOverride(scenarioFor(result, "strength-first"), "S1")).toBe("doubles-only");
+    expect(courtOverride(scenarioFor(result, "history-first"), "S1")).toBe("doubles-only");
+  });
+
+  it("plays: null everywhere leaves S1 placement and every constraintOverride exactly as before #149", () => {
+    const unconstrained = input({ players: availableRoster(8), ratings: ratings("tr_dynamic", RATED) });
+    const result = buildDayScenarios(unconstrained);
+
+    expect(result.singlesEligibleCount).toBe(result.eligibleCount);
+    for (const scenario of result.scenarios) {
+      for (const court of scenario.courts) expect(court.constraintOverride).toBeNull();
+    }
+    // Unfiltered: S1 goes to the strongest player overall, same as every pre-#149 assertion above.
+    expect(courtIds(scenarioFor(result, "strength-first"), "S1")).toEqual([1]);
+  });
+
+  it("mixed null and 'both' are both singles-eligible", () => {
+    const mixed = input({
+      players: withPlays(availableRoster(8), { 1: "both", 2: null }),
+      ratings: ratings("tr_dynamic", RATED),
+    });
+    const result = buildDayScenarios(mixed);
+
+    expect(result.singlesEligibleCount).toBe(result.eligibleCount);
+    expect(courtIds(scenarioFor(result, "strength-first"), "S1")).toEqual([1]);
+    expect(courtOverride(scenarioFor(result, "strength-first"), "S1")).toBeNull();
+  });
+
+  it("a doubles-only player with no singles court in the slot set: no effect, no override recorded", () => {
+    const doublesOnlySlotSet = input({
+      players: withPlays(availableRoster(5), { 1: "doubles-only" }),
+      slotSet: [
+        { slot: "D1", discipline: "doubles" as const },
+        { slot: "D2", discipline: "doubles" as const },
+      ],
+      ratings: ratings("tr_dynamic", { 1: 4.5, 2: 4.4, 3: 4.2, 4: 4.0, 5: 3.9 }),
+    });
+    const result = buildDayScenarios(doublesOnlySlotSet);
+
+    expect(result.singlesEligibleCount).toBe(4); // 5 eligible minus the one doubles-only player
+    for (const scenario of result.scenarios) {
+      for (const court of scenario.courts) expect(court.constraintOverride).toBeNull();
+      // The doubles-only player still gets placed normally — nothing here can ever ask the
+      // question a singles court would ask.
+      const placed = scenario.courts.flatMap((c) => c.players.map((p) => p.playerId));
+      expect(placed).toContain(1);
+    }
+  });
+
+  it("is deterministic: reversing every input array produces a byte-identical result", () => {
+    const forward = buildDayScenarios(oneDoublesOnly);
+    const reversed = buildDayScenarios({
+      players: [...oneDoublesOnly.players].reverse(),
+      slotSet: oneDoublesOnly.slotSet,
+      ratings: [...oneDoublesOnly.ratings].reverse(),
+      rows: [...oneDoublesOnly.rows].reverse(),
+    });
     expect(JSON.stringify(reversed)).toBe(JSON.stringify(forward));
   });
 });

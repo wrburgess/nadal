@@ -32,6 +32,7 @@ import { EmptySlotSetError } from "../src/query/derive-lineup-build.js";
 import { addEvent } from "../src/query/events.js";
 import { setHomeTeam } from "../src/query/home-team.js";
 import { UnknownEventError } from "../src/query/lineup.js";
+import { setPlays } from "../src/query/player-plays.js";
 import { seedAvailabilityMatrix } from "./helpers/availability-matrix.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -553,6 +554,98 @@ describe("tn lineup build — shortfall", () => {
   });
 });
 
+// #149 Task 5: the presenter's two ADDITIONS — an override marker on the singles court's line, and
+// a day-level line when nobody available carries singles eligibility. Both must be PRESENT when the
+// override actually fired and ABSENT when it did not: a marker that always fires teaches the reader
+// to ignore it, which is exactly what the "no doubles-only players at all" baseline test below pins.
+describe("tn lineup build — the doubles-only constraint (#149)", () => {
+  useTnDbPath();
+  afterEach(() => vi.restoreAllMocks());
+
+  it("prints neither the OVERRIDE marker nor the day-level constraint line when nobody is doubles-only", async () => {
+    seedDay();
+    const { output } = await render();
+
+    expect(output).not.toContain("OVERRIDE:");
+    expect(output).not.toContain("no available player has a recorded singles eligibility");
+  });
+
+  it("marks S1 with an OVERRIDE line naming the seated player, and prints the day-level line, when EVERY available player is doubles-only", async () => {
+    seedDay();
+    withDb((db) => {
+      for (const name of AVAILABLE) setPlays(db, { player: name, plays: "doubles-only" });
+    });
+
+    const { output } = await render();
+
+    // The strongest player is still seated at S1 — the court is never left empty — but flagged.
+    expect(output).toMatch(/S1 +Ada Ashby/);
+    expect(output).toContain("OVERRIDE: Ada Ashby is recorded doubles-only");
+    expect(output).toContain("constraint: no available player has a recorded singles eligibility");
+    // Only the singles court carries the marker — no doubles court is a singles-eligibility question.
+    const doublesLines = output.split("\n").filter((l) => /^ {4}D[123] /.test(l));
+    for (const line of doublesLines) expect(line).not.toContain("OVERRIDE:");
+  });
+
+  it("does not mark S1 and does not print the day-level line when a singles-eligible player is still available", async () => {
+    seedDay();
+    withDb((db) => {
+      // The strongest player is doubles-only, but seven others remain singles-eligible — no override.
+      setPlays(db, { player: "Ada Ashby", plays: "doubles-only" });
+    });
+
+    const { output } = await render();
+
+    // S1 skips Ada (doubles-only) and goes to the next strongest instead, unmarked.
+    expect(output).toMatch(/S1 +Bo Bramwell/);
+    expect(output).not.toContain("OVERRIDE:");
+    expect(output).not.toContain("no available player has a recorded singles eligibility");
+    // Ada still gets placed — on a doubles court, never sitting and never at S1.
+    expect(output).toContain("Ada Ashby");
+    expect(output).not.toMatch(/S1 +Ada Ashby/);
+  });
+
+  it("names only the singles courts it actually filled, when there are more singles courts than bodies", async () => {
+    // Two singles courts (a format the suite already exercises at query-lineup-build.test.ts:377)
+    // and ONE available body, who is doubles-only. S1 takes that body under the override; S2 has
+    // nobody left and is left unfilled. The day-level line must not claim S2 was "filled against
+    // that stated constraint" — it was not filled at all, and the reason it is empty is a body
+    // shortage, which the ledger and the `short:` line already state.
+    seedDay({ format: "S1:singles,S2:singles", available: [AVAILABLE[0]!] });
+    withDb((db) => setPlays(db, { player: AVAILABLE[0]!, plays: "doubles-only" }));
+
+    const { output } = await render();
+
+    expect(output).toMatch(/S1 +Ada Ashby/);
+    expect(output).toContain("OVERRIDE: Ada Ashby is recorded doubles-only");
+    // The claim names S1 and stops there.
+    expect(output).toContain("constraint: no available player has a recorded singles eligibility");
+    expect(output).not.toMatch(/constraint:[^\n]*S1, S2/);
+    expect(output).toMatch(/S2 +\(unfilled/);
+  });
+
+  it("prints the per-court OVERRIDE without the day-level line when SOME singles eligibility remains", async () => {
+    // Two singles courts and only ONE singles-eligible body: S1 takes them, S2 falls through to a
+    // doubles-only player. The per-court marker fires; the day-level line must NOT, because its
+    // claim ("no available player has a recorded singles eligibility") is false here — one did.
+    // The two lines are deliberately not equivalent, and this pins the asymmetry as intended
+    // behaviour rather than leaving it to be re-derived.
+    seedDay({ format: "S1:singles,S2:singles" });
+    withDb((db) => {
+      for (const name of AVAILABLE.slice(1)) setPlays(db, { player: name, plays: "doubles-only" });
+    });
+
+    const { output } = await render();
+
+    expect(output).toContain("OVERRIDE:");
+    expect(output).not.toContain("no available player has a recorded singles eligibility");
+    // S1 goes to the one singles-eligible body, unmarked; the marker belongs to S2 alone.
+    expect(output).toMatch(/S1 +Ada Ashby/);
+    const s1Lines = output.split("\n").filter((l) => /^ {4}S1 /.test(l));
+    for (const line of s1Lines) expect(line).not.toContain("OVERRIDE:");
+  });
+});
+
 describe("tn lineup build — an inverted rating scale", () => {
   useTnDbPath();
   afterEach(() => vi.restoreAllMocks());
@@ -879,6 +972,22 @@ describe("tn lineup build — every refusal exits 1 with a diagnostic", () => {
       db.update(availability)
         .set({ status: "maybe" })
         .where(eq(availability.playerId, fixture.ids["Ada Ashby"]!))
+        .run();
+    });
+
+    await expectRefusal(["lineup", "build", SATURDAY]);
+  });
+
+  it("InvalidPlaysError — a stored plays value our own writer could not have produced (#149)", async () => {
+    // GRAMMAR.md's refusal list names a corrupted `plays` value alongside the other stored-column
+    // refusals, and `getLineupBuild`'s own doc comment declares `InvalidPlaysError`. Both claims are
+    // only true if the command's refusal predicate recognizes the class — otherwise `readPlays`
+    // throws past the catch and the command dies uncaught instead of exiting 1 with a diagnostic.
+    const fixture = seedDay();
+    withDb((db) => {
+      db.update(players)
+        .set({ plays: "singles-only" })
+        .where(eq(players.id, fixture.ids["Ada Ashby"]!))
         .run();
     });
 

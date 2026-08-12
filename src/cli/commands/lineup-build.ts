@@ -23,6 +23,7 @@ import { NoHomeTeamError } from "../../query/home-team.js";
 import { InvalidLeagueScopeError } from "../../query/league-scope.js";
 import { EventHasNoFormatError, UnknownEventError } from "../../query/lineup.js";
 import { getLineupBuild } from "../../query/lineup-build.js";
+import { InvalidPlaysError } from "../../query/player-plays.js";
 import { globalFlags, parsePayloadArgs } from "../args.js";
 import { emitJson, emitSummary } from "../emit.js";
 import { formatLineupBuild } from "../format-lineup-build.js";
@@ -54,6 +55,7 @@ export function isLineupBuildRefusal(
   | UnknownEventError
   | InvalidEventFormatError
   | InvalidLeagueScopeError
+  | InvalidPlaysError
   | EmptySlotSetError {
   return (
     err instanceof NoHomeTeamError ||
@@ -67,6 +69,10 @@ export function isLineupBuildRefusal(
     err instanceof UnknownEventError ||
     err instanceof InvalidEventFormatError ||
     err instanceof InvalidLeagueScopeError ||
+    // #149: `readPlays`'s fail-closed throw. Omitted in the first cut, which made two claims false
+    // at once — `getLineupBuild`'s own doc comment declaring the class, and GRAMMAR.md's refusal
+    // list naming a corrupted `plays` value — while the command actually died uncaught.
+    err instanceof InvalidPlaysError ||
     err instanceof EmptySlotSetError
   );
 }

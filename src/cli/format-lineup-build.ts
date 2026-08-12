@@ -83,6 +83,24 @@ function sharedMatchesCell(court: ScenarioCourt): string {
   return `${court.sharedMatches} ${plural(court.sharedMatches, "match", "matches")} together`;
 }
 
+/**
+ * #149: the override marker — present ONLY on the singles court `constraintOverride` actually fired
+ * on, empty everywhere else. A marker that always fires teaches the reader to ignore it, so this
+ * must read as silence on every ordinary run (`test/cli-lineup-build-command.test.ts` pins the
+ * absence, not just the presence). Names the player, per the task's "whose it is" — a reader seeing
+ * a seated body they know is recorded doubles-only needs to be told this is the stated exception
+ * firing, not a rule the code forgot.
+ */
+function constraintOverrideCell(court: ScenarioCourt): string {
+  if (court.constraintOverride !== "doubles-only") return "";
+  const player = court.players[0]; // constraintOverride is only ever set on a FILLED singles court
+  if (player === undefined) return "";
+  return (
+    `OVERRIDE: ${formatName(player.canonicalName)} is recorded doubles-only — seated here anyway, ` +
+    "no singles-eligible player was available"
+  );
+}
+
 export function formatLineupBuild(build: LineupBuild): string {
   const lines: string[] = [
     `LINEUP BUILD — ${build.day} — ${formatName(build.teamName)}`,
@@ -114,6 +132,30 @@ export function formatLineupBuild(build: LineupBuild): string {
       `  shortfall: ${build.shortfall} ${plural(build.shortfall, "body", "bodies")} short of the ` +
         `${build.bodiesNeeded} this court list needs — a court is left unfilled rather than ` +
         "double-booking anyone",
+    );
+  }
+  // #149: the day-level twin of `constraintOverrideCell` above — stated once here rather than
+  // repeated on every singles court that carries the marker. `eligibleCount > 0` excludes the
+  // "nobody available at all" case, which is a different fact the ledger above already states —
+  // printing this too would claim a court was "filled" against a constraint when nothing was filled
+  // at all.
+  //
+  // The named courts are read back OUT of the scenarios rather than off `slotSet`, and the
+  // difference is not stylistic: `slotSet` is every singles court the FORMAT declares, while only
+  // the first `eligibleCount` of them actually receive a body. Naming the slot set claimed a court
+  // was "filled against that stated constraint rather than left empty" about a court that was left
+  // empty — reachable with more singles courts than available bodies, which is a format the suite
+  // already exercises (`test/query-lineup-build.test.ts:377`). Every strategy fills singles courts
+  // first and in slot order, so which ones are filled does not vary between scenarios; reading the
+  // first is reading the answer rather than re-deriving the rule that produced it.
+  const filledSingles = (build.scenarios[0]?.courts ?? []).filter(
+    (court) => court.discipline === "singles" && court.players.length > 0,
+  );
+  if (build.eligibleCount > 0 && build.singlesEligibleCount === 0 && filledSingles.length > 0) {
+    lines.push(
+      "  constraint: no available player has a recorded singles eligibility — every one is " +
+        `doubles-only, so ${filledSingles.map((court) => formatName(court.slot)).join(", ")} ` +
+        `${plural(filledSingles.length, "was", "were")} filled against that stated constraint rather than left empty`,
     );
   }
 
@@ -161,7 +203,7 @@ export function formatLineupBuild(build: LineupBuild): string {
       const evidence =
         court.players.length === 0
           ? ""
-          : [courtRatingCell(court, build.ratingSource), sharedMatchesCell(court)]
+          : [courtRatingCell(court, build.ratingSource), sharedMatchesCell(court), constraintOverrideCell(court)]
               .filter((part) => part !== "")
               .join("   ");
       lines.push(

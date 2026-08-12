@@ -21,6 +21,16 @@ export const players = sqliteTable("players", {
   // length is within FUZZY_MAX_DISTANCE of the target's — a necessary condition for a Levenshtein
   // distance within that radius, so narrowing on it cannot drop a true candidate.
   nameKeyLength: integer("name_key_length").generatedAlwaysAs(sql`length(name_key)`, { mode: "virtual" }),
+  // Issue #149: the captain's recorded statement of which disciplines a player plays — currently only
+  // "doubles-only" is a real, captured value; every other player is unconstrained. Nullable for the
+  // same SQLite reason as `nameKey` above (:13-19): `ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT
+  // ... CHECK (...)` rejects a populated table, and NULL is independently the correct value for every
+  // pre-existing row — nobody has recorded a constraint yet, so "unconstrained" is exactly what NULL
+  // should mean, not a placeholder standing in for it. The guarantee that a non-null value is one of
+  // the recognized ones lives at read time instead, in the fail-closed `readPlays`
+  // (src/query/lineup-build.ts), because this is a plain TEXT column and SQLite enforces nothing on
+  // it. The writer is `setPlays` (src/query/player-plays.ts).
+  plays: text("plays"),
 }, (t) => [
   index("players_name_key_idx").on(t.nameKey),
   index("players_name_key_length_idx").on(t.nameKeyLength),

@@ -1,0 +1,22 @@
+-- Issue #149: which disciplines a player plays, as the captain has recorded it — currently only
+-- "doubles-only" is a real, captured value (the case a captain has actually told us about); every
+-- other player is unconstrained. `tn lineup build` reads this so it never seats a doubles-only
+-- player at the singles court, unless no other available player can play singles at all — the
+-- override case, which is recorded rather than applied silently.
+--
+-- Nullable, and additive only, for the reason `players.nameKey`'s comment in `src/db/schema.ts`
+-- gives: SQLite rejects
+-- `ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT ... CHECK (...)` on a populated table
+-- ("CHECK constraint failed"), and the same form WITHOUT the check is fail-open — a forgotten
+-- write silently gets the default rather than a value anyone actually recorded. NULL is also
+-- independently the CORRECT value for every existing row: no captain has recorded a play-style
+-- constraint for anyone yet, so "unconstrained" is exactly what NULL means here, not a placeholder
+-- standing in for a real answer. Nothing needs backfilling.
+--
+-- Plain `text`, not a `CHECK`-constrained enum: the guarantee that a non-null value is one of the
+-- recognized ones lives at READ TIME instead, in `readPlays` (src/query/lineup-build.ts), which
+-- fails closed on anything it does not recognize — the same discipline `players.nameKey` and
+-- `events.format` already follow in `src/db/schema.ts`, for the same reason (SQLite enforces nothing on a
+-- plain text column, so the guarantee has to live somewhere that isn't the column). The writer is
+-- `setPlays` (src/query/player-plays.ts).
+ALTER TABLE `players` ADD `plays` text;

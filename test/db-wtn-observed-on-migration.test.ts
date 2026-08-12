@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
-import { players, ratingObservations } from "../src/db/schema.js";
+import { ratingObservations } from "../src/db/schema.js";
 import { buildLegacyMigrationsFolder } from "./helpers/legacy-migrations.js";
 
 /**
@@ -39,11 +39,15 @@ function seedPreMigrationDb(
   try {
     const db = drizzle(sqlite);
     migrate(db, { migrationsFolder: buildLegacyMigrationsFolder(11) });
-    const player = db
-      .insert(players)
-      .values({ canonicalName: "Umber Ulverton" })
-      .returning()
-      .all()[0]!;
+    // Raw SQL, not drizzle's `.insert(players).values(...).returning()` — drizzle's insert/returning
+    // builder always names every column the CURRENT schema.ts declares (including `plays`, #149,
+    // which this legacy through-0011 table shape does not have yet), so it would fail against it.
+    // Same defect, and the same fix, `test/db-name-key-backfill.test.ts` already documents for the
+    // identical reason (that file's pre-0004 legacy seed, one column-addition migration over).
+    sqlite.prepare("INSERT INTO players (canonical_name) VALUES (?)").run("Umber Ulverton");
+    const player = sqlite
+      .prepare("SELECT id FROM players WHERE canonical_name = ?")
+      .get("Umber Ulverton") as { id: number };
     for (const row of rows) {
       db.insert(ratingObservations)
         .values({ playerId: player.id, source: row.source, value: row.value, observedOn: row.observedOn })

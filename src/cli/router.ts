@@ -9,6 +9,7 @@ import { playerAlias } from "./commands/player-alias.js";
 import { playerAvail } from "./commands/player-avail.js";
 import { playerDistinct } from "./commands/player-distinct.js";
 import { playerNote } from "./commands/player-note.js";
+import { playerPlays } from "./commands/player-plays.js";
 import { playerPull } from "./commands/player-pull.js";
 import { playerShow } from "./commands/player-show.js";
 import { reportBuild } from "./commands/report-build.js";
@@ -44,6 +45,7 @@ export const COMMANDS: Command[] = [
   playerPull,
   playerShow,
   playerAvail,
+  playerPlays,
   playerNote,
   playerDistinct,
   playerAlias,
