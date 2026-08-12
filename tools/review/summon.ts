@@ -1,8 +1,17 @@
 // The orchestrated path — readiness, compose, dispatch, validate, record — as
 // one command, so it cannot be half-run silently. Exit codes: 0 conforming
-// review recorded · 2 unreachable · 3 unresponsive · 4 nonconforming after the
-// one re-summons · 5 a record could not be posted. 2, 3, 4, and 5 are stops:
-// the run asks the HC and never certifies unreviewed work as reviewed.
+// review recorded · 1 usage — a bad flag or an off-menu lens, caught before
+// anything is read · 2 unreachable · 3 unresponsive · 4 nonconforming after the
+// one re-summons · 5 a record could not be posted · 6 the summons could not be
+// composed. 2, 3, 4, 5 and 6 are stops: the run asks the HC and never certifies
+// unreviewed work as reviewed.
+//
+// 6 covers everything that fails before a dispatch — a reshaped config, an
+// unreadable accepted register, an expired credential, a `--commit` that is not
+// a commit. It exists because those used to surface as raw Node crashes at exit
+// 1, which is this file's *usage* code, so an operator reading exit codes could
+// not tell a mistyped flag from an expired token. Nothing has been dispatched or
+// posted at that point, so the one-line message is the whole record.
 //
 // 5 supersedes 2, 3, and 4 when the post recording one of them is what failed:
 // it is the code that changes what the HC must do — place a record by hand —
@@ -48,6 +57,17 @@ const MAX_POSTED_CHARS = 60_000;
 function sh(cmd: string, args: string[]): string {
   return execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
+
+/** Every way composing a summons can fail before anything is dispatched — a
+ *  reshaped config, an unreadable register, an expired token, a `--commit` that
+ *  is not a commit. All of them are **stops** in the same sense as 2/3/4/5: the
+ *  run asks the HC rather than proceeding.
+ *
+ *  Wrapped because they used to arrive as raw Node crashes — a stack trace at
+ *  exit 1, which is the code this file documents for a *usage* error, so an
+ *  operator reading exit codes could not tell a mistyped flag from an expired
+ *  credential. Verifying #155 at the CLI is what surfaced it. */
+class ComposeFailure extends Error {}
 
 /** The accepted register's impure edge, and nothing more: this runs the two
  *  processes and hands their output to the pure readers in `accepted.ts`, where
@@ -128,15 +148,31 @@ function main(): void {
   const commit = values.commit;
   const base = values.base!;
 
-  const reviewConfig = readFileSync("config/review.md", "utf8");
-  const roster = parseRoster(reviewConfig);
+  // Everything from here to the composed summons is read-only and dispatches
+  // nothing, so a failure in it has harmed nothing and needs only to be said
+  // plainly. `compose()` converts each into one classified stop.
+  const compose = <T,>(what: string, f: () => T): T => {
+    try {
+      return f();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new ComposeFailure(`${what}: ${detail}`);
+    }
+  };
+
+  const reviewConfig = compose("reading config/review.md", () =>
+    readFileSync("config/review.md", "utf8"),
+  );
+  const roster = compose("reading the reviewer roster", () => parseRoster(reviewConfig));
 
   // The declared bounds are enforced at dispatch, not trusted to the caller.
-  const lensErrors = checkLensSelection(
-    values.lens ?? [],
-    parseLensMenu(reviewConfig),
-    parseLensSetSize(reviewConfig),
-    values.prose ?? false,
+  const lensErrors = compose("reading the lens declaration", () =>
+    checkLensSelection(
+      values.lens ?? [],
+      parseLensMenu(reviewConfig),
+      parseLensSetSize(reviewConfig),
+      values.prose ?? false,
+    ),
   );
   if (lensErrors.length > 0) {
     for (const e of lensErrors) console.error(e);
@@ -146,25 +182,35 @@ function main(): void {
   // Both were hardcoded to deuce paths this repository does not hold, which is
   // what made the whole command unrunnable here (#155). Severity is a second use
   // of the config already read above, not a second read of it.
-  const severityFramework = extractSeverityFramework(reviewConfig);
-  const acceptedEntries = readAcceptedRegister(ghRegisterSource(), ACCEPTED_LABEL);
+  const severityFramework = compose("reading the severity framework", () =>
+    extractSeverityFramework(reviewConfig),
+  );
+  const acceptedEntries = compose("reading the accepted register", () =>
+    readAcceptedRegister(ghRegisterSource(), ACCEPTED_LABEL),
+  );
   const subject =
     values.subject ??
-    sh("gh", ["pr", "view", String(prNumber), "--json", "title", "-q", ".title"]).trim();
-  const diff = sh("git", ["diff", `${base}...${commit}`]);
+    compose("reading the pull request's title", () =>
+      sh("gh", ["pr", "view", String(prNumber), "--json", "title", "-q", ".title"]).trim(),
+    );
+  const diff = compose(`diffing ${base}...${commit}`, () =>
+    sh("git", ["diff", `${base}...${commit}`]),
+  );
 
   const summonedLenses = [...(values.lens ?? []), PERMANENT_LENS];
 
-  const summons = composeSummons({
-    prNumber,
-    subject,
-    commit,
-    lenses: values.lens ?? [],
-    severityFramework,
-    acceptedEntries,
-    diff,
-    reviewerName: roster.name,
-  });
+  const summons = compose("composing the summons", () =>
+    composeSummons({
+      prNumber,
+      subject,
+      commit,
+      lenses: values.lens ?? [],
+      severityFramework,
+      acceptedEntries,
+      diff,
+      reviewerName: roster.name,
+    }),
+  );
 
   if (values["dry-run"]) {
     process.stdout.write(summons);
@@ -295,29 +341,38 @@ process.stderr.on("error", () => {});
 try {
   main();
 } catch (err) {
-  if (!(err instanceof PostFailure)) throw err;
+  // A compose-time stop. Nothing was dispatched and nothing was posted, so the
+  // whole record is the one line — printed as a message, never as a stack, and
+  // under its own exit code so it cannot be read as the usage error at 1.
+  if (err instanceof ComposeFailure) {
+    process.stderr.write(`the summons could not be composed — ${err.message}\n`);
+    process.exitCode = 6;
+  } else if (!(err instanceof PostFailure)) {
+    throw err;
+  } else {
 
-  // The order below is the fix, so it is worth stating: save, then the pointer,
-  // then the convenience copy, then the code. The stream guards are already on,
-  // above.
-  //
-  // The file is the delivery. Four reviews found four different ways for a
-  // stream at exit time to lose this record; a written file has none of them.
-  const saved = saveUnpostedRecord(err);
+    // The order below is the fix, so it is worth stating: save, then the pointer,
+    // then the convenience copy, then the code. The stream guards are already on,
+    // above.
+    //
+    // The file is the delivery. Four reviews found four different ways for a
+    // stream at exit time to lose this record; a written file has none of them.
+    const saved = saveUnpostedRecord(err);
 
-  // One short line, written alone so the operating system delivers it whole.
-  try {
-    process.stderr.write(formatUnpostedNotice(err, saved));
-  } catch {
-    // Nothing further to try: the record is already on disk if it could be.
+    // One short line, written alone so the operating system delivers it whole.
+    try {
+      process.stderr.write(formatUnpostedNotice(err, saved));
+    } catch {
+      // Nothing further to try: the record is already on disk if it could be.
+    }
+
+    // The full record, convenience only — losing this copy costs nothing now.
+    try {
+      process.stderr.write(formatUnpostedRecord(err));
+    } catch {
+      // Ignored by design; see above.
+    }
+
+    process.exitCode = 5;
   }
-
-  // The full record, convenience only — losing this copy costs nothing now.
-  try {
-    process.stderr.write(formatUnpostedRecord(err));
-  } catch {
-    // Ignored by design; see above.
-  }
-
-  process.exitCode = 5;
 }
