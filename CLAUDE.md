@@ -8,8 +8,8 @@ values: quality checks, attribution, branch policy, gates, the findings-log disc
 
 ## The lifecycle
 
-Work runs through the six shipped Skills. Each is a **contract file** deuce updates by sync pull
-request — read them, never edit them (an edit is drift the receipt's checksums report):
+Work runs through the six shipped lifecycle Skills. Each is a **contract file** deuce updates by
+sync pull request — read them, never edit them (an edit is drift the receipt's checksums report):
 
 [`skills/assess/SKILL.md`](skills/assess/SKILL.md) ·
 [`skills/devise/SKILL.md`](skills/devise/SKILL.md) ·
@@ -17,6 +17,12 @@ request — read them, never edit them (an edit is drift the receipt's checksums
 [`skills/verify/SKILL.md`](skills/verify/SKILL.md) ·
 [`skills/deliver/SKILL.md`](skills/deliver/SKILL.md) ·
 [`skills/distill/SKILL.md`](skills/distill/SKILL.md)
+
+A seventh shipped Skill sits outside the lifecycle:
+[`skills/brief/SKILL.md`](skills/brief/SKILL.md) — not a stage but a standing procedure, summoned
+whenever the HC asks where something stands (the project, an epic, an issue, or a PR). Read-only by
+charter; its formats are the bundled [`skills/brief/formats.md`](skills/brief/formats.md). The same
+contract-file rule applies.
 
 [`AGENTS.md`](AGENTS.md) is the contractor-reviewer contract — the file a summoned reviewer reads.
 It is not this file's instruction source.
