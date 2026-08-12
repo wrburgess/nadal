@@ -25,14 +25,14 @@ The Verification on the pull request carries no open must-fix finding —
    record is written from them
    ([Chapter 1 → Stages communicate only through terminal artifacts](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stages-communicate-only-through-terminal-artifacts)).
 3. **Read the stage's routing** — which model and effort runs this stage is
-   [`config/models.md`](../../config/models.md); what may be offloaded, and in what shape, is
-   [`config/delegation.md`](../../config/delegation.md).
+   [`config/models.md`](../../../config/models.md); what may be offloaded, and in what shape, is
+   [`config/delegation.md`](../../../config/delegation.md).
 4. **Re-confirm the checks are green on the current head** — green is confirmed here, never
    produced here; a red check re-enters [Verify](../verify/SKILL.md), where the fix loop lives,
    and this stage runs again from its trigger
    ([Stage 5](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-5--deliver);
    [ADR 0009](https://github.com/wrburgess/deuce/blob/main/adr/0009-review-response-folded-into-verify.md)).
-5. **Read [`rules/authoring.md`](../../rules/authoring.md)** at the moment of writing.
+5. **Read [`rules/authoring.md`](../../../rules/authoring.md)** at the moment of writing.
 6. **Write the three prose fields first** — why the other options were rejected; what was tried
    and abandoned, so it is not re-proposed; what is fragile, and what the AC was unsure about at
    the end — each carrying only what the repository cannot reconstruct
@@ -50,7 +50,7 @@ The Verification on the pull request carries no open must-fix finding —
    ([Stage 5](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-5--deliver);
    [Chapter 1 → Binding to the Work Tracking System](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#binding-to-the-work-tracking-system)).
 9. **Post the reference on the issue** — a link to the Record — then **act on the Ship gate per its
-   current setting** ([`config/gates.md`](../../config/gates.md)). The setting is read there, never
+   current setting** ([`config/gates.md`](../../../config/gates.md)). The setting is read there, never
    from this file; the floor no setting reaches is canon
    ([Chapter 0 → Governance](https://github.com/wrburgess/deuce/blob/main/sds/00-identity-and-governance.md#governance) → *Merge
    authority*; [Stage 5](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-5--deliver)).

@@ -21,8 +21,8 @@ The HC points the AC at an issue —
 2. **Set `status:in-progress`**
    ([Chapter 1 → Binding to the Work Tracking System](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#binding-to-the-work-tracking-system)).
 3. **Read the stage's routing** — which model and effort runs this stage is
-   [`config/models.md`](../../config/models.md); what may be offloaded, and in what shape, is
-   [`config/delegation.md`](../../config/delegation.md).
+   [`config/models.md`](../../../config/models.md); what may be offloaded, and in what shape, is
+   [`config/delegation.md`](../../../config/delegation.md).
 4. **Search the tracker for duplicates and related work** — open and closed issues and pull
    requests, on the issue's key terms. Overlap or superseding work found goes into the Assessment
    as an open question — proceed-or-consolidate is the HC's call, never a silent proceed.
@@ -33,7 +33,7 @@ The HC points the AC at an issue —
 6. **Check what already exists before any option proposes custom construction** — the platform's
    built-ins first, then an established, maintained library. List what was considered in the
    Assessment even when rejected: "I couldn't find a fit" is acceptable; "I didn't look" is not.
-7. **Read [`rules/authoring.md`](../../rules/authoring.md)** at the moment of writing.
+7. **Read [`rules/authoring.md`](../../../rules/authoring.md)** at the moment of writing.
 8. **Draft the Assessment as a Readout** — content per
    [Stage 1](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-1--assess), shape per
    [Chapter 1 → The Readout](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#the-readout).
@@ -47,7 +47,7 @@ The HC points the AC at an issue —
    [the Direction gate's floor](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#the-direction-gate-graduated),
    clauses 1 and 2.
 11. **Hold at the Direction gate per its current setting**
-   ([`config/gates.md`](../../config/gates.md)). The setting is read there, never from this file;
+   ([`config/gates.md`](../../../config/gates.md)). The setting is read there, never from this file;
    the floor no setting reaches is canon
    ([Chapter 1 → The Direction gate, graduated](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#the-direction-gate-graduated)).
 
