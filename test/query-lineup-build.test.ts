@@ -30,6 +30,7 @@ import { addEvent } from "../src/query/events.js";
 import { NoHomeTeamError, setHomeTeam } from "../src/query/home-team.js";
 import { EventHasNoFormatError } from "../src/query/lineup.js";
 import { getLineupBuild } from "../src/query/lineup-build.js";
+import { InvalidPlaysError, setPlays } from "../src/query/player-plays.js";
 import { seedAvailabilityMatrix } from "./helpers/availability-matrix.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -631,6 +632,84 @@ describe("getLineupBuild — captain notes", () => {
       expect(build.captainNotes.pairing[0]!.playerId).toBe(ids[1]);
       expect(build.captainNotes.pairing[0]!.pairPlayerId).toBe(ids[2]);
       expect(build.captainNotes.player.map((n) => n.playerId)).not.toContain(seasonOnly);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+// #149 Task 3/4: `plays` joins into the roster exactly as `ageRange` already does, decoded
+// fail-closed by `readPlays`, and threaded into `buildDayScenarios` alongside `status`. These cover
+// the part the pure-layer tests (`test/query-derive-lineup-build.test.ts`) cannot see — that a value
+// actually written by `setPlays` reaches the derivation THROUGH the real roster join, and that a
+// hand-corrupted column is refused the same way a corrupted `availability.status` already is.
+describe("getLineupBuild — the doubles-only constraint (#149)", () => {
+  useTnDbPath();
+
+  it("refuses a stored plays value our own writer could never have produced (readPlays fails closed)", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const names = TEN.slice(0, 3);
+      const fixture = seedBuild(db, { season: names, format: FORMAT });
+      const ids = names.map((n) => fixture.ids[n]!);
+      allAvailable(db, ids, [SATURDAY]);
+      // Hand-corrupted, the way only a direct edit could produce.
+      db.update(players).set({ plays: "singles-only" }).where(eq(players.id, ids[0]!)).run();
+
+      expect(() => getLineupBuild(db, { day: SATURDAY })).toThrow(InvalidPlaysError);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("a doubles-only player's constraint, written through setPlays, reaches buildDayScenarios through the roster join", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      // 8 available for the format's 7 seats (S1 + D1-D3) — strictly more bodies than seats, so
+      // the placement below cannot be explained by the existing shortfall path
+      // (test/query-derive-lineup-build.test.ts's own "the fixture trap" note applies here too).
+      const names = TEN.slice(0, 8);
+      const fixture = seedBuild(db, { season: names, format: FORMAT });
+      const ids = names.map((n) => fixture.ids[n]!);
+      allAvailable(db, ids);
+      const values = [4.5, 4.4, 4.2, 4.0, 3.9, 3.7, 3.5, 3.3];
+      ids.forEach((id, i) => rate(db, id, values[i]!));
+      // The strongest player on file is doubles-only.
+      setPlays(db, { player: names[0]!, plays: "doubles-only" });
+
+      const build = getLineupBuild(db, { day: SATURDAY });
+
+      const strength = build.scenarios.find((s) => s.strategies.includes("strength-first"))!;
+      // S1 must skip the strongest (doubles-only) player and go to the next strongest instead —
+      // the placement is only explicable if `setPlays`'s write actually reached the derivation.
+      expect(strength.courts[0]!.players.map((p) => p.playerId)).toEqual([ids[1]]);
+      expect(strength.courts[0]!.constraintOverride).toBeNull();
+
+      const holding = strength.courts.find((c) => c.players.some((p) => p.playerId === ids[0]));
+      expect(holding?.discipline).toBe("doubles");
+      // #149: `singlesEligibleCount` is derived once in `buildDayScenarios` (derive-lineup-build.ts)
+      // but has to be THREADED through `getLineupBuild`'s own return shape to reach a presenter or
+      // the `lineup_build` MCP tool (which returns this object verbatim) — a defect found while
+      // implementing the presenter's day-level line, which reads exactly this field.
+      expect(build.singlesEligibleCount).toBe(7); // 8 eligible minus the one doubles-only player
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("singlesEligibleCount reaches getLineupBuild's own result as 0 when every available player is doubles-only", () => {
+    const { db, sqlite } = freshDb();
+    try {
+      const names = TEN.slice(0, 3);
+      const fixture = seedBuild(db, { season: names, format: FORMAT });
+      const ids = names.map((n) => fixture.ids[n]!);
+      allAvailable(db, ids);
+      for (const name of names) setPlays(db, { player: name, plays: "doubles-only" });
+
+      const build = getLineupBuild(db, { day: SATURDAY });
+
+      expect(build.singlesEligibleCount).toBe(0);
+      expect(build.eligibleCount).toBe(3);
     } finally {
       sqlite.close();
     }

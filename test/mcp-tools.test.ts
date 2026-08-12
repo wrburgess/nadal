@@ -386,6 +386,158 @@ describe("MCP tool dispatch (real client/server over InMemoryTransport)", () => 
     });
   });
 
+  // #149 Task 19: `player_plays` round-trips the SAME write service (`setPlays`,
+  // src/query/player-plays.ts) the CLI's `tn player plays` calls, and returns the SAME refusal
+  // classes — `setPlays` resolves its own target internally (unlike `player_avail`, which takes an
+  // already-resolved `playerId`), so this tool's handler needs no separate resolution step either.
+  describe("player_plays (#149)", () => {
+    it("records a play-style constraint via MCP using the same write service as the CLI", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+      const event = db
+        .insert(events)
+        .values({ name: "Event", kind: "tournament", startsOn: "2026-08-28", endsOn: "2026-08-30" })
+        .returning()
+        .get();
+      const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: event.id }).run();
+      backfillNameKeys(db);
+      sqlite.close();
+
+      const client = await connectedClient();
+      await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+      const result = await client.callTool({
+        name: "player_plays",
+        arguments: { target: player.canonicalName, plays: "doubles-only" },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(textOf(result))).toMatchObject({
+        player: player.canonicalName,
+        plays: "doubles-only",
+      });
+
+      const { db: db2, sqlite: sqlite2 } = openDb();
+      try {
+        const row = db2.select({ plays: players.plays }).from(players).where(eq(players.id, player.id)).get();
+        expect(row?.plays).toBe("doubles-only");
+      } finally {
+        sqlite2.close();
+      }
+    });
+
+    it("refuses an unrecognized value as a structured tool error, writing nothing (InvalidPlaysError)", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+      const player = db.insert(players).values({ canonicalName: "Randy Rostered" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      backfillNameKeys(db);
+      sqlite.close();
+
+      const client = await connectedClient();
+      await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+      const result = await client.callTool({
+        name: "player_plays",
+        arguments: { target: player.canonicalName, plays: "singles-only" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("doubles-only");
+
+      const { db: db2, sqlite: sqlite2 } = openDb();
+      try {
+        const row = db2.select({ plays: players.plays }).from(players).where(eq(players.id, player.id)).get();
+        expect(row?.plays).toBeNull();
+      } finally {
+        sqlite2.close();
+      }
+    });
+
+    it("refuses when no home team is designated (NoHomeTeamError), matching the CLI's refusal class", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const player = db.insert(players).values({ canonicalName: "Solo Player" }).returning().get();
+      backfillNameKeys(db);
+      sqlite.close();
+
+      const client = await connectedClient();
+      const result = await client.callTool({
+        name: "player_plays",
+        arguments: { target: player.canonicalName, plays: "doubles-only" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("home team");
+    });
+
+    it("refuses an unknown target, naming it (UnknownPlayerTargetError)", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+      backfillNameKeys(db);
+      sqlite.close();
+
+      const client = await connectedClient();
+      await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+      const result = await client.callTool({
+        name: "player_plays",
+        arguments: { target: "Nobody Nowhere", plays: "doubles-only" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("unknown");
+    });
+
+    it("returns a structured error for an ambiguous target, listing candidates (AmbiguousPlayerTargetError)", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+      const player = db.insert(players).values({ canonicalName: "Sam Smith" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: team.id, eventId: null }).run();
+      db.insert(players).values({ canonicalName: "Sam Smith" }).run();
+      backfillNameKeys(db);
+      sqlite.close();
+
+      const client = await connectedClient();
+      await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+      const result = await client.callTool({
+        name: "player_plays",
+        arguments: { target: "Sam Smith", plays: "doubles-only" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("ambiguous");
+    });
+
+    it("refuses a player not on the home team's roster, naming the reason (PlayerNotOnHomeRosterError)", async () => {
+      runMigrations();
+      const { db, sqlite } = openDb();
+      const team = db.insert(teams).values({ name: "Home Team" }).returning().get();
+      const otherTeam = db.insert(teams).values({ name: "Opponent" }).returning().get();
+      const player = db.insert(players).values({ canonicalName: "Opponent Player" }).returning().get();
+      db.insert(teamMemberships).values({ playerId: player.id, teamId: otherTeam.id, eventId: null }).run();
+      backfillNameKeys(db);
+      sqlite.close();
+
+      const client = await connectedClient();
+      await client.callTool({ name: "team_home", arguments: { target: team.name } });
+
+      const result = await client.callTool({
+        name: "player_plays",
+        arguments: { target: player.canonicalName, plays: "doubles-only" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("roster");
+    });
+  });
+
   it("event_add refuses an invalid kind as a tool error rather than crashing the server", async () => {
     runMigrations();
     const client = await connectedClient();

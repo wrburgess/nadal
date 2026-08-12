@@ -32,11 +32,13 @@ import type {
   DayScenarios,
   EligibilityLedger,
   EligibilityStatus,
+  PlaysConstraint,
   Scenario,
 } from "./derive-lineup-build.js";
 import type { EventCourt } from "./event-format.js";
 import { requireHomeTeam } from "./home-team.js";
 import { ownTeamCourtMatchRows, requireSlotSet, resolveEvent } from "./lineup.js";
+import { InvalidPlaysError } from "./player-plays.js";
 import { resolveRoster } from "./roster.js";
 import type { RatingSource } from "./types.js";
 
@@ -60,6 +62,12 @@ export type LineupBuild = {
   slotSet: EventCourt[];
   ledger: EligibilityLedger;
   eligibleCount: number;
+  /** #149: `eligibleCount` minus every player whose recorded `plays` is `"doubles-only"` — carried
+   * straight through from `DayScenarios.singlesEligibleCount` (derive-lineup-build.ts). Threaded
+   * here (rather than left a level down) because both consumers of THIS type need it directly: the
+   * CLI presenter's day-level disclosure of the constraint-override case, and the `lineup_build` MCP
+   * tool, which returns this object verbatim rather than re-deriving anything from `scenarios`. */
+  singlesEligibleCount: number;
   bodiesNeeded: number;
   shortfall: number;
   ratingSource: RatingSource | null;
@@ -124,6 +132,24 @@ function readStatus(status: AvailabilityStatus | null): EligibilityStatus {
 }
 
 /**
+ * Reads one stored `players.plays` into the pure layer's closed vocabulary, or refuses (#149).
+ *
+ * `players.plays` is a plain TEXT column exactly like `availability.status` above, so SQLite
+ * enforces nothing on it — only `setPlays`'s zod enum stands between a value and the table, and a
+ * hand-edited database is exactly the case this exists for. Failing closed matters here for the
+ * same reason `readStatus` fails closed: an unrecognized value is not one of the two eligibility
+ * outcomes this feature can act on, so the honest choice is to refuse rather than silently treat it
+ * as "unconstrained" (which would seat a player the captain constrained) or as "doubles-only" (which
+ * would bench a player the captain never constrained). Throws the SAME class `setPlays` throws for
+ * an invalid input — it is the same reason, only discovered at read time instead of write time.
+ */
+function readPlays(plays: string | null): PlaysConstraint {
+  if (plays === null) return null;
+  if (plays === "both" || plays === "doubles-only") return plays;
+  throw new InvalidPlaysError(`stored plays value "${plays}" is not one of both | doubles-only`);
+}
+
+/**
  * Builds one day's lineup scenarios for the home team: who is available, the three disclosed ways to
  * field them, and everything a presenter needs to say why.
  *
@@ -143,8 +169,9 @@ function readStatus(status: AvailabilityStatus | null): EligibilityStatus {
  * (`InvalidAvailabilityDayError`, `NoEventForDayError`, `AmbiguousEventForDayError`,
  * `EventDoesNotCoverDayError`, `UnknownEventError`); `EventHasNoFormatError` when the resolved event
  * has no court list; `InvalidEventFormatError` / `InvalidLeagueScopeError` for a corrupted stored
- * column; and `InvalidAvailabilityStatusError` for a stored status our own writer could not have
- * produced (see `readStatus`).
+ * column; `InvalidAvailabilityStatusError` for a stored status our own writer could not have
+ * produced (see `readStatus`); and `InvalidPlaysError` for a stored `plays` value our own writer
+ * could not have produced (#149, see `readPlays`).
  */
 export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild {
   const homeTeam = requireHomeTeam(db);
@@ -256,6 +283,7 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
       playerId: member.playerId,
       canonicalName: member.canonicalName,
       status: readStatus(statusFor.get(member.playerId) ?? null),
+      plays: readPlays(member.plays),
     })),
     slotSet,
     ratings: memberIds.map((playerId) => ({
@@ -281,6 +309,7 @@ export function getLineupBuild(db: Db, input: GetLineupBuildInput): LineupBuild 
     slotSet,
     ledger: scenarios.ledger,
     eligibleCount: scenarios.eligibleCount,
+    singlesEligibleCount: scenarios.singlesEligibleCount,
     bodiesNeeded: scenarios.bodiesNeeded,
     shortfall: scenarios.shortfall,
     ratingSource: scenarios.ratingSource,

@@ -11,6 +11,10 @@ export type RosterMember = {
   playerId: number;
   canonicalName: string;
   ageRange: string | null;
+  /** The captain's recorded play-style constraint, RAW off `players.plays` — undecoded, exactly as
+   * `ageRange` above. `tn lineup build` (src/query/lineup-build.ts's `readPlays`) is the fail-closed
+   * decoder; this join only carries the column through (#149 Task 3). */
+  plays: string | null;
 };
 
 /**
@@ -70,6 +74,7 @@ function queryBothScopes(
       eventId: teamMemberships.eventId,
       canonicalName: players.canonicalName,
       ageRange: players.ageRange,
+      plays: players.plays,
     })
     .from(teamMemberships)
     .innerJoin(players, eq(teamMemberships.playerId, players.id))
@@ -79,7 +84,12 @@ function queryBothScopes(
   const season: RosterMember[] = [];
   const registered: RosterMember[] = [];
   for (const row of rows) {
-    const member = { playerId: row.playerId, canonicalName: row.canonicalName, ageRange: row.ageRange };
+    const member = {
+      playerId: row.playerId,
+      canonicalName: row.canonicalName,
+      ageRange: row.ageRange,
+      plays: row.plays,
+    };
     if (row.eventId === null) season.push(member);
     else if (eventId !== null && row.eventId === eventId) registered.push(member);
   }

@@ -25,11 +25,17 @@ import type { CourtMatchRow, RatingObservationRow, RatingSource } from "./types.
  * is the defect this shape exists to make unrepresentable. */
 export type EligibilityStatus = "available" | "unavailable" | "uncertain" | null;
 
+/** The captain's recorded play-style constraint (#149), decoded and closed — `null` and `"both"`
+ * are both "unconstrained"; only `"doubles-only"` excludes a player from a singles court. */
+export type PlaysConstraint = "both" | "doubles-only" | null;
+
 export type RosterDayEntry = {
   playerId: number;
   canonicalName: string;
   /** This player's answer for the ONE day being built. */
   status: EligibilityStatus;
+  /** The captain's recorded play-style constraint, decoded by `readPlays` (#149). */
+  plays: PlaysConstraint;
 };
 
 export type BuildDayScenariosInput = {
@@ -110,6 +116,15 @@ export type ScenarioCourt = {
   /** How many of `players` contributed to the two sums above, so a partly-rated court is legible as
    * partly rated rather than as weak. */
   ratedPlayers: number;
+  /**
+   * #149: non-null ONLY on a singles court seated by a player whose recorded `plays` is
+   * `"doubles-only"` — the case where no singles-eligible body was left available at all, so the
+   * strongest available player was seated anyway rather than leaving the court empty. `null` on
+   * every doubles court, every unfilled court, and every singles court filled normally (from
+   * `singlesEligible`) — this is a REPORTED exception, not a general "did this court bend the
+   * rules" flag.
+   */
+  constraintOverride: "doubles-only" | null;
 };
 
 export type Scenario = {
@@ -135,6 +150,10 @@ export type DayScenarios = {
   bodiesNeeded: number;
   /** Eligible bodies short of `bodiesNeeded`; `0` when there are enough. */
   shortfall: number;
+  /** #149: `eligibleCount` minus every player whose recorded `plays` is `"doubles-only"` — how many
+   * eligible bodies could legitimately be seated at a singles court today. Equal to `eligibleCount`
+   * whenever nobody has recorded a constraint (the additive-only case). */
+  singlesEligibleCount: number;
   /** The ONE scale every comparison was made within, or `null` when nobody is rated. Chosen over the
    * whole roster rather than over the day's available subset, so the scale a captain reads does not
    * change from Friday to Saturday because one rated player answered differently. */
@@ -268,7 +287,24 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
   };
 
   const nameOf = new Map(roster.map((p) => [p.playerId, p.canonicalName]));
+  const playsOf = new Map(roster.map((p) => [p.playerId, p.plays]));
   const eligible = ledger.available.map((p) => p.playerId).sort((a, b) => a - b);
+
+  /**
+   * #149: `eligible` minus every player whose recorded `plays` is `"doubles-only"` — the ONE guard
+   * every singles-picking step below consults, and the ONLY place this file decides who may be
+   * seated at a singles court. Every one of the three strategies filters against THIS set rather
+   * than re-deriving its own "is this player doubles-only" check, for the identical reason `eligible`
+   * itself is derived once above rather than at each strategy: a second, independently-written
+   * filter is a second place the rule could drift from this one.
+   *
+   * `null` and `"both"` are both unconstrained — only the literal `"doubles-only"` excludes anyone,
+   * which is what makes this additive: a roster where nobody has recorded a constraint produces
+   * `singlesEligible === eligible`, so every ordering below runs exactly as it did before this set
+   * existed.
+   */
+  const singlesEligible = eligible.filter((id) => playsOf.get(id) !== "doubles-only");
+  const singlesEligibleSet = new Set(singlesEligible);
 
   /**
    * Stronger first; unrated last; ties by `playerId`.
@@ -351,9 +387,20 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
     const assignment: Assignment = new Map();
     const pool = [...eligible].sort(byStrength);
     for (const court of singlesSlots) {
-      const pick = pool.shift();
+      // #149: prefer the strongest SINGLES-ELIGIBLE body still in the pool. `pool` stays sorted by
+      // strength throughout (only ever shrunk, never re-sorted), so `.filter` preserves that order
+      // and its first element is the strongest such body. Only when NONE remains — every body left
+      // is doubles-only — does this fall through to `pool[0]`, the strongest body overall: the
+      // stated override, seating a doubles-only player rather than leaving the court empty.
+      const singlesPool = pool.filter((id) => singlesEligibleSet.has(id));
+      const pick = singlesPool[0] ?? pool[0];
       if (pick === undefined) break;
       assignment.set(court.slot, [pick]);
+      // `pool.shift()` would both seat this pick AND leave it in the doubles pool, double-booking
+      // it — the picked id has to be spliced out of `pool` explicitly, by INDEX rather than by
+      // position 0, since the pick can come from anywhere in `pool` once the singles-eligible
+      // filter is in play.
+      pool.splice(pool.indexOf(pick), 1);
     }
     for (const court of doublesSlots) {
       if (pool.length < 2) break; // one body left is one body sitting, never a half-filled court
@@ -371,8 +418,15 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
       if (ca !== cb) return cb - ca;
       return byStrength(a, b);
     });
+    // #149: the same order, filtered to singles-eligible bodies — `historyFirst` already draws from
+    // a `taken` set rather than a mutable pool, so (unlike `strengthFirst`/`balanced`) no splice is
+    // needed here; `.find` simply skips anyone already taken.
+    const singlesEligibleOrder = singlesOrder.filter((id) => singlesEligibleSet.has(id));
     for (const court of singlesSlots) {
-      const pick = singlesOrder.find((id) => !taken.has(id));
+      // The override falls back to the UNFILTERED order — the same history-then-strength rule,
+      // just without the singles-eligible restriction — only when every singles-eligible body is
+      // already taken.
+      const pick = singlesEligibleOrder.find((id) => !taken.has(id)) ?? singlesOrder.find((id) => !taken.has(id));
       if (pick === undefined) break;
       assignment.set(court.slot, [pick]);
       taken.add(pick);
@@ -406,9 +460,14 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
     const assignment: Assignment = new Map();
     const pool = [...eligible].sort(byStrength);
     for (const court of singlesSlots) {
-      const pick = pool.shift();
+      // #149: identical singles-eligible-first, explicit-splice logic to `strengthFirst` above —
+      // `balanced` fields S1 "as strength-first" (see `STRATEGY_RULES.balanced`) and shares the
+      // same mutable `pool`, so it shares the same double-booking risk and the same fix.
+      const singlesPool = pool.filter((id) => singlesEligibleSet.has(id));
+      const pick = singlesPool[0] ?? pool[0];
       if (pick === undefined) break;
       assignment.set(court.slot, [pick]);
+      pool.splice(pool.indexOf(pick), 1);
     }
 
     const fillable = Math.min(doublesSlots.length, Math.floor(pool.length / 2));
@@ -467,6 +526,15 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
       const ids = [...(assignment.get(court.slot) ?? [])].sort(byStrength);
       for (const id of ids) placed.add(id);
       const rated = ratedCount(ids);
+      // #149: derived from `singlesEligibleSet` — the SAME set every singles-picking step above
+      // consulted — rather than a fresh `playsOf.get(id) === "doubles-only"` check. A singles seat
+      // filled by anyone NOT in that set can only mean the override fired: every strategy above
+      // draws its S1 pick from `singlesEligible` first, falling through to a doubles-only body ONLY
+      // when no singles-eligible one remained.
+      const constraintOverride: "doubles-only" | null =
+        court.discipline === "singles" && ids.length === seats && !singlesEligibleSet.has(ids[0]!)
+          ? "doubles-only"
+          : null;
       return {
         slot: court.slot,
         discipline: court.discipline,
@@ -478,6 +546,7 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
           rated === 0 ? null : ids.reduce((total, id) => total + (ratingOf(id) ?? 0), 0),
         courtStrength: rated === 0 ? null : sumStrength(ids),
         ratedPlayers: rated,
+        constraintOverride,
       };
     });
 
@@ -520,6 +589,7 @@ export function buildDayScenarios(input: BuildDayScenariosInput): DayScenarios {
     eligibleCount: eligible.length,
     bodiesNeeded,
     shortfall: Math.max(0, bodiesNeeded - eligible.length),
+    singlesEligibleCount: singlesEligible.length,
     ratingSource: selection.source,
     ratedEligible: ratedCount(eligible),
     scenarios,

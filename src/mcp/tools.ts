@@ -25,6 +25,7 @@ import type { ScorecardPayload } from "../ingest/scorecard.js";
 import { pullTeam } from "../ingest/team-pull.js";
 import { setAvailability } from "../query/availability.js";
 import { addCaptainNote } from "../query/captain-notes.js";
+import { setPlays } from "../query/player-plays.js";
 import { addEvent, windowAnchorFor } from "../query/events.js";
 import { NoCourtMatchHistoryError, getLineupPlan, resolveEvent } from "../query/lineup.js";
 import { getLineupBuild } from "../query/lineup-build.js";
@@ -377,6 +378,28 @@ export const MCP_TOOLS: McpToolDef[] = [
           event: result.eventName,
           onEventRoster: result.onEventRoster,
         };
+      } finally {
+        sqlite.close();
+      }
+    },
+  },
+
+  {
+    name: "player_plays",
+    cliCommand: "player plays",
+    description: "Record a home-team player's play-style constraint (both or doubles-only)",
+    // `setPlays` (src/query/player-plays.ts) resolves its own target and throws the identical
+    // `UnknownPlayerTargetError`/`AmbiguousPlayerTargetError` taxonomy `requireResolved` exists to
+    // wrap for every OTHER tool here — so this handler, like the CLI command it mirrors, has nothing
+    // to resolve before calling it: any thrown refusal propagates and `src/mcp/server.ts` converts
+    // it to a structured `isError` result, matching `player_avail`'s handler one entry above.
+    inputShape: { target: z.string().min(1), plays: z.string().min(1) },
+    handler: async (rawArgs) => {
+      const { target, plays } = rawArgs as { target: string; plays: string };
+      const { db, sqlite } = openDb();
+      try {
+        const result = setPlays(db, { player: target, plays });
+        return { player: target, plays: result.plays };
       } finally {
         sqlite.close();
       }

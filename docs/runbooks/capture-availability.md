@@ -2,12 +2,14 @@
 
 ## When to use this
 
-Whenever a player reports their availability for Springfield Sectionals, or you have an observation
-worth recording about a player or a pairing — spec § Domain model: Availability is "structured
-per-player per-event-day … lineup planning depends on it," and CaptainNote is "Randy's subjective
-layer on a player or pairing. Populated for our team only, by design." Both write services refuse
-until a home team is designated (nadal ADR 0001) — there is no "our team" to scope either one to
-otherwise.
+Whenever a player reports their availability for Springfield Sectionals, tells you they only play
+doubles, or you have an observation worth recording about a player or a pairing — spec § Domain
+model: Availability is "structured per-player per-event-day … lineup planning depends on it," and
+CaptainNote is "Randy's subjective layer on a player or pairing. Populated for our team only, by
+design." A player's play-style constraint (`players.plays`, #149) is the third recorded fact this
+runbook covers, and `tn lineup build` reads it the same day-of-capture way it reads availability. All
+three write services refuse until a home team is designated (nadal ADR 0001) — there is no "our team"
+to scope any of them to otherwise.
 
 ## Before you start
 
@@ -124,7 +126,36 @@ warning, and there is nothing to redo once the player registers (`tn roster set`
 rendering on the next dossier build with no further action from you. Treat it as a prompt to check
 registration status, not as a failed write.
 
-### 4. Captain notes, once you are sure — through the `player_note` MCP tool
+### 4. Play-style constraints — `tn player plays`, only when a player has actually said so (#149)
+
+Most players are unconstrained and need nothing recorded at all — `players.plays` starts `NULL` for
+everyone, and `NULL` already means "no constraint on file," not "unanswered." Only record a value
+when a player has told you they play doubles only:
+
+```
+tn player plays "Randy Rostered" doubles-only
+```
+
+The value is exactly one of two words, plus what a blank means:
+
+- `doubles-only` — this player is not to be seated at the singles court.
+- `both` — explicitly unconstrained; only needed to overwrite a `doubles-only` you recorded earlier
+  in error, or once a player who previously said doubles-only tells you that has changed. A player
+  who has never said anything either way needs no call at all.
+
+Like availability, a second call for the same player **overwrites** the first — there is exactly one
+`plays` value per player, never a history of them. Unlike availability, this is **not per-day**: it is
+a standing statement about the player, not an answer for one event day, so it is recorded once and
+carries forward into every `tn lineup build` for as long as it stays true.
+
+**`tn lineup build` never leaves the singles court empty over this.** If every available player who
+could still take the day is recorded `doubles-only`, the strongest available player is seated there
+anyway rather than the court going unfilled — and the page prints an `OVERRIDE:` line naming who was
+seated against their recorded constraint, plus a day-level line stating that nobody available carried
+singles eligibility. Neither line appears on an ordinary day, so seeing one is itself the signal that
+the exception fired — see `docs/cli/GRAMMAR.md`'s `tn lineup build` section for the full rule.
+
+### 5. Captain notes, once you are sure — through the `player_note` MCP tool
 
 **Never a shell-quoted `tn player note "<text>"` for a note carrying anything beyond a trivial
 value.** A captain note is arbitrary text you typed, and it can carry an apostrophe, a double quote,
@@ -145,14 +176,16 @@ oversight, because a rigid third CLI positional was judged more awkward than a c
 name. A note about how two players play together — rather than about either one alone — is only
 reachable by asking the agent to call `player_note` with a `pairTarget`.
 
-### 5. Verify — there is no readback command
+### 6. Verify — there is no readback command
 
-**`tn player show` is not a readback for either of these.** It reports availability and captain
+**`tn player show` is not a readback for any of these.** It reports availability and captain
 notes only as a `dataGaps` status (`not-collected` / `empty` / `has-data`) — a count, never the
-actual values — so it can tell you *that* something is recorded and never *what*. The tool call's own
-result is the nearest thing to an immediate readback: `player_avail` returns the stored status and
-the event it resolved to, `player_note` returns the stored text. Read those rather than assuming the
-conversation translated correctly.
+actual values — so it can tell you *that* something is recorded and never *what*. `players.plays`
+is not part of `dataGaps` at all today, so `tn player show` says nothing about it either way. The
+tool call's own result is the nearest thing to an immediate readback: `player_avail` returns the
+stored status and the event it resolved to, `player_plays` returns the stored constraint,
+`player_note` returns the stored text. Read those rather than assuming the conversation translated
+correctly.
 
 For the values the captain will actually read at the tournament, rebuild and open the dossier:
 
@@ -175,6 +208,10 @@ actually show them.
   informational; nothing in this repo prompts you to register them, or reminds you again later.
 - **Captain notes cannot be edited or deleted, by anyone, through any surface.** A note recorded in
   error stays on file; there is no correction mechanism beyond writing a further note.
+- **A recorded play-style constraint does not appear on the `tn report build` dossier.** It is read
+  only by `tn lineup build` (#149) — the tool-call result and `tn lineup build`'s own page are the
+  only places to see it, the same "no readback surface" limitation the bullet above states for
+  availability and captain notes.
 - **This runbook does not enumerate a paste-able command per roster player.** That shape — a
   template inviting real player names and captain-typed text to be substituted in one line at a
   time — is the exact move `docs/findings.md:288` recorded as a defect, one runbook over. Use agent

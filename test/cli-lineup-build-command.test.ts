@@ -32,6 +32,7 @@ import { EmptySlotSetError } from "../src/query/derive-lineup-build.js";
 import { addEvent } from "../src/query/events.js";
 import { setHomeTeam } from "../src/query/home-team.js";
 import { UnknownEventError } from "../src/query/lineup.js";
+import { setPlays } from "../src/query/player-plays.js";
 import { seedAvailabilityMatrix } from "./helpers/availability-matrix.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
@@ -550,6 +551,58 @@ describe("tn lineup build — shortfall", () => {
     );
     expect(output).toContain("short: S1, D1, D2, D3 unfilled — 7 seats empty");
     expect(output).toContain("sitting: nobody");
+  });
+});
+
+// #149 Task 5: the presenter's two ADDITIONS — an override marker on the singles court's line, and
+// a day-level line when nobody available carries singles eligibility. Both must be PRESENT when the
+// override actually fired and ABSENT when it did not: a marker that always fires teaches the reader
+// to ignore it, which is exactly what the "no doubles-only players at all" baseline test below pins.
+describe("tn lineup build — the doubles-only constraint (#149)", () => {
+  useTnDbPath();
+  afterEach(() => vi.restoreAllMocks());
+
+  it("prints neither the OVERRIDE marker nor the day-level constraint line when nobody is doubles-only", async () => {
+    seedDay();
+    const { output } = await render();
+
+    expect(output).not.toContain("OVERRIDE:");
+    expect(output).not.toContain("no available player has a recorded singles eligibility");
+  });
+
+  it("marks S1 with an OVERRIDE line naming the seated player, and prints the day-level line, when EVERY available player is doubles-only", async () => {
+    seedDay();
+    withDb((db) => {
+      for (const name of AVAILABLE) setPlays(db, { player: name, plays: "doubles-only" });
+    });
+
+    const { output } = await render();
+
+    // The strongest player is still seated at S1 — the court is never left empty — but flagged.
+    expect(output).toMatch(/S1 +Ada Ashby/);
+    expect(output).toContain("OVERRIDE: Ada Ashby is recorded doubles-only");
+    expect(output).toContain("constraint: no available player has a recorded singles eligibility");
+    // Only the singles court carries the marker — no doubles court is a singles-eligibility question.
+    const doublesLines = output.split("\n").filter((l) => /^ {4}D[123] /.test(l));
+    for (const line of doublesLines) expect(line).not.toContain("OVERRIDE:");
+  });
+
+  it("does not mark S1 and does not print the day-level line when a singles-eligible player is still available", async () => {
+    seedDay();
+    withDb((db) => {
+      // The strongest player is doubles-only, but seven others remain singles-eligible — no override.
+      setPlays(db, { player: "Ada Ashby", plays: "doubles-only" });
+    });
+
+    const { output } = await render();
+
+    // S1 skips Ada (doubles-only) and goes to the next strongest instead, unmarked.
+    expect(output).toMatch(/S1 +Bo Bramwell/);
+    expect(output).not.toContain("OVERRIDE:");
+    expect(output).not.toContain("no available player has a recorded singles eligibility");
+    // Ada still gets placed — on a doubles court, never sitting and never at S1.
+    expect(output).toContain("Ada Ashby");
+    expect(output).not.toMatch(/S1 +Ada Ashby/);
   });
 });
 

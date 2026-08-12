@@ -147,6 +147,7 @@ looks for `--help` then depends on whether that resolved:
 | `tn player pull` | Pull a player's ratings and match history from TennisRecord |
 | `tn player show` | Show a player's full profile: ratings trajectory, history, records |
 | `tn player avail` | Record a home-team player's availability for an event day |
+| `tn player plays` | Record a home-team player's play-style constraint (both or doubles-only) |
 | `tn player note` | Append a captain note about a home-team player or pairing |
 | `tn player distinct` | Declare similar names different people, creating any of them not yet on file |
 | `tn player alias` | Record a second spelling as the same person as a known player |
@@ -449,14 +450,24 @@ from `tn team home` and there is no way to ask this question about an opponent �
 needed only when the day falls inside more than one event's range and still checked *against* the day
 when supplied (a named event that does not cover the day refuses, rather than being trusted).
 
-**Two hard constraints, both enforced by construction and both stated on the page.** Only a player
-whose recorded answer for that day is `available` is fielded, and **no player is ever placed on two
-courts**. When there are not enough available bodies, a court is left **unfilled** and the leftover
-body **sits** — a doubles court is filled with two or with none, never with one, and never by
-double-booking somebody from another court. Note the two numbers that go with that, which count
-different things: `shortfall` counts **bodies** (how many more people you need), while a scenario's
-`unfilledSeats` counts **seats** (how much of the court list is empty). One body short of a doubles
-court is a shortfall of 1 and 2 empty seats, with one person sitting.
+**Three constraints, enforced by construction and stated on the page — two of them absolute, the
+third conditional.** Only a player whose recorded answer for that day is `available` is fielded, and
+**no player is ever placed on two courts**: those two never yield. The third is `players.plays`
+(#149, recorded with `tn player plays <name> <both|doubles-only>`): a player recorded
+`doubles-only` is never seated at a singles court **while a singles-eligible player is still
+available**. Unlike the first two, this one is conditional rather than absolute — it **yields**
+rather than leaving the court empty. When every available player who could still take the day is
+`doubles-only`, the singles court is filled anyway with the strongest available player, and the page
+says so with an `OVERRIDE:` line naming who was seated and why, plus a day-level `constraint:` line
+stating that no available player carried singles eligibility. Absent either line, the constraint held
+without needing to yield — the marker is never printed on an ordinary run, so its presence always
+means the exception actually fired. When there are not enough available bodies for any reason, a
+court is left **unfilled** and the leftover body **sits** — a doubles court is filled with two or
+with none, never with one, and never by double-booking somebody from another court. Note the two
+numbers that go with that, which count different things: `shortfall` counts **bodies** (how many more
+people you need), while a scenario's `unfilledSeats` counts **seats** (how much of the court list is
+empty). One body short of a doubles court is a shortfall of 1 and 2 empty seats, with one person
+sitting.
 
 **`uncertain` and "never answered" are NOT fielded, and neither is silently folded into
 "unavailable".** The output carries a four-bucket eligibility ledger — available / unavailable /
@@ -508,7 +519,8 @@ this command to field one player twice, even where a real format would allow it.
 Refuses, exit 1, one distinct reason per message: no home team designated; a day that is not a real
 `YYYY-MM-DD` date; a day inside no event; a day inside more than one event with no `[event]` given;
 an `[event]` that is unknown or does not cover the day; an event with no `format` on file; and a
-stored `format`, league scope, or availability status our own writers could not have produced.
+stored `format`, league scope, availability status, or `plays` value our own writers could not have
+produced.
 A roster with nobody available is **not** a refusal — every slot prints unfilled, everyone is named in
 the ledger, and the command exits 0.
 
