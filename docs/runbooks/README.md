@@ -73,3 +73,6 @@ command is missing.
 - [backup-restore.md](backup-restore.md) — `tn db backup` for the snapshot half (#110), with the
   hand-run `sqlite3` drill retained below it as the fallback for a machine without `tn`; restoring is
   still the manual `.restore` drill, since no `tn db restore` command exists yet
+- [quality-gate.md](quality-gate.md) — `npm run gate`: the one command, its three exit codes, and
+  why `STOP` means fix the environment rather than the code. The only runbook here that needs no
+  database and no `tn` on `PATH`

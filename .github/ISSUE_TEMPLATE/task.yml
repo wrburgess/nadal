@@ -1,7 +1,10 @@
 name: "TASK — one branch, one PR"
 description: "Feature or improvement work sized to a single PR"
 title: "TASK: "
-labels: ["type:task", "status:ready"]
+# nadal's label set, not deuce's — declared drift against the vendoring receipt (#146). This list
+# read ["type:task", "status:ready"], and neither label exists on this tracker, so every issue opened
+# from this template lost its labels silently. See labels.yml for the divergence and why.
+labels: ["task"]
 body:
   - type: markdown
     attributes:

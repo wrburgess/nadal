@@ -5,11 +5,14 @@
   "description": "USTA tennis scouting and lineup planning (v1: Springfield Sectionals). CLI: tn.",
   "type": "module",
   "bin": { "tn": "bin/tn" },
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.18" },
   "scripts": {
+    "gate": "node tools/gate/run.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "check:drizzle": "drizzle-kit generate && test -z \"$(git status --porcelain drizzle/)\"",
     "test": "vitest run",
+    "test:tools": "node --test 'tools/**/*.test.ts'",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {

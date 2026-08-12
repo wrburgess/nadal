@@ -12,34 +12,19 @@ replace them during Customization.
 
 ## Quality Checks
 
-The commands an agent must run and get green before declaring work done. The generalized Skills read
-this table — they never hardcode a stack's commands. **Host Apps: replace these rows with your real
-commands during Customization** (e.g. a Rails host: lint `bundle exec rubocop -a`, tests
-`bundle exec rspec`, security `bin/brakeman --no-pager -q`, dependency audit `bin/bundler-audit check`;
-a JS/TS host: lint `npm run lint`, tests `npm test`, dependency audit `npm audit`). A **Stack Overlay**
-such as `ace-rails` can ship a ready-to-paste command set for its stack.
+**Moved. The gate's contents are [`config/checks.md`](config/checks.md), and the gate is
+`npm run gate`** (#146).
 
-nadal's Host App gate. Only **currently-runnable** checks are registered as rows: listing a command
-with no backing script would exit "Missing script" on every lifecycle run, never reaching green —
-not something an "effective gate" caveat in prose can override. (The *Structural parity* row retired
-with its script at the deuce cutover, deuce [#86](https://github.com/wrburgess/deuce/issues/86);
-the vendoring receipt's checksums are the drift mechanism now.)
+This section used to carry a four-row table that `.github/workflows/ci.yml` restated in its own
+steps and again in a comment block mapping one to the other — three hand-maintained lists agreeing
+by convention. Two are now pointers, and `tools/gate/run.ts` executes exactly what the declaration
+holds, in the order it holds it, so the list a reader sees and the list that runs are the same list.
+Add or remove a check there; there is no second place to edit.
 
-| Purpose | Command |
-|---------|---------|
-| Typecheck | `npm run typecheck` |
-| Lint | `npm run lint` |
-| CLI grammar parity | `npm test -- test/cli-grammar-parity.test.ts` |
-| Tests + coverage floor | `npm run test:coverage` |
-
-All rows are live: the coverage floor is enforced at 75% lines / 75% functions via
-`vitest.config.ts` thresholds, with every file under `src/` in scope — `src/cli/main.ts` included.
-The one carve-out is deuce's seeded `tools/gate/` and `tools/review/`: their tests are `node:test`
-suites vitest does not run, so they are excluded from coverage as dormant until the gate is wired
-(the day-one adoption issue tracks lifting this). Task 6 turned that floor green by adding real tests that
-exercise `src/db/schema.ts` and `src/cli/commands/db-migrate.ts` end-to-end via `openDb`/
-`runMigrations` and `dispatch(["db", "migrate"])`, rather than padding with tautological tests — see
-the Task 6 report.
+What the declaration's body carries, so it is not looked for here: the five rows and what each
+covers, why every command is an `npm run` form, the coverage floor and the honest limit of what it
+now asserts, why `requires` reports rather than repairs, and the three exit codes.
+[`docs/runbooks/quality-gate.md`](docs/runbooks/quality-gate.md) is the operator's copy.
 
 A check whose command runs but has nothing applicable to inspect (e.g. no application code to lint) is
 reported `pass`/`not_run` with a stated reason — checks are **not applicable, not skipped**, so rigor
@@ -150,9 +135,17 @@ reviewer during Customization; the *Invocation paths* Codex row below is the one
 carries **this repo's real mechanism** ([ADR 0035](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0035-codex-summons-is-the-local-cli-runtime.md)),
 which hosts likewise replace.
 
-Like *Human Gates*, this heading is deliberately **absent from the parity check's required sections**,
-so an already-vendored Host App whose `PROJECT.md` predates it keeps parsing to the shipped defaults
-and stays green.
+> **Nothing in this section is mechanically enforced, and five of its sentences used to say
+> otherwise** (#146) — this note replaces one of them; the other four are corrected where they
+> stand. Every claim that "the parity check" reports, reddens, or hard-fails something
+> here described `scripts/parity_check.rb`, which retired at the deuce cutover
+> (deuce [#86](https://github.com/wrburgess/deuce/issues/86)); the two Ruby readers it called —
+> `scripts/reviewer.rb` and `scripts/human_gates.rb` — had no other caller and were deleted on
+> #146. **The live values are now [`config/review.md`](config/review.md)**, which
+> [`tools/review/roster.ts`](tools/review/roster.ts) and
+> [`tools/review/lenses.ts`](tools/review/lenses.ts) actually parse. What survives below is the
+> *reasoning* — kept because it is good, and because a host reading it should know which parts a
+> machine checks. The answer is: the roster's shape, and nothing else.
 
 | Field | Setting | Allowed values |
 |-------|---------|----------------|
@@ -161,17 +154,22 @@ and stays green.
 | **Bounded window** — how long to wait for a response before falling back | `30m` | `<integer><unit>`, unit one of `s` · `m` · `h` |
 | **Degradation floor** — what happens when the whole chain is exhausted | `stop-and-ask` | `stop-and-ask` (not configurable) |
 
-- **The degradation floor is not configurable.** `stop-and-ask` is its only allowed value and the
-  parity check hard-fails any other, on the same footing as merge: a run that cannot obtain an
+- **The degradation floor is not configurable.** `stop-and-ask` is its only allowed value, on the
+  same footing as merge: a run that cannot obtain an
   independent review must not be able to certify itself. The AC stops and asks the HC — it never
   delivers unreviewed with a footnote ([ADR 0026](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0026-reviewer-is-a-project-config-value-ac-summons-floor-preserved.md)
   decision 3, affirming [ADR 0005](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0005-ship-hybrid-delegation-offload-retrieval-protect-judgment.md)).
 - **The acting harness is excluded from the chain before any summons.** An AC is never its own
   independent backstop — a same-model review that *appears* to run is worse than none — so the harness a
-  run is executing *as* is filtered out of *Primary* + *Fallback order* before the window opens
-  (`scripts/reviewer.rb` → `independent_chain`, the runtime sibling of the static
-  fallback-names-the-primary invariant). It is a **harness-level** guard: it catches a same-harness
-  reviewer and, like the invariant it mirrors, does **not** catch two harnesses serving the same model
+  run is executing *as* is filtered out of *Primary* + *Fallback order* before the window opens.
+  **This is discipline, not a control, and this line used to claim the opposite**: it cited
+  `scripts/reviewer.rb` → `independent_chain` as "the runtime sibling" enforcing it, and nothing has
+  called that script since the cutover — it is deleted as of #146. What actually holds the property
+  today is arithmetic: [`config/review.md`](config/review.md)'s roster has exactly one entry, Codex,
+  and nadal's ACs are Claude harnesses, so the chain cannot contain the acting harness. Add a second
+  roster row and this becomes an unchecked assertion again. It is in any case a **harness-level**
+  guard: it catches a same-harness
+  reviewer and does **not** catch two harnesses serving the same model
   ([ADR 0027](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0027-reviewer-chain-validated-against-invocation-paths.md) decision 7 records why
   the rest is unverifiable from a static declaration). If the exclusion empties the chain, the run is at
   the exhausted-chain floor — `stop-and-ask`.
@@ -213,8 +211,9 @@ and stays green.
 
 The mechanism for summoning each harness. **This table is the chain's membership list**: a harness
 named in *Primary* or *Fallback order* with no row here has no summons mechanism, so it is
-**unreachable** — the parity check reports it, and `verify` falls straight past it rather than
+**unreachable**, and `verify` falls straight past it rather than
 starting a window ([ADR 0027](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0027-reviewer-chain-validated-against-invocation-paths.md)).
+Nothing reports the mismatch — the reader of this table is the check.
 The Codex row names **this repo's real mechanism**, not a neutral placeholder
 ([ADR 0035](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0035-codex-summons-is-the-local-cli-runtime.md)); a Host App replaces these rows
 with its real commands during Customization.
@@ -241,7 +240,11 @@ without a side effect — so that row's Check stays host-supplied.
 column *after* it — the mechanism column is found by its `Summons` header, falling back to the second
 column when no header names it — but the harness label must stay leftmost, because it is read
 positionally. Moving it fails closed rather than silently: the real harness name is never seen, so
-every chain entry reads as unreachable and the parity check reddens.
+every chain entry reads as unreachable — which stops a run rather than mis-routing one. Note that
+this is *this table's* contract and no longer the one a tool reads; the roster
+[`tools/review/roster.ts`](tools/review/roster.ts) parses is
+[`config/review.md`](config/review.md)'s, and its first-column-is-the-name reading is pinned there by
+`roster.test.ts`'s live-declaration assertion.
 
 | Harness | Summons | Precondition | Check |
 |---------|---------|--------------|-------|
@@ -268,6 +271,23 @@ host-local statement, and it **overrides** the unbounded adversarial pass the ve
 [`verify`](skills/verify/SKILL.md) body describes (see the precedence table under
 [*Findings-Log Discipline*](#precedence--this-overrides-five-instructions-that-say-otherwise)).
 
+> **The values moved; the reasoning stayed** (#146). The lens menu, the lens-set size and the
+> fix-verification bound are now **[`config/review.md`](config/review.md)**, and
+> [`tools/review/lenses.ts`](tools/review/lenses.ts) parses them.
+>
+> **What that does and does not buy, because a first draft of this callout overstated it and the
+> contractor review caught it.** `checkLensSelection` refuses an off-menu lens *when it is called* —
+> and in this repository **nothing calls it**, because the summons that would
+> ([`summon.ts`](tools/review/summon.ts)) reads two deuce files nadal does not hold and cannot run
+> (#155). Nor is the refusal universal even then: canon's four prose lenses are admitted for prose
+> subjects by design. So these bounds are held by **the agent running the summons by hand**, exactly
+> as they were before — what the declaration adds today is one parseable source instead of prose in
+> two files, not enforcement.
+>
+> Two things to know before reading on: the menu is stated there as **questions**, which a test does
+> enforce; and the range below collapses to the parser's single number, **3**. Where this section
+> and the declaration differ, the declaration is the source.
+
 **Two kinds of discovery, one of them bounded.** *Solicited* discovery is commissioned — Stage 4's
 adversarial pass, the Reviewer's response, every re-summons after a fix — and if it is not bounded it
 does not terminate. *Unsolicited* discovery is something noticed while doing other work; it is routed,
@@ -283,7 +303,10 @@ Round counts are the wrong bound: across seven nadal PRs, value in a late pass c
 *different* question and cost came from *repeating* one. The one pass given an explicit threat model
 converged at one finding, then zero.
 
-**Lens-set size: 3–4 per summons, plus the permanent lens.** This is a menu, not a checklist —
+**Lens-set size: 3 per summons, plus the permanent lens** — declared in
+[`config/review.md`](config/review.md), which `parseLensSetSize` reads as one number. This paragraph
+said "3–4" while nothing parsed it; the declaration takes the lower bound. This is a menu, not a
+checklist —
 running every lens on every change rebuilds the unbounded pass in a new costume.
 
 | Lens | Asks |
@@ -304,7 +327,10 @@ evidence that other classes are absent.
 ### Fix-verification is bounded separately
 
 Code written in response to review findings is the least-reviewed code in the change — authored *after*
-the pass that would have caught it. It gets **two verification passes**, not the lens set.
+the pass that would have caught it. It gets **two verification passes**, not the lens set — declared
+in [`config/review.md`](config/review.md) → *Fix-verification*, and load-bearing at the Ship gate:
+[`config/gates.md`](config/gates.md) makes a second must-fix wave the point at which the run stops
+and hands to the HC.
 
 **Escalate on recurrence rather than iterate.** If a fix-verification pass finds a defect *in the
 fixes themselves* beyond that limit, the design is wrong and the AC stops and says so. Nine recorded
@@ -336,10 +362,15 @@ external-model adversarial review bound to the SHA being merged
 section still parses to the strict fail-safe — plan approval `required`, merge `required` — through the
 parser default; the flip lives in the shipped file, not in that default.)
 
+**Moved. The two settings are [`config/gates.md`](config/gates.md)** (#146) — Direction gate
+`delegated` (this section's plan approval `auto`, in deuce's vocabulary) and Ship gate `attested`.
+The table below is kept for its reasoning, not as the source; where the two differ,
+`config/gates.md` is authoritative and carries the date and the decision it came from.
+
 | Gate | Setting | Allowed values |
 |------|---------|----------------|
-| **Plan approval** — covers both the Stage-1 option pick and the Stage-2 plan approval | `auto` | `required` · `auto` |
-| **Merge** — who merges the delivered PR | `attested` | `required` · `attested` |
+| **Plan approval** — covers both the Stage-1 option pick and the Stage-2 plan approval | `auto` → `config/gates.md` | `required` · `auto` |
+| **Merge** — who merges the delivered PR | `attested` → `config/gates.md` | `required` · `attested` |
 
 - **`auto`** (shipped default) — the AC proceeds on **its own stated recommendation** rather than
   waiting. It still **posts** the assessment and the plan to the lifecycle host — under `auto` those
@@ -350,28 +381,29 @@ parser default; the flip lives in the shipped file, not in that default.)
 - **`required`** — a host may set the **plan-approval** row (and only that row) back to `required`. The
   AC then stops and waits for the HC: it does not proceed past the assessment without a chosen option,
   and it does not write code without an approved plan.
-- **Merge — nadal declares `attested`, and under deuce it does not currently reach.**
-  [`deliver`](skills/deliver/SKILL.md) (Stage 5; `final` was its ace-era name and left with the
-  cutover) posts the Delivery Record and then **may merge, but only on evidence**: every *Quality
-  Checks* row green and the required checks green **at the delivered head**, no open must-fix findings,
-  an independent external-model adversarial review on record (see *Reviewer*), and that review **bound
-  to a literal SHA equal to the PR head**. Any one of those failing means no merge — post the Delivery
-  Record, name the condition that failed, and stop.
+- **Merge — nadal runs `attested`, and it now reaches.** [`deliver`](skills/deliver/SKILL.md)
+  (Stage 5; `final` was its ace-era name and left with the cutover) posts the Delivery Record and
+  then **may merge, but only on evidence**: every gate check green **at the delivered head**, no open
+  must-fix findings, an independent external-model adversarial review on record (see *Reviewer*), and
+  that review **bound to a literal SHA equal to the PR head**. Any one of those failing means no
+  merge — post the Delivery Record, name the condition that failed, and stop.
 
-  **The fourth condition is not satisfiable by an AC-run lifecycle, and that is a structural fact
-  rather than a bad run** (#150 / PR #151). [`verify`](skills/verify/SKILL.md) step 10 disposes of
-  review findings in one fix wave and states that **the reviewer is never re-summoned**. A fix wave
-  moves the head. So on any pull request whose review finds anything at all, the review is bound to a
-  SHA that is no longer the head, and no further summons is permitted to re-bind it — the condition
-  can only be met by a review that found nothing. Until that is reconciled upstream, this row resolves
-  the way [#146](https://github.com/wrburgess/nadal/issues/146) item 2 already states it: **every merge
-  here is HC-performed.** Recorded rather than fixed by loosening — a gate that cannot be met is a
-  reason to stop and hand over, never a reason to lower it. **`auto` remains forbidden** and the parity
-  check hard-fails it: unconditional self-merge is the claim [ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
-  refused, and `attested` is not that claim. What makes the difference real rather than semantic is
-  *Reviewer* below, which filters the acting harness out of its own review chain and forces
-  `stop-and-ask` when no independent review can be obtained — so the AC still cannot certify its own
-  work ([ADR 0037](https://github.com/wrburgess/ace/blob/8faa6a5e39e6ace4d436513cf16a9238a08c351b/docs/adr/0037-merge-gate-accepts-attested.md)).
+  **The fourth condition used to be unsatisfiable, and the reason is worth keeping** (#150 / PR #151).
+  [`verify`](skills/verify/SKILL.md) step 10 disposes of review findings in one fix wave and states
+  that **the reviewer is never re-summoned**. A fix wave moves the head. So on any pull request whose
+  review finds anything, the review is bound to a SHA that is no longer the head, and this section
+  concluded that every merge here must be HC-performed.
+
+  **The HC's ruling on [#146](https://github.com/wrburgess/nadal/issues/146) removes the HC merge
+  gate, so the machinery exists instead — it is
+  [`config/gates.md`](config/gates.md) → *How the binding is re-established*.** In one line: *never
+  re-summoned* bounds one **pass** of Verify, and when the wave moves the head that pass is over; a
+  must-fix wave therefore costs a second summons on the new head, and a second must-fix wave stops
+  and hands to the HC. Read the gate declaration for the full table — it is the source, and this is
+  a pointer to it. **`auto` remains forbidden**: unconditional self-merge is the claim
+  [ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
+  refused, and `attested` is not that claim
+  ([ADR 0037](https://github.com/wrburgess/ace/blob/8faa6a5e39e6ace4d436513cf16a9238a08c351b/docs/adr/0037-merge-gate-accepts-attested.md)).
 - **`attested` does not reach the intake and authoring PRs.** `scout` / `clip` / `follow` / `restock` /
   `create-skill` still end with **a human disposing on the PR** ([ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
   decision 6, unchanged). Those gates exist for *content judgment*, not code correctness.
@@ -421,11 +453,16 @@ parser default; the flip lives in the shipped file, not in that default.)
 > So this is not stale naming that a rename would fix. Deciding what `log-and-continue` *means* with
 > no Step 1 to attach it to — whether the value retires with the mechanism, or moves onto a stage that
 > never had it — is a governance choice belonging to
-> [#146](https://github.com/wrburgess/nadal/issues/146), not to a feature PR. **Read the passages
+> [#154](https://github.com/wrburgess/nadal/issues/154), not to a feature PR. **Read the passages
 > below as addressed to a step that is not currently run.** The exception is the numbered
 > findings-log discipline inside *What `final` does at Step 1*, which
 > [*Findings-Log Discipline*](#findings-log-discipline) still depends on and which remains live — the
-> two are interleaved here, which is itself part of what #146 has to separate.
+> two are interleaved here, which is what #154 has to separate.
+>
+> **This banner used to name [#146](https://github.com/wrburgess/nadal/issues/146).** That issue
+> declined the work on its own thread and re-pointed here rather than closing over a live reference —
+> a 165-line deletion in this file's most argued section did not belong in a config-migration pull
+> request, and the interleaving above is exactly why it needs its own assessment.
 
 How ace `final` handled the Rules-Layer / config improvements it learned during
 implementation, now that a hands-off run reaches the merge gate on its own
@@ -670,9 +707,9 @@ of the following applies:
 |---|---|---|
 | [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → *Anti-Patterns* (Tier-1 Lean Core, resident on every run) | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
 | [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and formerly executable as the retired `ship` orchestrator's `asks_ledger` contract (`status: "handed-off"` with a `ref`) — the mechanism left at the deuce cutover, the rule it encoded did not | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
-| ace `final`'s Step 1 — **no longer executed at all**, since [`deliver`](skills/deliver/SKILL.md) carries no rule-suggestion step | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply, and now has no mechanism to apply through.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`, and that whole section awaits [#146](https://github.com/wrburgess/nadal/issues/146). |
+| ace `final`'s Step 1 — **no longer executed at all**, since [`deliver`](skills/deliver/SKILL.md) carries no rule-suggestion step | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply, and now has no mechanism to apply through.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`, and that whole section awaits [#154](https://github.com/wrburgess/nadal/issues/154). |
 | [`scout`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
-| [`verify`](skills/verify/SKILL.md) Stage 4 (executed on every PR) | an adversarial pass that *"actively tries to **refute** the change"* — stated with **no stopping condition**, so "is anything wrong?" runs until a human stops it | **Bounded here.** See [*Review Lenses*](#review-lenses): a solicited pass declares a lens set of 3–4 plus the permanent lens, each lens runs once, and fix-verification gets two passes before escalation. The adversarial *posture* is unchanged — only its terminus is supplied, because the vendored body supplies none. |
+| [`verify`](skills/verify/SKILL.md) Stage 4 (executed on every PR) | an adversarial pass that *"actively tries to **refute** the change"* — stated with **no stopping condition**, so "is anything wrong?" runs until a human stops it | **Bounded here.** See [*Review Lenses*](#review-lenses): a solicited pass declares a lens set of 3 plus the permanent lens ([`config/review.md`](config/review.md), which the dispatcher parses), each lens runs once, and fix-verification gets two passes before escalation. The adversarial *posture* is unchanged — only its terminus is supplied, because the vendored body supplies none. |
 
 Two of these are easy to miss for opposite reasons. The **last** row is the trained reflex: the only
 logging pattern the bundle ships has the opposite disposition, so an agent pattern-matching on "I

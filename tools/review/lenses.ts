@@ -47,10 +47,17 @@ export function parseLensSetSize(markdown: string): number {
   return Number(m[1]);
 }
 
-// Canon's own lenses for prose subjects — pinned copies of the phrases in
-// Chapter 2 → *Verifying prose*, drift-guarded by the test that asserts each
-// against the section. A canon pull request is summoned with these; they are
-// canon-sourced, not menu-derived, so an empty menu strands no canon subject.
+// Canon's own lenses for prose subjects — copies of the phrases in deuce
+// Chapter 2 → *Verifying prose*. A prose pull request is summoned with these;
+// they are canon-sourced, not menu-derived, so an empty menu strands no prose
+// subject.
+//
+// UNGUARDED HERE, and upstream they are not. deuce's copy of this file is
+// drift-guarded by a test that reads `sds/02-review-and-findings.md` and
+// compares the two sets. nadal reads canon at its source and never vendors it
+// (CLAUDE.md), so there is no local file to compare against and that test was
+// dropped on #146. Consequence, stated rather than implied: reword a phrase
+// below, or let canon reword one, and nothing in this repository notices.
 export const PROSE_LENSES: readonly string[] = [
   "restatement of content another document owns",
   "contradiction with ratified canon",
@@ -77,9 +84,15 @@ export function checkLensSelection(
       }
       continue;
     }
+    // The message names where the menu comes from, so a caller knows where to
+    // go. Upstream that is `findings/classes.md`; nadal has no class index —
+    // its menu derives from defect classes recorded in prose — so saying so
+    // here would send a reader to a file this repository does not hold, which
+    // is the class of claim #146 exists to remove. `config/review.md` is the
+    // one place true for both.
     errors.push(
       `lens is not on the menu and cannot be summoned: ${lens} — ` +
-        "the menu derives from the class index and canon names the prose lenses; " +
+        "the menu is declared in config/review.md and canon names the prose lenses; " +
         "a one-off lens enters as a dated menu entry, never as a bypass",
     );
   }
