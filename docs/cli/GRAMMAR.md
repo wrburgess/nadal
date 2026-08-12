@@ -244,6 +244,25 @@ path additionally prints an unconditional stderr warning naming the player and t
 warning, never a refusal: the write is not rolled back over it, and `--quiet` does not suppress the
 warning, matching this grammar's own "quiet suppresses stdout only" rule for every error/warning line.
 
+`tn player note <name|usta:…> "<text>" [<pair-name>]` (#150) — the third positional is **optional**
+and names a second home-team player, making the note about that **pairing** rather than the player
+alone (`captain_notes.pair_player_id`; the dossier's own-team book and `tn lineup build` render the
+two separately). It is the last positional, not the second, and that ordering is the point: the note
+text keeps a fixed position, so **arity never decides what a positional means**. `tn player note
+Randy Mark` records a note reading `Mark` about Randy — it cannot be silently taken as a pairing by a
+captain who omitted the quotes, which a `<name> <pair> <text>` ordering would have made both
+plausible and invisible. A third payload positional is still an unexpected extra argument.
+
+Both names resolve through the same ladder as every other target, and the diagnostics say **which**
+name failed: an unknown partner reads `unknown pairing partner "…"`, an ambiguous one carries the
+`pairing partner name` context, and a partner who is not on the home team's roster is named as the
+partner rather than as the subject. Naming the player as their own partner refuses. The summary line
+carries `pair="…"` only when a partner was supplied — omitted, never empty, on a solo note.
+
+Until #150 this was reachable only through the `player_note` MCP tool. That was a deliberate #17 PR A
+decision, reversed on evidence: `pair_player_id` had two renderers and zero rows, and `request_log`
+recorded 407 invocations of which none were MCP.
+
 `tn player show <name|usta:…> [event]` and `tn team show <name|tr:…> [event]` — the optional trailing
 `[event]` (#97) names an event whose **league scope** restricts the court matches every record, slot
 tendency, partner count and prior-meeting row is computed over. Same optional-trailing-positional

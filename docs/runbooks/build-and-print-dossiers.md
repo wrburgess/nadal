@@ -93,9 +93,12 @@ Open `reports/<team-slug>/index.html` in a browser. Check:
   WTN than the USTA profile does for the same player — the binder prints the USTA figure and says
   so rather than picking one silently. A date far in the past means the ratings are stale, not that
   the line is broken.
-- The **"Not collected yet"** block at the bottom names what has no data source yet. That block is
-  load-bearing: it is how you tell *"this opponent has no tournament results"* from *"nadal cannot
-  record tournament results yet."* Do not read an absent section as a fact about the opponent.
+- There is **no "Not collected yet" block**, and its absence is the correct result rather than a
+  rendering fault. That block names sections with no writer anywhere in the codebase; all three it
+  once listed — events, availability, captain notes — have had writers since #17 PR A and #113, so a
+  real dossier can no longer contain it (`test/report-write.test.ts:79` asserts exactly that). The
+  renderer still emits it if a future section ever has no writer. Earlier revisions of this runbook
+  told you to check for it, which was unpassable as written.
 
 ### 4. Print
 
@@ -180,19 +183,21 @@ about an opponent since last time (useful mid-event).
   - `—` in a grid cell means **not recorded**, which is *not* the same as `unavailable`. A blank
     binder cell is a question nobody has asked yet; act on it accordingly.
   - *"None recorded."* means the table is empty and `tn player avail` / `tn player note` will fill
-    it. It does **not** mean the feature is missing — that is the separate *"Not collected yet"*
-    section, which says no writer exists anywhere in the codebase.
+    it. It does **not** mean the feature is missing — that would be the separate *"Not collected
+    yet"* section, which says no writer exists anywhere in the codebase and which **no real dossier
+    can carry any more**, every section it once named having gained a writer (see step 3).
   - *"No event named for this build…"* means availability had no day range to grid over. Re-run
     naming the event (step 2's setup note) to get the grid.
 
   A day nobody has answered for still gets a column of `—`, deliberately: the columns come from the
   event's date range, not from the rows on file, so "who is available Saturday?" can never render as
   though there were no Saturday.
-- **Pairing notes can only be recorded over MCP, not from the CLI.** The dossier renders a *Pairing
-  notes* block, and `tn player note` has no way to name the second player — pairing notes are
-  reachable only through the `player_note` MCP tool (`src/cli/commands/player-note.ts:29`, a
-  deliberate #17 PR A decision, not a regression). Until that changes, expect the block to read
-  *"None recorded."* on a CLI-only workflow even when per-player notes are populated.
+- **Pairing notes are recordable from the CLI** as of #150 — `tn player note <name> "<text>"
+  <pair-name>`, the optional third positional. Until then the dossier rendered a *Pairing notes*
+  block that only the `player_note` MCP tool could fill, so the block read *"None recorded."* on a
+  CLI-only workflow even when per-player notes were populated. If you are holding a binder printed
+  before that fix, read that line as "not recordable here yet" rather than as "the captain wrote
+  none".
 - **The availability grid lists the REGISTERED field, not the whole season roster.** It names exactly
   the players in the Roster table at the top of the same dossier. Someone on the season roster who
   did not register will not appear — though `tn player avail` still *accepts* a recording for them,
