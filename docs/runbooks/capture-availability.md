@@ -172,11 +172,14 @@ so no shell ever parses it.
 > "He serves big on break points."
 > "Randy and Kai Kestrel are strong together at the net."
 
-**Pairing notes are MCP-only.** `tn player note` has no way to name a second player at all — a
-deliberate #17 decision (`src/cli/commands/player-note.ts:29`, `docs/findings.md:590`), not an
-oversight, because a rigid third CLI positional was judged more awkward than a conversational second
-name. A note about how two players play together — rather than about either one alone — is only
-reachable by asking the agent to call `player_note` with a `pairTarget`.
+**Pairing notes now have a CLI form too** — `tn player note <name> "<text>" [<pair-name>]`, shipped by
+#150. Position 2 is **always** the note text and position 3 **always** the partner, so omitting the
+quotes cannot silently record a teammate's name as the note. The MCP `player_note` tool's `pairTarget`
+argument reaches the same field. This corrects the earlier statement here that pairing notes were
+MCP-only: that was true under the #17 decision (`src/cli/commands/player-note.ts:29`), which #150
+reversed on the grounds that the repo's own grammar already carried three-positional and two-name
+forms. The shell-quoting rule above is unchanged and matters *more* with a CLI path available — route
+anything non-trivial through the MCP tool, where no shell parses the text.
 
 ### 6. Verify — there is no readback command
 
