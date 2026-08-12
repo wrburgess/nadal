@@ -7,7 +7,14 @@ export interface Validation {
   missing: string[];
 }
 
-const SEVERITIES = new Set(["must-fix", "should-fix", "note"]);
+// Exported so the declaration and the enforcement can be pinned to each other.
+// Nothing shipped divergent, but #155 came within a self-review of it: moving
+// the severity framework into `config/review.md` sent the reviewer a vocabulary
+// (Critical/High/Medium/Low) that this set does not admit, while `compose.ts`
+// went on demanding the values below — every review nonconforming, on every run.
+// Both files parsed perfectly throughout, so only a test comparing the two can
+// see it. That test lives in `compose.test.ts` and reads this set.
+export const SEVERITIES = new Set(["must-fix", "should-fix", "note"]);
 const TYPES = new Set(["defect", "risk", "improvement", "lesson"]);
 
 function fieldValues(review: string, field: string): string[] {

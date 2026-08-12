@@ -86,6 +86,15 @@ test("a lens not on the menu is refused, by name", () => {
   assert.ok(errors.some((e) => e.includes("does any guard fail open?")));
 });
 
+// `--lens ""` reaches here as an empty string, and the refusal used to render
+// with a hole where the lens should be — a caller passing several flags could
+// not tell which one was rejected. Found by driving the CLI on #157.
+test("an empty lens is refused and still says which flag it was", () => {
+  const errors = checkLensSelection([""], ["a"], 3, false);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]!, /\(empty\)/);
+});
+
 test("a selection over the declared size is refused, naming the bound", () => {
   const menu = ["a", "b", "c", "d"];
   const errors = checkLensSelection(["a", "b", "c", "d"], menu, 3, false);

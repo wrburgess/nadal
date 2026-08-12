@@ -91,7 +91,10 @@ export function checkLensSelection(
     // is the class of claim #146 exists to remove. `config/review.md` is the
     // one place true for both.
     errors.push(
-      `lens is not on the menu and cannot be summoned: ${lens} — ` +
+      // Quoted, and named even when empty: `--lens ""` used to render this
+      // message with a hole where the lens should be, which tells a caller
+      // nothing about which of their flags was the bad one.
+      `lens is not on the menu and cannot be summoned: ${lens === "" ? "(empty)" : `"${lens}"`} — ` +
         "the menu is declared in config/review.md and canon names the prose lenses; " +
         "a one-off lens enters as a dated menu entry, never as a bypass",
     );

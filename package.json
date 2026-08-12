@@ -8,6 +8,7 @@
   "engines": { "node": ">=22.18" },
   "scripts": {
     "gate": "node tools/gate/run.ts",
+    "summon": "node tools/review/summon.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "check:drizzle": "drizzle-kit generate && test -z \"$(git status --porcelain drizzle/)\"",

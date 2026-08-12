@@ -95,21 +95,29 @@ the actual if they differ. Use human-readable names, never API ids.
 
 ## Review Severity Framework
 
-Generic starter severities for the lifecycle's Verify and Deliver stages and human review. A Host
-App tunes the definitions.
+**How deep a finding's consequence goes** — what a review's output *means*, and what it costs.
 
-| Severity | Meaning | Disposition |
-|----------|---------|-------------|
-| **Critical** | Data loss, security hole, breaks protected-branch or auth invariants, or ships broken. | Block merge; fix before proceeding. |
-| **High** | Correctness bug, missing required test, or a violated project rule. | Fix in this PR before merge. |
-| **Medium** | Maintainability, clarity, or a smaller coverage gap. | Fix now or file a tracked follow-up. |
-| **Low** | Style, naming, or optional polish. | Author's discretion. |
-
-**"File a tracked follow-up" applies to a *defect*, never to a process learning.** The Medium row is
-written for code, and for code it is correct. A Medium finding that is a *learning or a proposal about
-how agents work* takes the [*Findings-Log Discipline*](#findings-log-discipline) path instead — one
-findings line — because filing it is the exact move that section prohibits. Apply that section's
-two-question test before reading this column: **is something broken?** first, *then* is it a learning.
+> **The values moved, and gained a half they never had** (#155). The severity ladder is now
+> **[`config/review.md`](config/review.md)** → *Severity framework*, which
+> [`tools/review/compose.ts`](tools/review/compose.ts) reads at runtime and sends as the summons'
+> vocabulary.
+>
+> **The half it gained, because the move exposed the gap.** This section only ever carried the
+> **ladder** — Critical/High/Medium/Low. What a review actually *returns* is
+> `must-fix | should-fix | note`, which lived in three places that had never been stated together:
+> `compose.ts`'s required output shape, [`validate.ts`](tools/review/validate.ts)'s enforced set, and
+> [`config/gates.md`](config/gates.md)'s wave counting. Injecting the ladder alone would have produced
+> a summons naming one vocabulary as mandatory and demanding another — every review nonconforming, on
+> every run. `config/review.md` now carries **both, with the mapping explicit**.
+>
+> **What that buys, stated at its real size.** This is the same move #146 made for the lens menu, with
+> one difference: the lens bounds stay held by the agent, because `checkLensSelection` is advisory
+> about a *selection a human made*. Severity is machine-checked on return — `validate.ts` refuses a
+> review rated outside that vocabulary, and a test in
+> [`compose.test.ts`](tools/review/compose.test.ts) holds the validator's set against the declaration
+> so the two cannot silently diverge again. A second live-file test pins the section against drift —
+> the guard #146 recorded as unavailable while the source was a deuce file this repository does not
+> hold.
 
 **Severity is orthogonal to [*Review Lenses*](#review-lenses).** A lens decides *what a pass looks
 for*; severity decides *what happens to what it finds*. A finding surfaced outside the declared lens
@@ -276,13 +284,13 @@ host-local statement, and it **overrides** the unbounded adversarial pass the ve
 > [`tools/review/lenses.ts`](tools/review/lenses.ts) parses them.
 >
 > **What that does and does not buy, because a first draft of this callout overstated it and the
-> contractor review caught it.** `checkLensSelection` refuses an off-menu lens *when it is called* —
-> and in this repository **nothing calls it**, because the summons that would
-> ([`summon.ts`](tools/review/summon.ts)) reads two deuce files nadal does not hold and cannot run
-> (#155). Nor is the refusal universal even then: canon's four prose lenses are admitted for prose
-> subjects by design. So these bounds are held by **the agent running the summons by hand**, exactly
-> as they were before — what the declaration adds today is one parseable source instead of prose in
-> two files, not enforcement.
+> contractor review caught it.** `checkLensSelection` refuses an off-menu lens *when it is called*.
+> **As of #155 something calls it** — [`summon.ts`](tools/review/summon.ts) runs as `npm run summon`,
+> and refuses an off-menu lens before dispatching anything. Nor is the refusal universal even then:
+> canon's four prose lenses are admitted for prose subjects by design, and a summons composed by hand
+> instead still passes through no check at all. So the bound is enforced **on the orchestrated path
+> and only there** — which is a reason to prefer that path, not a claim that the bound cannot be
+> walked around.
 >
 > Two things to know before reading on: the menu is stated there as **questions**, which a test does
 > enforce; and the range below collapses to the parser's single number, **3**. Where this section

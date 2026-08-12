@@ -19,32 +19,26 @@ export interface SummonsInput {
   reviewerName: string;
 }
 
-export function extractSeverityFramework(chapterMarkdown: string): string {
-  const at = chapterMarkdown.search(/^###\s+The severity framework\s*$/m);
+/** Reads the severity framework out of `config/review.md` — nadal's own review
+ *  configuration, alongside the roster and the lens menu that `roster.ts` and
+ *  `lenses.ts` already parse from that file (#155).
+ *
+ *  Upstream this read deuce's `sds/02-review-and-findings.md` -> *The severity
+ *  framework*. nadal cannot: canon is read at its source and never vendored
+ *  (CLAUDE.md), so a runtime read of a chapter file could only ever fail here.
+ *  Section-shaped, not frontmatter, for the reason `config/review.md` states
+ *  about itself — this repository is pinned before deuce's frontmatter
+ *  migration. */
+export function extractSeverityFramework(configMarkdown: string): string {
+  const at = configMarkdown.search(/^##\s+Severity framework\s*$/m);
   if (at === -1) {
-    throw new Error("chapter carries no '### The severity framework' section");
-  }
-  const body = chapterMarkdown.slice(at);
-  const next = body.slice(4).search(/\n###?\s/);
-  return next === -1 ? body : body.slice(0, next + 4);
-}
-
-export function parseAcceptedRegister(markdown: string): string[] {
-  const at = markdown.search(/^##\s+Entries\s*$/m);
-  if (at === -1) {
-    // Fail loud, never open: an empty list from a reshaped register would tell
-    // the reviewer "none accepted to date" and re-open every settled question.
     throw new Error(
-      "the accepted register carries no '## Entries' section — refusing to treat a malformed register as empty",
+      "config/review.md carries no '## Severity framework' section — the summons has no severity vocabulary to send",
     );
   }
-  // Bounded to the Entries section — a bullet in any later section is not an
-  // accepted finding, and carrying it would suppress unrelated review findings.
-  const section = markdown.slice(at).split(/\n##\s/)[0]!;
-  return section
-    .split("\n")
-    .filter((l) => /^\s*-\s/.test(l))
-    .map((l) => l.trim());
+  // Bounded at the next section, the way parseRoster bounds its own: running on
+  // would send the reviewer a neighbouring policy as though it were severity.
+  return configMarkdown.slice(at).split(/\n##\s/)[0]!;
 }
 
 export function composeSummons(input: SummonsInput): string {

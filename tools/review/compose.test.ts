@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   composeSummons,
   extractSeverityFramework,
-  parseAcceptedRegister,
   MAX_DIFF_BYTES,
   PERMANENT_LENS,
   type SummonsInput,
 } from "./compose.ts";
+import { SEVERITIES } from "./validate.ts";
 
 const base: SummonsInput = {
   prNumber: 99,
@@ -60,73 +61,80 @@ test("an oversized diff is a loud error, never a silent truncation", () => {
 
 // Upstream, this pair read deuce's own files — `sds/02-review-and-findings.md` for the severity
 // framework and `findings/accepted.md` for the accepted register — and so guarded the live copies
-// against drift. nadal holds NEITHER file and cannot: canon is read at its source and never
-// vendored (CLAUDE.md), and nadal's accepted register is closed `residual` issues on the tracker,
-// not a file (PROJECT.md -> Findings-Log Discipline). The drift guards are therefore dropped
-// rather than pointed somewhere false, and what is lost is stated rather than quietly absent:
-// nothing here checks that nadal's severity vocabulary matches deuce's, or that its residuals are
-// well-formed. Both are prose disciplines with no mechanical backstop in this repository (#146).
+// against drift. #146 recorded both guards as permanently unavailable here. **Half of that is no
+// longer true, and #155 is why.**
 //
-// The section-boundary assertion is NOT lost with them — it was the load-bearing half, and it is
-// re-made below over synthetic input, which is where the rest of this file's coverage already lives.
+// The severity framework now lives in `config/review.md`, a file this repository owns, so the
+// drift guard is BACK — the live-file test below is it, and it is the same shape `roster.test.ts`
+// and `lenses.test.ts` already use over that file.
+//
+// The accepted register's guard stays gone, and differently: nadal's register is closed `residual`
+// issues on the tracker (PROJECT.md -> Findings-Log Discipline), so there is no file to drift
+// against. What replaces it is a probe rather than a parse — see `accepted.ts`, where a label that
+// does not exist throws instead of reading as an empty register.
 test("extractSeverityFramework stops at the next heading, whatever follows it", () => {
-  const chapter = [
-    "## Review",
+  const config = [
+    "## Lens-set size",
     "",
-    "### The severity framework",
+    "3 lenses",
+    "",
+    "## Severity framework",
     "",
     "| must-fix | blocks shipping |",
     "| should-fix | fix before merge |",
     "| note | author's discretion |",
     "",
-    "### Fix-verification, bounded separately",
+    "## Fix-verification",
     "",
     "two passes, then escalate",
     "",
   ].join("\n");
-  const s = extractSeverityFramework(chapter);
+  const s = extractSeverityFramework(config);
   assert.ok(s.includes("must-fix"));
   assert.ok(s.includes("should-fix"));
   assert.ok(s.includes("note"));
   assert.ok(!s.includes("Fix-verification"), "ran past the section boundary");
+  assert.ok(!s.includes("Lens-set size"), "started before the section boundary");
 });
 
 test("extractSeverityFramework fails loudly when the section is absent", () => {
   assert.throws(() => extractSeverityFramework("## Review\n\nno framework here\n"), /severity/i);
 });
 
-test("a register without its Entries section fails loudly, never as an empty list", () => {
-  assert.throws(
-    () => parseAcceptedRegister("# The accepted register\n\nreshaped file\n"),
-    /Entries/,
+// The restored drift guard. `config/review.md` is now the severity source that `summon.ts` reads at
+// runtime, so a section renamed or removed there breaks the summons — this fails first, and says so.
+test("the live config/review.md carries a parseable severity framework", () => {
+  const live = readFileSync(new URL("../../config/review.md", import.meta.url), "utf8");
+  const s = extractSeverityFramework(live);
+  // The rating ladder — the scale a severity is chosen on, bridged to the returned
+  // vocabulary by config/gates.md since #146.
+  for (const severity of ["Critical", "High", "Medium", "Low"]) {
+    assert.ok(s.includes(severity), `the live severity framework is missing: ${severity}`);
+  }
+  // Past its OWN heading — the section necessarily opens with one, so the
+  // boundary check has to start after it or it can never pass.
+  const afterOwnHeading = s.slice(s.indexOf("\n"));
+  assert.ok(
+    !afterOwnHeading.includes("\n## "),
+    "the extracted section ran past its own boundary and carries a neighbouring section",
   );
 });
 
-test("parseAcceptedRegister collects entry lines once entries exist", () => {
-  const md = [
-    "# The accepted register",
-    "",
-    "## Entries",
-    "",
-    "- one accepted risk — disposition: PR #7",
-    "- another — disposition: PR #8",
-    "",
-  ].join("\n");
-  assert.equal(parseAcceptedRegister(md).length, 2);
-});
-
-test("parseAcceptedRegister never reads past its own section", () => {
-  const md = [
-    "# The accepted register",
-    "",
-    "## Entries",
-    "",
-    "- the one real entry",
-    "",
-    "## Some later section",
-    "",
-    "- a bullet that is not an accepted finding",
-    "",
-  ].join("\n");
-  assert.deepEqual(parseAcceptedRegister(md), ["- the one real entry"]);
+// The self-contradiction guard (#155). `composeSummons` heads the injected framework with
+// "use only this vocabulary" and then, two sections later, demands `must-fix | should-fix | note`
+// in the required output shape — which `validateReview` enforces on return. If the declared
+// framework does not carry the vocabulary the validator enforces, the summons contradicts itself
+// and EVERY review comes back nonconforming: one re-summons, then exit 4, on every run.
+//
+// No parser test can see this. Both files parse perfectly while disagreeing.
+test("the live severity framework carries every severity the validator enforces", () => {
+  const live = readFileSync(new URL("../../config/review.md", import.meta.url), "utf8");
+  const framework = extractSeverityFramework(live);
+  for (const severity of SEVERITIES) {
+    assert.ok(
+      framework.includes(severity),
+      `the summons would demand "${severity}" in its output shape while the framework it sends ` +
+        `never names it — the reviewer cannot conform to both`,
+    );
+  }
 });

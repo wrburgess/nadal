@@ -82,12 +82,20 @@ noticed.
   `validateReview(review, expectedCommit, lenses)` compares the review's self-reported commit against
   an `expectedCommit` **its caller supplies**; it never reads the head itself, and
   [`deliver`](../skills/deliver/SKILL.md) names no such call. Its only non-test caller is
-  [`summon.ts`](../tools/review/summon.ts), which cannot run here yet
-  ([#155](https://github.com/wrburgess/nadal/issues/155)).
+  [`summon.ts`](../tools/review/summon.ts), which **runs here as of
+  [#155](https://github.com/wrburgess/nadal/issues/155)** — `npm run summon`.
 
-  So this gate is **attested by the AC's discipline, backed by an independent review** — not by a
+  **That does not move the middle row, and it is worth being exact about why**, because the sentence
+  this paragraph replaced predicted that it would. `summon.ts` binds to the SHA passed as `--commit`; it reads the pull
+  request only for its title. So the chain is still *the AC names a commit → the tool holds the
+  reviewer to that commit*, with nothing checking the named commit is the head. What #155 bought is
+  that the summons is now **recorded, bounded and validated** rather than hand-composed — the first
+  and third rows — and it left the second exactly where it was.
+
+  So this gate remains **attested by the AC's discipline, backed by an independent review** — not by a
   machine that refuses the merge. That is a real control and a weaker one than "checkable", which is
-  what the earlier draft claimed. #155 is what turns the middle row of that table into code.
+  what an earlier draft claimed. Turning the middle row into code means reading the head at summons
+  time and refusing a `--commit` that is not it; that is not built.
 - **The last row is the fix-verification bound, not a new rule.**
   [`config/review.md`](review.md) → *Fix-verification* gives fixes two passes and then escalates,
   on nine recorded instances of patching past that point moving a defect sideways. A **third** wave
