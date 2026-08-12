@@ -31,8 +31,10 @@ export class AmbiguousPlayerTargetError extends Error {
 
 /**
  * The only captured value today. `"singles-only"` is deliberately NOT in this enum — #149 measured
- * zero captured captain statements using it, and an untested branch is forbidden
- * (rules/testing.md). Widen this the day a captain actually says it, with the test that proves it.
+ * zero captured captain statements using it, and an untested branch is forbidden — the ace-era
+ * testing rule, cited at its pinned source since the cutover removed the local copy:
+ * https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/testing.md
+ * Widen this the day a captain actually says it, with the test that proves it.
  */
 const playsSchema = z.enum(["both", "doubles-only"]);
 export type Plays = z.infer<typeof playsSchema>;

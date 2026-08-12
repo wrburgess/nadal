@@ -4,8 +4,8 @@
 -- player at the singles court, unless no other available player can play singles at all — the
 -- override case, which is recorded rather than applied silently.
 --
--- Nullable, and additive only, for the same reason every prior column comment in this file gives
--- (see `players.nameKey`'s comment in `src/db/schema.ts`): SQLite rejects
+-- Nullable, and additive only, for the reason `players.nameKey`'s comment in `src/db/schema.ts`
+-- gives: SQLite rejects
 -- `ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT ... CHECK (...)` on a populated table
 -- ("CHECK constraint failed"), and the same form WITHOUT the check is fail-open — a forgotten
 -- write silently gets the default rather than a value anyone actually recorded. NULL is also
@@ -16,7 +16,7 @@
 -- Plain `text`, not a `CHECK`-constrained enum: the guarantee that a non-null value is one of the
 -- recognized ones lives at READ TIME instead, in `readPlays` (src/query/lineup-build.ts), which
 -- fails closed on anything it does not recognize — the same discipline `players.nameKey` and
--- `events.format` already follow in this file, for the same reason (SQLite enforces nothing on a
+-- `events.format` already follow in `src/db/schema.ts`, for the same reason (SQLite enforces nothing on a
 -- plain text column, so the guarantee has to live somewhere that isn't the column). The writer is
 -- `setPlays` (src/query/player-plays.ts).
 ALTER TABLE `players` ADD `plays` text;

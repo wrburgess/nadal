@@ -457,11 +457,22 @@ third conditional.** Only a player whose recorded answer for that day is `availa
 `doubles-only` is never seated at a singles court **while a singles-eligible player is still
 available**. Unlike the first two, this one is conditional rather than absolute — it **yields**
 rather than leaving the court empty. When every available player who could still take the day is
-`doubles-only`, the singles court is filled anyway with the strongest available player, and the page
-says so with an `OVERRIDE:` line naming who was seated and why, plus a day-level `constraint:` line
-stating that no available player carried singles eligibility. Absent either line, the constraint held
-without needing to yield — the marker is never printed on an ordinary run, so its presence always
-means the exception actually fired. When there are not enough available bodies for any reason, a
+`doubles-only`, the singles court is filled anyway and the page says so with an `OVERRIDE:` line
+naming who was seated and why. **Each strategy yields within its own rule rather than to a single
+shared answer** — strength-first and balanced seat the strongest available player, history-first
+seats the one with the most singles appearances, exactly as each does when the constraint is not in
+play. So the three scenarios can name three different people in the override, which is the same
+disagreement between strategies the page exists to show.
+
+**The `OVERRIDE:` line is the one to read, and the day-level `constraint:` line is narrower than it.**
+`OVERRIDE:` appears on each singles court the constraint actually yielded on, so its absence from a
+court means that court's constraint held. The day-level `constraint:` line makes the stronger claim
+that *no* available player carried singles eligibility, so it appears only in that total case — with
+more singles courts than singles-eligible players, a later court can yield while the day-level line
+stays silent, correctly, because one player did carry it. Neither line is ever printed on an ordinary
+run, so the presence of either always means the exception fired.
+
+When there are not enough available bodies for any reason, a
 court is left **unfilled** and the leftover body **sits** — a doubles court is filled with two or
 with none, never with one, and never by double-booking somebody from another court. Note the two
 numbers that go with that, which count different things: `shortfall` counts **bodies** (how many more

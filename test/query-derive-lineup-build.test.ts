@@ -748,6 +748,28 @@ describe("buildDayScenarios — the doubles-only constraint (#149)", () => {
     expect(courtIds(scenarioFor(result, "strength-first"), "S1")).toEqual([1]);
   });
 
+  it("each strategy yields within its OWN rule, so the override can name different people", () => {
+    // Everyone doubles-only, so every strategy overrides. Player 1 is the strongest and has never
+    // played singles; player 5 is weaker but has singles history. strength-first must still seat the
+    // strongest, history-first must still seat the most-played — the constraint yields to each
+    // strategy's own ordering rather than to one shared "strongest available" answer. GRAMMAR.md and
+    // capture-availability.md both claimed the latter; this pins what the code actually does.
+    const result = buildDayScenarios(
+      input({
+        players: availableRoster(8).map((p) => ({ ...p, plays: "doubles-only" as const })),
+        ratings: ratings("tr_dynamic", RATED),
+        rows: singlesRows("S1", 5, 3),
+      }),
+    );
+
+    expect(result.singlesEligibleCount).toBe(0);
+    expect(courtIds(scenarioFor(result, "strength-first"), "S1")).toEqual([1]);
+    expect(courtIds(scenarioFor(result, "history-first"), "S1")).toEqual([5]);
+    // Both are overrides — a different pick is not a different rule about the constraint.
+    expect(courtOverride(scenarioFor(result, "strength-first"), "S1")).toBe("doubles-only");
+    expect(courtOverride(scenarioFor(result, "history-first"), "S1")).toBe("doubles-only");
+  });
+
   it("plays: null everywhere leaves S1 placement and every constraintOverride exactly as before #149", () => {
     const unconstrained = input({ players: availableRoster(8), ratings: ratings("tr_dynamic", RATED) });
     const result = buildDayScenarios(unconstrained);

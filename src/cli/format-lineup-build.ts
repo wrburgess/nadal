@@ -135,18 +135,27 @@ export function formatLineupBuild(build: LineupBuild): string {
     );
   }
   // #149: the day-level twin of `constraintOverrideCell` above — stated once here rather than
-  // repeated on every singles court that carries the marker, and gated on there BEING a singles
-  // court in this build's own court list at all (a doubles-only-heavy roster on an all-doubles
-  // format never asks this question, so nothing here would be true to print). `eligibleCount > 0`
-  // excludes the "nobody available at all" case, which is a different fact the ledger above already
-  // states — printing this too would claim S1 was "filled" against a constraint when nothing was
-  // filled at all.
-  const singlesSlots = build.slotSet.filter((court) => court.discipline === "singles");
-  if (build.eligibleCount > 0 && build.singlesEligibleCount === 0 && singlesSlots.length > 0) {
+  // repeated on every singles court that carries the marker. `eligibleCount > 0` excludes the
+  // "nobody available at all" case, which is a different fact the ledger above already states —
+  // printing this too would claim a court was "filled" against a constraint when nothing was filled
+  // at all.
+  //
+  // The named courts are read back OUT of the scenarios rather than off `slotSet`, and the
+  // difference is not stylistic: `slotSet` is every singles court the FORMAT declares, while only
+  // the first `eligibleCount` of them actually receive a body. Naming the slot set claimed a court
+  // was "filled against that stated constraint rather than left empty" about a court that was left
+  // empty — reachable with more singles courts than available bodies, which is a format the suite
+  // already exercises (`test/query-lineup-build.test.ts:377`). Every strategy fills singles courts
+  // first and in slot order, so which ones are filled does not vary between scenarios; reading the
+  // first is reading the answer rather than re-deriving the rule that produced it.
+  const filledSingles = (build.scenarios[0]?.courts ?? []).filter(
+    (court) => court.discipline === "singles" && court.players.length > 0,
+  );
+  if (build.eligibleCount > 0 && build.singlesEligibleCount === 0 && filledSingles.length > 0) {
     lines.push(
       "  constraint: no available player has a recorded singles eligibility — every one is " +
-        `doubles-only, so ${singlesSlots.map((court) => formatName(court.slot)).join(", ")} ` +
-        `${plural(singlesSlots.length, "was", "were")} filled against that stated constraint rather than left empty`,
+        `doubles-only, so ${filledSingles.map((court) => formatName(court.slot)).join(", ")} ` +
+        `${plural(filledSingles.length, "was", "were")} filled against that stated constraint rather than left empty`,
     );
   }
 

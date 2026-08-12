@@ -149,10 +149,12 @@ a standing statement about the player, not an answer for one event day, so it is
 carries forward into every `tn lineup build` for as long as it stays true.
 
 **`tn lineup build` never leaves the singles court empty over this.** If every available player who
-could still take the day is recorded `doubles-only`, the strongest available player is seated there
-anyway rather than the court going unfilled — and the page prints an `OVERRIDE:` line naming who was
-seated against their recorded constraint, plus a day-level line stating that nobody available carried
-singles eligibility. Neither line appears on an ordinary day, so seeing one is itself the signal that
+could still take the day is recorded `doubles-only`, someone is seated there anyway rather than the
+court going unfilled — and the page prints an `OVERRIDE:` line naming who was seated against their
+recorded constraint, plus a day-level line stating that nobody available carried singles eligibility.
+Each strategy picks that person by **its own** rule, so the scenarios may well name different people:
+strength-first and balanced seat the strongest available, history-first the most-played singles
+player. Neither line appears on an ordinary day, so seeing one is itself the signal that
 the exception fired — see `docs/cli/GRAMMAR.md`'s `tn lineup build` section for the full rule.
 
 ### 5. Captain notes, once you are sure — through the `player_note` MCP tool
