@@ -89,18 +89,62 @@ rather than closing it.
 Nothing parses this section; the number lives here because this is where the review bounds are read,
 and splitting it from the lens bound would put two halves of one policy in two files.
 
-## What is declared here and not yet executable
+## Severity framework
 
-[`tools/review/summon.ts`](../tools/review/summon.ts) would run this declaration as one orchestrated
-command — readiness, compose, dispatch, validate, record — but it reads
-`sds/02-review-and-findings.md` and `findings/accepted.md` at **runtime**, both hardcoded, and nadal
-holds neither. Re-pointing them means first deciding what nadal's accepted register and severity
-source are, which is a findings-system question — declined on #146's record and tracked as
-[#155](https://github.com/wrburgess/nadal/issues/155).
+**This section is sent verbatim to the reviewer**, headed *"use only this vocabulary"*
+([`compose.ts`](../tools/review/compose.ts)), so it is written for that reader and carries no
+repository history — the provenance of the move lives in [`PROJECT.md`](../PROJECT.md) →
+*Review Severity Framework*.
 
-Until then the summons is **hand-run** — `codex exec - < summons.md` — and
-[`tools/review/validate.ts`](../tools/review/validate.ts) is run against the returned review. It
-refuses a review whose named commit is not the SHA **the caller passes it**, so it catches a reviewer
-that attested the wrong commit or none; it does not read the pull request head, and reading that head
-is the AC's step. [`config/gates.md`](gates.md) → *Who does what* is the exact split, and #155 is what
-would close it.
+Rate every finding with one of these three. **`must-fix` is the only value that blocks a merge.**
+
+| Severity | Rate a finding this way when it is | Disposition |
+|---|---|---|
+| **`must-fix`** | **Critical** — data loss, a security hole, breaks protected-branch or auth invariants, or ships broken; or **High** — a correctness bug, a missing required test, or a violated project rule. | Blocks the merge. Fixed in this pull request, then re-reviewed on the new head. |
+| **`should-fix`** | **Medium** — maintainability, clarity, or a smaller coverage gap. | Fixed now, or tracked as a follow-up. |
+| **`note`** | **Low** — style, naming, or optional polish. | The author's discretion. |
+
+**Rate on the consequence, not on the effort to fix.** A one-character fix to a guard that fails open
+is `must-fix`; a large refactor that would merely tidy working code is `note`.
+
+**A finding outside the declared lens set is not thereby downgraded.** The lenses decide what a pass
+looks *for*; this decides what happens to what it *finds*. Anything the permanent lens surfaces is
+rated on the same three values as everything else.
+
+## Severity framework — notes for this repository
+
+**The reader changes here.** Everything below is for this repository rather than for the reviewer, and
+it is a **separate `##` section on purpose**: `extractSeverityFramework` bounds what it sends at the
+next `##` heading, so a `###` subsection would have shipped in the summons along with the vocabulary.
+
+**"Tracked as a follow-up" applies to a *defect*, never to a process learning.** The `should-fix` row
+is written for code, and for code it is correct. A `should-fix` finding that is a *learning or a
+proposal about how agents work* takes the [`PROJECT.md`](../PROJECT.md) → *Findings-Log Discipline*
+path instead — one findings line — because filing it is the exact move that section prohibits. Apply
+that section's two-question test first: **is something broken?**, *then* is it a learning.
+
+**The `must-fix` ⇒ Critical/High mapping is not new here.** [`config/gates.md`](gates.md) has counted
+its waves that way since #146; #155 is where the returned vocabulary and the ladder were first stated
+together, after being injected as two contradicting halves of one summons.
+
+## What runs
+
+[`tools/review/summon.ts`](../tools/review/summon.ts) runs this declaration as one orchestrated
+command — readiness, compose, dispatch, validate, record — as **`npm run summon`**:
+
+```
+npm run summon -- --pr <n> --commit <sha> --lens "..." --lens "..." --lens "..."
+```
+
+Every value above is read at runtime rather than restated in code: the roster by
+[`roster.ts`](../tools/review/roster.ts), the lens menu and set size by
+[`lenses.ts`](../tools/review/lenses.ts), and the severity framework by
+[`compose.ts`](../tools/review/compose.ts). The accepted register is **not** in this file — it is the
+tracker, read by [`accepted.ts`](../tools/review/accepted.ts) as closed issues labelled `residual`
+([`PROJECT.md`](../PROJECT.md) → *Findings-Log Discipline*). Both runtime reads were hardcoded to
+deuce paths nadal does not hold until #155 repointed them.
+
+[`validate.ts`](../tools/review/validate.ts) still refuses a review whose named commit is not the SHA
+**the caller passes it**, so it catches a reviewer that attested the wrong commit or none; it does not
+read the pull request head, and reading that head remains the AC's step.
+[`config/gates.md`](gates.md) → *Who does what* is the exact split.

@@ -14,14 +14,22 @@
 // PR #46 found four separate ways for a stream at exit time to lose the record,
 // and the channel was replaced rather than patched a fifth time.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { parseRoster } from "./roster.ts";
 import {
+  ACCEPTED_LABEL,
+  classifyLabelProbe,
+  parseRegisterListing,
+  readAcceptedRegister,
+  REGISTER_LIMIT,
+  type RegisterSource,
+  type ResidualIssue,
+} from "./accepted.ts";
+import {
   composeSummons,
   extractSeverityFramework,
-  parseAcceptedRegister,
   PERMANENT_LENS,
 } from "./compose.ts";
 import { validateReview } from "./validate.ts";
@@ -39,6 +47,47 @@ const MAX_POSTED_CHARS = 60_000;
 
 function sh(cmd: string, args: string[]): string {
   return execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+}
+
+/** The accepted register's impure edge, and nothing more: this runs the two
+ *  processes and hands their output to the pure readers in `accepted.ts`, where
+ *  every branch is reachable from a test. */
+function ghRegisterSource(): RegisterSource {
+  return {
+    labelExists(label: string): boolean {
+      const r = spawnSync("gh", ["api", `repos/{owner}/{repo}/labels/${label}`], {
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      if (r.error) {
+        // The spawn never happened — `gh` absent or not executable. That is not
+        // an answer about the label, so it must not be reported as one.
+        throw new Error(`could not run \`gh\` to check the \`${label}\` label: ${r.error.message}`);
+      }
+      const detail = `${(r.stderr ?? "").trim()} ${(r.stdout ?? "").trim()}`.trim();
+      return classifyLabelProbe(r.status, detail, label);
+    },
+
+    listClosed(label: string): ResidualIssue[] {
+      // execFileSync throws on a nonzero exit, so a failed query propagates
+      // rather than arriving here as an empty list.
+      return parseRegisterListing(
+        sh("gh", [
+          "issue",
+          "list",
+          "--state",
+          "closed",
+          "--label",
+          label,
+          "--limit",
+          String(REGISTER_LIMIT),
+          "--json",
+          "number,title",
+        ]),
+        label,
+      );
+    },
+  };
 }
 
 function elideDiffForPosting(summons: string, base: string, commit: string): string {
@@ -94,12 +143,11 @@ function main(): void {
     process.exitCode = 1;
     return;
   }
-  const severityFramework = extractSeverityFramework(
-    readFileSync("sds/02-review-and-findings.md", "utf8"),
-  );
-  const acceptedEntries = parseAcceptedRegister(
-    readFileSync("findings/accepted.md", "utf8"),
-  );
+  // Both were hardcoded to deuce paths this repository does not hold, which is
+  // what made the whole command unrunnable here (#155). Severity is a second use
+  // of the config already read above, not a second read of it.
+  const severityFramework = extractSeverityFramework(reviewConfig);
+  const acceptedEntries = readAcceptedRegister(ghRegisterSource(), ACCEPTED_LABEL);
   const subject =
     values.subject ??
     sh("gh", ["pr", "view", String(prNumber), "--json", "title", "-q", ".title"]).trim();
