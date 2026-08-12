@@ -9,20 +9,23 @@ values: quality checks, attribution, branch policy, gates, the findings-log disc
 ## The lifecycle
 
 Work runs through the six shipped lifecycle Skills. Each is a **contract file** deuce updates by
-sync pull request — read them, never edit them (an edit is drift the receipt's checksums report):
+sync pull request — read them, never edit them (an edit is drift the receipt's checksums report).
+They live under `.claude/skills/`, which is the path the AC's own Skill tool reads, so each is
+invocable by name as well as readable as a file:
 
-[`skills/assess/SKILL.md`](skills/assess/SKILL.md) ·
-[`skills/devise/SKILL.md`](skills/devise/SKILL.md) ·
-[`skills/implement/SKILL.md`](skills/implement/SKILL.md) ·
-[`skills/verify/SKILL.md`](skills/verify/SKILL.md) ·
-[`skills/deliver/SKILL.md`](skills/deliver/SKILL.md) ·
-[`skills/distill/SKILL.md`](skills/distill/SKILL.md)
+[`.claude/skills/assess/SKILL.md`](.claude/skills/assess/SKILL.md) ·
+[`.claude/skills/devise/SKILL.md`](.claude/skills/devise/SKILL.md) ·
+[`.claude/skills/implement/SKILL.md`](.claude/skills/implement/SKILL.md) ·
+[`.claude/skills/verify/SKILL.md`](.claude/skills/verify/SKILL.md) ·
+[`.claude/skills/deliver/SKILL.md`](.claude/skills/deliver/SKILL.md) ·
+[`.claude/skills/distill/SKILL.md`](.claude/skills/distill/SKILL.md)
 
 A seventh shipped Skill sits outside the lifecycle:
-[`skills/brief/SKILL.md`](skills/brief/SKILL.md) — not a stage but a standing procedure, summoned
-whenever the HC asks where something stands (the project, an epic, an issue, or a PR). Read-only by
-charter; its formats are the bundled [`skills/brief/formats.md`](skills/brief/formats.md). The same
-contract-file rule applies.
+[`.claude/skills/brief/SKILL.md`](.claude/skills/brief/SKILL.md) — not a stage but a standing
+procedure, summoned whenever the HC asks where something stands (the project, an epic, an issue, or a
+PR). Read-only by charter; its formats are the bundled
+[`.claude/skills/brief/formats.md`](.claude/skills/brief/formats.md). The same contract-file rule
+applies.
 
 [`AGENTS.md`](AGENTS.md) is the contractor-reviewer contract — the file a summoned reviewer reads.
 It is not this file's instruction source.
