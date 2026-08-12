@@ -1,6 +1,6 @@
 ---
 commit: 90ee01aed9a634930249d9bfae2c2a9187d9cb38
-date: 2026-08-11
+date: 2026-08-12
 checksums:
   - path: skills/assess/SKILL.md
     sha256: b66d4a1e135ec141abc114407c1839e1920d273e2ebfe64bbc4ab27f509b9ba7
@@ -14,6 +14,10 @@ checksums:
     sha256: e08157e016cadf4f4b4247496c992c250e0d5f9552e3e98698fd4c1c2b537cd7
   - path: skills/distill/SKILL.md
     sha256: 70658dc71d1cca2aed6915b5ba405875227f92633572de67d488d1f4f49e1977
+  - path: skills/brief/SKILL.md
+    sha256: 9ebf22e912407aae28e821ff26632fbc81534d8e8b95d86460282ecf827ecd4c
+  - path: skills/brief/formats.md
+    sha256: 131abf664a212a30955a7489bf97db6c09c5373843b495a84ab88cf3c4854371
   - path: .githooks/guard-protected-branch
     sha256: 4bf66f4e2b58888e5a5f6a6cbc0d3dcdad0350d82d4f5aa150c55a9084e3daf9
   - path: .githooks/pre-commit
