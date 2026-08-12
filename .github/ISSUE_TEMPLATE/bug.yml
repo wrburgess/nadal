@@ -1,7 +1,9 @@
 name: "BUG — a defect with a reproduction"
 description: "A defect; the fix ships with the test that failed before it"
 title: "BUG: "
-labels: ["type:bug", "status:ready"]
+# nadal's label set, not deuce's — declared drift against the vendoring receipt (#146). See
+# labels.yml for the divergence and why.
+labels: ["bug"]
 body:
   - type: markdown
     attributes:

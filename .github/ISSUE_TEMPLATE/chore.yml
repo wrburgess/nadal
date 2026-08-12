@@ -1,7 +1,10 @@
 name: "CHORE — mechanical maintenance"
 description: "Mechanical maintenance; minimal ceremony"
 title: "CHORE: "
-labels: ["type:chore", "status:ready"]
+# nadal's label set, not deuce's — declared drift against the vendoring receipt (#146). nadal has no
+# `chore` type: mechanical maintenance is a `task` here. The CHORE: title prefix is left as deuce's
+# rather than invented away, so an issue opened from this template is legible to both. See labels.yml.
+labels: ["task"]
 body:
   - type: markdown
     attributes:

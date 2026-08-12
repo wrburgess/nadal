@@ -1,20 +1,17 @@
 name: ci
 
-# The ace-era structural parity check (parity.yml + scripts/parity_check.rb) retired with the
-# deuce cutover (deuce #86): the vendoring receipt's checksums are the drift mechanism now, so
-# there is no parity job anywhere and none is missing.
+# One gate, one command, local and CI. This workflow no longer carries its own list of checks: it
+# runs `npm run gate`, which executes exactly what `config/checks.md` declares, in the order
+# declared (#146). Before this, `config/checks.md` did not exist and three hand-maintained lists —
+# PROJECT.md's Quality Checks table, this file's steps, and a comment block mapping one to the other
+# — agreed only by convention. Two of the three are now pointers.
 #
-# Coverage mapping — PROJECT.md § Quality Checks rows to the step that covers each one, so an
-# absent row here reads as "covered elsewhere," never as "not covered":
-#   Typecheck                -> npm run typecheck               (this file, `app` job)
-#   Lint                     -> npm run lint                     (this file, `app` job)
-#   CLI grammar parity       -> npm test -- test/cli-grammar-parity.test.ts
-#                                (subsumed by `npm run test:coverage` below, which runs the whole
-#                                 vitest suite including this test file — a second explicit
-#                                 invocation would double-run the suite for no new signal)
-#   Tests + coverage floor    -> npm run test:coverage           (this file, `app` job; the floor
-#                                 itself — lines 75% / functions 75% — is enforced automatically by
-#                                 vitest.config.ts:9, not by anything in this workflow)
+# Add or remove a check in `config/checks.md`. There is no second place to edit, and nothing here
+# needs to change when the gate's contents do.
+#
+# The ace-era structural parity check (parity.yml + scripts/parity_check.rb) retired with the deuce
+# cutover (deuce #86): the vendoring receipt's checksums are the drift mechanism now, so there is no
+# parity job anywhere and none is missing.
 
 on:
   pull_request:
@@ -34,14 +31,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Drizzle schema-drift check
-        # `git diff --exit-code drizzle/` alone is NOT sufficient here: it only inspects TRACKED
-        # files, so a brand-new, untracked migration `.sql` (the most likely drift artifact) would
-        # pass silently. `git status --porcelain drizzle/` also surfaces untracked (`??`) files, so
-        # a schema change with no matching committed migration fails the build.
-        run: |
-          npx drizzle-kit generate
-          test -z "$(git status --porcelain drizzle/)"
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run test:coverage
+      # Exit 1 means a check ran and failed; exit 2 means the gate could not run at all (a missing
+      # prerequisite, an unreadable declaration). Both fail the job, and the gate's own output says
+      # which — see docs/runbooks/quality-gate.md.
+      - run: npm run gate

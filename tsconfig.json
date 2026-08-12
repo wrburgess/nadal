@@ -7,11 +7,15 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "outDir": "dist"
+    // Nothing here is compiled to disk: `bin/tn` runs `tsx src/cli/main.ts`, vitest and
+    // `node --import tsx` load TypeScript directly, and there is no build script. `outDir: "dist"`
+    // named an output no command produced. Declaring `noEmit` states that, and it is also what
+    // `allowImportingTsExtensions` requires (#146).
+    "noEmit": true,
+    // tools/gate and tools/review import each other with explicit `.ts` specifiers, which is the
+    // shape Node's own type stripping wants. Admitting it here is what let their `exclude`
+    // carve-out lift, so `npm run typecheck` now covers them (#146).
+    "allowImportingTsExtensions": true
   },
-  "include": ["src", "test", "tools", "vitest.config.ts", "eslint.config.js", "drizzle.config.ts"],
-  // deuce's seeded gate/review tools are dormant until the gate is wired (they use
-  // allowImportingTsExtensions-style .ts imports this config rejects); the day-one adoption
-  // issue tracks lifting this carve-out.
-  "exclude": ["tools/gate", "tools/review"]
+  "include": ["src", "test", "tools", "vitest.config.ts", "eslint.config.js", "drizzle.config.ts"]
 }

@@ -1,7 +1,10 @@
 name: "SPIKE — research feeding a decision"
 description: "Research whose terminal artifact is a Readout; it may produce no code"
 title: "SPIKE: "
-labels: ["type:spike", "status:ready"]
+# nadal's label set, not deuce's — declared drift against the vendoring receipt (#146). nadal has no
+# `spike` type: research folds into an issue's Assessment. The SPIKE: title prefix is left as deuce's
+# rather than invented away. See labels.yml.
+labels: ["task"]
 body:
   - type: markdown
     attributes:

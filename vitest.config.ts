@@ -23,11 +23,17 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**", "tools/**"],
-      // deuce's seeded gate/review tools are dormant until the gate is wired: their tests are
-      // node:test suites this runner never executes, so counting the sources toward the floor
-      // would red the gate on code nothing here runs. The day-one adoption issue tracks lifting
-      // this carve-out alongside wiring the gate.
-      exclude: [...coverageConfigDefaults.exclude, "tools/gate/**", "tools/review/**"],
+      // tools/gate and tools/review are IN this total and report 0%, which is not a gap — their
+      // tests are `node:test` suites this runner cannot discover, and they run under
+      // `npm run test:tools`, a `config/checks.md` row and a CI step (#146).
+      //
+      // Measured when the carve-out lifted: 96.83% -> 89.46% lines, against a 75% floor. Say the
+      // consequence plainly rather than let the number speak: roughly 1,400 lines counted here are
+      // verified somewhere else, so this percentage asserts less about those two directories than
+      // it appears to. It is honest only while `tools-tests` stays in the gate. If that row is ever
+      // dropped, exclude these two directories again in the same commit — a floor computed over
+      // code nothing executes is worse than one that never claimed to cover it.
+      exclude: [...coverageConfigDefaults.exclude],
       thresholds: { lines: 75, functions: 75 },
     },
   },

@@ -2,10 +2,20 @@
 
 # protected_branches.rb — the ONE place that derives the protected-branch list from PROJECT.md
 # (Option A, issue #6 / ADR 0009). PROJECT.md is the single authored source; the git hooks read a
-# generated sidecar (.githooks/protected-branches). Parsing lives here so it is unit-tested once and
-# reused by both `bin/protected-branches` (generate) and `scripts/parity_check.rb` (verify no drift).
+# generated sidecar (.githooks/protected-branches). Parsing lives here so it is unit-tested once.
 #
-# Dependency-free: Ruby standard library only, mirroring scripts/parity_check.rb (ADR 0008).
+# THE LAST RUBY READER STANDING, and it is here because it is called (#146). Its two siblings,
+# `human_gates.rb` and `reviewer.rb`, were deleted on that issue: their only caller was
+# `scripts/parity_check.rb`, which retired at the deuce cutover (deuce #86), leaving 819 lines with
+# no caller anywhere in the tree. This file's caller is live and load-bearing —
+# `bin/setup` -> `bin/install-git-hooks` -> `bin/protected-branches` -> here — so deleting it would
+# silently stop regenerating the sidecar the branch guard reads on a fresh clone.
+#
+# The "verify no drift" half of this file's job went with parity_check.rb. Nothing now checks that
+# the committed sidecar still matches PROJECT.md between runs of bin/install-git-hooks; the
+# regeneration on setup is what keeps them together.
+#
+# Dependency-free: Ruby standard library only (ADR 0008).
 #
 # Contract with PROJECT.md → "## Branch & PR Policy":
 #   - the list is authored on the bullet line beginning `- **Protected branches:**`

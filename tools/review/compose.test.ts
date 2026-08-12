@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import {
   composeSummons,
   extractSeverityFramework,
@@ -59,11 +58,32 @@ test("an oversized diff is a loud error, never a silent truncation", () => {
   assert.throws(() => composeSummons({ ...base, diff: big }), /diff/i);
 });
 
-test("extractSeverityFramework pulls the chapter's own section, whole", () => {
-  const chapter = readFileSync(
-    new URL("../../sds/02-review-and-findings.md", import.meta.url),
-    "utf8",
-  );
+// Upstream, this pair read deuce's own files — `sds/02-review-and-findings.md` for the severity
+// framework and `findings/accepted.md` for the accepted register — and so guarded the live copies
+// against drift. nadal holds NEITHER file and cannot: canon is read at its source and never
+// vendored (CLAUDE.md), and nadal's accepted register is closed `residual` issues on the tracker,
+// not a file (PROJECT.md -> Findings-Log Discipline). The drift guards are therefore dropped
+// rather than pointed somewhere false, and what is lost is stated rather than quietly absent:
+// nothing here checks that nadal's severity vocabulary matches deuce's, or that its residuals are
+// well-formed. Both are prose disciplines with no mechanical backstop in this repository (#146).
+//
+// The section-boundary assertion is NOT lost with them — it was the load-bearing half, and it is
+// re-made below over synthetic input, which is where the rest of this file's coverage already lives.
+test("extractSeverityFramework stops at the next heading, whatever follows it", () => {
+  const chapter = [
+    "## Review",
+    "",
+    "### The severity framework",
+    "",
+    "| must-fix | blocks shipping |",
+    "| should-fix | fix before merge |",
+    "| note | author's discretion |",
+    "",
+    "### Fix-verification, bounded separately",
+    "",
+    "two passes, then escalate",
+    "",
+  ].join("\n");
   const s = extractSeverityFramework(chapter);
   assert.ok(s.includes("must-fix"));
   assert.ok(s.includes("should-fix"));
@@ -71,16 +91,8 @@ test("extractSeverityFramework pulls the chapter's own section, whole", () => {
   assert.ok(!s.includes("Fix-verification"), "ran past the section boundary");
 });
 
-test("the live register parses, and every entry is one whole line ending in its disposition link", () => {
-  const md = readFileSync(
-    new URL("../../findings/accepted.md", import.meta.url),
-    "utf8",
-  );
-  const entries = parseAcceptedRegister(md);
-  for (const e of entries) {
-    assert.match(e, /^- /);
-    assert.match(e, /https:\/\/github\.com\/.+>?$/, `entry lacks its disposition link: ${e}`);
-  }
+test("extractSeverityFramework fails loudly when the section is absent", () => {
+  assert.throws(() => extractSeverityFramework("## Review\n\nno framework here\n"), /severity/i);
 });
 
 test("a register without its Entries section fails loudly, never as an empty list", () => {

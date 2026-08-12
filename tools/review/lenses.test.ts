@@ -10,23 +10,21 @@ import {
 
 const live = readFileSync(new URL("../../config/review.md", import.meta.url), "utf8");
 
-test("every prose lens is canon's own phrase — pinned against the Verifying prose section", () => {
-  const chapter = readFileSync(
-    new URL("../../sds/02-review-and-findings.md", import.meta.url),
-    "utf8",
-  );
-  const at = chapter.search(/^##\s+Verifying prose\s*$/m);
-  assert.notEqual(at, -1, "chapter carries no Verifying prose section");
-  const section = chapter
-    .slice(at)
-    .split(/\n##\s/)[0]!
-    .replace(/\s+/g, " ");
-  const declared = section.match(/lenses fit for prose: ([^.]+)\./);
-  assert.ok(declared, "chapter no longer declares the prose-lens list");
-  const canonSet = declared![1]!.split(", ").map((l) => l.trim()).sort();
-  assert.deepEqual([...PROSE_LENSES].sort(), canonSet);
-});
-
+// Two guards were dropped here, and both read files nadal does not hold (#146).
+//
+// 1. This one pinned PROSE_LENSES against `sds/02-review-and-findings.md` -> *Verifying prose*.
+//    Canon is read at its source and never vendored (CLAUDE.md), so there is no local copy to pin
+//    against. PROSE_LENSES is now an unguarded copy of four canon phrases: if canon rewords them,
+//    nothing here notices.
+// 2. The menu/class-index one-to-one guard, which sat just below the live-menu test. It required
+//    every menu entry
+//    to link to a heading in `findings/classes.md`. nadal has no class index at all — its lens menu
+//    derives from recorded defect classes described in prose (PROJECT.md -> Review Lenses), and its
+//    findings live in `docs/findings.md` as a flat log. So the invariant it enforced does not exist
+//    here yet, and enforcing a link to an absent file would be a check that certifies nothing.
+//
+// What survives is every assertion that needs no file: the interrogative rule over the live menu,
+// the declared size, and the whole of checkLensSelection's behaviour.
 test("a prose lens is summonable for a prose subject with an empty menu", () => {
   const errors = checkLensSelection([PROSE_LENSES[0]!], [], 3, true);
   assert.deepEqual(errors, []);
@@ -48,37 +46,6 @@ test("every lens on the live menu is stated as an interrogative", () => {
   for (const lens of menu) {
     assert.ok(lens.endsWith("?"), `lens is not stated as an interrogative: ${lens}`);
   }
-});
-
-// Checking only that the menu is populated, or only that its links resolve,
-// measures a proxy for the invariant that matters — that the menu and the index
-// are the same set. Substituting a proxy is class 1 in the index this guards,
-// and enforcing one direction while the other leaks is class 4.
-test("the menu and the class index are one to one, in both directions", () => {
-  const index = readFileSync(new URL("../../findings/classes.md", import.meta.url), "utf8");
-  const anchor = (heading: string) =>
-    heading.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
-  // Scoped to Entries: every `###` in the file is not a class, and counting one
-  // that is not would be this check measuring the wrong unit.
-  const entries = index.slice(index.search(/^##\s+Entries\s*$/m)).split(/\n##\s/)[0]!;
-  const classes = [...entries.matchAll(/^###\s+(.+?)\s*$/gm)].map((m) => anchor(m[1]!));
-  const section = live.slice(live.search(/^##\s+Lens menu\s*$/m)).split(/\n##\s/)[0]!;
-  const links = [
-    ...section.matchAll(/\]\(\.\.\/findings\/classes\.md#([^)]+)\)/g),
-  ].map((m) => m[1]!);
-  // Both sides are zero when the menu is empty, and equality alone would pass
-  // on it — the vacuous case is where a derivation check fails open.
-  assert.ok(links.length > 0, "no lens entry links to a class at all");
-  assert.equal(
-    links.length,
-    parseLensMenu(live).length,
-    "a lens entry carries no link to the class it derives from",
-  );
-  assert.deepEqual(
-    [...links].sort(),
-    [...classes].sort(),
-    "menu and index disagree — every admitted class earns a lens, and every lens names a class",
-  );
 });
 
 test("the live declaration's lens-set size is 3", () => {
