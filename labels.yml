@@ -23,17 +23,32 @@
 #     and mechanical maintenance is a `task`.
 #   * TITLE PREFIX AS WELL AS LABEL. Every issue carries its type as BOTH an uppercase title prefix
 #     (`BUG:`, `FEATURE:`) and the matching label. The prefix is what makes `gh issue list` readable;
-#     the label is what makes it filterable. The two always say the same thing -- which is why
-#     `.github/ISSUE_TEMPLATE/{chore,spike}.yml` file under `TASK:`/`task` rather than keeping
-#     deuce's `CHORE:`/`SPIKE:` prefixes over a `task` label. Their forms still prompt for
-#     chore- and spike-shaped work; only the type they file under is nadal's.
+#     the label is what makes it filterable. The two always say the same thing -- and an issue opened
+#     from a template is now the one place that does NOT hold. See the note below.
 #
 # NOTHING PARSES THIS FILE. It is hand-synced, and it is documentation of the tracker rather than a
 # source the tracker is generated from. Deliberately not given a shape test on #146: a check over a
 # file nothing consumes certifies an invariant it cannot see, which is a lesson this repository has
-# already paid for. What DOES read a label set is `.github/ISSUE_TEMPLATE/*.yml`, whose `labels:`
-# lists were corrected to this set on the same issue -- they had been assigning deuce's `type:*` and
-# `status:ready`, none of which exist here, so every templated issue silently lost its labels.
+# already paid for.
+#
+# THE TEMPLATES NO LONGER FILE UNDER THIS SET, AND THAT IS A DECISION, NOT A REGRESSION TO FIX HERE
+# (deuce #120, the HC's ruling of 2026-08-12). #146 had corrected `.github/ISSUE_TEMPLATE/*.yml` to
+# the set above, because deuce's `type:*` / `status:ready` names do not exist on this tracker and
+# every templated issue was silently losing its labels. Those six files are CONTRACT class: deuce's
+# sync ships them, and the correction was declared drift against the vendoring receipt. At the
+# Skills-path cutover the HC chose to take the sync whole rather than re-diverge them, so as of that
+# merge:
+#
+#   * bug/epic/task.yml assign `type:bug` / `type:epic` / `type:task` + `status:ready` -- five names
+#     that do not exist here, so an issue opened from a template arrives WITH NO LABELS. Label it by
+#     hand from the set above; the type is not optional just because the form stopped supplying it.
+#   * chore.yml and spike.yml are back to `CHORE:` / `SPIKE:` title prefixes over those same absent
+#     labels, though nadal has no `chore` or `spike` type -- mechanical maintenance is a `task` here
+#     and research folds into an issue's Assessment. Retitle to `TASK:` and label `task`.
+#
+# Closing it needs a decision this file cannot make: either these six names join the tracker, or the
+# whole set moves to deuce's three-axis schema, or deuce's templates learn to read a host's label
+# set. Until one of those happens, hand-labelling is the procedure and this note is the warning.
 
 # One per issue, always — as a label and as an uppercase title prefix.
 type:
