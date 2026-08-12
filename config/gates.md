@@ -66,13 +66,28 @@ A wave is counted whether its findings came from the reviewer or from the AC's o
 the previous wave: what the bound measures is *how many times this change has been re-cut*, not who
 noticed.
 
-- **The comparison is derived, not enumerated.** `deliver` compares the pull request head to the SHA
-  the recorded review attests. Anything that moved the head is caught — a fix wave, a late findings
-  append, a rebase, a merge of `main` — rather than only the case that prompted the rule.
-- **It is checkable rather than asserted.**
-  [`tools/review/validate.ts`](../tools/review/validate.ts) refuses a review whose named commit is
-  not the bound commit, and names what is missing. That module has no external file dependency and
-  runs today, which is why it survived this issue's disposition of the seeded review tools.
+- **The comparison is derived rather than enumerated, and the AC is what performs it.** Before
+  merging, the AC reads the pull request head and compares it to the SHA the recorded review attests.
+  Deriving it this way catches anything that moved the head — a fix wave, a late findings append, a
+  rebase, a merge of `main` — instead of only the case that prompted the rule.
+- **Who does what, stated exactly, because an earlier draft of this file overstated it and the
+  contractor review caught it on [PR #153](https://github.com/wrburgess/nadal/pull/153).**
+
+  | Step | Performed by |
+  |---|---|
+  | Read the pull request head | the AC |
+  | Compare it to the review's attested SHA | the AC |
+  | Check that the review names that SHA, and say what is missing if not | [`tools/review/validate.ts`](../tools/review/validate.ts) |
+
+  `validateReview(review, expectedCommit, lenses)` compares the review's self-reported commit against
+  an `expectedCommit` **its caller supplies**; it never reads the head itself, and
+  [`deliver`](../skills/deliver/SKILL.md) names no such call. Its only non-test caller is
+  [`summon.ts`](../tools/review/summon.ts), which cannot run here yet
+  ([#155](https://github.com/wrburgess/nadal/issues/155)).
+
+  So this gate is **attested by the AC's discipline, backed by an independent review** — not by a
+  machine that refuses the merge. That is a real control and a weaker one than "checkable", which is
+  what the earlier draft claimed. #155 is what turns the middle row of that table into code.
 - **The last row is the fix-verification bound, not a new rule.**
   [`config/review.md`](review.md) → *Fix-verification* gives fixes two passes and then escalates,
   on nine recorded instances of patching past that point moving a defect sideways. A **third** wave

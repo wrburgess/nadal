@@ -99,6 +99,8 @@ source are, which is a findings-system question — declined on #146's record an
 [#155](https://github.com/wrburgess/nadal/issues/155).
 
 Until then the summons is **hand-run** — `codex exec - < summons.md` — and
-[`tools/review/validate.ts`](../tools/review/validate.ts) is run against the returned review, which
-is the part that matters for the Ship gate: it refuses a review whose named commit is not the commit
-being merged. See [`config/gates.md`](gates.md).
+[`tools/review/validate.ts`](../tools/review/validate.ts) is run against the returned review. It
+refuses a review whose named commit is not the SHA **the caller passes it**, so it catches a reviewer
+that attested the wrong commit or none; it does not read the pull request head, and reading that head
+is the AC's step. [`config/gates.md`](gates.md) → *Who does what* is the exact split, and #155 is what
+would close it.
