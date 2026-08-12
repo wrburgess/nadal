@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { openDb, runMigrations } from "../src/db/client.js";
@@ -333,6 +334,87 @@ describe("getCaptainNotes", () => {
       expect(view.player.map((n) => n.note)).toEqual(["in the field"]);
     } finally {
       sqlite.close();
+    }
+  });
+});
+
+// Codex adversarial review of PR #151, lens 4 (Concurrency), reported class A. Its stated trace was
+// WRONG in mechanism — it claimed the partner check re-reads the home-team designation, and it does
+// not: `homeTeam` is read once at captain-notes.ts:81 and both `isOnHomeRoster` calls use that one
+// value, so the two endpoints were never validated against two different designations. The finding
+// was right that a NEW interleaving exists, for a different reason: the two roster-MEMBERSHIP reads
+// happened at different instants, so a concurrent retire between them could land a pairing whose two
+// members were never simultaneously on the roster. The solo form asserts one fact and cannot be
+// internally inconsistent that way.
+//
+// Same seam and the same off-by-one care as `setAvailability`'s own atomicity test
+// (test/query-availability.test.ts:591): `verbose` fires JUST BEFORE a statement runs, so the lock is
+// not yet held while `BEGIN IMMEDIATE` itself is announced — the interleaving has to be attempted on
+// the FOLLOWING statement.
+describe("addCaptainNote is atomic across BOTH roster reads of a pairing", () => {
+  const dbFixture = useTnDbPath();
+
+  it("holds the write lock from the home-team read through the insert, so a partner cannot be retired mid-check", () => {
+    runMigrations();
+    let subjectId = 0;
+    let partnerId = 0;
+    {
+      const { db, sqlite } = openDb(dbFixture.path());
+      const fixture = seedHomeTeamFixture(db);
+      subjectId = fixture.playerId;
+      const partner = db.insert(players).values({ canonicalName: "Bryan Partner" }).returning().get();
+      db.insert(teamMemberships)
+        .values({ playerId: partner.id, teamId: fixture.homeTeamId, eventId: fixture.eventId })
+        .run();
+      partnerId = partner.id;
+      sqlite.close();
+    }
+
+    const other = new Database(dbFixture.path());
+    other.pragma("journal_mode = WAL");
+    other.pragma("busy_timeout = 0"); // fail fast rather than hang
+
+    let sawBegin = false;
+    let attempted = false;
+    let retireSucceeded: boolean | null = null;
+
+    const { db, sqlite } = openDb(dbFixture.path(), {
+      verbose: (message) => {
+        if (attempted || typeof message !== "string") return;
+        if (!sawBegin) {
+          sawBegin = message.toLowerCase().includes("begin immediate");
+          return;
+        }
+        attempted = true;
+        try {
+          // The retire that would strand the pairing this transaction is about to write.
+          other
+            .prepare("update team_memberships set retired_at = ? where player_id = ?")
+            .run("2026-08-11T00:00:00.000Z", partnerId);
+          retireSucceeded = true;
+        } catch {
+          retireSucceeded = false;
+        }
+      },
+    });
+
+    try {
+      const note = addCaptainNote(db, { playerId: subjectId, pairPlayerId: partnerId, text: "Strong together." });
+
+      expect(sawBegin, "the transaction must be BEGIN IMMEDIATE, not deferred").toBe(true);
+      expect(attempted, "the interleaving must actually have been attempted mid-transaction").toBe(true);
+      expect(
+        retireSucceeded,
+        "another process must not be able to retire an endpoint while this pairing is being validated",
+      ).toBe(false);
+
+      // Both endpoints were on the roster for the whole of the write — the invariant held.
+      expect(note.pairPlayerId).toBe(partnerId);
+      const stored = db.select().from(teamMemberships).where(eq(teamMemberships.playerId, partnerId)).all();
+      expect(stored[0]!.retiredAt).toBeNull();
+    } finally {
+      sqlite.close();
+      other.close();
     }
   });
 });

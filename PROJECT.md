@@ -177,7 +177,7 @@ and stays green.
   the exhausted-chain floor — `stop-and-ask`.
 - **With `Fallback order: none`, that exclusion is unconditional whenever Codex is the acting
   harness** — `chain` is just `[Codex]`, so `independent_chain` always empties it, and every
-  Codex-run `invoke`/`verify` would hit `stop-and-ask` with no other entry to try (a Codex reviewer
+  Codex-run `implement`/`verify` would hit `stop-and-ask` with no other entry to try (a Codex reviewer
   finding on this exact PR: nothing app-specific, the same logic applies to any host that names a
   single-entry chain). nadal's mitigation is *not* a second *Invocation paths* row — it's
   [§ Execution Profile](#execution-profile): Codex is routed **only** to the Adversarial-PR-review
@@ -350,11 +350,23 @@ parser default; the flip lives in the shipped file, not in that default.)
 - **`required`** — a host may set the **plan-approval** row (and only that row) back to `required`. The
   AC then stops and waits for the HC: it does not proceed past the assessment without a chosen option,
   and it does not write code without an approved plan.
-- **Merge — nadal runs `attested`.** `final` posts the SOW and then **may merge, but only on evidence**:
-  every *Quality Checks* row green and the required checks green **at the delivered head**, no open
-  must-fix findings, an independent external-model adversarial review on record (see *Reviewer*), and
-  that review **bound to a literal SHA equal to the PR head**. Any one of those failing means no merge —
-  post the SOW, name the condition that failed, and stop. **`auto` remains forbidden** and the parity
+- **Merge — nadal declares `attested`, and under deuce it does not currently reach.**
+  [`deliver`](skills/deliver/SKILL.md) (Stage 5; `final` was its ace-era name and left with the
+  cutover) posts the Delivery Record and then **may merge, but only on evidence**: every *Quality
+  Checks* row green and the required checks green **at the delivered head**, no open must-fix findings,
+  an independent external-model adversarial review on record (see *Reviewer*), and that review **bound
+  to a literal SHA equal to the PR head**. Any one of those failing means no merge — post the Delivery
+  Record, name the condition that failed, and stop.
+
+  **The fourth condition is not satisfiable by an AC-run lifecycle, and that is a structural fact
+  rather than a bad run** (#150 / PR #151). [`verify`](skills/verify/SKILL.md) step 10 disposes of
+  review findings in one fix wave and states that **the reviewer is never re-summoned**. A fix wave
+  moves the head. So on any pull request whose review finds anything at all, the review is bound to a
+  SHA that is no longer the head, and no further summons is permitted to re-bind it — the condition
+  can only be met by a review that found nothing. Until that is reconciled upstream, this row resolves
+  the way [#146](https://github.com/wrburgess/nadal/issues/146) item 2 already states it: **every merge
+  here is HC-performed.** Recorded rather than fixed by loosening — a gate that cannot be met is a
+  reason to stop and hand over, never a reason to lower it. **`auto` remains forbidden** and the parity
   check hard-fails it: unconditional self-merge is the claim [ADR 0025](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0025-human-gate-policy-is-a-project-config-value.md)
   refused, and `attested` is not that claim. What makes the difference real rather than semantic is
   *Reviewer* below, which filters the acting harness out of its own review chain and forces
@@ -365,7 +377,8 @@ parser default; the flip lives in the shipped file, not in that default.)
   decision 6, unchanged). Those gates exist for *content judgment*, not code correctness.
 - **The harness must also permit it.** Repo policy and agent-runtime permission are independent layers:
   `attested` authorizes the merge, it does not make the runtime allow the command. If the runtime denies
-  it, `final` stops and says so rather than treating the denial as a gate failure.
+  it, [`deliver`](skills/deliver/SKILL.md) stops and says so rather than treating the denial as a gate
+  failure.
 
 **Unconditional, whatever this section says:**
 
@@ -373,14 +386,17 @@ parser default; the flip lives in the shipped file, not in that default.)
   external review; there is no setting under which a PR merges on the AC's own say-so.
 - **The plan gate is also a context boundary, and the reset survives the pause being waived.**
   "Plan posted" forces a context reset under either setting — a session boundary under `required` (the
-  human crosses), `ship`'s own context reset under `auto`
-  ([ADR 0028](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0028-context-reset-boundary-resumable-stops-autonomous-listen.md)):
-  [`invoke`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/invoke/SKILL.md) **begins by re-reading the posted plan from the issue** and never
-  continues on conversational memory, and the pre-[`final`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/final/SKILL.md) context check still
-  applies. `auto` removes the *wait*; it never removes the context firebreak.
-- **[`ship`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/ship/SKILL.md)'s four emergency stops** — an unresolvable check failure; a discovery
-  that the change touches core logic the plan did not anticipate; an architectural or ambiguous review
-  comment; a handoff verdict the orchestrator cannot resolve — always stop and ask the HC.
+  human crosses), and under `auto` the reset the retired `ship` orchestrator performed
+  ([ADR 0028](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0028-context-reset-boundary-resumable-stops-autonomous-listen.md)).
+  What carries the firebreak now is the stage itself: [`implement`](skills/implement/SKILL.md)
+  (Stage 3; `invoke` was its ace-era name) **begins by re-reading the posted Plan from the issue** and
+  never continues on conversational memory, and [`deliver`](skills/deliver/SKILL.md) likewise begins by
+  re-reading the pull request. `auto` removes the *wait*; it never removes the context firebreak.
+- **The four standing stops** — an unresolvable check failure; a discovery that the change touches core
+  logic the Plan did not anticipate; an architectural or ambiguous review comment; a verdict the run
+  cannot resolve — always stop and ask the HC. These were `ship`'s emergency stops while an
+  orchestrator existed; under deuce every skill carries them directly, as
+  [Chapter 1 → Stops](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stops).
 - **The lifecycle's "the HC decides when to compress"** remains mandatory for every row of its
   *When to skip or compress stages* table **but one**: `auto` waives exactly three pauses — the Stage-1
   option pick, the Stage-2 plan approval, and the **exploratory (spike-then-plan) election** named
@@ -395,7 +411,23 @@ parser default; the flip lives in the shipped file, not in that default.)
 
 ### Rule-suggestion disposition
 
-How [`final`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/final/SKILL.md) handles the Rules-Layer / config improvements it learns during
+> **The mechanism this section governs no longer exists, and the section is left standing rather than
+> guessed at** (#150 / PR #151). Every rule below is addressed to ace `final`'s **Step 1**, its
+> rule-suggestion step. [`deliver`](skills/deliver/SKILL.md) — deuce's Stage 5, which replaced `final`
+> — **has no such step**: its nine-step procedure reads the PR and issue, re-confirms the checks,
+> writes the Delivery Record, and acts on the Ship gate. Nothing in it learns or disposes of
+> Rules-Layer suggestions.
+>
+> So this is not stale naming that a rename would fix. Deciding what `log-and-continue` *means* with
+> no Step 1 to attach it to — whether the value retires with the mechanism, or moves onto a stage that
+> never had it — is a governance choice belonging to
+> [#146](https://github.com/wrburgess/nadal/issues/146), not to a feature PR. **Read the passages
+> below as addressed to a step that is not currently run.** The exception is the numbered
+> findings-log discipline inside *What `final` does at Step 1*, which
+> [*Findings-Log Discipline*](#findings-log-discipline) still depends on and which remains live — the
+> two are interleaved here, which is itself part of what #146 has to separate.
+
+How ace `final` handled the Rules-Layer / config improvements it learned during
 implementation, now that a hands-off run reaches the merge gate on its own
 ([ADR 0029](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0029-baseline-ships-ungated-to-merge.md)). The shipped default is
 `autonomous-fold`; the shipped values are `autonomous-fold | present-to-hc`. **nadal sets it to
@@ -418,7 +450,8 @@ would mean editing the vendored Rules Layer, and this project writes **zero** lo
 [*Findings-Log Discipline*](#findings-log-discipline) below prohibits outright. That is not theoretical:
 [#34](https://github.com/wrburgess/nadal/issues/34) was opened by the `/ship 15` run as exactly such a
 Rules-Layer follow-up, and was closed `not planned` and converted back into findings entries in
-`59a34c3`. The setting produced the violation, so the setting changes.
+`59a34c3`. The setting produced the violation, so the setting changes. (`/ship` was the ace-era
+orchestrator, retired at the deuce cutover — named here as the history it is, not as a command to run.)
 
 **`present-to-hc` is not the answer either, and nadal does not claim it.** That value means `final`
 presents the suggestions **and waits**. nadal does not wait: its operating loop states that *nothing
@@ -458,12 +491,13 @@ run either of them.**
    relative to a plan that does not exist. What a compressed run does **not** change is the
    *disposition*: the learning is still one line in [`docs/findings.md`](docs/findings.md), and still
    never an Issue, PR, rule, or ADR.
-2. **Append as you learn** — in the phase that learned it, committed with that phase's own work, rather
-   than batched at delivery. This mirrors the durable-as-it-arrives rule
-   [`ship`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/ship/SKILL.md) already applies to its asks-ledger. **A learning from `assess`,
-   `devise`, or the orchestrator has no branch yet**: record it in that stage's durable artifact (the
-   assessment or plan comment on the issue, where `ship` already records its stops and asks) and
-   transcribe it into `docs/findings.md` in the first phase that has a branch — `invoke`.
+2. **Append as you learn** — in the stage that learned it, committed with that stage's own work, rather
+   than batched at delivery. This mirrors the durable-as-it-arrives rule the retired `ship`
+   orchestrator applied to its asks-ledger. **A learning from [`assess`](skills/assess/SKILL.md) or
+   [`devise`](skills/devise/SKILL.md) has no branch yet**: record it in that stage's durable artifact —
+   the Assessment or Plan comment on the issue, which is also where a stop and its answer are recorded
+   — and transcribe it into `docs/findings.md` in the first stage that has a branch,
+   [`implement`](skills/implement/SKILL.md).
 
    **A learning is only safe once it is on `main`, and two endings prevent that.** Committing the line
    with its phase is not sufficient on its own:
@@ -635,8 +669,8 @@ of the following applies:
 | Vendored instruction | What it says | Here |
 |---|---|---|
 | [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → *Anti-Patterns* (Tier-1 Lean Core, resident on every run) | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
-| [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and executable in [`ship`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/ship/SKILL.md)'s `asks_ledger` contract as `status: "handed-off"` with a `ref` | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
-| [`final`](https://github.com/wrburgess/nadal/blob/0e9ff24b424ef2ba6ac813ff3acc88b850a907d0/skills/final/SKILL.md) Step 1 (executed at every delivery) | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`. |
+| [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and formerly executable as the retired `ship` orchestrator's `asks_ledger` contract (`status: "handed-off"` with a `ref`) — the mechanism left at the deuce cutover, the rule it encoded did not | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
+| ace `final`'s Step 1 — **no longer executed at all**, since [`deliver`](skills/deliver/SKILL.md) carries no rule-suggestion step | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply, and now has no mechanism to apply through.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`, and that whole section awaits [#146](https://github.com/wrburgess/nadal/issues/146). |
 | [`scout`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
 | [`verify`](skills/verify/SKILL.md) Stage 4 (executed on every PR) | an adversarial pass that *"actively tries to **refute** the change"* — stated with **no stopping condition**, so "is anything wrong?" runs until a human stops it | **Bounded here.** See [*Review Lenses*](#review-lenses): a solicited pass declares a lens set of 3–4 plus the permanent lens, each lens runs once, and fix-verification gets two passes before escalation. The adversarial *posture* is unchanged — only its terminus is supplied, because the vendored body supplies none. |
 
