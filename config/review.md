@@ -94,7 +94,8 @@ and splitting it from the lens bound would put two halves of one policy in two f
 command — readiness, compose, dispatch, validate, record — but it reads
 `sds/02-review-and-findings.md` and `findings/accepted.md` at **runtime**, both hardcoded, and nadal
 holds neither. Re-pointing them means first deciding what nadal's accepted register and severity
-source are, which is a findings-system question and its own issue (#146 declined it on the record).
+source are, which is a findings-system question — declined on #146's record and tracked as
+[#155](https://github.com/wrburgess/nadal/issues/155).
 
 Until then the summons is **hand-run** — `codex exec - < summons.md` — and
 [`tools/review/validate.ts`](../tools/review/validate.ts) is run against the returned review, which

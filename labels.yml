@@ -1,4 +1,9 @@
-# nadal's label set — a description of what this tracker actually runs.
+# nadal's label set — the labels this tracker actually USES.
+#
+# Scope, stated because the previous version of this file over-claimed and the correction is cheap:
+# GitHub's eight stock labels (documentation, duplicate, enhancement, good first issue, help wanted,
+# invalid, question, wontfix) still exist on the repository and are simply never applied. They are
+# not listed below. This file enumerates the working vocabulary, not every label the API would return.
 #
 # Rewritten on #146. What stood here before was deuce's three-axis schema (type: / status: / area:),
 # and NONE of its 17 names existed on this repository: measured at that issue, 0 of 17. nadal has run

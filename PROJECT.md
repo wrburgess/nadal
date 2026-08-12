@@ -444,11 +444,16 @@ The table below is kept for its reasoning, not as the source; where the two diff
 > So this is not stale naming that a rename would fix. Deciding what `log-and-continue` *means* with
 > no Step 1 to attach it to — whether the value retires with the mechanism, or moves onto a stage that
 > never had it — is a governance choice belonging to
-> [#146](https://github.com/wrburgess/nadal/issues/146), not to a feature PR. **Read the passages
+> [#154](https://github.com/wrburgess/nadal/issues/154), not to a feature PR. **Read the passages
 > below as addressed to a step that is not currently run.** The exception is the numbered
 > findings-log discipline inside *What `final` does at Step 1*, which
 > [*Findings-Log Discipline*](#findings-log-discipline) still depends on and which remains live — the
-> two are interleaved here, which is itself part of what #146 has to separate.
+> two are interleaved here, which is what #154 has to separate.
+>
+> **This banner used to name [#146](https://github.com/wrburgess/nadal/issues/146).** That issue
+> declined the work on its own thread and re-pointed here rather than closing over a live reference —
+> a 165-line deletion in this file's most argued section did not belong in a config-migration pull
+> request, and the interleaving above is exactly why it needs its own assessment.
 
 How ace `final` handled the Rules-Layer / config improvements it learned during
 implementation, now that a hands-off run reaches the merge gate on its own

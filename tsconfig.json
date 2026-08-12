@@ -7,10 +7,10 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "types": ["node"],
-    // Nothing here is compiled to disk: `bin/tn` runs `tsx src/cli/main.ts`, vitest and
-    // `node --import tsx` load TypeScript directly, and there is no build script. `outDir: "dist"`
-    // named an output no command produced. Declaring `noEmit` states that, and it is also what
-    // `allowImportingTsExtensions` requires (#146).
+    // Nothing here is compiled to disk: `bin/tn` runs `tsx src/cli/main.ts`, vitest transpiles in
+    // memory, `node --test` and `npm run gate` use Node's own type stripping, and there is no build
+    // script. `outDir: "dist"` named an output no command produced. Declaring `noEmit` states that,
+    // and it is also what `allowImportingTsExtensions` requires (#146).
     "noEmit": true,
     // tools/gate and tools/review import each other with explicit `.ts` specifiers, which is the
     // shape Node's own type stripping wants. Admitting it here is what let their `exclude`
