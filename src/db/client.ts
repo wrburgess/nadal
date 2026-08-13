@@ -78,6 +78,69 @@ export function dbPath(): string {
 export class MissingDatabaseError extends Error {}
 
 /**
+ * A database that exists and opens fine, but whose schema is OLDER than the code about to query it
+ * — issue #160, part D.
+ *
+ * Filed from a live failure: on 2026-08-13 the production database sat at 13 of 14 migrations for a
+ * day after PR #152 merged `players.plays`, so every command reading `players` through the ORM
+ * threw `SqliteError: no such column: plays`. Part A' of #160 guarantees such an error now reaches
+ * the operator at all. This class is the difference between it reading as a column name and reading
+ * as an instruction.
+ *
+ * It is a distinct class rather than a message because two other places must recognize it: the
+ * `create: true` exemption in `openDb` below (or `tn db migrate` could not open the very database
+ * it exists to repair), and `writeRequestLogRow`'s catch (or one fault prints two diagnostics).
+ */
+export class DatabaseBehindMigrationsError extends Error {}
+
+/**
+ * How many migrations on disk this database has not applied. `0` means current.
+ *
+ * **Deliberately built on the same single-watermark rule `applyMigrations` uses** — one
+ * `MAX(created_at)` read compared against each `migration.folderMillis`, never a per-hash set
+ * difference. That is not a stylistic choice: a checker with its own notion of "current" would
+ * eventually disagree with the migrator, and a preflight that refuses a database `tn db migrate`
+ * considers finished is worse than no preflight at all. `test/db-migration-drift.test.ts` walks the
+ * journal from empty to full asserting the two agree at every point, because a checker that agrees
+ * by coincidence looks exactly like one that agrees by construction.
+ *
+ * A database with no `__drizzle_migrations` table at all reads as fully behind rather than
+ * throwing: that is the honest answer for a file nothing has bootstrapped, and it keeps this
+ * function safe to call on any open handle.
+ */
+export function migrationStatus(
+  sqlite: Database.Database,
+  migrationsFolder: string = MIGRATIONS_FOLDER,
+): { pending: number; total: number } {
+  const migrations = readMigrationFiles({ migrationsFolder });
+  const total = migrations.length;
+  const journalExists = sqlite
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='__drizzle_migrations'`)
+    .get();
+  if (journalExists === undefined) return { pending: total, total };
+
+  const watermark = sqlite
+    .prepare(
+      `SELECT created_at AS createdAt FROM "__drizzle_migrations" ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get() as { createdAt: unknown } | undefined;
+  if (watermark === undefined) return { pending: total, total };
+
+  return {
+    pending: migrations.filter((m) => Number(watermark.createdAt) < m.folderMillis).length,
+    total,
+  };
+}
+
+/** `migrationStatus`'s pending count alone, for callers that do not need the total. */
+export function pendingMigrationCount(
+  sqlite: Database.Database,
+  migrationsFolder: string = MIGRATIONS_FOLDER,
+): number {
+  return migrationStatus(sqlite, migrationsFolder).pending;
+}
+
+/**
  * Why did an open of `path` fail — because there was nothing there to open, or for some other
  * reason? Returns the `open(2)` errno, or `null` when the file opens fine (so SQLite objected to
  * its CONTENT, not its reachability).
@@ -229,6 +292,25 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
   }
   enableWal(sqlite);
   sqlite.pragma("foreign_keys = ON");
+  // #160 part D: refuse a database older than the code about to query it, BEFORE the first query
+  // turns that into `SqliteError: no such column: <whatever the newest migration added>`.
+  //
+  // The exemption is `create === true`, which is exactly and only `runMigrations` (see
+  // `OpenDbOptions.create` above — every other one of the ~30 call sites inherits the `false`
+  // default). Any other spelling would lock `tn db migrate` out of the one database it exists to
+  // repair; keying off the bit that already means "I am the bootstrapper" adds no new concept.
+  if (options.create !== true) {
+    // One read of the migration folder, not two — the first revision re-read it inside the failure
+    // branch to recover `total`.
+    const { pending, total } = migrationStatus(sqlite);
+    if (pending > 0) {
+      sqlite.close();
+      throw new DatabaseBehindMigrationsError(
+        `database at ${resolve(path)} is at ${total - pending} of ${total} migrations — ` +
+          "run `tn db migrate`",
+      );
+    }
+  }
   return { sqlite, db: drizzle(sqlite) };
 }
 

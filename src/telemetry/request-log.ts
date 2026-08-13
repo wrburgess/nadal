@@ -1,4 +1,5 @@
-import { MissingDatabaseError, openDb } from "../db/client.js";
+import { reportFatal } from "../cli/report-fatal.js";
+import { DatabaseBehindMigrationsError, MissingDatabaseError, openDb } from "../db/client.js";
 import { requestLog } from "../db/schema.js";
 import { errorClass, errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
@@ -42,6 +43,11 @@ function writeRequestLogRow(row: RequestLogRow): void {
     }
   } catch (err) {
     if (err instanceof MissingDatabaseError) return;
+    // #160 part D, same reasoning as the line above: a database behind its migrations is a fault
+    // the operator is ALREADY being told about, by the refusal `openDb` threw at the command. If
+    // telemetry also complained, one fault would print two diagnostics — and the second one names
+    // request_log, which has nothing to do with what is wrong.
+    if (err instanceof DatabaseBehindMigrationsError) return;
     // `errorMessage`, not `err instanceof Error ? err.message : String(err)`: the latter puts the
     // coercion on the wrong branch, so an Error whose `message` is not a string made
     // `sanitizeValue()` call `.replace()` on a non-string and throw a TypeError from inside THIS
@@ -55,12 +61,21 @@ export async function logRequest(
   command: string,
   args: string[],
   fn: () => Promise<number>,
+  // #160. The caller's output mode, so a thrown error is reported in the shape the caller asked
+  // for. Optional with a plain default: every existing test calls this with four arguments, and a
+  // missing mode must still REPORT (defaulting to silence would reinstate the defect whenever a
+  // future caller forgets to pass it).
+  emitOpts: { json: boolean; quiet: boolean } = { json: false, quiet: false },
 ): Promise<number> {
   const startedAt = new Date().toISOString();
   let outcome = "ok";
   let code: number;
   try {
     code = await fn();
+    // NOT reported: a command that returns non-zero without throwing has already emitted its own
+    // `status=error` summary. Reporting here too would print every ordinary refusal twice, and an
+    // operator who learns to skip the duplicate line is an operator who will skip the real
+    // diagnostic when it finally appears.
     if (code !== 0) outcome = `error:exit-${code}`;
   } catch (err) {
     // `errorClass`, not an inline `instanceof` + `.constructor.name` (Reviewer finding 3 on
@@ -69,6 +84,13 @@ export async function logRequest(
     // and `logRequest` reject instead of returning the wrapped call's exit code.
     outcome = `error:${errorClass(err)}`;
     code = 1;
+    // #160: SPEAK before returning. This is the whole behavioral change, and it is deliberately a
+    // report rather than a re-throw: PR #84's guarantee that this function never rejects is
+    // correct and stays. What was wrong was applying telemetry's own "never break the caller"
+    // discipline to the CALLER'S error — the one thing the operator actually needed to see.
+    // `reportFatal` is built on the same non-throwing `errorMessage`/`errorClass` helpers this
+    // catch already trusts, so it cannot turn a command's failure into its own.
+    reportFatal(command, err, emitOpts);
   }
   writeRequestLogRow({
     surface,
@@ -105,9 +127,21 @@ function sanitizeArgsDeep(value: unknown): unknown {
  *
  * On success, writes `outcome="ok"` and returns `fn`'s result. On a thrown error, writes
  * `outcome="error:<ClassName>"` and RE-THROWS the original error — telemetry must never swallow a
- * tool failure, the same contract `logRequest` gives the CLI (there, a non-zero exit code IS the
- * "error" signal; here, since there is no exit code, the throw itself has to be the signal, so it
- * cannot be absorbed).
+ * tool failure.
+ *
+ * **The two surfaces reach that same guarantee by different means, and this comment used to claim
+ * otherwise** (#160). It read "the same contract `logRequest` gives the CLI", which was false: at
+ * the time, `logRequest` caught a thrown error, labelled its row, and returned 1 in total silence —
+ * the defect #160 fixes. The contracts now, stated as they actually are:
+ *
+ *   - **MCP (here):** re-throw. There is no exit code, so the throw itself is the only signal, and
+ *     absorbing it would leave the client with a successful-looking empty result.
+ *   - **CLI (`logRequest`):** report via `reportFatal`, then return 1 — never reject. It must keep
+ *     returning an exit code because PR #84 finding 3 established that a rejecting `logRequest`
+ *     loses the wrapped call's code entirely; the fix for silence was to make it SPEAK, not to make
+ *     it throw.
+ *
+ * Same guarantee — a failure is never invisible — through the mechanism each surface can carry.
  */
 export async function logMcpTool<T>(tool: string, args: unknown, fn: () => Promise<T>): Promise<T> {
   const startedAt = new Date().toISOString();

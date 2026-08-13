@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { migrateToAllButLast } from "./helpers/migrations.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
@@ -35,5 +36,50 @@ describe("tn binary exit code (real process, not the in-process dispatch() retur
     // stderr, so this test stays about the exit-code/first-line contract it exists to cover.
     const [firstLine] = result.stderr.trim().split("\n");
     expect(firstLine).toMatch(/^db migrate status=error message=".+"$/);
+  });
+
+  // #160. The two tests above cover a command that HANDLES its own failure. The bug was the other
+  // half: an error a command re-throws (11 of 14 do, deliberately — `if (!isEventRefusal(err))
+  // throw err;`) reached `logRequest`, was used to label a telemetry row, and was then discarded.
+  // `tn` exited 1 with zero bytes on both streams. These assert at the only layer that can prove
+  // it: a real process, where "printed nothing" is observable rather than argued about.
+  it("#160: an error the command RE-THROWS still reaches stderr — it used to vanish entirely", () => {
+    // A corrupt database file: no refusal predicate in any command matches the resulting
+    // SqliteError, so it propagates exactly like the production `no such column` did. Chosen over
+    // a behind-migrations database on purpose — part D would intercept that one, and this test
+    // exists to prove the GENERIC reporter works for errors nothing anticipated.
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "corrupt.db");
+    writeFileSync(dbPath, "this is not a database, it is a sandwich");
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    // The whole defect, in one assertion.
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/^player show status=error message=".+" class=".+"$/m);
+  });
+
+  it("#160: a database behind its migrations says so, instead of naming a column", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "behind.db");
+    const { applied, available } = migrateToAllButLast(dbPath);
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    // What the operator gets to act on: both counts and the command. Before this, the same
+    // situation produced `SqliteError: no such column: plays` at best, and silence in fact.
+    expect(result.stderr).toContain(`is at ${applied} of ${available} migrations`);
+    expect(result.stderr).toContain("run `tn db migrate`");
+    // Exactly one diagnostic for one fault — telemetry must not add its own line about
+    // request_log, which is not what is wrong.
+    expect(result.stderr).not.toContain("telemetry: request_log write failed");
   });
 });

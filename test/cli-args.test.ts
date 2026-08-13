@@ -220,6 +220,36 @@ describe("scanFlags", () => {
     expect(scan.helpRequested).toBe(true);
   });
 
+  // #160: the scan also answers "which output mode did the caller ask for", so `dispatch` can hand
+  // `reportFatal` the right `emitSummary` opts for a command that THREW — at which point the
+  // command's own parsed flags no longer exist to read. Derived from this walk rather than by
+  // string-matching argv, because a value flag's value is exactly what a naive `args.includes()`
+  // would misread — the #44 defect, one layer over.
+  it("#160: reports --json and --quiet in flag position", () => {
+    const scan = scanFlags(["x", "--json"], [], []);
+    expect(scan.json).toBe(true);
+    expect(scan.quiet).toBe(false);
+  });
+
+  it("#160: -q is the short spelling of --quiet, reconciled here as globalFlags does", () => {
+    const scan = scanFlags(["x", "-q"], [], []);
+    expect(scan.quiet).toBe(true);
+    expect(scanFlags(["x", "--quiet"], [], []).quiet).toBe(true);
+  });
+
+  it("#160: --json consumed as a value flag's VALUE is not an output-mode request", () => {
+    // The #44 class, applied to the new fields: `--from --json` means "from, whose value is the
+    // literal string --json", not "JSON output". An implementation using args.includes("--json")
+    // passes every other test in this block and fails this one.
+    const scan = scanFlags(["--from", "--json"], [], ["from"]);
+    expect(scan.json).toBe(false);
+  });
+
+  it("#160: --json past a real end-of-flags delimiter is text, not a flag", () => {
+    const scan = scanFlags(["--players", "--", "--json"], ["players"], []);
+    expect(scan.json).toBe(false);
+  });
+
   it("precedence: a name declared as BOTH boolean and value classifies as boolean, matching parseArgs", () => {
     const scanned = scanFlags(["--dual", "--"], ["dual"], ["dual"]);
     // Boolean flags never consume — so the following "--" is visited and IS the delimiter.

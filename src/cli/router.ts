@@ -157,5 +157,13 @@ export async function dispatch(argv: string[]): Promise<number> {
     console.log(helpText());
     return 0;
   }
-  return logRequest("cli", `${cmd.noun} ${cmd.verb}`, rest, () => cmd.run(rest));
+  // #160: `scan` already walked the flags value-flag-aware, so its `json`/`quiet` are the same
+  // answer the command's own parser would reach — derived from that one walk rather than a second,
+  // naive one. That matters because the reporting path exists precisely for commands that THREW,
+  // which includes throwing before their own parser ran; and because re-deriving the mode by
+  // string-matching `rest` is the #44 defect verbatim (a value flag's value read as a flag).
+  return logRequest("cli", `${cmd.noun} ${cmd.verb}`, rest, () => cmd.run(rest), {
+    json: scan.json,
+    quiet: scan.quiet,
+  });
 }
