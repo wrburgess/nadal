@@ -39,12 +39,15 @@
 # Skills-path cutover the HC chose to take the sync whole rather than re-diverge them, so as of that
 # merge:
 #
-#   * bug/epic/task.yml assign `type:bug` / `type:epic` / `type:task` + `status:ready` -- five names
-#     that do not exist here, so an issue opened from a template arrives WITH NO LABELS. Label it by
-#     hand from the set above; the type is not optional just because the form stopped supplying it.
-#   * chore.yml and spike.yml are back to `CHORE:` / `SPIKE:` title prefixes over those same absent
-#     labels, though nadal has no `chore` or `spike` type -- mechanical maintenance is a `task` here
-#     and research folds into an issue's Assessment. Retitle to `TASK:` and label `task`.
+#   * The five drifted forms assign SIX distinct names between them, and this repository has none of
+#     them (verified against `gh label list`, 2026-08-12): `type:bug`, `type:epic`, `type:task`,
+#     `type:chore`, `type:spike`, and `status:ready` -- the last shared by all five. GitHub drops a
+#     label a form names but the repository lacks, so an issue opened from any of them arrives WITH
+#     NO LABELS. Label it by hand from the set above; the type is not optional just because the form
+#     stopped supplying it.
+#   * chore.yml and spike.yml additionally return to `CHORE:` / `SPIKE:` title prefixes, though nadal
+#     has no `chore` or `spike` type -- mechanical maintenance is a `task` here and research folds
+#     into an issue's Assessment. Retitle to `TASK:` and label `task`.
 #
 # Closing it needs a decision this file cannot make: either these six names join the tracker, or the
 # whole set moves to deuce's three-axis schema, or deuce's templates learn to read a host's label
