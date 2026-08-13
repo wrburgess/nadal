@@ -191,7 +191,7 @@ which hosts likewise replace.
   for a lifecycle run in the first place. If a future task ever assigns Codex a Driver role, add back
   a working fallback (e.g. `Copilot`, whose *Invocation paths* row already ships below) before doing
   so, or this chain empties for it too.
-- **At the PR gate, the AC summons the Reviewer, not the HC**, and [`verify`](skills/verify/SKILL.md)
+- **At the PR gate, the AC summons the Reviewer, not the HC**, and [`verify`](.claude/skills/verify/SKILL.md)
   is the **sole owner** of that summons. No other Skill issues it — a duplicated summons produces two
   review requests and two windows, and makes "did the primary respond?" unanswerable.
 - **At the plan gate the HC forwards** the assessment and plan **when plan approval is `required`** (see
@@ -236,7 +236,7 @@ decision 4's unconditional model:
   on whatever terminal outcome results — `unreachable (precondition unverified)` when no request was
   created, `timed-out (precondition unverified)` when a request was created but stayed silent through the
   window — never collapsing a *pending* request into a clean `unreachable`. (This mirrors
-  [`verify`](skills/verify/SKILL.md)'s summon steps; the two must stay aligned.)
+  [`verify`](.claude/skills/verify/SKILL.md)'s summon steps; the two must stay aligned.)
 
 **The baseline now ships one executable check** — the Codex row's ready probe, which can run *before*
 summoning without a side effect, so it is declared rather than left host-supplied
@@ -276,7 +276,7 @@ concrete field name is host territory and never appears in a skill body.
 **How deep a solicited review goes, and when it stops.** The canonical mechanism is proposed upstream
 at [wrburgess/ace#161](https://github.com/wrburgess/ace/issues/161); until it lands this section is the
 host-local statement, and it **overrides** the unbounded adversarial pass the vendored
-[`verify`](skills/verify/SKILL.md) body describes (see the precedence table under
+[`verify`](.claude/skills/verify/SKILL.md) body describes (see the precedence table under
 [*Findings-Log Discipline*](#precedence--this-overrides-five-instructions-that-say-otherwise)).
 
 > **The values moved; the reasoning stayed** (#146). The lens menu, the lens-set size and the
@@ -389,7 +389,7 @@ The table below is kept for its reasoning, not as the source; where the two diff
 - **`required`** — a host may set the **plan-approval** row (and only that row) back to `required`. The
   AC then stops and waits for the HC: it does not proceed past the assessment without a chosen option,
   and it does not write code without an approved plan.
-- **Merge — nadal runs `attested`, and it now reaches.** [`deliver`](skills/deliver/SKILL.md)
+- **Merge — nadal runs `attested`, and it now reaches.** [`deliver`](.claude/skills/deliver/SKILL.md)
   (Stage 5; `final` was its ace-era name and left with the cutover) posts the Delivery Record and
   then **may merge, but only on evidence**: every gate check green **at the delivered head**, no open
   must-fix findings, an independent external-model adversarial review on record (see *Reviewer*), and
@@ -397,7 +397,7 @@ The table below is kept for its reasoning, not as the source; where the two diff
   merge — post the Delivery Record, name the condition that failed, and stop.
 
   **The fourth condition used to be unsatisfiable, and the reason is worth keeping** (#150 / PR #151).
-  [`verify`](skills/verify/SKILL.md) step 10 disposes of review findings in one fix wave and states
+  [`verify`](.claude/skills/verify/SKILL.md) step 10 disposes of review findings in one fix wave and states
   that **the reviewer is never re-summoned**. A fix wave moves the head. So on any pull request whose
   review finds anything, the review is bound to a SHA that is no longer the head, and this section
   concluded that every merge here must be HC-performed.
@@ -417,7 +417,7 @@ The table below is kept for its reasoning, not as the source; where the two diff
   decision 6, unchanged). Those gates exist for *content judgment*, not code correctness.
 - **The harness must also permit it.** Repo policy and agent-runtime permission are independent layers:
   `attested` authorizes the merge, it does not make the runtime allow the command. If the runtime denies
-  it, [`deliver`](skills/deliver/SKILL.md) stops and says so rather than treating the denial as a gate
+  it, [`deliver`](.claude/skills/deliver/SKILL.md) stops and says so rather than treating the denial as a gate
   failure.
 
 **Unconditional, whatever this section says:**
@@ -428,9 +428,9 @@ The table below is kept for its reasoning, not as the source; where the two diff
   "Plan posted" forces a context reset under either setting — a session boundary under `required` (the
   human crosses), and under `auto` the reset the retired `ship` orchestrator performed
   ([ADR 0028](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/docs/adr/0028-context-reset-boundary-resumable-stops-autonomous-listen.md)).
-  What carries the firebreak now is the stage itself: [`implement`](skills/implement/SKILL.md)
+  What carries the firebreak now is the stage itself: [`implement`](.claude/skills/implement/SKILL.md)
   (Stage 3; `invoke` was its ace-era name) **begins by re-reading the posted Plan from the issue** and
-  never continues on conversational memory, and [`deliver`](skills/deliver/SKILL.md) likewise begins by
+  never continues on conversational memory, and [`deliver`](.claude/skills/deliver/SKILL.md) likewise begins by
   re-reading the pull request. `auto` removes the *wait*; it never removes the context firebreak.
 - **The four standing stops** — an unresolvable check failure; a discovery that the change touches core
   logic the Plan did not anticipate; an architectural or ambiguous review comment; a verdict the run
@@ -453,7 +453,7 @@ The table below is kept for its reasoning, not as the source; where the two diff
 
 > **The mechanism this section governs no longer exists, and the section is left standing rather than
 > guessed at** (#150 / PR #151). Every rule below is addressed to ace `final`'s **Step 1**, its
-> rule-suggestion step. [`deliver`](skills/deliver/SKILL.md) — deuce's Stage 5, which replaced `final`
+> rule-suggestion step. [`deliver`](.claude/skills/deliver/SKILL.md) — deuce's Stage 5, which replaced `final`
 > — **has no such step**: its nine-step procedure reads the PR and issue, re-confirms the checks,
 > writes the Delivery Record, and acts on the Ship gate. Nothing in it learns or disposes of
 > Rules-Layer suggestions.
@@ -514,14 +514,14 @@ run either of them.**
 
 1. **On a run that posts a plan, the plan must carry a standing task:** *"append this run's
    process/config learnings to `docs/findings.md`."* This is a **host requirement on the plan the AC
-   authors**, and it is declared *here* because this file is where [`devise`](skills/devise/SKILL.md)
+   authors**, and it is declared *here* because this file is where [`devise`](.claude/skills/devise/SKILL.md)
    reads its host values. **Stated plainly so it is not mistaken for shipped behavior: the vendored
    `devise` body does not name this task, and nadal cannot add it there** — whoever authors the plan
    includes it because *this line* requires it, exactly as the Step-1 procedure above is the branch
    `final`'s body does not contain. A plan posted without the task is incomplete: add it and re-post
    before implementing, rather than appending later and calling it unplanned.
    **This is deliberately not an exemption:** the append is *inside the approved plan*, so
-   [`verify`](skills/verify/SKILL.md)'s normal drift test passes on it **truthfully** — its self-review
+   [`verify`](.claude/skills/verify/SKILL.md)'s normal drift test passes on it **truthfully** — its self-review
    can still assert *"only files in the final approved plan changed"* without that record being false.
    Everything else in the same commit gets the ordinary drift review; nothing is suppressed by
    filename, so an unplanned change cannot ride along beside a findings line.
@@ -538,11 +538,11 @@ run either of them.**
    never an Issue, PR, rule, or ADR.
 2. **Append as you learn** — in the stage that learned it, committed with that stage's own work, rather
    than batched at delivery. This mirrors the durable-as-it-arrives rule the retired `ship`
-   orchestrator applied to its asks-ledger. **A learning from [`assess`](skills/assess/SKILL.md) or
-   [`devise`](skills/devise/SKILL.md) has no branch yet**: record it in that stage's durable artifact —
+   orchestrator applied to its asks-ledger. **A learning from [`assess`](.claude/skills/assess/SKILL.md) or
+   [`devise`](.claude/skills/devise/SKILL.md) has no branch yet**: record it in that stage's durable artifact —
    the Assessment or Plan comment on the issue, which is also where a stop and its answer are recorded
    — and transcribe it into `docs/findings.md` in the first stage that has a branch,
-   [`implement`](skills/implement/SKILL.md).
+   [`implement`](.claude/skills/implement/SKILL.md).
 
    **A learning is only safe once it is on `main`, and two endings prevent that.** Committing the line
    with its phase is not sufficient on its own:
@@ -707,7 +707,8 @@ Only the deferred side is sub-sorted, and only when something is about to be don
 
 The instruction chain does not merely omit the rules above; in five places it **directs the opposite** —
 and each sits where an agent is standing at the moment it decides. All five are **vendored** — nadal
-never edits `rules/`, `skills/`, or `docs/standards/` — so they are overridden here, from the host's own
+never edits a vendored file, whether ace's `rules/` and `docs/standards/` or deuce's payload under
+`.claude/skills/` — so they are overridden here, from the host's own
 config layer, which is what that layer exists for. For a **process/operational** finding in nadal, none
 of the following applies:
 
@@ -715,9 +716,9 @@ of the following applies:
 |---|---|---|
 | [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → *Anti-Patterns* (Tier-1 Lean Core, resident on every run) | *"promote it now … or open a tracked enforcement issue"* | **Does not apply.** Write the findings line. |
 | [`rules/self-review.md`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/rules/self-review.md) → the **asks-ledger**, stated three times (Patterns, Checklist, Anti-Patterns), and formerly executable as the retired `ship` orchestrator's `asks_ledger` contract (`status: "handed-off"` with a `ref`) — the mechanism left at the deuce cutover, the rule it encoded did not | *"each one is either delivered or **handed to a tracked follow-up**"* | **The findings line IS delivery.** For a process/operational learning the log is the correct terminal destination, so such an ask closes as `delivered` with the findings line as its `ref` — never as `handed-off` to an Issue. The asks-ledger rule is not weakened: nothing may be silently dropped. |
-| ace `final`'s Step 1 — **no longer executed at all**, since [`deliver`](skills/deliver/SKILL.md) carries no rule-suggestion step | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply, and now has no mechanism to apply through.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`, and that whole section awaits [#154](https://github.com/wrburgess/nadal/issues/154). |
+| ace `final`'s Step 1 — **no longer executed at all**, since [`deliver`](.claude/skills/deliver/SKILL.md) carries no rule-suggestion step | *"defer the large or contentious ones to a tracked follow-up issue"* | **Does not apply, and now has no mechanism to apply through.** See *Rule-suggestion disposition* above — nadal runs `log-and-continue`, and that whole section awaits [#154](https://github.com/wrburgess/nadal/issues/154). |
 | [`scout`](https://github.com/wrburgess/ace/blob/46fdbb89d4e6dd30a63f01d58c0c75d9feb32608/skills/scout/SKILL.md) / the Learnings Log — the only logging pattern the Config Bundle ships | a logged entry carries a `stance` + `touches` and `scout` **opens a PR** proposing Rules/Skills/ADR changes | **A different artifact.** The Learnings Log folds *external* field voices and is meant to open PRs; [`docs/findings.md`](docs/findings.md) records the AC's *own* operational experience and is meant to open nothing. Do not carry the reflex across. |
-| [`verify`](skills/verify/SKILL.md) Stage 4 (executed on every PR) | an adversarial pass that *"actively tries to **refute** the change"* — stated with **no stopping condition**, so "is anything wrong?" runs until a human stops it | **Bounded here.** See [*Review Lenses*](#review-lenses): a solicited pass declares a lens set of 3 plus the permanent lens ([`config/review.md`](config/review.md), which the dispatcher parses), each lens runs once, and fix-verification gets two passes before escalation. The adversarial *posture* is unchanged — only its terminus is supplied, because the vendored body supplies none. |
+| [`verify`](.claude/skills/verify/SKILL.md) Stage 4 (executed on every PR) | an adversarial pass that *"actively tries to **refute** the change"* — stated with **no stopping condition**, so "is anything wrong?" runs until a human stops it | **Bounded here.** See [*Review Lenses*](#review-lenses): a solicited pass declares a lens set of 3 plus the permanent lens ([`config/review.md`](config/review.md), which the dispatcher parses), each lens runs once, and fix-verification gets two passes before escalation. The adversarial *posture* is unchanged — only its terminus is supplied, because the vendored body supplies none. |
 
 Two of these are easy to miss for opposite reasons. The **last** row is the trained reflex: the only
 logging pattern the bundle ships has the opposite disposition, so an agent pattern-matching on "I

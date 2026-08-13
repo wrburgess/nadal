@@ -25,7 +25,7 @@ exit — is canon and is not restated here.
    superseded one, the latest posted Plan is the Plan
    ([Stops](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stops), trigger 2).
 3. **Read the stage's routing** — which model and effort runs this stage is
-   [`config/models.md`](../../config/models.md); what may be offloaded is nothing — **every step
+   [`config/models.md`](../../../config/models.md); what may be offloaded is nothing — **every step
    below runs in the AC's own loop, on the whole diff**
    ([Stage 4](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-4--verify)).
 4. **Hunt drift in both directions** — the diff against the Plan for the unplanned, the Plan
@@ -60,13 +60,13 @@ exit — is canon and is not restated here.
    restatement of content another document owns. Fix it before the summons, so the review
    *confirms* rather than *corrects*. Why the step exists: run at full strength under the
    predecessor, this pass cut contractor findings by roughly 80% — the measurement behind the
-   one-wave limit in [`config/review.md`](../../config/review.md), which this step is what makes
+   one-wave limit in [`config/review.md`](../../../config/review.md), which this step is what makes
    affordable.
 8. **Declare the lens set fit for the subject, then summon the contractor review** — the set per
    [Chapter 2 → Bounded by lens set](https://github.com/wrburgess/deuce/blob/main/sds/02-review-and-findings.md#bounded-by-lens-set-not-by-round-count),
    prose subjects per
    [Chapter 2 → Verifying prose](https://github.com/wrburgess/deuce/blob/main/sds/02-review-and-findings.md#verifying-prose); run the
-   summons path ([`tools/review/summon.ts`](../../tools/review/summon.ts)), whose contract is
+   summons path ([`tools/review/summon.ts`](../../../tools/review/summon.ts)), whose contract is
    [Chapter 2 → The summons, completed](https://github.com/wrburgess/deuce/blob/main/sds/02-review-and-findings.md#the-summons-completed)
    and [→ Validation on return](https://github.com/wrburgess/deuce/blob/main/sds/02-review-and-findings.md#validation-on-return). **A run
    with no reachable reviewer stops and asks.**
@@ -79,12 +79,12 @@ exit — is canon and is not restated here.
    exercises it, then steps 4–6 re-run on the wave's diff; the reviewer is never re-summoned —
    bounds and escalation per
    [Chapter 2 → Fix-verification, bounded separately](https://github.com/wrburgess/deuce/blob/main/sds/02-review-and-findings.md#fix-verification-bounded-separately),
-   the limit's value in [`config/review.md`](../../config/review.md), the escalation into
+   the limit's value in [`config/review.md`](../../../config/review.md), the escalation into
    [Devise](../devise/SKILL.md). Re-run the checks to green.
 11. **Answer each finding on the surface it arrived on** — a pull request carries three:
     comments, inline threads, review bodies; a self-raised finding is answered in the
     Verification itself ([Stage 4](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-4--verify)).
-12. **Read [`rules/authoring.md`](../../rules/authoring.md)** at the moment of writing.
+12. **Read [`rules/authoring.md`](../../../rules/authoring.md)** at the moment of writing.
 13. **Draft the Verification as a Readout** — content per
     [Stage 4](https://github.com/wrburgess/deuce/blob/main/sds/01-lifecycle-and-skills.md#stage-4--verify), grown to the record
     [Chapter 2 → Verify's external half, now written](https://github.com/wrburgess/deuce/blob/main/sds/02-review-and-findings.md#verifys-external-half-now-written)

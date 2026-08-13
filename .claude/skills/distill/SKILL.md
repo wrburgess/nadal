@@ -31,9 +31,9 @@ what lands; this file fixes how the session gets there.
    records, and whatever the problem touches, as the repository actually is. A question the
    repository can answer is never put to the HC.
 3. **Read the session's routing** — which model and effort runs it is
-   [`config/models.md`](../../config/models.md); what may be offloaded, and in what shape, is
-   [`config/delegation.md`](../../config/delegation.md).
-4. **Read [`rules/authoring.md`](../../rules/authoring.md) before the first question** — every
+   [`config/models.md`](../../../config/models.md); what may be offloaded, and in what shape, is
+   [`config/delegation.md`](../../../config/delegation.md).
+4. **Read [`rules/authoring.md`](../../../rules/authoring.md) before the first question** — every
    question and capture is written for the HC to read.
 5. **Open the landing surfaces at the first settlement, not at the end.** On a raw problem:
    restate the problem, agree it with the HC, and open the `EPIC:` with its Problem field — the
@@ -42,7 +42,7 @@ what lands; this file fixes how the session gets there.
    Ratifying: the chapter's pull request is the surface, amended in place. File-side captures —
    Glossary entries, decision records — ride the chapter's pull request when ratifying; otherwise
    one session, one branch, one pull request, opened at the first capture and merged alongside the
-   brief at the Ship gate's current setting ([`config/gates.md`](../../config/gates.md)).
+   brief at the Ship gate's current setting ([`config/gates.md`](../../../config/gates.md)).
 6. **Put one question, with a recommendation and its reasoning** — settling first what other
    questions hang on. Shape every proposal against the SDS as it forms; work no chapter sanctions
    is a request for a chapter, never a workaround

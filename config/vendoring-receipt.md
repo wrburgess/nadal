@@ -1,23 +1,7 @@
 ---
-commit: 90ee01aed9a634930249d9bfae2c2a9187d9cb38
+commit: 9d00244d61f3401cfee32dc5e6a404b92d3c1d24
 date: 2026-08-12
 checksums:
-  - path: skills/assess/SKILL.md
-    sha256: b66d4a1e135ec141abc114407c1839e1920d273e2ebfe64bbc4ab27f509b9ba7
-  - path: skills/devise/SKILL.md
-    sha256: bb033d44195aedebaa69f1929ffeef545a3a369938598e756a9fd82e3094edbf
-  - path: skills/implement/SKILL.md
-    sha256: 2ebec42b8c5e053c3937b97ba4b950b568a969a78e1fa9915e1749004b36d053
-  - path: skills/verify/SKILL.md
-    sha256: cd4844ef670cb4ba6030de43e0cd5c264ae9936f9677f10855b6056e65243250
-  - path: skills/deliver/SKILL.md
-    sha256: e08157e016cadf4f4b4247496c992c250e0d5f9552e3e98698fd4c1c2b537cd7
-  - path: skills/distill/SKILL.md
-    sha256: 70658dc71d1cca2aed6915b5ba405875227f92633572de67d488d1f4f49e1977
-  - path: skills/brief/SKILL.md
-    sha256: 9ebf22e912407aae28e821ff26632fbc81534d8e8b95d86460282ecf827ecd4c
-  - path: skills/brief/formats.md
-    sha256: 131abf664a212a30955a7489bf97db6c09c5373843b495a84ab88cf3c4854371
   - path: .githooks/guard-protected-branch
     sha256: 4bf66f4e2b58888e5a5f6a6cbc0d3dcdad0350d82d4f5aa150c55a9084e3daf9
   - path: .githooks/pre-commit
@@ -38,6 +22,22 @@ checksums:
     sha256: b976f82296b95243e6d5945332ff3ebed5b510127d9d42de21018912e5051ef8
   - path: AGENTS.md
     sha256: a71e04d090f5ce02763ef47ce92e1059d223b4e3d44f28ddf9fdcf1dfc0e452b
+  - path: .claude/skills/assess/SKILL.md
+    sha256: bdd5995c6489e670a4252db9978c9b081877907cbc8f4329c8e9a769575d5216
+  - path: .claude/skills/devise/SKILL.md
+    sha256: e231924548b4c0d14bad0d8a511711f33c47cc5b1dcb03f2f6719cbb0c9cf14f
+  - path: .claude/skills/implement/SKILL.md
+    sha256: a9dd0afb532db733c6cb2200424eb516be1e4d325977d7e35158ece2c2a229e5
+  - path: .claude/skills/verify/SKILL.md
+    sha256: 09795454a6bf4abac884d31427b73c54c179ae11f7ca46745363e1aec1ea781e
+  - path: .claude/skills/deliver/SKILL.md
+    sha256: b81c0c8e320075841305c761b7fdf6a9e6ed6d8bc45cf4e4f47eabfd96afa49c
+  - path: .claude/skills/distill/SKILL.md
+    sha256: 4895ad18990e426e15e7addc58df2d1334119e39c21eb6151a6c6fd86e992ef3
+  - path: .claude/skills/brief/SKILL.md
+    sha256: cae221b2b6bb28ae1021c136b1acc9937deb6dcd324b2743a84908cd70caa74f
+  - path: .claude/skills/brief/formats.md
+    sha256: 131abf664a212a30955a7489bf97db6c09c5373843b495a84ab88cf3c4854371
 ---
 
 # Vendoring receipt

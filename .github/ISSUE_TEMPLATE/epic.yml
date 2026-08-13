@@ -1,9 +1,7 @@
 name: "EPIC — umbrella over child issues"
 description: "An umbrella carrying the eight-field brief; closes when its last child merges"
 title: "EPIC: "
-# nadal's label set, not deuce's — declared drift against the vendoring receipt (#146). See
-# labels.yml for the divergence and why.
-labels: ["epic"]
+labels: ["type:epic", "status:ready"]
 body:
   - type: markdown
     attributes:

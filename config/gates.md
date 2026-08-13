@@ -32,7 +32,7 @@ stage — skipping one stays the HC's call.
 ### Why, dated to the decision
 
 nadal declared `attested` on 2026-07-31 (#41) and then could not reach it. The reason was
-structural, not a bad run: [`verify`](../skills/verify/SKILL.md) step 10 batches review findings into
+structural, not a bad run: [`verify`](../.claude/skills/verify/SKILL.md) step 10 batches review findings into
 one fix wave and states that **the reviewer is never re-summoned**. A fix wave moves the head. So on
 any pull request whose review found anything, the review was bound to a SHA that was no longer the
 head, and the fourth condition could only be met by a review that found nothing. `PROJECT.md`
@@ -81,7 +81,7 @@ noticed.
 
   `validateReview(review, expectedCommit, lenses)` compares the review's self-reported commit against
   an `expectedCommit` **its caller supplies**; it never reads the head itself, and
-  [`deliver`](../skills/deliver/SKILL.md) names no such call. Its only non-test caller is
+  [`deliver`](../.claude/skills/deliver/SKILL.md) names no such call. Its only non-test caller is
   [`summon.ts`](../tools/review/summon.ts), which **runs here as of
   [#155](https://github.com/wrburgess/nadal/issues/155)** — `npm run summon`.
 

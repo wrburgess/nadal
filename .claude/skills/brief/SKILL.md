@@ -33,7 +33,7 @@ target kinds. The reader to write for is the HC returning after time away, holdi
      among them.
    - **The project:** every epic and its state, the open issues by `status:` label, and what
      merged recently.
-3. **Read [`rules/authoring.md`](../../rules/authoring.md)** at the moment of writing — the Brief
+3. **Read [`rules/authoring.md`](../../../rules/authoring.md)** at the moment of writing — the Brief
    is written for exactly the reader the register rule protects.
 4. **Compose per [`formats.md`](formats.md)** — the four parts in order: the fresh-eyes
    description (what it is, why it exists, how it is being pursued), the health verdict from the
