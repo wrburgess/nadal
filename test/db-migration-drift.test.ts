@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { readMigrationFiles } from "drizzle-orm/migrator";
-import { resolve } from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   DatabaseBehindMigrationsError,
@@ -10,7 +12,13 @@ import {
   runMigrations,
 } from "../src/db/client.js";
 import { logRequest } from "../src/telemetry/request-log.js";
-import { MIGRATIONS_FOLDER, migrateToAllButLast } from "./helpers/migrations.js";
+import {
+  MIGRATIONS_FOLDER,
+  journalRowCount,
+  migrateToAllButLast,
+  migrateToPrefix,
+  migrationTags,
+} from "./helpers/migrations.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 
 /**
@@ -83,22 +91,65 @@ describe("migration drift is named rather than decoded (#160 part D)", () => {
     expect(() => runMigrations(fixture.path())).not.toThrow();
   });
 
-  it("PARITY: the checker and the migrator agree about what 'current' means, across the whole journal", () => {
-    // The hazard this kills: a checker that agrees with `applyMigrations` by coincidence looks
-    // identical to one that agrees by construction. Both read the same single-watermark rule
-    // (`Number(watermark) < folderMillis`), so walking the journal from empty to full must show
-    // pendingMigrationCount hitting zero at exactly the point applyMigrations stops doing work.
-    const sqlite = new Database(fixture.path());
-    const available = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER }).length;
+  it("PARITY: at every prefix state, the checker's count equals the work the migrator actually does", () => {
+    // The property, executed rather than asserted about: `pendingMigrationCount` must equal the
+    // number of migrations `applyMigrations` GOES ON TO APPLY from that same state. A checker with
+    // its own notion of "current" would eventually refuse a database `tn db migrate` considers
+    // finished, and the two disagreeing is invisible at any single state — so this walks all of
+    // them, 0 applied through N applied, and compares the prediction against the observed work.
+    const total = migrationTags().length;
+    expect(total).toBeGreaterThan(1); // a one-migration journal would make the walk vacuous
 
-    expect(pendingMigrationCount(sqlite)).toBe(available);
-    applyMigrations(sqlite, MIGRATIONS_FOLDER);
-    expect(pendingMigrationCount(sqlite)).toBe(0);
+    for (let applied = 0; applied <= total; applied++) {
+      const path = join(mkdtempSync(join(tmpdir(), "tn-parity-")), "db.sqlite");
+      migrateToPrefix(path, applied);
+      const sqlite = new Database(path);
 
-    // A second application is a no-op for the migrator; the checker must still say zero rather
-    // than re-counting anything as pending.
+      const predicted = pendingMigrationCount(sqlite);
+      const before = journalRowCount(sqlite);
+      applyMigrations(sqlite, MIGRATIONS_FOLDER);
+      const actuallyApplied = journalRowCount(sqlite) - before;
+
+      expect(predicted, `at ${applied} of ${total} applied`).toBe(actuallyApplied);
+      // And having caught up, the checker says so — a second application is a no-op for the
+      // migrator and must not be re-counted as pending.
+      expect(pendingMigrationCount(sqlite), `after catching up from ${applied}`).toBe(0);
+      applyMigrations(sqlite, MIGRATIONS_FOLDER);
+      expect(pendingMigrationCount(sqlite)).toBe(0);
+      sqlite.close();
+    }
+  });
+
+  it("the checker reads the journal's own rule, not the migration folder's size", () => {
+    // The limit of the walk above, closed here rather than left to a comment. Every state a prefix
+    // walk can reach has `COUNT(*) === (migrations at or below the watermark)`, so that walk cannot
+    // tell the watermark rule from `total - COUNT(*)` — both pass it. Verified by mutation: swapping
+    // `migrationStatus`'s body for the row count leaves the whole drift suite green.
+    //
+    // A journal that is NOT a clean prefix separates them. An extra row — what a hand-repaired
+    // journal or a re-run of a squashed migration leaves behind — makes the row count claim one
+    // MORE migration is applied than the folder holds, while the watermark rule keeps answering the
+    // question `applyMigrations` actually asks: is anything on disk newer than what I last applied?
+    const path = join(mkdtempSync(join(tmpdir(), "tn-journal-")), "db.sqlite");
+    const { available } = migrateToPrefix(path, migrationTags().length - 1);
+    const sqlite = new Database(path);
+
+    const watermark = sqlite
+      .prepare(`SELECT created_at AS createdAt FROM "__drizzle_migrations" ORDER BY created_at DESC LIMIT 1`)
+      .get() as { createdAt: number };
+    sqlite
+      .prepare(`INSERT INTO "__drizzle_migrations" ("hash", "created_at") VALUES (?, ?)`)
+      .run("a duplicate of an already-applied migration", watermark.createdAt);
+
+    // Row count now says `available` are applied and nothing is pending. The watermark says the
+    // newest migration on disk is still ahead of everything recorded — which is the truth, and is
+    // what `applyMigrations` will act on.
+    expect(journalRowCount(sqlite)).toBe(available);
+    expect(pendingMigrationCount(sqlite)).toBe(1);
+
+    const before = journalRowCount(sqlite);
     applyMigrations(sqlite, MIGRATIONS_FOLDER);
-    expect(pendingMigrationCount(sqlite)).toBe(0);
+    expect(journalRowCount(sqlite) - before).toBe(1);
     sqlite.close();
   });
 

@@ -82,4 +82,31 @@ describe("tn binary exit code (real process, not the in-process dispatch() retur
     // request_log, which is not what is wrong.
     expect(result.stderr).not.toContain("telemetry: request_log write failed");
   });
+
+  it("#160: `--json` reaches the crash reporter — the only test of the wiring that supplies it", () => {
+    // This is the one assertion that executes `dispatch`'s hand-off of `scanFlags`' output to
+    // `logRequest`. Everything else about the reporter's `--json` shape is unit-tested by passing
+    // the opts in by hand, which cannot see a router that stops deriving them: replacing
+    // `{json: scan.json, quiet: scan.quiet}` with `{json: false, quiet: false}` left all 2478 tests
+    // green before this existed. The behind-migrations database is deliberate — it is the one
+    // failure whose stderr is exactly one line (telemetry stays silent on it), so the whole stream
+    // can be parsed as the payload rather than searched for a line that looks like JSON.
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "behind-json.db");
+    const { applied, available } = migrateToAllButLast(dbPath);
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone", "--json"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    const payload: unknown = JSON.parse(result.stderr.trim());
+    expect(payload).toEqual({
+      status: "error",
+      message: expect.stringContaining(`is at ${applied} of ${available} migrations`),
+      class: "DatabaseBehindMigrationsError",
+    });
+  });
 });

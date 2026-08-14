@@ -30,6 +30,13 @@ import { errorClass, errorMessage } from "../error-message.js";
  * stderr, sanitizes through `quoteSummaryValue`, honors `--json`, and deliberately does NOT let
  * `--quiet` suppress an error line. That last one matters here more than anywhere — a failure the
  * operator cannot see is the whole defect.
+ *
+ * Which makes `opts.quiet` **inert on this path, and carried anyway**: `emitSummary` checks
+ * `quiet && !toStderr`, and a crash is always `toStderr`, so no value of it can change a byte of
+ * what this function writes. It is passed because `EmitOpts` is one shape every caller builds the
+ * same way, and a reporter that took only `json` would be the one call site where "the caller's
+ * output mode" meant something narrower. Said out loud so nobody reads the `--quiet` test below as
+ * pinning a branch — it pins `emitSummary`'s contract, which is where the behavior actually lives.
  */
 export function reportFatal(
   command: string,

@@ -47,6 +47,17 @@ function writeRequestLogRow(row: RequestLogRow): void {
     // the operator is ALREADY being told about, by the refusal `openDb` threw at the command. If
     // telemetry also complained, one fault would print two diagnostics — and the second one names
     // request_log, which has nothing to do with what is wrong.
+    //
+    // **The cost, stated because it is a real regression and not only a carve-out.** Before part D
+    // this open SUCCEEDED against a behind database, so the row was written: `request_log`'s
+    // `error:SqliteError` rows from 2026-08-13 are exactly that, and they are the evidence #160 was
+    // filed on. Now nothing is recorded for any command run while the database is behind — the
+    // window between pulling a migration and running it is invisible to telemetry. Accepted,
+    // because the alternative is worse in both directions: writing the row needs an open this
+    // guard exists to refuse, and exempting telemetry from the guard would query a schema the
+    // command was just refused. The operator loses nothing they can act on (the drift refusal says
+    // what to do); what is lost is forensic, and a reader mining `request_log` for a silent window
+    // should know it reads as absence rather than as a recorded error.
     if (err instanceof DatabaseBehindMigrationsError) return;
     // `errorMessage`, not `err instanceof Error ? err.message : String(err)`: the latter puts the
     // coercion on the wrong branch, so an Error whose `message` is not a string made

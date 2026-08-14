@@ -100,9 +100,15 @@ export class DatabaseBehindMigrationsError extends Error {}
  * `MAX(created_at)` read compared against each `migration.folderMillis`, never a per-hash set
  * difference. That is not a stylistic choice: a checker with its own notion of "current" would
  * eventually disagree with the migrator, and a preflight that refuses a database `tn db migrate`
- * considers finished is worse than no preflight at all. `test/db-migration-drift.test.ts` walks the
- * journal from empty to full asserting the two agree at every point, because a checker that agrees
- * by coincidence looks exactly like one that agrees by construction.
+ * considers finished is worse than no preflight at all.
+ *
+ * `test/db-migration-drift.test.ts` holds that in two tests, and it takes two: its PARITY test
+ * walks every prefix state, 0 applied through N, asserting this count equals the number of
+ * migrations `applyMigrations` then actually applies — but every prefix state has
+ * `COUNT(*) === (migrations at or below the watermark)`, so that walk alone passes just as happily
+ * for a checker built on `total - COUNT(*)` (verified by mutation, not assumed). The second test
+ * supplies the state that separates them — a journal carrying a duplicate row, which is not a clean
+ * prefix — and it is the one that fails if this rule is ever replaced by a row count.
  *
  * A database with no `__drizzle_migrations` table at all reads as fully behind rather than
  * throwing: that is the honest answer for a file nothing has bootstrapped, and it keeps this
@@ -132,7 +138,12 @@ export function migrationStatus(
   };
 }
 
-/** `migrationStatus`'s pending count alone, for callers that do not need the total. */
+/**
+ * `migrationStatus`'s pending count alone. **No production caller** — `openDb` below needs the
+ * total for its message and calls `migrationStatus` directly; this is the accessor
+ * `test/db-migration-drift.test.ts` asserts through, kept because the count is the property those
+ * tests are about and threading `.pending` through every assertion reads worse than naming it once.
+ */
 export function pendingMigrationCount(
   sqlite: Database.Database,
   migrationsFolder: string = MIGRATIONS_FOLDER,

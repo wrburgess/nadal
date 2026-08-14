@@ -50,6 +50,27 @@ this keeps the line single-line and un-spoofable. Sanitizing does not trim leadi
 whitespace: a quoted value preserves edge whitespace exactly (e.g. a `TN_DB_PATH` with a trailing
 space round-trips unchanged), since quoting already makes it unambiguous.
 
+**A crash carries one extra field, and that field is how you tell a crash from a refusal.** Every
+`status=error` line a command prints for a caller-fixable problem — a bad flag, an unknown player, a
+day outside the event — carries `message=` and nothing else. A line that also carries **`class=`**
+was not printed by any command: it comes from the crash reporter (`src/cli/report-fatal.ts`), which
+`dispatch`'s telemetry wrapper calls for an error a command *threw* rather than handled, and `class=`
+is the thrown value's error class:
+
+```
+lineup build status=error message="no availability recorded for 2026-08-29"
+player show status=error message="database at /…/nadal.db is at 13 of 14 migrations — run `tn db migrate`" class="DatabaseBehindMigrationsError"
+```
+
+The first is the command answering you; the second is nadal failing. Both go to stderr, both exit 1,
+and both respect `--json` (`{"status":"error","message":"…","class":"…"}`). Neither is suppressed by
+`--quiet`, which touches stdout only.
+
+This line used to print nothing at all — `logRequest` caught the error, labelled a telemetry row
+with it, and discarded it, so `tn` exited 1 with zero bytes on both streams (#160). *"Every command
+prints one deterministic `key=value` summary line"* above was aspirational for this one path until
+that was fixed.
+
 A bare **`--` ends flag parsing:** every token after it is a target or payload, never a flag, so
 `tn player note Randy -- "--poach at net"` records a note that begins with `--`. Global flags are
 recognized only *before* the delimiter — past it, `--json` is literal text. An unrecognized flag
