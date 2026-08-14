@@ -330,6 +330,11 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
         );
       }
     }
+    // The `return` is INSIDE the guard deliberately: the block has to end where ownership actually
+    // transfers, not one statement earlier. Drawing the line above this would re-open the same hole
+    // one call along — `drizzle(sqlite)` is the last thing that can throw while this function is
+    // still the handle's only owner.
+    return { sqlite, db: drizzle(sqlite) };
   } catch (err) {
     // The close is itself guarded, and that is not belt-and-braces: `applyMigrations` below carries
     // a recorded finding about exactly this shape — an unconditional cleanup call in a catch threw
@@ -342,7 +347,6 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
     }
     throw err;
   }
-  return { sqlite, db: drizzle(sqlite) };
 }
 
 // Issue #46: a pre-existing database holding a duplicate `teams.tennisrecord_url` pair (the exact
