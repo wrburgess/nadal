@@ -30,7 +30,21 @@ const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36";
 
 const DEFAULT_POLITENESS_MS = 1500;
-const DEFAULT_TIMEOUT_MS = 20_000;
+/**
+ * 60s, not 20s. A long-tenured player's single-season match history is a genuinely large page and
+ * TennisRecord serves it slowly: measured 2026-08-14, `Jerry Martin&s=4` at `year=2025` returned
+ * HTTP 200 with 318,136 bytes in 18.3s — inside the old 20s budget only sometimes, so the cascade
+ * skipped his whole 2025 season twice in a row.
+ *
+ * That failure is worse than it looks because it is tagged `retryable` and IS a real timeout, so
+ * the operator is told to re-run something that will keep failing. The fault was never transient:
+ * the budget was simply below the page's honest service time.
+ *
+ * 60s is ~3.3x the slowest page observed, so a genuinely hung request still fails well inside a
+ * pull rather than stalling it. Same reasoning the suite's own `testTimeout` was set by — size the
+ * budget from the slowest MEASURED case, not from what feels patient.
+ */
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 export type Clock = { now(): number };
 export type Sleep = (ms: number) => Promise<void>;
