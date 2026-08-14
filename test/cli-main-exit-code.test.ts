@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { migrateToAllButLast } from "./helpers/migrations.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
@@ -35,5 +36,118 @@ describe("tn binary exit code (real process, not the in-process dispatch() retur
     // stderr, so this test stays about the exit-code/first-line contract it exists to cover.
     const [firstLine] = result.stderr.trim().split("\n");
     expect(firstLine).toMatch(/^db migrate status=error message=".+"$/);
+  });
+
+  // #160. The two tests above cover a command that HANDLES its own failure. The bug was the other
+  // half: an error a command re-throws (11 of 14 do, deliberately — `if (!isEventRefusal(err))
+  // throw err;`) reached `logRequest`, was used to label a telemetry row, and was then discarded.
+  // `tn` exited 1 with zero bytes on both streams. These assert at the only layer that can prove
+  // it: a real process, where "printed nothing" is observable rather than argued about.
+  it("#160: an error the command RE-THROWS still reaches stderr — it used to vanish entirely", () => {
+    // A corrupt database file: no refusal predicate in any command matches the resulting
+    // SqliteError, so it propagates exactly like the production `no such column` did. Chosen over
+    // a behind-migrations database on purpose — part D would intercept that one, and this test
+    // exists to prove the GENERIC reporter works for errors nothing anticipated.
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "corrupt.db");
+    writeFileSync(dbPath, "this is not a database, it is a sandwich");
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    // The whole defect, in one assertion.
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/^player show status=error message=".+" class=".+"$/m);
+  });
+
+  it("#160: a database behind its migrations says so, instead of naming a column", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "behind.db");
+    const { applied, available } = migrateToAllButLast(dbPath);
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    // What the operator gets to act on: both counts and the command. Before this, the same
+    // situation produced `SqliteError: no such column: plays` at best, and silence in fact.
+    expect(result.stderr).toContain(`is at ${applied} of ${available} migrations`);
+    expect(result.stderr).toContain("run `tn db migrate`");
+    // Exactly one diagnostic for one fault — telemetry must not add its own line about
+    // request_log, which is not what is wrong.
+    expect(result.stderr).not.toContain("telemetry: request_log write failed");
+  });
+
+  it("#160: `--json` reaches the crash reporter — the only test of the wiring that supplies it", () => {
+    // This is the one assertion that executes `dispatch`'s hand-off of `scanFlags`' output to
+    // `logRequest`. Everything else about the reporter's `--json` shape is unit-tested by passing
+    // the opts in by hand, which cannot see a router that stops deriving them: replacing
+    // `{json: scan.json, quiet: scan.quiet}` with `{json: false, quiet: false}` left all 2478 tests
+    // green before this existed. The behind-migrations database is deliberate — it is the one
+    // failure whose stderr is exactly one line (telemetry stays silent on it), so the whole stream
+    // can be parsed as the payload rather than searched for a line that looks like JSON.
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "behind-json.db");
+    const { applied, available } = migrateToAllButLast(dbPath);
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone", "--json"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    const payload: unknown = JSON.parse(result.stderr.trim());
+    expect(payload).toEqual({
+      status: "error",
+      message: expect.stringContaining(`is at ${applied} of ${available} migrations`),
+      class: "DatabaseBehindMigrationsError",
+    });
+  });
+
+  it("#160: under --json EVERY stderr line is an object, including telemetry's own failure", () => {
+    // Contractor review of 2aa63b9, finding 1. The test above passes for a reason that hides this:
+    // a behind-migrations database is the one failure where telemetry stays deliberately silent, so
+    // stderr is a single line and `JSON.parse` of the whole stream works by accident of there being
+    // nothing else on it. A corrupt file fails BOTH the command and the telemetry write, and the
+    // second diagnostic used to be plain text on the same stream — so a `--json` consumer received
+    // something it could not parse, while GRAMMAR.md promised a crash respects `--json`.
+    //
+    // Reproduced end-to-end before it was fixed:
+    //   {"status":"error","message":"file is not a database","class":"SqliteError"}
+    //   telemetry: request_log write failed: file is not a database
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "corrupt-json.db");
+    writeFileSync(dbPath, "this is not a database, it is a sandwich");
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone", "--json"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    const lines = result.stderr.trim().split("\n");
+    // Two faults, two diagnostics — the command's and telemetry's. Pinned as a count so a third
+    // line appearing later has to be looked at rather than absorbed.
+    expect(lines).toHaveLength(2);
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(parsed[0]).toEqual({
+      status: "error",
+      message: "file is not a database",
+      class: "SqliteError",
+    });
+    // `scope`, not `class`: a consumer must be able to tell telemetry failing from the command
+    // failing, and must not mistake the second line for the thing that went wrong.
+    expect(parsed[1]).toEqual({
+      status: "error",
+      scope: "telemetry",
+      message: "request_log write failed: file is not a database",
+    });
   });
 });

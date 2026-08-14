@@ -218,8 +218,18 @@ reviewer is not misled by a clean table — none is a bug in itself, and several
   `court_match_players`; `src/ingest/player-pull.ts` reads `team_matches`.
 - **The database-handle type lives under ingest.** Nine files across `src/query/`, `src/report/` and
   `src/db/` import it from `src/ingest/db-types.ts`.
-- **The Controller directory contains its own View.** `src/cli/emit.ts`, `src/cli/format-profile.ts`
-  and `src/cli/format-lineup.ts` are rendering code inside `src/cli/`.
+- **The Controller directory contains its own View.** `src/cli/emit.ts`, `src/cli/format-profile.ts`,
+  `src/cli/format-lineup.ts` and `src/cli/report-fatal.ts` are rendering code inside `src/cli/`.
+- **A cross-cutting layer imports the Controller's View.** `src/telemetry/request-log.ts` imports
+  `src/cli/report-fatal.ts` (#160), which imports `src/cli/emit.ts` — so the module that must not
+  affect the operation it wraps is the one that now renders the operator's crash line. The direction
+  is deliberate and the alternative was worse: the reporting call has to sit at the catch that was
+  swallowing the error, and moving that catch out of telemetry means making `logRequest` reject,
+  which PR #84 finding 3 established loses the wrapped command's exit code. What the separate file
+  buys is *ownership of the decision*, not an import edge — the edge is real and points this way.
+  Its second consequence is that the MCP door transitively loads CLI rendering code, since
+  `logMcpTool` lives in the same module. Nothing enforces any of this:
+  `test/architecture-paths.test.ts` checks only that paths named in this document resolve on disk.
 - **`src/fs/output-root.ts` is the largest file in the app** and belongs to no letter of the map.
 - **Nothing reads `request_log`.** Any claim that telemetry feeds analysis is aspirational today.
 

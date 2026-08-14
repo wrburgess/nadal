@@ -37,6 +37,13 @@ export const dbMigrate: Command = {
       // `quoteSummaryValue`'s `.replace()`, so this command threw a TypeError INSTEAD of emitting
       // its deterministic one-line summary — and `logRequest`'s own catch absorbed the TypeError,
       // leaving exit 1 with no summary line at all.
+      //
+      // That second half is now HISTORY, and #160 is what changed it: `logRequest` reports what it
+      // catches (`src/cli/report-fatal.ts`), so an escape from this catch would surface as
+      // `db migrate status=error … class="TypeError"` rather than as silence. #64 recorded the
+      // wider swallowing here as an observed fact beside its narrow fix and filed nothing; this
+      // comment is what #160 was eventually traced back to. The narrow fix below still stands on
+      // its own — this command owes the operator its own vocabulary, not the crash reporter's.
       emitSummary("db migrate", "error", [["message", errorMessage(err)]], opts);
       return 1;
     }

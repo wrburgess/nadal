@@ -1,7 +1,14 @@
-import { MissingDatabaseError, openDb } from "../db/client.js";
+import { reportFatal } from "../cli/report-fatal.js";
+import { DatabaseBehindMigrationsError, MissingDatabaseError, openDb } from "../db/client.js";
 import { requestLog } from "../db/schema.js";
 import { errorClass, errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
+
+/** The caller's output mode, the shape `emitSummary` takes. */
+type EmitMode = { json: boolean; quiet: boolean };
+
+/** What a caller that never asked for a mode gets — `logMcpTool`, and every 4-argument test. */
+const PLAIN: EmitMode = { json: false, quiet: false };
 
 type RequestLogRow = {
   surface: "cli" | "mcp";
@@ -32,7 +39,7 @@ type RequestLogRow = {
  * widening this catch generally, so a genuine telemetry failure against a database that DOES exist
  * (a dropped table, SQLITE_BUSY, a read-only volume) still prints exactly as before.
  */
-function writeRequestLogRow(row: RequestLogRow): void {
+function writeRequestLogRow(row: RequestLogRow, emitOpts: EmitMode = PLAIN): void {
   try {
     const { db, sqlite } = openDb();
     try {
@@ -42,11 +49,41 @@ function writeRequestLogRow(row: RequestLogRow): void {
     }
   } catch (err) {
     if (err instanceof MissingDatabaseError) return;
+    // #160 part D, same reasoning as the line above: a database behind its migrations is a fault
+    // the operator is ALREADY being told about, by the refusal `openDb` threw at the command. If
+    // telemetry also complained, one fault would print two diagnostics — and the second one names
+    // request_log, which has nothing to do with what is wrong.
+    //
+    // **The cost, stated because it is a real regression and not only a carve-out.** Before part D
+    // this open SUCCEEDED against a behind database, so the row was written: `request_log`'s
+    // `error:SqliteError` rows from 2026-08-13 are exactly that, and they are the evidence #160 was
+    // filed on. Now nothing is recorded for any command run while the database is behind — the
+    // window between pulling a migration and running it is invisible to telemetry. Accepted,
+    // because the alternative is worse in both directions: writing the row needs an open this
+    // guard exists to refuse, and exempting telemetry from the guard would query a schema the
+    // command was just refused. The operator loses nothing they can act on (the drift refusal says
+    // what to do); what is lost is forensic, and a reader mining `request_log` for a silent window
+    // should know it reads as absence rather than as a recorded error.
+    if (err instanceof DatabaseBehindMigrationsError) return;
     // `errorMessage`, not `err instanceof Error ? err.message : String(err)`: the latter puts the
     // coercion on the wrong branch, so an Error whose `message` is not a string made
     // `sanitizeValue()` call `.replace()` on a non-string and throw a TypeError from inside THIS
     // catch — breaking the request this whole function exists not to break (#64).
-    console.error(`telemetry: request_log write failed: ${sanitizeValue(errorMessage(err))}`);
+    const detail = sanitizeValue(errorMessage(err));
+    // #160, contractor review of 2aa63b9 finding 1. Under `--json` the crash line above this one is
+    // a JSON object, and this line was plain text on the SAME stream — so a `--json` consumer got a
+    // stream it could not parse, and GRAMMAR.md's promise that a crash respects `--json` was true of
+    // the crash line and false of the stderr an operator actually receives. Both are objects now.
+    //
+    // `scope` rather than `class` is what tells the two apart: this is telemetry failing, not the
+    // command, and a consumer must not read it as the command's error. It is deliberately NOT
+    // routed through `emitSummary` — that would rewrite the plain-text spelling too, and this
+    // diagnostic's exact string is pinned by six tests and read by operators who know it.
+    console.error(
+      emitOpts.json
+        ? JSON.stringify({ status: "error", scope: "telemetry", message: `request_log write failed: ${detail}` })
+        : `telemetry: request_log write failed: ${detail}`,
+    );
   }
 }
 
@@ -55,12 +92,21 @@ export async function logRequest(
   command: string,
   args: string[],
   fn: () => Promise<number>,
+  // #160. The caller's output mode, so a thrown error is reported in the shape the caller asked
+  // for. Optional with a plain default: every existing test calls this with four arguments, and a
+  // missing mode must still REPORT (defaulting to silence would reinstate the defect whenever a
+  // future caller forgets to pass it).
+  emitOpts: EmitMode = PLAIN,
 ): Promise<number> {
   const startedAt = new Date().toISOString();
   let outcome = "ok";
   let code: number;
   try {
     code = await fn();
+    // NOT reported: a command that returns non-zero without throwing has already emitted its own
+    // `status=error` summary. Reporting here too would print every ordinary refusal twice, and an
+    // operator who learns to skip the duplicate line is an operator who will skip the real
+    // diagnostic when it finally appears.
     if (code !== 0) outcome = `error:exit-${code}`;
   } catch (err) {
     // `errorClass`, not an inline `instanceof` + `.constructor.name` (Reviewer finding 3 on
@@ -69,15 +115,27 @@ export async function logRequest(
     // and `logRequest` reject instead of returning the wrapped call's exit code.
     outcome = `error:${errorClass(err)}`;
     code = 1;
+    // #160: SPEAK before returning. This is the whole behavioral change, and it is deliberately a
+    // report rather than a re-throw: PR #84's guarantee that this function never rejects is
+    // correct and stays. What was wrong was applying telemetry's own "never break the caller"
+    // discipline to the CALLER'S error — the one thing the operator actually needed to see.
+    // `reportFatal` is built on the same non-throwing `errorMessage`/`errorClass` helpers this
+    // catch already trusts, so it cannot turn a command's failure into its own.
+    reportFatal(command, err, emitOpts);
   }
-  writeRequestLogRow({
-    surface,
-    command,
-    args: JSON.stringify(args.map(sanitizeValue)),
-    startedAt,
-    endedAt: new Date().toISOString(),
-    outcome,
-  });
+  writeRequestLogRow(
+    {
+      surface,
+      command,
+      args: JSON.stringify(args.map(sanitizeValue)),
+      startedAt,
+      endedAt: new Date().toISOString(),
+      outcome,
+    },
+    // The same mode the crash line above was reported in, so the two stderr lines a single failed
+    // run can produce are never in two different formats.
+    emitOpts,
+  );
   return code;
 }
 
@@ -105,9 +163,21 @@ function sanitizeArgsDeep(value: unknown): unknown {
  *
  * On success, writes `outcome="ok"` and returns `fn`'s result. On a thrown error, writes
  * `outcome="error:<ClassName>"` and RE-THROWS the original error — telemetry must never swallow a
- * tool failure, the same contract `logRequest` gives the CLI (there, a non-zero exit code IS the
- * "error" signal; here, since there is no exit code, the throw itself has to be the signal, so it
- * cannot be absorbed).
+ * tool failure.
+ *
+ * **The two surfaces reach that same guarantee by different means, and this comment used to claim
+ * otherwise** (#160). It read "the same contract `logRequest` gives the CLI", which was false: at
+ * the time, `logRequest` caught a thrown error, labelled its row, and returned 1 in total silence —
+ * the defect #160 fixes. The contracts now, stated as they actually are:
+ *
+ *   - **MCP (here):** re-throw. There is no exit code, so the throw itself is the only signal, and
+ *     absorbing it would leave the client with a successful-looking empty result.
+ *   - **CLI (`logRequest`):** report via `reportFatal`, then return 1 — never reject. It must keep
+ *     returning an exit code because PR #84 finding 3 established that a rejecting `logRequest`
+ *     loses the wrapped call's code entirely; the fix for silence was to make it SPEAK, not to make
+ *     it throw.
+ *
+ * Same guarantee — a failure is never invisible — through the mechanism each surface can carry.
  */
 export async function logMcpTool<T>(tool: string, args: unknown, fn: () => Promise<T>): Promise<T> {
   const startedAt = new Date().toISOString();

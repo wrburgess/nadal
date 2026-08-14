@@ -1025,11 +1025,21 @@ describe("isLineupBuildRefusal", () => {
     expect(isLineupBuildRefusal("not even an error")).toBe(false);
   });
 
-  it("a non-refusal is rethrown, not reported as a refusal line", async () => {
+  it("a non-refusal is rethrown and reported as a CRASH, distinguishable from a refusal (#160)", async () => {
     seedDay();
-    // A dropped table is the shape of a genuine bug: nothing the caller typed can fix it. It must
-    // NOT arrive as `lineup build status=error`, which is this command's vocabulary for "your input
-    // is fixable" — `dispatch`'s telemetry wrapper records the real class instead.
+    // A dropped table is the shape of a genuine bug: nothing the caller typed can fix it. The
+    // concern this test has always protected is that such a bug must not be laundered into this
+    // command's "your input is fixable" vocabulary.
+    //
+    // What changed at #160 is HOW that distinction is carried. This test used to assert the crash
+    // produced no `lineup build status=error` line at all, on the stated reasoning that "dispatch's
+    // telemetry wrapper records the real class instead" — which is precisely the belief #160
+    // refutes: the class was recorded to the database and shown to nobody, so `tn` exited 1 in
+    // total silence and the operator had a dropped table with no way to learn it.
+    //
+    // The distinction now rides on `class=`, which only the crash reporter emits — a refusal line
+    // carries `message=` alone. That is a real difference an operator can read, where "no output"
+    // was indistinguishable from "worked, printed nothing".
     const { sqlite } = openDb();
     try {
       sqlite.exec("DROP TABLE rating_observations");
@@ -1043,9 +1053,12 @@ describe("isLineupBuildRefusal", () => {
 
     expect(code).toBe(1);
     expect(logSpy).not.toHaveBeenCalled();
-    expect(errSpy.mock.calls.map((c) => String(c[0])).some((l) => l.startsWith("lineup build status=error"))).toBe(
-      false,
-    );
+    const lines = errSpy.mock.calls.map((c) => String(c[0]));
+    // Reported, not swallowed.
+    expect(lines.some((l) => l.startsWith("lineup build status=error"))).toBe(true);
+    // And reported as a crash: `class=` is the crash reporter's own field, absent from every
+    // refusal this command emits.
+    expect(lines.some((l) => l.startsWith("lineup build status=error") && l.includes(" class="))).toBe(true);
     const outcome = withDb((db) => db.select().from(requestLog).all().at(-1)?.outcome ?? "");
     expect(outcome).toMatch(/^error:/);
     expect(outcome, "an exit-code outcome would mean the command reported it as a refusal").not.toBe("error:exit-1");

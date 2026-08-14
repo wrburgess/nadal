@@ -48,7 +48,16 @@ function classifyFlag(name: string, booleanFlags: string[], valueFlags: string[]
   return "unknown";
 }
 
-export type FlagScan = { endOfFlags: number; helpRequested: boolean };
+export type FlagScan = {
+  endOfFlags: number;
+  helpRequested: boolean;
+  // #160: the caller's requested output mode, read off THIS walk rather than a separate one.
+  // `dispatch` needs it to report an error from a command that threw before (or instead of)
+  // parsing its own flags — at which point `parsed.flags` does not exist to read. Same shape
+  // `globalFlags` returns, so it passes straight to `emitSummary`'s `opts`.
+  json: boolean;
+  quiet: boolean;
+};
 
 /**
  * The single flag scan `dispatch` (src/cli/router.ts) and `parsePositionals` below both derive
@@ -68,22 +77,32 @@ export type FlagScan = { endOfFlags: number; helpRequested: boolean };
  */
 export function scanFlags(args: string[], booleanFlags: string[], valueFlags: string[]): FlagScan {
   let helpRequested = false;
+  let json = false;
+  let quiet = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--") {
-      return { endOfFlags: i, helpRequested };
+      return { endOfFlags: i, helpRequested, json, quiet };
     }
     if (arg.startsWith("--")) {
       const name = arg.slice(2);
       if (name === "help") helpRequested = true;
+      // #160: only a VISITED `--json`/`--quiet` counts, exactly as `--help` above — one consumed as
+      // some earlier value flag's value was never a flag at all.
+      if (name === "json") json = true;
+      if (name === "quiet") quiet = true;
       if (classifyFlag(name, booleanFlags, valueFlags) === "value") {
         i++; // consume the next token as this flag's value — never visited by this walk
       }
       continue;
     }
-    // `-q` and ordinary positionals: neither ends the flag region nor sets helpRequested.
+    // `-q` is the single-dash short spelling of `--quiet` (GRAMMAR.md: "--quiet/-q"), reconciled
+    // into the same boolean here so callers ask this question once — the role `globalFlags` plays
+    // for `parseArgs`'s output. It still neither ends the flag region nor sets helpRequested, and
+    // ordinary positionals do neither either.
+    if (arg === "-q") quiet = true;
   }
-  return { endOfFlags: args.length, helpRequested };
+  return { endOfFlags: args.length, helpRequested, json, quiet };
 }
 
 /**

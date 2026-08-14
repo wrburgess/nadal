@@ -50,6 +50,57 @@ this keeps the line single-line and un-spoofable. Sanitizing does not trim leadi
 whitespace: a quoted value preserves edge whitespace exactly (e.g. a `TN_DB_PATH` with a trailing
 space round-trips unchanged), since quoting already makes it unambiguous.
 
+**A crash carries one extra field, and that field is how you tell a crash from a refusal.** Every
+`status=error` line a command prints for a caller-fixable problem — a bad flag, an unknown player, a
+day outside the event — carries `message=` and nothing else. A line that also carries **`class=`**
+was not printed by any command: it comes from the crash reporter (`src/cli/report-fatal.ts`), which
+`dispatch`'s telemetry wrapper calls for an error a command *threw* rather than handled, and `class=`
+is the thrown value's error class:
+
+```
+lineup build status=error message="no availability recorded for 2026-08-29"
+player show status=error message="database at /…/nadal.db is at 13 of 14 migrations — run `tn db migrate`" class="DatabaseBehindMigrationsError"
+```
+
+The first is the command answering you; the second is nadal failing. Both go to stderr, both exit 1,
+and both respect `--json` (`{"status":"error","message":"…","class":"…"}`). Neither is suppressed by
+`--quiet`, which touches stdout only.
+
+**Under `--json`, stderr is one JSON object per line — not one JSON document.** A single failed run
+can produce two, because it can have two faults: the command's, and telemetry's own failure to
+record it. Parse line by line; `JSON.parse` of the whole stream is wrong even when it happens to
+work on a one-line failure.
+
+```
+{"status":"error","message":"file is not a database","class":"SqliteError"}
+{"status":"error","scope":"telemetry","message":"request_log write failed: file is not a database"}
+```
+
+The second carries **`scope`**, not `class`: it is telemetry failing, not the command, and a consumer
+must not read it as what went wrong. (Both lines were once mixed formats — the crash line JSON, the
+telemetry line plain text — so a `--json` consumer received a stream it could not parse.)
+
+**Two stderr lines are not objects even under `--json`, and both come from before a command runs:**
+an unknown `noun verb` (`error: unknown command …`, exit 2 — nothing was dispatched, so there is no
+command whose output mode could apply), and `tn mcp serve`'s argument rejection, which takes no
+flags at all for the reason given above. Those are the only two, and that is checked rather than
+claimed — `test/report-fatal.test.ts`'s *"every stderr writer in `src/` is one GRAMMAR.md accounts
+for"* pins the whole set, so a fifth one added later fails the suite instead of quietly falsifying
+this paragraph.
+
+**That exclusivity is checked, not merely intended** — `emitSummary` accepts any field name from any
+of its ~30 call sites, so this would otherwise be a convention that one new command could break
+while this page went on asserting it. `test/report-fatal.test.ts`'s *"`class=` is emitted by this
+module and nothing else"* walks `src/` and fails if any file other than `src/cli/report-fatal.ts`
+emits a `class` field. Its one blind spot is recorded beside it: it reads the literal `["class", …]`
+tuple every summary field in this repo is written as, and would not see a field name computed from a
+variable.
+
+This line used to print nothing at all — `logRequest` caught the error, labelled a telemetry row
+with it, and discarded it, so `tn` exited 1 with zero bytes on both streams (#160). *"Every command
+prints one deterministic `key=value` summary line"* above was aspirational for this one path until
+that was fixed.
+
 A bare **`--` ends flag parsing:** every token after it is a target or payload, never a flag, so
 `tn player note Randy -- "--poach at net"` records a note that begins with `--`. Global flags are
 recognized only *before* the delimiter — past it, `--json` is literal text. An unrecognized flag

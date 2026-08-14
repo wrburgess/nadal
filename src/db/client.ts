@@ -78,6 +78,80 @@ export function dbPath(): string {
 export class MissingDatabaseError extends Error {}
 
 /**
+ * A database that exists and opens fine, but whose schema is OLDER than the code about to query it
+ * — issue #160, part D.
+ *
+ * Filed from a live failure: on 2026-08-13 the production database sat at 13 of 14 migrations for a
+ * day after PR #152 merged `players.plays`, so every command reading `players` through the ORM
+ * threw `SqliteError: no such column: plays`. Part A' of #160 guarantees such an error now reaches
+ * the operator at all. This class is the difference between it reading as a column name and reading
+ * as an instruction.
+ *
+ * It is a distinct class rather than a message because two other places must recognize it: the
+ * `create: true` exemption in `openDb` below (or `tn db migrate` could not open the very database
+ * it exists to repair), and `writeRequestLogRow`'s catch (or one fault prints two diagnostics).
+ */
+export class DatabaseBehindMigrationsError extends Error {}
+
+/**
+ * How many migrations on disk this database has not applied. `0` means current.
+ *
+ * **Deliberately built on the same single-watermark rule `applyMigrations` uses** — one
+ * `MAX(created_at)` read compared against each `migration.folderMillis`, never a per-hash set
+ * difference. That is not a stylistic choice: a checker with its own notion of "current" would
+ * eventually disagree with the migrator, and a preflight that refuses a database `tn db migrate`
+ * considers finished is worse than no preflight at all.
+ *
+ * `test/db-migration-drift.test.ts` holds that in two tests, and it takes two: its PARITY test
+ * walks every prefix state, 0 applied through N, asserting this count equals the number of
+ * migrations `applyMigrations` then actually applies — but every prefix state has
+ * `COUNT(*) === (migrations at or below the watermark)`, so that walk alone passes just as happily
+ * for a checker built on `total - COUNT(*)` (verified by mutation, not assumed). The second test
+ * supplies the state that separates them — a journal carrying a duplicate row, which is not a clean
+ * prefix — and it is the one that fails if this rule is ever replaced by a row count.
+ *
+ * A database with no `__drizzle_migrations` table at all reads as fully behind rather than
+ * throwing: that is the honest answer for a file nothing has bootstrapped, and it keeps this
+ * function safe to call on any open handle.
+ */
+export function migrationStatus(
+  sqlite: Database.Database,
+  migrationsFolder: string = MIGRATIONS_FOLDER,
+): { pending: number; total: number } {
+  const migrations = readMigrationFiles({ migrationsFolder });
+  const total = migrations.length;
+  const journalExists = sqlite
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='__drizzle_migrations'`)
+    .get();
+  if (journalExists === undefined) return { pending: total, total };
+
+  const watermark = sqlite
+    .prepare(
+      `SELECT created_at AS createdAt FROM "__drizzle_migrations" ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get() as { createdAt: unknown } | undefined;
+  if (watermark === undefined) return { pending: total, total };
+
+  return {
+    pending: migrations.filter((m) => Number(watermark.createdAt) < m.folderMillis).length,
+    total,
+  };
+}
+
+/**
+ * `migrationStatus`'s pending count alone. **No production caller** — `openDb` below needs the
+ * total for its message and calls `migrationStatus` directly; this is the accessor
+ * `test/db-migration-drift.test.ts` asserts through, kept because the count is the property those
+ * tests are about and threading `.pending` through every assertion reads worse than naming it once.
+ */
+export function pendingMigrationCount(
+  sqlite: Database.Database,
+  migrationsFolder: string = MIGRATIONS_FOLDER,
+): number {
+  return migrationStatus(sqlite, migrationsFolder).pending;
+}
+
+/**
  * Why did an open of `path` fail — because there was nothing there to open, or for some other
  * reason? Returns the `open(2)` errno, or `null` when the file opens fine (so SQLite objected to
  * its CONTENT, not its reachability).
@@ -227,9 +301,52 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
     }
     throw err;
   }
-  enableWal(sqlite);
-  sqlite.pragma("foreign_keys = ON");
-  return { sqlite, db: drizzle(sqlite) };
+  // Everything from here to the `return` runs with a handle NOBODY ELSE HOLDS YET, so every escape
+  // from this block has to close it — contractor review of f1242fd, finding 1. Part D's refusal
+  // closed explicitly and the branch where the preflight ITSELF throws did not, which leaks a
+  // connection per failed open; in `tn mcp serve` (long-lived, `logMcpTool` re-throws, the next
+  // request opens again) that is one descriptor per failed call, forever. The whole block is
+  // wrapped rather than that one branch patched, because the class is older than part D:
+  // `enableWal` and the `foreign_keys` pragma could always throw here (a corrupt file reaches
+  // both), and each was leaking the same way before this issue existed.
+  try {
+    enableWal(sqlite);
+    sqlite.pragma("foreign_keys = ON");
+    // #160 part D: refuse a database older than the code about to query it, BEFORE the first query
+    // turns that into `SqliteError: no such column: <whatever the newest migration added>`.
+    //
+    // The exemption is `create === true`, which is exactly and only `runMigrations` (see
+    // `OpenDbOptions.create` above — every other one of the ~30 call sites inherits the `false`
+    // default). Any other spelling would lock `tn db migrate` out of the one database it exists to
+    // repair; keying off the bit that already means "I am the bootstrapper" adds no new concept.
+    if (options.create !== true) {
+      // One read of the migration folder, not two — the first revision re-read it inside the
+      // failure branch to recover `total`.
+      const { pending, total } = migrationStatus(sqlite);
+      if (pending > 0) {
+        throw new DatabaseBehindMigrationsError(
+          `database at ${resolve(path)} is at ${total - pending} of ${total} migrations — ` +
+            "run `tn db migrate`",
+        );
+      }
+    }
+    // The `return` is INSIDE the guard deliberately: the block has to end where ownership actually
+    // transfers, not one statement earlier. Drawing the line above this would re-open the same hole
+    // one call along — `drizzle(sqlite)` is the last thing that can throw while this function is
+    // still the handle's only owner.
+    return { sqlite, db: drizzle(sqlite) };
+  } catch (err) {
+    // The close is itself guarded, and that is not belt-and-braces: `applyMigrations` below carries
+    // a recorded finding about exactly this shape — an unconditional cleanup call in a catch threw
+    // and REPLACED the real failure, so the operator debugged the masking error instead. Cleanup
+    // failure is not news; the error that got us here is.
+    try {
+      sqlite.close();
+    } catch {
+      /* the original error is the one worth reporting */
+    }
+    throw err;
+  }
 }
 
 // Issue #46: a pre-existing database holding a duplicate `teams.tennisrecord_url` pair (the exact

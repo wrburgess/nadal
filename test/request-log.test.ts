@@ -41,6 +41,65 @@ describe("request telemetry", () => {
     expect(String(row?.outcome)).toMatch(/^error:/);
   });
 
+  // #160: the swallowing this suite's "still returns the exit code" tests were written around.
+  // Returning 1 was never the defect — returning 1 in SILENCE was. These four pin the speaking half
+  // without disturbing PR #84's guarantee that `logRequest` itself never rejects.
+  it("#160: a thrown error reaches stderr instead of vanishing", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await logRequest("cli", "player show", [], async () => {
+      throw new TypeError("no such column: plays");
+    });
+
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'player show status=error message="no such column: plays" class="TypeError"',
+    );
+  });
+
+  it("#160: the telemetry row is STILL written when the command throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await logRequest("cli", "player show", [], async () => {
+      throw new Error("boom");
+    });
+
+    // Reporting must not have displaced logging — the fix adds a diagnostic, it does not trade the
+    // row for it.
+    const [row] = rows();
+    expect(row?.outcome).toBe("error:Error");
+  });
+
+  it("#160: a command that FAILS WITHOUT THROWING is not double-reported", async () => {
+    // A command returning non-zero has already emitted its own `status=error` summary (every
+    // command does this for its own refusals). If `logRequest` reported here too, every ordinary
+    // refusal would print twice and the operator would learn to ignore the second line — which is
+    // how the real diagnostic gets lost again, one indirection over.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await logRequest("cli", "player show", [], async () => 1);
+
+    expect(code).toBe(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("#160: the caller's output mode is honored — --json failures stay parseable", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await logRequest(
+      "cli",
+      "player show",
+      ["--json"],
+      async () => {
+        throw new Error("boom");
+      },
+      { json: true, quiet: false },
+    );
+
+    const payload: unknown = JSON.parse(String(errorSpy.mock.calls[0]?.[0]));
+    expect(payload).toEqual({ status: "error", message: "boom", class: "Error" });
+  });
+
   it("records error:exit-N outcome and returns the exit code when fn returns non-zero without throwing", async () => {
     const code = await logRequest("cli", "x", [], async () => 2);
     expect(code).toBe(2);
