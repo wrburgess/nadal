@@ -4,6 +4,12 @@ import { requestLog } from "../db/schema.js";
 import { errorClass, errorMessage } from "../error-message.js";
 import { sanitizeValue } from "../sanitize.js";
 
+/** The caller's output mode, the shape `emitSummary` takes. */
+type EmitMode = { json: boolean; quiet: boolean };
+
+/** What a caller that never asked for a mode gets — `logMcpTool`, and every 4-argument test. */
+const PLAIN: EmitMode = { json: false, quiet: false };
+
 type RequestLogRow = {
   surface: "cli" | "mcp";
   command: string;
@@ -33,7 +39,7 @@ type RequestLogRow = {
  * widening this catch generally, so a genuine telemetry failure against a database that DOES exist
  * (a dropped table, SQLITE_BUSY, a read-only volume) still prints exactly as before.
  */
-function writeRequestLogRow(row: RequestLogRow): void {
+function writeRequestLogRow(row: RequestLogRow, emitOpts: EmitMode = PLAIN): void {
   try {
     const { db, sqlite } = openDb();
     try {
@@ -63,7 +69,21 @@ function writeRequestLogRow(row: RequestLogRow): void {
     // coercion on the wrong branch, so an Error whose `message` is not a string made
     // `sanitizeValue()` call `.replace()` on a non-string and throw a TypeError from inside THIS
     // catch — breaking the request this whole function exists not to break (#64).
-    console.error(`telemetry: request_log write failed: ${sanitizeValue(errorMessage(err))}`);
+    const detail = sanitizeValue(errorMessage(err));
+    // #160, contractor review of 2aa63b9 finding 1. Under `--json` the crash line above this one is
+    // a JSON object, and this line was plain text on the SAME stream — so a `--json` consumer got a
+    // stream it could not parse, and GRAMMAR.md's promise that a crash respects `--json` was true of
+    // the crash line and false of the stderr an operator actually receives. Both are objects now.
+    //
+    // `scope` rather than `class` is what tells the two apart: this is telemetry failing, not the
+    // command, and a consumer must not read it as the command's error. It is deliberately NOT
+    // routed through `emitSummary` — that would rewrite the plain-text spelling too, and this
+    // diagnostic's exact string is pinned by six tests and read by operators who know it.
+    console.error(
+      emitOpts.json
+        ? JSON.stringify({ status: "error", scope: "telemetry", message: `request_log write failed: ${detail}` })
+        : `telemetry: request_log write failed: ${detail}`,
+    );
   }
 }
 
@@ -76,7 +96,7 @@ export async function logRequest(
   // for. Optional with a plain default: every existing test calls this with four arguments, and a
   // missing mode must still REPORT (defaulting to silence would reinstate the defect whenever a
   // future caller forgets to pass it).
-  emitOpts: { json: boolean; quiet: boolean } = { json: false, quiet: false },
+  emitOpts: EmitMode = PLAIN,
 ): Promise<number> {
   const startedAt = new Date().toISOString();
   let outcome = "ok";
@@ -103,14 +123,19 @@ export async function logRequest(
     // catch already trusts, so it cannot turn a command's failure into its own.
     reportFatal(command, err, emitOpts);
   }
-  writeRequestLogRow({
-    surface,
-    command,
-    args: JSON.stringify(args.map(sanitizeValue)),
-    startedAt,
-    endedAt: new Date().toISOString(),
-    outcome,
-  });
+  writeRequestLogRow(
+    {
+      surface,
+      command,
+      args: JSON.stringify(args.map(sanitizeValue)),
+      startedAt,
+      endedAt: new Date().toISOString(),
+      outcome,
+    },
+    // The same mode the crash line above was reported in, so the two stderr lines a single failed
+    // run can produce are never in two different formats.
+    emitOpts,
+  );
   return code;
 }
 

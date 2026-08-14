@@ -109,4 +109,45 @@ describe("tn binary exit code (real process, not the in-process dispatch() retur
       class: "DatabaseBehindMigrationsError",
     });
   });
+
+  it("#160: under --json EVERY stderr line is an object, including telemetry's own failure", () => {
+    // Contractor review of 2aa63b9, finding 1. The test above passes for a reason that hides this:
+    // a behind-migrations database is the one failure where telemetry stays deliberately silent, so
+    // stderr is a single line and `JSON.parse` of the whole stream works by accident of there being
+    // nothing else on it. A corrupt file fails BOTH the command and the telemetry write, and the
+    // second diagnostic used to be plain text on the same stream — so a `--json` consumer received
+    // something it could not parse, while GRAMMAR.md promised a crash respects `--json`.
+    //
+    // Reproduced end-to-end before it was fixed:
+    //   {"status":"error","message":"file is not a database","class":"SqliteError"}
+    //   telemetry: request_log write failed: file is not a database
+    const dir = mkdtempSync(join(tmpdir(), "tn-"));
+    const dbPath = join(dir, "corrupt-json.db");
+    writeFileSync(dbPath, "this is not a database, it is a sandwich");
+
+    const result = spawnSync(TN_BIN, ["player", "show", "Anyone", "--json"], {
+      env: { ...process.env, TN_DB_PATH: dbPath },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    const lines = result.stderr.trim().split("\n");
+    // Two faults, two diagnostics — the command's and telemetry's. Pinned as a count so a third
+    // line appearing later has to be looked at rather than absorbed.
+    expect(lines).toHaveLength(2);
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(parsed[0]).toEqual({
+      status: "error",
+      message: "file is not a database",
+      class: "SqliteError",
+    });
+    // `scope`, not `class`: a consumer must be able to tell telemetry failing from the command
+    // failing, and must not mistake the second line for the thing that went wrong.
+    expect(parsed[1]).toEqual({
+      status: "error",
+      scope: "telemetry",
+      message: "request_log write failed: file is not a database",
+    });
+  });
 });

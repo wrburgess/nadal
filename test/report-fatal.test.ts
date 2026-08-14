@@ -6,6 +6,23 @@ import { reportFatal } from "../src/cli/report-fatal.js";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
 
+/**
+ * Every `src/**\/*.ts` whose text matches `pattern`, as sorted `src`-relative paths. Both callers
+ * assert an exact list, so the walk asserts its own non-vacuousness: a broken walk returning
+ * nothing would make an "only this file" claim pass for the wrong reason.
+ */
+function sourceFilesMatching(pattern: RegExp): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(SRC, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".ts")) files.push(join(entry.parentPath, entry.name));
+  }
+  expect(files.length).toBeGreaterThan(30);
+  return files
+    .filter((file) => pattern.test(readFileSync(file, "utf8")))
+    .map((file) => relative(SRC, file))
+    .sort();
+}
+
 // #160. `logRequest` caught every error a command threw, labelled a telemetry row with its class,
 // and printed NOTHING — `tn` exited 1 with zero bytes on both streams. This module is the missing
 // operator-facing half. It lives in its own file rather than inside `src/telemetry/request-log.ts`
@@ -86,20 +103,29 @@ describe("reportFatal", () => {
   // from ~30 call sites, so the documented invariant was a convention one new command could break
   // silently, and the doc would go on asserting it. This is the check that makes the sentence true.
   it("`class=` is emitted by this module and nothing else — the invariant GRAMMAR.md states", () => {
-    const files: string[] = [];
-    for (const entry of readdirSync(SRC, { recursive: true, withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith(".ts")) {
-        files.push(join(entry.parentPath, entry.name));
-      }
-    }
-    // Not vacuous: if the walk found nothing, the assertion below would pass for the wrong reason.
-    expect(files.length).toBeGreaterThan(30);
-
-    const emitters = files
-      .filter((file) => /\[\s*"class"\s*,/.test(readFileSync(file, "utf8")))
-      .map((file) => relative(SRC, file));
-
+    const emitters = sourceFilesMatching(/\[\s*"class"\s*,/);
     expect(emitters).toEqual(["cli/report-fatal.ts"]);
+  });
+
+  // Contractor review of 2aa63b9, finding 1, second half. GRAMMAR.md now tells a `--json` consumer
+  // that stderr is one JSON object per line, and names the only two lines that are not — both from
+  // before a command is dispatched. That sentence is an enumeration of source, so it decays the
+  // moment someone adds a fifth `console.error`. This is what makes it decay LOUDLY.
+  it("every stderr writer in src/ is one GRAMMAR.md accounts for", () => {
+    // Direct callers. `src/cli/emit.ts` is deliberately absent and is asserted separately below:
+    // it picks the stream with `const write = toStderr ? console.error : console.log`, so it never
+    // spells the call — a detail worth having found here rather than in the claim's next reader.
+    expect(sourceFilesMatching(/console\.error\(/)).toEqual([
+      // `tn mcp serve` rejecting arguments: documented as taking no flags at all.
+      "cli/commands/mcp-serve.ts",
+      // An unknown noun/verb: nothing was dispatched, so no command's output mode applies.
+      "cli/router.ts",
+      // Telemetry's own write failure — an object under `--json` as of this issue.
+      "telemetry/request-log.ts",
+    ]);
+
+    // The fourth writer, and the one every command's output actually travels through.
+    expect(sourceFilesMatching(/toStderr \? console\.error : console\.log/)).toEqual(["cli/emit.ts"]);
   });
 
   // Stated because the guard above reads source text, and a guard's blind spot belongs next to the

@@ -66,6 +66,28 @@ The first is the command answering you; the second is nadal failing. Both go to 
 and both respect `--json` (`{"status":"error","message":"…","class":"…"}`). Neither is suppressed by
 `--quiet`, which touches stdout only.
 
+**Under `--json`, stderr is one JSON object per line — not one JSON document.** A single failed run
+can produce two, because it can have two faults: the command's, and telemetry's own failure to
+record it. Parse line by line; `JSON.parse` of the whole stream is wrong even when it happens to
+work on a one-line failure.
+
+```
+{"status":"error","message":"file is not a database","class":"SqliteError"}
+{"status":"error","scope":"telemetry","message":"request_log write failed: file is not a database"}
+```
+
+The second carries **`scope`**, not `class`: it is telemetry failing, not the command, and a consumer
+must not read it as what went wrong. (Both lines were once mixed formats — the crash line JSON, the
+telemetry line plain text — so a `--json` consumer received a stream it could not parse.)
+
+**Two stderr lines are not objects even under `--json`, and both come from before a command runs:**
+an unknown `noun verb` (`error: unknown command …`, exit 2 — nothing was dispatched, so there is no
+command whose output mode could apply), and `tn mcp serve`'s argument rejection, which takes no
+flags at all for the reason given above. Those are the only two, and that is checked rather than
+claimed — `test/report-fatal.test.ts`'s *"every stderr writer in `src/` is one GRAMMAR.md accounts
+for"* pins the whole set, so a fifth one added later fails the suite instead of quietly falsifying
+this paragraph.
+
 **That exclusivity is checked, not merely intended** — `emitSummary` accepts any field name from any
 of its ~30 call sites, so this would otherwise be a convention that one new command could break
 while this page went on asserting it. `test/report-fatal.test.ts`'s *"`class=` is emitted by this
