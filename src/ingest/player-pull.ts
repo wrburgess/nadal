@@ -23,9 +23,34 @@ type PlayerRow = typeof players.$inferSelect;
 
 const TENNISRECORD_HOST = "https://www.tennisrecord.com";
 
-/** `/adult/profile.aspx?playername=Ellis+Eastwick` → the match-history URL for the same player. */
-export function matchHistoryUrlFor(playername: string, year: string): string {
+/** A TennisRecord namesake index is a small ordinal — `&s=5` is "the 5th player called this". */
+const NAMESAKE_INDEX_PATTERN = /^\d{1,4}$/;
+
+/** Thrown for an `&s=` that is present on a roster link but not an ordinal. Refused rather than
+ * dropped: dropping it is precisely the #167 defect, and silently fetching the default namesake is
+ * a wrong HUMAN, not a missing field. */
+export class UnusableNamesakeIndexError extends Error {}
+
+/**
+ * `/adult/profile.aspx?playername=Ellis+Eastwick` → the match-history URL for the same player.
+ *
+ * `namesakeIndex` is TennisRecord's `&s=` parameter, which selects BETWEEN people who share a name
+ * (issue #167). It is not decoration and it is not optional when the roster link carries one:
+ * without it the request resolves to that name's default profile, which is a different person whose
+ * page parses perfectly. Measured 2026-08-14 — `playername=Andy+Wang` is a 5.5 player in Lorton VA;
+ * `&s=15` is the 3.5 player in Papillion NE who is actually on the roster.
+ *
+ * `undefined`/`null` means the roster link carried no index, which is TennisRecord's own way of
+ * saying the name is unique — so the parameter is omitted rather than defaulted to any value.
+ */
+export function matchHistoryUrlFor(playername: string, year: string, namesakeIndex?: string | null): string {
   const params = new URLSearchParams({ year, playername, mt: "0", lt: "0", yr: "0" });
+  if (namesakeIndex !== undefined && namesakeIndex !== null && namesakeIndex !== "") {
+    if (!NAMESAKE_INDEX_PATTERN.test(namesakeIndex)) {
+      throw new UnusableNamesakeIndexError(`unusable namesake index "${namesakeIndex}"`);
+    }
+    params.set("s", namesakeIndex);
+  }
   return `${TENNISRECORD_HOST}/adult/matchhistory.aspx?${params.toString()}`;
 }
 
