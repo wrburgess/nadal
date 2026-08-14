@@ -1,5 +1,10 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reportFatal } from "../src/cli/report-fatal.js";
+
+const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
 
 // #160. `logRequest` caught every error a command threw, labelled a telemetry row with its class,
 // and printed NOTHING — `tn` exited 1 with zero bytes on both streams. This module is the missing
@@ -73,5 +78,40 @@ describe("reportFatal", () => {
     expect(errorSpy).toHaveBeenCalledWith(
       'player show status=error message="a bare string" class="unknown"',
     );
+  });
+
+  // Contractor review of f1242fd, finding 2. `docs/cli/GRAMMAR.md` tells an operator that a
+  // `status=error` line carrying `class=` was NOT printed by a command — it is how you tell nadal
+  // crashing from nadal refusing. Nothing enforced that: `emitSummary` takes arbitrary field names
+  // from ~30 call sites, so the documented invariant was a convention one new command could break
+  // silently, and the doc would go on asserting it. This is the check that makes the sentence true.
+  it("`class=` is emitted by this module and nothing else — the invariant GRAMMAR.md states", () => {
+    const files: string[] = [];
+    for (const entry of readdirSync(SRC, { recursive: true, withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith(".ts")) {
+        files.push(join(entry.parentPath, entry.name));
+      }
+    }
+    // Not vacuous: if the walk found nothing, the assertion below would pass for the wrong reason.
+    expect(files.length).toBeGreaterThan(30);
+
+    const emitters = files
+      .filter((file) => /\[\s*"class"\s*,/.test(readFileSync(file, "utf8")))
+      .map((file) => relative(SRC, file));
+
+    expect(emitters).toEqual(["cli/report-fatal.ts"]);
+  });
+
+  // Stated because the guard above reads source text, and a guard's blind spot belongs next to the
+  // guard rather than in a reviewer's memory: it catches the literal `["class", …]` tuple, which is
+  // how every summary field in this repo is written today, and would NOT catch a field name built
+  // from a variable (`[key, value]`). That is a real hole and an acceptable one — the alternative is
+  // reserving field names inside `emitSummary` at runtime, which buys a check on a path no command
+  // takes for a vocabulary of exactly one word. If a command ever does compute field names, this
+  // guard stops being sufficient and GRAMMAR.md's claim has to be re-derived rather than trusted.
+  it("the guard above would actually fire — a second literal emitter breaks it", () => {
+    const sample = `emitSummary("x", "error", [["message", m], ["class", c]], opts)`;
+    expect(/\[\s*"class"\s*,/.test(sample)).toBe(true);
+    expect(/\[\s*"class"\s*,/.test(`emitSummary("x", "error", [["message", m]], opts)`)).toBe(false);
   });
 });

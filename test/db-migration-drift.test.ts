@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { readMigrationFiles } from "drizzle-orm/migrator";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -151,6 +151,30 @@ describe("migration drift is named rather than decoded (#160 part D)", () => {
     applyMigrations(sqlite, MIGRATIONS_FOLDER);
     expect(journalRowCount(sqlite) - before).toBe(1);
     sqlite.close();
+  });
+
+  it("a preflight that THROWS does not leak the handle it was checking", () => {
+    // Contractor review of f1242fd, finding 1. The refusal branch closes explicitly; the branch
+    // where `migrationStatus` itself throws did not, so `openDb` lost an open connection every
+    // time. It matters in `tn mcp serve`, a long-lived process where `logMcpTool` re-throws and the
+    // next request opens again — one leaked descriptor per failed call, forever.
+    //
+    // The state that reaches it: a `__drizzle_migrations` table that EXISTS but has no
+    // `created_at`, so the `sqlite_master` probe finds the journal and the watermark query then
+    // throws `no such column`. A partially restored backup or a hand-repaired journal is this.
+    //
+    // Observed rather than reasoned about: better-sqlite3 checkpoints and REMOVES `-wal`/`-shm`
+    // when the last connection closes, so their survival is the leak, visible from the filesystem
+    // and not from any counter this process could fake.
+    const path = join(mkdtempSync(join(tmpdir(), "tn-leak-")), "db.sqlite");
+    const seed = new Database(path);
+    seed.exec(`CREATE TABLE "__drizzle_migrations" (id integer)`);
+    seed.close();
+
+    expect(() => openDb(path)).toThrow(/no such column/);
+
+    expect(existsSync(`${path}-wal`), "a leaked connection keeps the WAL alive").toBe(false);
+    expect(existsSync(`${path}-shm`)).toBe(false);
   });
 
   it("telemetry stays silent on a behind database — one fault must not print two diagnostics", async () => {

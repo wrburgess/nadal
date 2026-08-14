@@ -301,26 +301,46 @@ export function openDb(path: string = dbPath(), options: OpenDbOptions = {}) {
     }
     throw err;
   }
-  enableWal(sqlite);
-  sqlite.pragma("foreign_keys = ON");
-  // #160 part D: refuse a database older than the code about to query it, BEFORE the first query
-  // turns that into `SqliteError: no such column: <whatever the newest migration added>`.
-  //
-  // The exemption is `create === true`, which is exactly and only `runMigrations` (see
-  // `OpenDbOptions.create` above — every other one of the ~30 call sites inherits the `false`
-  // default). Any other spelling would lock `tn db migrate` out of the one database it exists to
-  // repair; keying off the bit that already means "I am the bootstrapper" adds no new concept.
-  if (options.create !== true) {
-    // One read of the migration folder, not two — the first revision re-read it inside the failure
-    // branch to recover `total`.
-    const { pending, total } = migrationStatus(sqlite);
-    if (pending > 0) {
-      sqlite.close();
-      throw new DatabaseBehindMigrationsError(
-        `database at ${resolve(path)} is at ${total - pending} of ${total} migrations — ` +
-          "run `tn db migrate`",
-      );
+  // Everything from here to the `return` runs with a handle NOBODY ELSE HOLDS YET, so every escape
+  // from this block has to close it — contractor review of f1242fd, finding 1. Part D's refusal
+  // closed explicitly and the branch where the preflight ITSELF throws did not, which leaks a
+  // connection per failed open; in `tn mcp serve` (long-lived, `logMcpTool` re-throws, the next
+  // request opens again) that is one descriptor per failed call, forever. The whole block is
+  // wrapped rather than that one branch patched, because the class is older than part D:
+  // `enableWal` and the `foreign_keys` pragma could always throw here (a corrupt file reaches
+  // both), and each was leaking the same way before this issue existed.
+  try {
+    enableWal(sqlite);
+    sqlite.pragma("foreign_keys = ON");
+    // #160 part D: refuse a database older than the code about to query it, BEFORE the first query
+    // turns that into `SqliteError: no such column: <whatever the newest migration added>`.
+    //
+    // The exemption is `create === true`, which is exactly and only `runMigrations` (see
+    // `OpenDbOptions.create` above — every other one of the ~30 call sites inherits the `false`
+    // default). Any other spelling would lock `tn db migrate` out of the one database it exists to
+    // repair; keying off the bit that already means "I am the bootstrapper" adds no new concept.
+    if (options.create !== true) {
+      // One read of the migration folder, not two — the first revision re-read it inside the
+      // failure branch to recover `total`.
+      const { pending, total } = migrationStatus(sqlite);
+      if (pending > 0) {
+        throw new DatabaseBehindMigrationsError(
+          `database at ${resolve(path)} is at ${total - pending} of ${total} migrations — ` +
+            "run `tn db migrate`",
+        );
+      }
     }
+  } catch (err) {
+    // The close is itself guarded, and that is not belt-and-braces: `applyMigrations` below carries
+    // a recorded finding about exactly this shape — an unconditional cleanup call in a catch threw
+    // and REPLACED the real failure, so the operator debugged the masking error instead. Cleanup
+    // failure is not news; the error that got us here is.
+    try {
+      sqlite.close();
+    } catch {
+      /* the original error is the one worth reporting */
+    }
+    throw err;
   }
   return { sqlite, db: drizzle(sqlite) };
 }

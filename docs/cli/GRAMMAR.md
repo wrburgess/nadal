@@ -66,6 +66,14 @@ The first is the command answering you; the second is nadal failing. Both go to 
 and both respect `--json` (`{"status":"error","message":"…","class":"…"}`). Neither is suppressed by
 `--quiet`, which touches stdout only.
 
+**That exclusivity is checked, not merely intended** — `emitSummary` accepts any field name from any
+of its ~30 call sites, so this would otherwise be a convention that one new command could break
+while this page went on asserting it. `test/report-fatal.test.ts`'s *"`class=` is emitted by this
+module and nothing else"* walks `src/` and fails if any file other than `src/cli/report-fatal.ts`
+emits a `class` field. Its one blind spot is recorded beside it: it reads the literal `["class", …]`
+tuple every summary field in this repo is written as, and would not see a field name computed from a
+variable.
+
 This line used to print nothing at all — `logRequest` caught the error, labelled a telemetry row
 with it, and discarded it, so `tn` exited 1 with zero bytes on both streams (#160). *"Every command
 prints one deterministic `key=value` summary line"* above was aspirational for this one path until
