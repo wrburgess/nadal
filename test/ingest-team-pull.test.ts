@@ -13,6 +13,7 @@ import { MAX_CASCADE_YEARS, cascadeFailureWarning, cascadeYears, pullTeam } from
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { buildRosterPage, removeAllRosterRows, removeRosterRow } from "./helpers/roster-html.js";
 import { loadFixture } from "./helpers/fixtures.js";
+import { cascadeUrlBuilderFor, namesakeIndexFrom } from "./helpers/roster-links.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
 
@@ -38,6 +39,22 @@ const ROSTER_NAMES = [
   "Juniper Jarrow",
   "Delaney Duxbury",
 ];
+
+/**
+ * Issue #167. The roster entries whose hrefs carry TennisRecord's `&s=` NAMESAKE INDEX, read out of
+ * the fixture's own bytes rather than restated here — see `test/helpers/roster-links.ts` for why the
+ * derivation is shared. `test/parsers-tennisrecord-team.test.ts` pins `EMORY ELLERBY&s=5` at the
+ * parser boundary; this is what carries it the rest of the way, into the URL the cascade requests.
+ *
+ * Asserted non-empty on load: if the fixture ever loses its namesake links, the tests below would
+ * otherwise keep passing while testing nothing, which is the exact failure mode #167 was.
+ */
+const NAMESAKE_INDEX = namesakeIndexFrom(team);
+const NAMESAKE_ROSTER_ENTRIES = [...NAMESAKE_INDEX.entries()];
+expect(NAMESAKE_ROSTER_ENTRIES.length, "fixture must retain roster links carrying &s=").toBeGreaterThan(0);
+
+/** The URL the cascade actually requests for a fixture roster name (#167). */
+const cascadeUrlFor = cascadeUrlBuilderFor(team);
 
 function syntheticEmptyMatchHistory(name: string): string {
   return `<html><body>
@@ -78,7 +95,12 @@ function historyFixtures(names: string[], years: string[]): Record<string, { bod
   const fixtures: Record<string, { body: string }> = {};
   for (const year of years) {
     for (const name of names) {
-      fixtures[matchHistoryUrlFor(name, year)] = { body: syntheticEmptyMatchHistory(name) };
+      // Keyed through NAMESAKE_INDEX (#167) so a fixture exists at the URL the cascade actually
+      // requests. Before the fix these keys and the requests agreed by both omitting `&s=`, which is
+      // why a suite this size stayed green while every namesake on a real roster fetched a stranger.
+      fixtures[cascadeUrlFor(name, year)] = {
+        body: syntheticEmptyMatchHistory(name),
+      };
     }
   }
   return fixtures;
@@ -277,6 +299,56 @@ describe("pullTeam", () => {
     }
   });
 
+  // Issue #167. TennisRecord disambiguates same-named players with an `&s=<n>` NAMESAKE INDEX on the
+  // roster link — `playername=EMORY ELLERBY&s=5` in this fixture. Dropping it does not fail loudly:
+  // the request resolves to that name's DEFAULT profile, which is a DIFFERENT HUMAN, and the pull
+  // reports `status=ok` with a stranger's ratings written against a roster member.
+  //
+  // Measured live 2026-08-14, one parameter apart:
+  //   playername=Andy+Wang        -> Andy Wang (LORTON, VA),    NTRP 5.5, no dynamic rating, 15,776 B
+  //   playername=Andy+Wang&s=15   -> Andy Wang (Papillion, NE), NTRP 3.5, dynamic 3.4362,   124,505 B
+  // Papillion is the roster's own city; the second page names five of his teammates and the first
+  // names none. 11 of 51 players registered for Springfield had ingested a stranger this way.
+  //
+  // Asserted on the URLs REQUESTED rather than on anything parsed downstream, because the defect is
+  // entirely in URL construction — the fetched page is a perfectly valid profile, just not this
+  // person's, so no parser and no identity check downstream has anything to object to.
+  it("carries the roster link's &s= namesake index into every cascaded match-history URL", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      const { fetcher, years } = buildFetcher();
+      await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
+
+      const cascaded = fetcher.calls.slice(1);
+      // Both namesake entries in the fixture, with the indices its own hrefs carry.
+      for (const [name, s] of NAMESAKE_ROSTER_ENTRIES) {
+        for (const year of years) {
+          const expected = matchHistoryUrlFor(name, year, s);
+          expect(expected).toContain(`s=${s}`);
+          expect(cascaded).toContain(expected);
+        }
+      }
+
+      // And the converse, which is the half that actually catches the bug: NO cascaded URL may name
+      // a namesake player WITHOUT the index. A fix that appends `s=` while still also fetching the
+      // bare form would pass the loop above and still be pulling the wrong person.
+      for (const [name] of NAMESAKE_ROSTER_ENTRIES) {
+        for (const year of years) {
+          expect(cascaded).not.toContain(matchHistoryUrlFor(name, year));
+        }
+      }
+
+      // A player whose name IS unique carries no index — the parameter must not be invented.
+      for (const year of years) {
+        expect(cascaded).toContain(matchHistoryUrlFor("Ellis Eastwick", year));
+      }
+      expect(cascaded.filter((u) => u.includes("s=")).length).toBe(NAMESAKE_ROSTER_ENTRIES.length * years.length);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("--players cascades exactly one fetch per roster profile link PER SEASON, each exactly once", async () => {
     runMigrations();
     const { db, sqlite } = openDb();
@@ -295,7 +367,7 @@ describe("pullTeam", () => {
       expect(fetcher.calls).toHaveLength(1 + ROSTER_NAMES.length * years.length);
       expect(fetcher.calls[0]).toBe(team.source.url);
 
-      const expectedCascadeUrls = years.flatMap((year) => ROSTER_NAMES.map((name) => matchHistoryUrlFor(name, year)));
+      const expectedCascadeUrls = years.flatMap((year) => ROSTER_NAMES.map((name) => cascadeUrlFor(name, year)));
       const actualCascadeUrls = fetcher.calls.slice(1);
       // EXACT set equality, not containment: a missing season and a surplus one both fail here.
       expect([...actualCascadeUrls].sort()).toEqual([...expectedCascadeUrls].sort());
@@ -364,7 +436,7 @@ describe("pullTeam", () => {
       // particular transport failure. The dispositions themselves are pinned against real
       // `FetchError`s in the `#98` block at the end of this file.
       const fixtures = historyFixtures(ROSTER_NAMES, years);
-      delete fixtures[matchHistoryUrlFor(victim, older)];
+      delete fixtures[cascadeUrlFor(victim, older)];
       const fetcher = createStubFetcher({ [team.source.url]: { body: team.html }, ...fixtures });
 
       const result = await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
@@ -377,7 +449,7 @@ describe("pullTeam", () => {
         { entry: `${victim} (year=${older})`, disposition: "unclassified", reason: expect.any(String) },
       ]);
       // The successful season was still fetched and still committed the player.
-      expect(fetcher.calls).toContain(matchHistoryUrlFor(victim, newest));
+      expect(fetcher.calls).toContain(cascadeUrlFor(victim, newest));
       const row = db.select().from(players).where(eq(players.canonicalName, victim)).all();
       expect(row).toHaveLength(1);
     } finally {
@@ -405,9 +477,9 @@ describe("pullTeam", () => {
       for (const name of ROSTER_NAMES) {
         const row = db.select().from(players).where(eq(players.canonicalName, name)).all()[0];
         expect(row?.tennisrecordUrl, `${name} should keep the newest season's handle`).toBe(
-          matchHistoryUrlFor(name, newest),
+          cascadeUrlFor(name, newest),
         );
-        expect(row?.tennisrecordUrl).not.toBe(matchHistoryUrlFor(name, oldest));
+        expect(row?.tennisrecordUrl).not.toBe(cascadeUrlFor(name, oldest));
       }
     } finally {
       sqlite.close();
@@ -430,7 +502,7 @@ describe("pullTeam", () => {
       // The victim's NEWEST season is unregistered — the stub throws — while their older season is
       // served. The inverse of the partial-failure test above; same note on the disposition.
       const fixtures = historyFixtures(ROSTER_NAMES, years);
-      delete fixtures[matchHistoryUrlFor(victim, newest)];
+      delete fixtures[cascadeUrlFor(victim, newest)];
       const fetcher = createStubFetcher({ [team.source.url]: { body: team.html }, ...fixtures });
 
       const result = await pullTeam({ db, fetchPage: fetcher, target: team.source.url, cascadePlayers: true });
@@ -444,7 +516,7 @@ describe("pullTeam", () => {
       // The handle is the older season's — the best one actually obtained — never null.
       const row = db.select().from(players).where(eq(players.canonicalName, victim)).all()[0];
       expect(row?.tennisrecordUrl, "a player enriched from an older season must stay reachable by name").toBe(
-        matchHistoryUrlFor(victim, older),
+        cascadeUrlFor(victim, older),
       );
 
       // And the property that actually matters to an operator: the player resolves by NAME, which is
@@ -452,7 +524,7 @@ describe("pullTeam", () => {
       const byName = await pullPlayer({
         db,
         fetchPage: createStubFetcher({
-          [matchHistoryUrlFor(victim, older)]: { body: syntheticEmptyMatchHistory(victim) },
+          [cascadeUrlFor(victim, older)]: { body: syntheticEmptyMatchHistory(victim) },
         }),
         target: victim,
       });
@@ -491,6 +563,55 @@ describe("pullTeam", () => {
   // fetched roster page and went straight into `console.warn` — a raw stderr write with no summary
   // formatter in front of it, so ANSI, bidi and line controls bypassed the terminal-boundary guard
   // every other CLI output path has.
+  // Issue #167, the refusal half. A namesake index that is not an ordinal means the roster link is
+  // not the shape we think it is — and the tempting handling, dropping it and fetching the bare
+  // name, is EXACTLY the defect this issue is about. So it refuses that entry instead, on the one
+  // input that says our reading of the page is wrong.
+  it("refuses a roster entry whose &s= is not an ordinal, rather than falling back to the default namesake", async () => {
+    runMigrations();
+    const { db, sqlite } = openDb();
+    try {
+      // `replaceAll` — this fixture carries the same href twice (roster table and a match row), and
+      // a first-occurrence-only swap would leave the cascade reading the untouched second copy.
+      const mutated = team.html.replaceAll(
+        "playername=EMORY ELLERBY&s=5",
+        "playername=EMORY ELLERBY&s=not-an-ordinal",
+      );
+      expect(mutated).not.toBe(team.html);
+      expect(mutated).not.toContain("EMORY ELLERBY&s=5");
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const years = defaultYears();
+      const stubFetcher = createStubFetcher({
+        [team.source.url]: { body: mutated },
+        ...historyFixtures(
+          ROSTER_NAMES.filter((n) => n !== "EMORY ELLERBY"),
+          years,
+        ),
+      });
+
+      const result = await pullTeam({ db, fetchPage: stubFetcher, target: team.source.url, cascadePlayers: true });
+      warnSpy.mockRestore();
+
+      // The bare-name URL is the thing that must NEVER be requested — it is a different person.
+      for (const year of years) {
+        expect(stubFetcher.calls).not.toContain(matchHistoryUrlFor("EMORY ELLERBY", year));
+      }
+
+      // Reported as a skip, per season, and classified `permanent` — a retry re-reads the same href.
+      // `pullTeam` itself returns `ok` and carries the skip list; `partial` is the CLI's rendering of
+      // a non-empty one, so the list is what this test asserts on.
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") throw new Error("expected ok");
+      const skipped = result.skippedRosterEntries.filter((e) => e.entry.startsWith("EMORY ELLERBY"));
+      expect(skipped).toHaveLength(years.length);
+      expect(skipped.every((e) => e.disposition === "permanent")).toBe(true);
+      expect(skipped[0]?.reason).toContain("not-an-ordinal");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("sanitizes a hostile roster entry name before warning about it", async () => {
     const RTL_OVERRIDE = String.fromCharCode(0x202e);
     const ESC = String.fromCharCode(0x1b);

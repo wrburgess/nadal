@@ -605,7 +605,29 @@ export async function pullTeam(options: TeamPullOptions): Promise<TeamPullResult
       for (const entry of parsed.roster) {
         const playername = entry.profilePath === null ? null : hrefParam(entry.profilePath, "playername");
         if (playername === null || playername === "") continue;
-        const playerUrl = matchHistoryUrlFor(playername, year);
+        // Issue #167. `&s=` is TennisRecord's NAMESAKE INDEX — it selects between people who share a
+        // name — so it belongs to the identity, not to the query string's decoration. Reading only
+        // `playername` here fetched that name's DEFAULT profile: a different human, whose page parses
+        // cleanly and whose ratings were written against this roster member with `status=ok`.
+        const namesakeIndex = entry.profilePath === null ? null : hrefParam(entry.profilePath, "s");
+        let playerUrl: string;
+        try {
+          playerUrl = matchHistoryUrlFor(playername, year, namesakeIndex);
+        } catch (error) {
+          // REFUSED, never dropped. Falling back to the bare name here would re-create the exact
+          // defect this block exists to close, and would do it on the one input that says the page
+          // shape is not what we think it is. `permanent` because a retry re-reads the same href.
+          skippedRosterEntries.push({
+            entry: `${entry.name} (year=${year})`,
+            disposition: "permanent",
+            reason: `roster link carries an ${errorMessage(error)} — refusing to fetch the default namesake`,
+          });
+          console.warn(
+            `team pull: cascading "${sanitizeValue(entry.name)}" failed (identity) — ` +
+              `${sanitizeValue(errorMessage(error))} — skipped`,
+          );
+          continue;
+        }
         const result = await pullPlayer({
           db,
           fetchPage,
