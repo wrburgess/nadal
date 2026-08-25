@@ -65,7 +65,7 @@ Not a gallery artifact — a static site in this repository, served by GitHub Pa
 |---|---|---|
 | Springfield Game Plan | `https://gameplan.kc.tennis` — **intended, not yet resolving** | access gate exercised 2026-08-25; **numbers not re-derived** |
 
-The URL is what `docs/CNAME` declares, not a address confirmed live: as of this row the `gameplan`
+The URL is what `docs/CNAME` declares, not an address confirmed live: as of this row the `gameplan`
 CNAME does not exist at Cloudflare and no certificate has issued. Whoever finds this row stale in
 either direction should fix it here.
 
