@@ -1,7 +1,7 @@
 # Published artifacts
 
-The twelve artifacts nadal has published, with what each is and how far its numbers have been
-checked against the database.
+The twelve artifacts nadal has published, plus the one assembled site, with what each is and how far
+its numbers have been checked against the database.
 
 **Why this file exists.** The artifact gallery is **account-wide, not project-scoped** — the
 `Artifact` tool's `list` action takes only `mine` / `shared` / `all`, with no project filter, folder
@@ -56,6 +56,27 @@ and then measured away on 2026-08-25.
 | Springfield Scouting Board | https://claude.ai/code/artifact/c2ee6076-c7f4-412d-b4a5-59af30f986ab | **not verified** |
 | The Springfield Five | https://claude.ai/code/artifact/e9264c28-ba94-4f99-ab32-8f1dcedbc3ff | **not verified** |
 | Springfield Handoff | https://claude.ai/code/artifact/2ea11d66-eb0c-4c02-9622-8f172e3db3ca | process doc — not opened |
+
+## The assembled site
+
+Not a gallery artifact — a static site in this repository, served by GitHub Pages.
+
+| Artifact | URL | Verified |
+|---|---|---|
+| Springfield Game Plan | https://gameplan.kc.tennis | access gate exercised 2026-08-25; **numbers not re-derived** |
+
+`docs/index.html`, added by [PR#184](https://github.com/wrburgess/nadal/pull/184). It was assembled
+**by hand** from nine of the artifacts above — the four match cards, the five scouting reports, the
+Scouting Board and The Springfield Five — plus trip logistics that exist nowhere else. So it is a
+*copy*, and the Verified column above is not inherited from its sources: republishing any of those
+rows leaves this page stale, and there is no build script to re-derive it.
+
+Two things a reader of this file should know, because they are easy to meet by surprise:
+
+- **This file is itself served at `gameplan.kc.tennis/artifacts.md`.** Pages branch-source offers
+  `/` or `/docs` and nothing else, so everything in `docs/` is published — `findings.md` included.
+- The page carries a four-digit access gate. It is a speed bump, not a control, and it does not
+  cover the copies GitHub serves from this public repository. See `findings.md`, 2026-08-25.
 
 ## Not nadal
 
