@@ -70,10 +70,17 @@ CNAME does not exist at Cloudflare and no certificate has issued. Whoever finds 
 either direction should fix it here.
 
 `docs/index.html`, added by [PR#184](https://github.com/wrburgess/nadal/pull/184). It was assembled
-**by hand** from nine of the artifacts above — the four match cards, the five scouting reports, the
-Scouting Board and The Springfield Five — plus trip logistics that exist nowhere else. So it is a
+**by hand** from **eleven of the twelve** artifacts above — the four match cards, the five scouting
+reports, the Scouting Board and The Springfield Five — plus trip logistics that exist nowhere else.
+The twelfth, *Springfield Handoff*, is a process document and is not a source. So the page is a
 *copy*, and the Verified column above is not inherited from its sources: republishing any of those
 rows leaves this page stale, and there is no build script to re-derive it.
+
+**The count is eleven, and it is worth saying why this sentence once read *nine*.** The operator's
+deploy brief says *"All nine source artifacts are in"* and then lists the field overview, four match
+cards, five scouting reports, the Scouting Board and trip logistics — which is eleven artifacts and a
+category. The nine was carried here unchecked and caught in review. Anyone reconciling this page
+against that brief will meet the same discrepancy; the table above is the countable authority.
 
 Two things a reader of this file should know, because they are easy to meet by surprise:
 
