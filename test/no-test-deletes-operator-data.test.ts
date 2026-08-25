@@ -50,6 +50,34 @@ export function stripComments(source: string): string {
 }
 
 /**
+ * Every `rmSync(` offset in `source`, tagged with whether its own line reads as a comment.
+ *
+ * A SECOND, structurally different derivation of "is this occurrence commented out" — it looks at
+ * the shape of the line (`//` or `*` after trimming) and never at the stripping regexes above. That
+ * independence is the point: `stripComments` cannot lex JavaScript, so a `//` or a `/*` inside a
+ * string literal would make it swallow live code, and a check built from the same regex could not
+ * see that happen. The suite-wide test below asserts the two agree, so the day a fixture string
+ * eats a real removal call, this file goes red instead of going quiet.
+ */
+export function removalLines(source: string): { offset: number; commentedByShape: boolean }[] {
+  const lines = source.split("\n");
+  const found: { offset: number; commentedByShape: boolean }[] = [];
+  for (const match of source.matchAll(/rmSync\(/g)) {
+    const offset = match.index;
+    const lineNo = source.slice(0, offset).split("\n").length - 1;
+    const trimmed = (lines[lineNo] ?? "").trim();
+    // LINE SHAPE ONLY — deliberately NOT "is there a // earlier on this line", which is the exact
+    // test `stripComments` performs. An earlier draft included that clause and the two derivations
+    // then shared one blind spot: for `const p = "a//b"; rmSync(...)` both call it a comment, so
+    // they agree precisely in the case the agreement test exists to catch. Two paths that share a
+    // wrong assumption return the same wrong answer, which is why `verify.py`'s check 0 tests the
+    // convention against `winner_side` rather than against a second reading of the score.
+    found.push({ offset, commentedByShape: trimmed.startsWith("//") || trimmed.startsWith("*") });
+  }
+  return found;
+}
+
+/**
  * The first argument of every `rmSync(` call in `source` — the removal target, without the options
  * object.
  *
@@ -170,6 +198,43 @@ describe("no test removes a directory the repository declares as operator data (
   it("does not read a commented-out teardown as live code", () => {
     const quoted = '// the old cleanup was rmSync(resolve("raw"), { recursive: true, force: true })\nconst x = 1;';
     expect(removalTargets(stripComments(quoted))).toEqual([]);
+  });
+
+  it("stripComments never eats a removal call that is not visibly a comment", () => {
+    // The hazard: `stripComments` is regex-based and cannot lex JavaScript, so a `//` or `/*`
+    // inside a string literal (a URL, an inline CSS fixture) could make it swallow live code and
+    // silently shrink the sweep below. `removalLines` decides the same question from line shape
+    // alone, so the two disagree exactly when that happens.
+    //
+    // This file itself is excluded: it deliberately holds adversarial fixtures — including a string
+    // that stripComments DOES eat — as the planted defect below.
+    const eaten: string[] = [];
+
+    for (const { file, source } of testSources()) {
+      if (file.endsWith("no-test-deletes-operator-data.test.ts")) continue;
+      const lost =
+        (source.match(/rmSync\(/g) ?? []).length - (stripComments(source).match(/rmSync\(/g) ?? []).length;
+      const commented = removalLines(source).filter((c) => c.commentedByShape).length;
+      if (lost !== commented) {
+        eaten.push(`${file}: stripping removed ${lost} rmSync( calls, ${commented} read as comments by shape`);
+      }
+    }
+
+    expect(eaten).toEqual([]);
+  });
+
+  it("PLANTED DEFECT: the two derivations disagree when a string literal hides a //", () => {
+    // The case the check above exists to catch, constructed rather than described. `stripComments`
+    // sees `//b"; rmSync(...)` and eats to end of line; line shape correctly says this is code.
+    // The disagreement is what makes the hazard detectable instead of silent.
+    const planted = 'const p = "a//b"; rmSync(resolve("raw"), { recursive: true });';
+
+    const lost = (planted.match(/rmSync\(/g) ?? []).length - (stripComments(planted).match(/rmSync\(/g) ?? []).length;
+    const commented = removalLines(planted).filter((c) => c.commentedByShape).length;
+
+    expect(lost).toBe(1); // stripComments loses it
+    expect(commented).toBe(0); // line shape knows it is code
+    expect(lost).not.toBe(commented); // therefore the suite-wide check above would report it
   });
 
   it("no test file in the suite removes a package-root-anchored protected directory", () => {
