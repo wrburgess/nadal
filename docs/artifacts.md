@@ -63,7 +63,11 @@ Not a gallery artifact — a static site in this repository, served by GitHub Pa
 
 | Artifact | URL | Verified |
 |---|---|---|
-| Springfield Game Plan | https://gameplan.kc.tennis | access gate exercised 2026-08-25; **numbers not re-derived** |
+| Springfield Game Plan | `https://gameplan.kc.tennis` — **intended, not yet resolving** | access gate exercised 2026-08-25; **numbers not re-derived** |
+
+The URL is what `docs/CNAME` declares, not a address confirmed live: as of this row the `gameplan`
+CNAME does not exist at Cloudflare and no certificate has issued. Whoever finds this row stale in
+either direction should fix it here.
 
 `docs/index.html`, added by [PR#184](https://github.com/wrburgess/nadal/pull/184). It was assembled
 **by hand** from nine of the artifacts above — the four match cards, the five scouting reports, the
@@ -73,8 +77,9 @@ rows leaves this page stale, and there is no build script to re-derive it.
 
 Two things a reader of this file should know, because they are easy to meet by surprise:
 
-- **This file is itself served at `gameplan.kc.tennis/artifacts.md`.** Pages branch-source offers
-  `/` or `/docs` and nothing else, so everything in `docs/` is published — `findings.md` included.
+- **Once Pages is enabled, this file is served too** — at `/artifacts.md` on whatever host answers.
+  Pages branch-source offers `/` or `/docs` and nothing else, so everything in `docs/` is published,
+  `findings.md` included.
 - The page carries a four-digit access gate. It is a speed bump, not a control, and it does not
   cover the copies GitHub serves from this public repository. See `findings.md`, 2026-08-25.
 
