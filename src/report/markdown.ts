@@ -16,6 +16,7 @@ import {
   formatRosterSourceLine,
   formatSlotTendencies,
   formatWtnProvenanceLine,
+  formatWtnScaleBreakLine,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
 import { sanitizeValue } from "../sanitize.js";
@@ -88,7 +89,15 @@ function renderRosterSourceLineMarkdown(dossier: TeamDossier): string {
  */
 function renderWtnProvenanceLineMarkdown(dossier: TeamDossier): string {
   const line = formatWtnProvenanceLine(dossier.players.map((p) => p.ratingTrajectory));
-  return `**WTN ratings:** ${escapeMarkdownCell(line)}.`;
+  const provenance = `**WTN ratings:** ${escapeMarkdownCell(line)}.`;
+
+  // #172, the twin of the HTML renderer's block. Both surfaces must disclose the same break, or the
+  // markdown copy of a dossier becomes the one a reader trusts by accident.
+  const breach = formatWtnScaleBreakLine(
+    dossier.players.map((p) => ({ name: p.identity.canonicalName, ratingTrajectory: p.ratingTrajectory })),
+  );
+  if (breach === null) return provenance;
+  return `${provenance}\n\n**Scale break:** ${escapeMarkdownCell(breach)}.`;
 }
 
 /**
