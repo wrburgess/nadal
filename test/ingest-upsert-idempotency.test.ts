@@ -14,7 +14,6 @@ import {
 import { hrefParam } from "../src/parsers/dom.js";
 import { AmbiguousIdentityError } from "../src/ingest/errors.js";
 import { resolvePlayer } from "../src/ingest/identity.js";
-import { matchHistoryUrlFor } from "../src/ingest/player-pull.js";
 import { cascadeYears, pullTeam } from "../src/ingest/team-pull.js";
 import {
   normalizeSiteKey,
@@ -26,10 +25,13 @@ import {
 } from "../src/ingest/upsert.js";
 import { createStubFetcher } from "./helpers/stub-fetcher.js";
 import { loadFixture } from "./helpers/fixtures.js";
+import { cascadeUrlBuilderFor } from "./helpers/roster-links.js";
 import { useTnDbPath } from "./helpers/tn-db.js";
 import { useTnRawPath } from "./helpers/tn-raw.js";
 
 const team = loadFixture("tennisrecord/team");
+/** Issue #167 — the cascade's real request URLs for this fixture, namesake indices included. */
+const cascadeUrlFor = cascadeUrlBuilderFor(team);
 const matchHistory = loadFixture("tennisrecord/match-history");
 
 const ROSTER_NAMES = [
@@ -119,7 +121,9 @@ function buildFetcher() {
   const newest = seasons[0];
   for (const year of seasons) {
     for (const name of ROSTER_NAMES) {
-      const url = matchHistoryUrlFor(name, year);
+      // Issue #167: keyed at the URL the cascade actually requests, namesake index and all. Derived
+      // from the fixture's own hrefs (`test/helpers/roster-links.ts`), never restated here.
+      const url = cascadeUrlFor(name, year);
       if (name !== "Avery Ashby") {
         fixtures[url] = { body: syntheticEmptyMatchHistory(name) };
         continue;
