@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
@@ -32,6 +32,19 @@ const WATCHED = ["raw", "reports"];
 
 type Fingerprint = Map<string, string>;
 
+/**
+ * One path's identity mark. `lstatSync`, never `statSync`: following a symlink would fingerprint
+ * the TARGET, so replacing a watched directory with a symlink to an identical one would go
+ * unnoticed. The inode is included for the same reason — contractor review, PR #174 wave 4 showed
+ * that recording a directory as the bare string `"dir"` let an empty `raw/` be swapped for another
+ * empty directory with the same fingerprint. Type, identity and — for files — size and mtime.
+ */
+function mark(path: string): string {
+  const stat = lstatSync(path);
+  const kind = stat.isSymbolicLink() ? "link" : stat.isDirectory() ? "dir" : "file";
+  return kind === "file" ? `file:${stat.ino}:${stat.size}:${stat.mtimeMs}` : `${kind}:${stat.ino}`;
+}
+
 function fingerprint(): Fingerprint {
   const seen: Fingerprint = new Map();
   for (const dir of WATCHED) {
@@ -49,14 +62,17 @@ function fingerprint(): Fingerprint {
     // The ROOT ITSELF is a watched entry. Contractor review, PR #174 wave 3 [must-fix]: recording
     // only regular files made the disappearance of an empty protected directory invisible, which
     // was precisely the class the teardowns could still cause.
-    seen.set(dir, "dir");
+    seen.set(dir, mark(root));
     for (const entry of entries) {
       const path = join(root, entry);
       try {
-        const stat = statSync(path);
-        seen.set(join(dir, entry), stat.isDirectory() ? "dir" : `${stat.size}:${stat.mtimeMs}`);
-      } catch {
-        continue; // vanished between listing and stat — a concurrent writer, not our business
+        seen.set(join(dir, entry), mark(path));
+      } catch (err) {
+        // ONLY the concurrent-disappearance case is ignorable. Contractor review, PR #174 wave 4:
+        // swallowing every stat error dropped a dangling symlink, or an entry behind an I/O or
+        // permission fault, out of the baseline entirely — after which deleting it passed.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw err;
       }
     }
   }
