@@ -302,10 +302,32 @@ describe("archive guard vs the filesystem (symlinks)", () => {
 describe("archivePage under the DOCUMENTED DEFAULT (TN_RAW_PATH unset)", () => {
   const original = process.env.TN_RAW_PATH;
 
+  // #173. Unsetting TN_RAW_PATH is the whole point of this describe, and it is also what makes the
+  // teardown dangerous: `rawRoot()` then resolves to the OPERATOR'S real archive. The previous
+  // cleanup was `rmSync(resolve("raw"), { recursive: true, force: true })` — a recursive delete of
+  // that entire directory to dispose of the two files below. Running the declared quality gate in a
+  // used checkout therefore destroyed `raw/` outright: archived captures and provenance for 316
+  // pulls, gitignored and so unrecoverable by git. CI never saw it, because a fresh clone has an
+  // empty `raw/` and loses nothing.
+  //
+  // The rule this now follows, and the one the sibling defect in `test/fs-output-root.test.ts`
+  // broke the same way: REMOVE ONLY WHAT THE TEST CREATED. Never a recursive sweep of a shared
+  // in-repo directory that the test merely wrote into.
+  const rawRootPath = resolve("raw");
+  const rawRootPreexisted = existsSync(rawRootPath);
+  const archived: string[] = [];
+
   afterEach(() => {
     if (original === undefined) delete process.env.TN_RAW_PATH;
     else process.env.TN_RAW_PATH = original;
-    rmSync(resolve("raw"), { recursive: true, force: true });
+
+    for (const leaf of archived.splice(0)) {
+      rmSync(leaf, { force: true });
+      rmSync(`${leaf}.provenance.json`, { force: true });
+    }
+    // Only when this run created the root is a recursive removal correct — then everything under it
+    // is ours. When it pre-existed, the two leaves above are the entire footprint.
+    if (!rawRootPreexisted) rmSync(rawRootPath, { recursive: true, force: true });
   });
 
   it("REGRESSION: writes to <repo>/raw/<sourceSet>/ instead of throwing", () => {
@@ -318,6 +340,7 @@ describe("archivePage under the DOCUMENTED DEFAULT (TN_RAW_PATH unset)", () => {
       body: "<html>default</html>",
       httpStatus: 200,
     });
+    archived.push(htmlPath);
 
     // Issue #111: with TN_RAW_PATH unset, rawRoot() now returns an absolute, package-root-anchored
     // path rather than the bare relative string "raw" — this test's cwd happens to be the package
