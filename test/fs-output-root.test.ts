@@ -62,9 +62,11 @@ vi.mock("node:fs", async (importOriginal) => {
 
 describe("assertOutputPathSafe", () => {
   describe("the permitted directory is a real parameter, not a second hardcoded exception", () => {
-    afterEach(() => {
-      rmSync(resolve("reports"), { recursive: true, force: true });
-    });
+    // #173. There is deliberately NO teardown here. These three tests only VALIDATE paths —
+    // `assertOutputPathSafe` creates nothing — so the previous
+    // `rmSync(resolve("reports"), { recursive: true, force: true })` disposed of nothing this block
+    // had made and instead deleted the operator's real `reports/` on every gate run. Cleaning up
+    // what a test did not create is not tidiness; it is data loss with a test's permissions.
 
     it("accepts the repo's own gitignored reports/ as the root when \"reports\" is permitted", () => {
       const root = resolve("reports");
@@ -139,9 +141,15 @@ describe("assertOutputPathSafe", () => {
   // `test/ingest-archive.test.ts` (`rawRoot()` unset) and `test/db-client.test.ts` (`dbPath()`
   // unset), both asserting an absolute path under the package root.
   describe("a bare repo-relative root string (reachable via an explicit relative env override)", () => {
-    afterEach(() => {
-      rmSync(resolve("reports"), { recursive: true, force: true });
-    });
+    // #173, the same defect as the block above and the one in `test/ingest-archive.test.ts`: this
+    // teardown used to recursively delete the operator's real `reports/`. The only thing either
+    // test below creates is the BARE directory (the `mkdirSync` on the next test, no children), so
+    // removing it is correct exactly when this run is what created it.
+    // NO TEARDOWN, deliberately. Contractor review, PR #174 wave 3 [must-fix]: the previous
+    // non-recursive `rmdirSync(resolve("reports"))` still deleted an operator's pre-existing EMPTY
+    // `reports/`. The only thing either test below creates is that bare directory, gitignored and
+    // inert, so leaving it costs nothing and removing it cannot be done safely without ownership
+    // this block has no way to establish.
 
     it("REGRESSION: allows a bare repo-relative root equal to the permitted dir", () => {
       mkdirSync(resolve("reports"), { recursive: true });

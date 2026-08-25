@@ -3,6 +3,13 @@ import { coverageConfigDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
+    // #173. Fails the run if any path that existed in raw/ or reports/ before it is missing, or
+    // has changed type, inode, size or mtime after it — the invariant itself, rather than a static
+    // scan for the spellings that happened to break it. Contractor review, PR #174 wave 4: that is
+    // the fingerprint's real strength, and "altered" overstated it, since a same-size edit
+    // restoring mtime passes. See test/helpers/operator-data-canary.ts for why the scan was
+    // withdrawn and what the fingerprint does and does not prove.
+    globalSetup: ["test/helpers/operator-data-canary.ts"],
     // Vitest's default is 5000ms, and that default makes THIS suite nondeterministically red — a
     // flaky gate, not a slow one. `docs/findings.md` records the measurement from #44/PR #51 (four
     // consecutive full runs, 2-4 failures each, a DIFFERENT failing set every time, every failure
