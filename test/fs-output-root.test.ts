@@ -8,7 +8,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmdirSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -146,20 +145,11 @@ describe("assertOutputPathSafe", () => {
     // teardown used to recursively delete the operator's real `reports/`. The only thing either
     // test below creates is the BARE directory (the `mkdirSync` on the next test, no children), so
     // removing it is correct exactly when this run is what created it.
-    const reportsRootPath = resolve("reports");
-
-    afterEach(() => {
-      // Non-recursive, and unconditional. Contractor review, PR #174, permanent lens [must-fix]:
-      // gating a recursive sweep on a pre-test existence snapshot still deletes whatever lands
-      // under the root between that snapshot and this hook. `rmdirSync` refuses a non-empty
-      // directory (ENOTEMPTY), and the only thing this block creates is the BARE directory below —
-      // so this removes exactly that, or nothing.
-      try {
-        rmdirSync(reportsRootPath);
-      } catch {
-        /* not empty, or never created — leave it alone */
-      }
-    });
+    // NO TEARDOWN, deliberately. Contractor review, PR #174 wave 3 [must-fix]: the previous
+    // non-recursive `rmdirSync(resolve("reports"))` still deleted an operator's pre-existing EMPTY
+    // `reports/`. The only thing either test below creates is that bare directory, gitignored and
+    // inert, so leaving it costs nothing and removing it cannot be done safely without ownership
+    // this block has no way to establish.
 
     it("REGRESSION: allows a bare repo-relative root equal to the permitted dir", () => {
       mkdirSync(resolve("reports"), { recursive: true });

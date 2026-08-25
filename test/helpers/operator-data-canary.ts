@@ -17,6 +17,12 @@ import { join, resolve } from "node:path";
  * file that existed in `raw/` or `reports/` before the run may be missing or altered after it.
  * There is nothing here to out-spell.
  *
+ * WHAT THE FINGERPRINT ACTUALLY PROVES, stated at its real strength rather than at the strength the
+ * word "altered" suggests: a file's size and mtime, and a directory's existence. That catches
+ * deletion, truncation and rewrite. It does NOT catch a same-length edit that restores the original
+ * mtime — content hashing would, at the cost of re-reading every watched byte on every run, and the
+ * class this exists to stop is destruction rather than forgery.
+ *
  * ADDITIONS ARE DELIBERATELY IGNORED. The suite currently leaves two archived files behind under a
  * concurrent-environment race (#175); that is pollution, tracked separately, and failing on it here
  * would conflate two different defects and make this canary red for a reason it is not about.
@@ -33,15 +39,22 @@ function fingerprint(): Fingerprint {
     let entries: string[];
     try {
       entries = readdirSync(root, { recursive: true, encoding: "utf8" });
-    } catch {
-      continue; // absent on a fresh clone — nothing to protect, and that is not an error
+    } catch (err) {
+      // ONLY "it is not there" means there is nothing to protect. Contractor review, PR #174
+      // wave 3: swallowing every error made EACCES/EIO/ENOTDIR silently drop a whole directory
+      // from protection — the error path doing something weaker than the happy path.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
     }
+    // The ROOT ITSELF is a watched entry. Contractor review, PR #174 wave 3 [must-fix]: recording
+    // only regular files made the disappearance of an empty protected directory invisible, which
+    // was precisely the class the teardowns could still cause.
+    seen.set(dir, "dir");
     for (const entry of entries) {
       const path = join(root, entry);
       try {
         const stat = statSync(path);
-        if (!stat.isFile()) continue;
-        seen.set(join(dir, entry), `${stat.size}:${stat.mtimeMs}`);
+        seen.set(join(dir, entry), stat.isDirectory() ? "dir" : `${stat.size}:${stat.mtimeMs}`);
       } catch {
         continue; // vanished between listing and stat — a concurrent writer, not our business
       }

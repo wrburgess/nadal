@@ -1,5 +1,5 @@
 import * as fsModule from "node:fs";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -313,32 +313,21 @@ describe("archivePage under the DOCUMENTED DEFAULT (TN_RAW_PATH unset)", () => {
   // The rule this now follows, and the one the sibling defect in `test/fs-output-root.test.ts`
   // broke the same way: REMOVE ONLY WHAT THE TEST CREATED. Never a recursive sweep of a shared
   // in-repo directory that the test merely wrote into.
-  const rawRootPath = resolve("raw");
   const archived: string[] = [];
 
   afterEach(() => {
     if (original === undefined) delete process.env.TN_RAW_PATH;
     else process.env.TN_RAW_PATH = original;
 
-    // NOTHING RECURSIVE, at any level. Contractor review, PR #174, permanent lens [must-fix]: an
-    // earlier form kept the recursive sweep and merely gated it on a pre-test existence snapshot,
-    // which still deletes anything that lands under a newly-observed root before this hook runs —
-    // an operator writing to it, or the concurrent-archive race in #175. `rmdirSync` removes a
-    // directory only when it is EMPTY and fails ENOTEMPTY otherwise, so the footprint removed here
-    // can never exceed what these tests created.
+    // NO DIRECTORY IS REMOVED HERE, at any level. Contractor review, PR #174, waves 1-3 walked
+    // this down: recursive sweep -> sweep gated on an existence snapshot -> non-recursive rmdir of
+    // the root. The last still deleted an operator's PRE-EXISTING EMPTY `raw/`, because "empty" and
+    // "mine" are not the same claim and only the second one licenses removal. Distinguishing them
+    // needs ownership this hook cannot establish, so it stops trying: it deletes the two files it
+    // created and nothing else. An empty `raw/tennisrecord/` left behind is gitignored and inert.
     for (const leaf of archived.splice(0)) {
       rmSync(leaf, { force: true });
       rmSync(`${leaf}.provenance.json`, { force: true });
-      try {
-        rmdirSync(dirname(leaf));
-      } catch {
-        /* not empty — something else is using it; leave it alone */
-      }
-    }
-    try {
-      rmdirSync(rawRootPath);
-    } catch {
-      /* not empty, or never created — leave it alone */
     }
   });
 
