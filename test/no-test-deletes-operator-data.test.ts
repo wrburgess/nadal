@@ -115,39 +115,87 @@ export function removalTargets(source: string): string[] {
 }
 
 /**
- * The protected directories a removal target names **anchored at the package root** — the only
- * shape that reaches the operator's real data.
+ * The first argument of a `resolve(...)`/`join(...)` argument list, split at the top level so a
+ * nested call arrives whole rather than truncated at its first comma.
+ */
+function firstArgument(argumentList: string): string {
+  let depth = 0;
+  for (let i = 0; i < argumentList.length; i++) {
+    const ch = argumentList[i];
+    if (ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ")" || ch === "}" || ch === "]") depth--;
+    else if (ch === "," && depth === 0) return argumentList.slice(0, i).trim();
+  }
+  return argumentList.trim();
+}
+
+/** Base expressions that resolve to this checkout. */
+const PACKAGE_ROOT_ANCHORS = ["process.cwd()", "import.meta.dirname", "__dirname", "PACKAGE_ROOT"];
+
+/**
+ * Whether a removal target is rooted at this checkout — the property that decides whether it can
+ * reach operator data, replacing the first draft's list of accepted spellings.
  *
- * Two anchors qualify: `resolve("<name>")`, which is package-root-relative because the suite's cwd
- * is the package root, and a bare `"<name>"` target for the same reason. A target rooted at a
- * variable (`join(repoDir, "reports")`) does not qualify: its base is whatever that variable holds,
- * which throughout this suite is a `mkdtemp` directory.
+ * Contractor review, PR #174, guard-completeness lens [must-fix]: matching only `resolve("raw")`
+ * and a bare `"raw"` was fail-open, because `resolve(".", "raw")` and `join(process.cwd(), "raw")`
+ * delete the same data and both passed. What actually separates a dangerous removal from a safe one
+ * is the SHAPE OF ITS BASE — a cwd/package-root anchor reaches operator data, a variable holding a
+ * `mkdtemp` path does not — so that is what is tested now.
+ *
+ * Anchored: a bare string literal (cwd-relative); `resolve(…)`/`join(…)` whose first argument is a
+ * string literal or a package-root expression; or either wrapping a nested call that is anchored.
+ * Not anchored: a bare identifier, or a call rooted at one (`join(repoDir, "reports")`).
+ */
+export function anchoredAtPackageRoot(target: string): boolean {
+  const trimmed = target.trim();
+  const isStringLiteral = (text: string) => /^(["'`])[^"'`]*\1$/.test(text);
+
+  const call = /^(?:resolve|join)\(([\s\S]*)\)$/.exec(trimmed);
+  if (call === null) return isStringLiteral(trimmed);
+
+  const base = firstArgument(call[1] ?? "");
+  if (isStringLiteral(base)) return true;
+  if (PACKAGE_ROOT_ANCHORS.includes(base)) return true;
+  if (/^(?:resolve|join)\(/.test(base)) return anchoredAtPackageRoot(base);
+  return false;
+}
+
+/**
+ * The protected directories a removal target names AND is anchored at the package root by.
  *
  * Names are compared by exact equality, never containment — `"tn-reports-cmd-"` is a `mkdtemp`
  * prefix, not the `reports/` directory, and a containment test would flag every correct temp
  * teardown in the repository.
  */
 export function packageRootAnchoredNames(target: string, protectedNames: string[]): string[] {
-  const anchored = new Set<string>();
-
-  for (const match of target.matchAll(/\bresolve\(\s*(["'`])([^"'`]+)\1\s*\)/g)) {
-    const name = match[2];
-    if (name !== undefined) anchored.add(name);
+  const literals = new Set<string>();
+  for (const match of target.matchAll(/["'`]([^"'`]*)["'`]/g)) {
+    const value = match[1];
+    if (value !== undefined) literals.add(value);
   }
 
-  const bare = /^(["'`])([^"'`]+)\1$/.exec(target);
-  const bareName = bare?.[2];
-  if (bareName !== undefined) anchored.add(bareName);
-
-  return protectedNames.filter((name) => anchored.has(name));
+  const named = protectedNames.filter((name) => literals.has(name));
+  if (named.length === 0) return [];
+  return anchoredAtPackageRoot(target) ? named : [];
 }
 
 function testSources(): { file: string; source: string }[] {
-  const dir = join(PACKAGE_ROOT, "test");
-  return readdirSync(dir, { recursive: true, encoding: "utf8" })
-    .filter((entry) => entry.endsWith(".test.ts"))
-    .map((entry) => ({ file: join("test", entry), source: readFileSync(join(dir, entry), "utf8") }));
+  // BOTH runners the gate declares: `test/**` under vitest (`npm test`) and `tools/**` under
+  // `node:test` (`npm run test:tools`). Contractor review, PR #174, claim-vs-code lens [must-fix]:
+  // the first draft scanned only `test/**` while its title claimed "no test file in the suite",
+  // leaving a destructive teardown under `tools/` unguarded and the claim overstated.
+  const sources: { file: string; source: string }[] = [];
+  for (const root of ["test", "tools"]) {
+    const dir = join(PACKAGE_ROOT, root);
+    for (const entry of readdirSync(dir, { recursive: true, encoding: "utf8" })) {
+      if (!entry.endsWith(".test.ts")) continue;
+      sources.push({ file: join(root, entry), source: readFileSync(join(dir, entry), "utf8") });
+    }
+  }
+  return sources;
 }
+
+const SELF = "no-test-deletes-operator-data.test.ts";
 
 describe("no test removes a directory the repository declares as operator data (#173)", () => {
   const protectedNames = protectedDirectories(readFileSync(join(PACKAGE_ROOT, ".gitignore"), "utf8"));
@@ -158,9 +206,11 @@ describe("no test removes a directory the repository declares as operator data (
     expect(protectedNames).toContain("reports");
   });
 
-  it("finds removal calls to inspect, so the sweep below is not passing vacuously", () => {
-    const total = testSources().reduce((sum, { source }) => sum + removalTargets(stripComments(source)).length, 0);
-    expect(total).toBeGreaterThan(0);
+  it("scans both gate runners' test files, and finds removal calls in each", () => {
+    const files = testSources();
+    expect(files.some((f) => f.file.startsWith("test/"))).toBe(true);
+    expect(files.some((f) => f.file.startsWith("tools/"))).toBe(true);
+    expect(files.reduce((sum, { source }) => sum + removalTargets(stripComments(source)).length, 0)).toBeGreaterThan(0);
   });
 
   it("PLANTED DEFECT: the exact teardown that destroyed raw/ is reported", () => {
@@ -171,6 +221,15 @@ describe("no test removes a directory the repository declares as operator data (
 
     expect(targets).toEqual(['resolve("raw")']);
     expect(packageRootAnchoredNames(targets[0] ?? "", protectedNames)).toEqual(["raw"]);
+  });
+
+  it("PLANTED DEFECT: the equivalent spellings the first draft let through", () => {
+    // Contractor review, PR #174, guard-completeness lens [must-fix] — each deletes the same data.
+    expect(packageRootAnchoredNames('resolve(".", "raw")', protectedNames)).toEqual(["raw"]);
+    expect(packageRootAnchoredNames('join(process.cwd(), "raw")', protectedNames)).toEqual(["raw"]);
+    expect(packageRootAnchoredNames('resolve(import.meta.dirname, "..", "reports")', protectedNames)).toEqual([
+      "reports",
+    ]);
   });
 
   it("PLANTED DEFECT: a nested target is read whole, not truncated at the first paren", () => {
@@ -211,7 +270,7 @@ describe("no test removes a directory the repository declares as operator data (
     const eaten: string[] = [];
 
     for (const { file, source } of testSources()) {
-      if (file.endsWith("no-test-deletes-operator-data.test.ts")) continue;
+      if (file.endsWith(SELF)) continue;
       const lost =
         (source.match(/rmSync\(/g) ?? []).length - (stripComments(source).match(/rmSync\(/g) ?? []).length;
       const commented = removalLines(source).filter((c) => c.commentedByShape).length;
@@ -237,11 +296,11 @@ describe("no test removes a directory the repository declares as operator data (
     expect(lost).not.toBe(commented); // therefore the suite-wide check above would report it
   });
 
-  it("no test file in the suite removes a package-root-anchored protected directory", () => {
+  it("no test file under either gate runner removes a package-root-anchored protected directory", () => {
     const offenders: string[] = [];
 
     for (const { file, source } of testSources()) {
-      if (file.endsWith("no-test-deletes-operator-data.test.ts")) continue; // holds the planted defects above
+      if (file.endsWith(SELF)) continue; // holds the planted defects above
       for (const target of removalTargets(stripComments(source))) {
         for (const name of packageRootAnchoredNames(target, protectedNames)) {
           offenders.push(`${file}: rmSync(${target}) removes the gitignored "${name}/"`);

@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -146,10 +147,18 @@ describe("assertOutputPathSafe", () => {
     // test below creates is the BARE directory (the `mkdirSync` on the next test, no children), so
     // removing it is correct exactly when this run is what created it.
     const reportsRootPath = resolve("reports");
-    const reportsRootPreexisted = existsSync(reportsRootPath);
 
     afterEach(() => {
-      if (!reportsRootPreexisted) rmSync(reportsRootPath, { recursive: true, force: true });
+      // Non-recursive, and unconditional. Contractor review, PR #174, permanent lens [must-fix]:
+      // gating a recursive sweep on a pre-test existence snapshot still deletes whatever lands
+      // under the root between that snapshot and this hook. `rmdirSync` refuses a non-empty
+      // directory (ENOTEMPTY), and the only thing this block creates is the BARE directory below —
+      // so this removes exactly that, or nothing.
+      try {
+        rmdirSync(reportsRootPath);
+      } catch {
+        /* not empty, or never created — leave it alone */
+      }
     });
 
     it("REGRESSION: allows a bare repo-relative root equal to the permitted dir", () => {

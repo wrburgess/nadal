@@ -1,5 +1,5 @@
 import * as fsModule from "node:fs";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -314,20 +314,32 @@ describe("archivePage under the DOCUMENTED DEFAULT (TN_RAW_PATH unset)", () => {
   // broke the same way: REMOVE ONLY WHAT THE TEST CREATED. Never a recursive sweep of a shared
   // in-repo directory that the test merely wrote into.
   const rawRootPath = resolve("raw");
-  const rawRootPreexisted = existsSync(rawRootPath);
   const archived: string[] = [];
 
   afterEach(() => {
     if (original === undefined) delete process.env.TN_RAW_PATH;
     else process.env.TN_RAW_PATH = original;
 
+    // NOTHING RECURSIVE, at any level. Contractor review, PR #174, permanent lens [must-fix]: an
+    // earlier form kept the recursive sweep and merely gated it on a pre-test existence snapshot,
+    // which still deletes anything that lands under a newly-observed root before this hook runs —
+    // an operator writing to it, or the concurrent-archive race in #175. `rmdirSync` removes a
+    // directory only when it is EMPTY and fails ENOTEMPTY otherwise, so the footprint removed here
+    // can never exceed what these tests created.
     for (const leaf of archived.splice(0)) {
       rmSync(leaf, { force: true });
       rmSync(`${leaf}.provenance.json`, { force: true });
+      try {
+        rmdirSync(dirname(leaf));
+      } catch {
+        /* not empty — something else is using it; leave it alone */
+      }
     }
-    // Only when this run created the root is a recursive removal correct — then everything under it
-    // is ours. When it pre-existed, the two leaves above are the entire footprint.
-    if (!rawRootPreexisted) rmSync(rawRootPath, { recursive: true, force: true });
+    try {
+      rmdirSync(rawRootPath);
+    } catch {
+      /* not empty, or never created — leave it alone */
+    }
   });
 
   it("REGRESSION: writes to <repo>/raw/<sourceSet>/ instead of throwing", () => {
