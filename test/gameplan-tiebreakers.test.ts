@@ -152,18 +152,19 @@ describe("the game plan states each tiebreaker ladder exactly once", () => {
 
   // The tournament's step 2 reads "winner of head-to-head match if all teams play each other",
   // which is reproduced verbatim — adding a condition it does not contain would be inventing a
-  // rule. But that wording names no winner in a circular three-way result (A beat B, B beat C, C
-  // beat A), while reading as though the step resolves the tie. A contractor review caught the
-  // gap. The page states the branch instead of closing it, and this pins that statement so it
-  // cannot be dropped or inverted into "this step always resolves the tie".
-  it("says out loud that step 2 can separate nobody", () => {
+  // rule, and that is what this pins.
+  //
+  // Issue #190 also had the page gloss the wording, because it names no winner in a circular
+  // three-way result (A beat B, B beat C, C beat A) while reading as though the step resolves the
+  // tie; that gloss was pinned here too. **The HC removed the gloss in #200** — one of four prose
+  // blocks cut from the book in that pass — so the two assertions that required it are gone. The
+  // page now reproduces the step and says nothing about the branch it does not cover. That is a
+  // deliberate editorial choice, recorded in docs/findings.md rather than re-litigated here; what
+  // survives is the guard that matters either way, that the wording stays the tournament's.
+  it("keeps step 2's wording exactly as the tournament issued it", () => {
     const standings = tiebreakerSection(gamePlan());
     expect(standings, "step 2's wording must stay the tournament's").toContain(
       "Winner of the head-to-head match, if all tied teams play each other.",
-    );
-    expect(standings, "the no-winner branch must be stated").toMatch(/names no winner/i);
-    expect(standings, "and its consequence — fall through, do not stop").toMatch(
-      /next line decides/i,
     );
   });
 
