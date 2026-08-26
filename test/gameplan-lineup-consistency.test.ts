@@ -34,6 +34,40 @@ const BOOK = join(REPO_ROOT, "docs", "index.html");
 
 export type Lineup = { court: string; players: string[] };
 
+/**
+ * Every match is exactly these four courts. Asserted per match in BOTH copies,
+ * because the equality check alone cannot see a missing one: a copy that labelled
+ * two courts `D1` and omitted `D3` still yields sixteen non-empty entries, and
+ * keying them into a Map would silently collapse the duplicate and compare the
+ * survivors as equal. Raised by contractor review on PR #192 — the guard had the
+ * same collide-on-one-key shape it was written to catch.
+ */
+const COURTS = ["S1", "D1", "D2", "D3"] as const;
+
+/** Refuses duplicate keys rather than letting the later one win. */
+export function indexByCourt(lineups: Lineup[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const l of lineups) {
+    if (out.has(l.court)) {
+      throw new Error(`duplicate court key ${l.court} — one court is stated twice and another is missing`);
+    }
+    out.set(l.court, l.players);
+  }
+  return out;
+}
+
+/** Each match must carry S1, D1, D2 and D3 exactly once. */
+export function assertCourtSet(lineups: Lineup[], which: string): void {
+  for (let match = 0; match < 4; match++) {
+    const seen = lineups.filter((l) => l.court.endsWith(`#${match}`)).map((l) => l.court.split("#")[0]!);
+    const want = [...COURTS].sort().join(",");
+    const got = [...seen].sort().join(",");
+    if (got !== want) {
+      throw new Error(`${which} match ${match} has courts [${got}], expected [${want}]`);
+    }
+  }
+}
+
 const SURNAMES = [
   "Burgess", "Zingg", "Jacobs", "Johnson", "Bierman", "Merritt",
   "Martin", "Morris", "Chettiar", "Plungkhen", "Halksworth",
@@ -110,13 +144,37 @@ describe("the game plan states each lineup twice, and the two copies must agree"
     }
   });
 
+  it("every match in every copy carries S1, D1, D2 and D3 exactly once", () => {
+    const html = readFileSync(BOOK, "utf8");
+    expect(() => assertCourtSet(parseSummary(html), "summary")).not.toThrow();
+    expect(() => assertCourtSet(parseCards(html), "cards")).not.toThrow();
+    expect(() => indexByCourt(parseSummary(html))).not.toThrow();
+    expect(() => indexByCourt(parseCards(html))).not.toThrow();
+  });
+
+  it("a duplicated court is caught rather than collapsed — the equality check alone cannot see it", () => {
+    // Two D1s and no D3: sixteen entries, all non-empty, and both copies identical,
+    // so length, emptiness and equality all pass. Only the court-set check fails.
+    const doubled: Lineup[] = [];
+    for (let m = 0; m < 4; m++) {
+      for (const c of ["S1", "D1", "D1", "D2"]) doubled.push({ court: `${c}#${m}`, players: ["Burgess"] });
+    }
+    expect(doubled).toHaveLength(16);
+    expect(doubled.every((l) => l.players.length > 0)).toBe(true);
+    expect(() => assertCourtSet(doubled, "synthetic")).toThrow(/expected \[D1,D2,D3,S1\]/);
+    expect(() => indexByCourt(doubled)).toThrow(/duplicate court key D1#0/);
+  });
+
   it("the self-scout summary and the four match cards name the same men on every court", () => {
     const html = readFileSync(BOOK, "utf8");
     const summary = parseSummary(html);
     const cards = parseCards(html);
 
-    const key = (l: Lineup) => l.court;
-    const byCourt = new Map(cards.map((l) => [key(l), l.players]));
+    // Court-set first: equality over a Map cannot see a court that is missing from
+    // both copies, because the duplicate that replaced it collapses silently.
+    assertCourtSet(summary, "summary");
+    assertCourtSet(cards, "cards");
+    const byCourt = indexByCourt(cards);
 
     const disagreements: string[] = [];
     for (const s of summary) {
