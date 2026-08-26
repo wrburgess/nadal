@@ -29,6 +29,7 @@ import type {
   WindowedRecordOptions,
   WindowedRecordResult,
 } from "./types.js";
+import { spansWtnScaleBreak } from "./rating-scale.js";
 
 /**
  * Rows whose `playedOn` falls within `[since, +∞)` — the SAME inclusive lower bound
@@ -294,6 +295,11 @@ const RATING_SOURCE_PRECEDENCE: RatingSource[] = ["tr_dynamic", "ntrp", "wtn_dou
  * on the page to say so. */
 export const INVERTED_RATING_SOURCES = new Set<RatingSource>(["wtn_singles", "wtn_doubles"]);
 
+/** The two sources read from the ITF widget on the USTA profile page — the only ones ITF's 2026-08
+ * recalculation moved (#172). `tr_dynamic` and `ntrp` have no such break, and applying the window
+ * to them would refuse a perfectly comparable column. */
+const USTA_WIDGET_WTN_SOURCES = new Set<RatingSource>(["wtn_singles", "wtn_doubles"]);
+
 const HIGH_CONFIDENCE_SUPPORT = 5;
 const MEDIUM_CONFIDENCE_SUPPORT = 2;
 /** A pairing seen once is a coincidence, not a partnership. */
@@ -386,7 +392,27 @@ export function selectRosterRatingSource(input: {
     for (const source of bySource.keys()) coverage.set(source, (coverage.get(source) ?? 0) + 1);
   }
 
+  // #172. A `wtn_doubles` column whose selected observations straddle ITF's 2026-08 recalculation
+  // is not one axis, so it must not be RANKED — the same reasoning this function already applies
+  // across sources, now applied within one. It is DEMOTED rather than eliminated: a roster whose
+  // only rating source spans the break still needs its values printed, and the caller is told by
+  // `spansScaleBreak` rather than handed an empty selection.
+  //
+  // Comparability outranks coverage in this order, deliberately. Ranking 3 of 3 players on a mixed
+  // scale is silently wrong; ranking 1 of 3 on a comparable one is visibly thin.
+  const spans = (source: RatingSource): boolean =>
+    USTA_WIDGET_WTN_SOURCES.has(source) &&
+    spansWtnScaleBreak(
+      Array.from(latest.values())
+        .map((bySource) => bySource.get(source))
+        .filter((obs): obs is RatingObservationRow => obs !== undefined)
+        .map((obs) => obs.observedOn),
+    );
+
   const sources = Array.from(coverage.entries()).sort((a, b) => {
+    const aSpans = spans(a[0]);
+    const bSpans = spans(b[0]);
+    if (aSpans !== bSpans) return aSpans ? 1 : -1;
     if (b[1] !== a[1]) return b[1] - a[1];
     const ai = RATING_SOURCE_PRECEDENCE.indexOf(a[0]);
     const bi = RATING_SOURCE_PRECEDENCE.indexOf(b[0]);

@@ -11,7 +11,9 @@ import {
   formatSlotTendencies,
   formatTeamMemberships,
   formatWtnProvenanceLine,
+  formatWtnScaleBreakLine,
 } from "../src/cli/format-profile.js";
+import type { RatingSource } from "../src/query/types.js";
 import type { PlayerTeamMembershipSummary } from "../src/query/player-profile.js";
 import type { AbsentRosterMember } from "../src/query/team-profile.js";
 import type { DataGapsResult, PartnerFrequencyEntry, RatingTrajectoryResult, SlotTendency, WindowedRecordResult } from "../src/query/types.js";
@@ -671,5 +673,154 @@ describe("formatAliases", () => {
 
     expect(rendered).not.toMatch(CONTROL_OR_BIDI);
     expect(rendered).toContain("Jerry");
+  });
+});
+
+// ISS#172, Deliverable 1. `formatWtnProvenanceLine` renders a straddling roster as
+// "published between 2026-08-05 and 2026-08-19" — a DATE RANGE, which reads as freshness. It is not
+// a freshness range: ITF recalculated in between, so the two ends are different measurements. This
+// line is the disclosure that says so, and it names who, because a reader holding a printed binder
+// needs to know which cells are the odd ones.
+describe("formatWtnScaleBreakLine (#172)", () => {
+  const player = (name: string, source: RatingSource, observedOn: string, value = 25) => ({
+    name,
+    ratingTrajectory: [
+      {
+        source,
+        latest: { id: 1, value, ratingType: null, observedOn },
+        series: [{ id: 1, value, ratingType: null, observedOn }],
+      },
+    ],
+  });
+
+  it("HAPPY PATH: a roster all on the new scale gets no extra sentence", () => {
+    const line = formatWtnScaleBreakLine([
+      player("Ada Adair", "wtn_doubles", "2026-08-19"),
+      player("Bo Byrne", "wtn_doubles", "2026-08-19"),
+    ]);
+
+    expect(line).toBeNull();
+  });
+
+  it("says nothing when there is no WTN on file at all", () => {
+    expect(formatWtnScaleBreakLine([player("Ada Adair", "ntrp", "2026-01-08")])).toBeNull();
+    expect(formatWtnScaleBreakLine([])).toBeNull();
+  });
+
+  it("PLANTED DEFECT: a straddling roster is disclosed, and the pre-rescale players are named", () => {
+    const line = formatWtnScaleBreakLine([
+      player("Ada Adair", "wtn_doubles", "2026-08-19"),
+      player("Bo Byrne", "wtn_doubles", "2026-08-05"),
+      player("Cy Chase", "wtn_doubles", "2026-08-05"),
+    ]);
+
+    expect(line).not.toBeNull();
+    expect(line).toContain("not one scale");
+    expect(line).toContain("Bo Byrne");
+    expect(line).toContain("Cy Chase");
+    expect(line).not.toContain("Ada Adair"); // the correctly-captured player is not implicated
+  });
+
+  it("PLANTED DEFECT: an undateable observation is described as such, not as pre-rescale", () => {
+    // "predate the change" would be a claim the data does not support for a date inside the window.
+    const line = formatWtnScaleBreakLine([
+      player("Ada Adair", "wtn_doubles", "2026-08-19"),
+      player("Bo Byrne", "wtn_doubles", "2026-08-12"),
+    ]);
+
+    expect(line).toContain("Bo Byrne");
+    expect(line).not.toMatch(/Bo Byrne[^.]*predate/);
+    expect(line).toContain("cannot be placed");
+  });
+
+  it("PLANTED DEFECT: both groups are named when both are present", () => {
+    const line = formatWtnScaleBreakLine([
+      player("Ada Adair", "wtn_doubles", "2026-08-19"),
+      player("Bo Byrne", "wtn_doubles", "2026-08-05"),
+      player("Cy Chase", "wtn_doubles", "2026-08-12"),
+    ]);
+
+    expect(line).toContain("predate");
+    expect(line).toContain("cannot be placed");
+    expect(line).toContain("Bo Byrne");
+    expect(line).toContain("Cy Chase");
+  });
+
+  it("PLANTED DEFECT: an all-indeterminate roster is still disclosed", () => {
+    // One era, and still not provably one scale — the clause most likely to be simplified away.
+    const line = formatWtnScaleBreakLine([
+      player("Ada Adair", "wtn_doubles", "2026-08-12"),
+      player("Bo Byrne", "wtn_doubles", "2026-08-13"),
+    ]);
+
+    expect(line).not.toBeNull();
+    expect(line).toContain("cannot be placed");
+  });
+
+  it("names a player once even when both WTN sources straddle", () => {
+    // DUPLICATES: singles and doubles are two entries for one person; the sentence must not list
+    // them twice.
+    const line = formatWtnScaleBreakLine([
+      player("Ada Adair", "wtn_doubles", "2026-08-19"),
+      {
+        name: "Bo Byrne",
+        ratingTrajectory: [
+          {
+            source: "wtn_doubles" as RatingSource,
+            latest: { id: 1, value: 29, ratingType: null, observedOn: "2026-08-05" },
+            series: [{ id: 1, value: 29, ratingType: null, observedOn: "2026-08-05" }],
+          },
+          {
+            source: "wtn_singles" as RatingSource,
+            latest: { id: 2, value: 30, ratingType: null, observedOn: "2026-08-05" },
+            series: [{ id: 2, value: 30, ratingType: null, observedOn: "2026-08-05" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(line?.match(/Bo Byrne/g)).toHaveLength(1);
+  });
+
+  it("ignores a non-USTA-widget WTN source, which had no 2026-08 recalculation", () => {
+    const line = formatWtnScaleBreakLine([
+      player("Ada Adair", "wtn_doubles", "2026-08-19"),
+      player("Bo Byrne", "tr_dynamic", "2026-08-05"),
+    ]);
+
+    expect(line).toBeNull();
+  });
+});
+
+describe("formatWtnScaleBreakLine — name lists read as prose (#172)", () => {
+  const p = (name: string, observedOn: string) => ({
+    name,
+    ratingTrajectory: [
+      {
+        source: "wtn_doubles" as RatingSource,
+        latest: { id: 1, value: 25, ratingType: null, observedOn },
+        series: [{ id: 1, value: 25, ratingType: null, observedOn }],
+      },
+    ],
+  });
+
+  it("renders one, two and three names the way a sentence does", () => {
+    const one = formatWtnScaleBreakLine([p("Ada Adair", "2026-08-19"), p("Bo Byrne", "2026-08-05")]);
+    expect(one).toContain("the number shown for Bo Byrne predates");
+
+    const two = formatWtnScaleBreakLine([
+      p("Ada Adair", "2026-08-19"),
+      p("Bo Byrne", "2026-08-05"),
+      p("Cy Chase", "2026-08-05"),
+    ]);
+    expect(two).toContain("the numbers shown for Bo Byrne and Cy Chase predate");
+
+    const three = formatWtnScaleBreakLine([
+      p("Ada Adair", "2026-08-19"),
+      p("Bo Byrne", "2026-08-05"),
+      p("Cy Chase", "2026-08-05"),
+      p("Di Dane", "2026-08-05"),
+    ]);
+    expect(three).toContain("the numbers shown for Bo Byrne, Cy Chase and Di Dane predate");
   });
 });

@@ -26,6 +26,7 @@ import {
   formatRosterSourceLine,
   formatSlotTendencies,
   formatWtnProvenanceLine,
+  formatWtnScaleBreakLine,
   ratingSourceLabel,
 } from "../cli/format-profile.js";
 import { sanitizeValue } from "../sanitize.js";
@@ -69,7 +70,17 @@ function renderRosterSourceLineHtml(dossier: TeamDossier): string {
  * therefore as untrusted as a scraped name. */
 function renderWtnProvenanceLineHtml(dossier: TeamDossier): string {
   const line = formatWtnProvenanceLine(dossier.players.map((p) => p.ratingTrajectory));
-  return `<p><strong>WTN ratings:</strong> ${escapeHtml(line)}.</p>`;
+  const provenance = `<p><strong>WTN ratings:</strong> ${escapeHtml(line)}.</p>`;
+
+  // #172. The sentence above renders a straddling roster as a DATE RANGE, which reads as freshness
+  // rather than as two incomparable measurements. This second paragraph is printed only when there
+  // is a break to disclose, and names who — escaped like every other interpolation here, because a
+  // canonical name is scraped and `observed_on` is an unconstrained TEXT column.
+  const breach = formatWtnScaleBreakLine(
+    dossier.players.map((p) => ({ name: p.identity.canonicalName, ratingTrajectory: p.ratingTrajectory })),
+  );
+  if (breach === null) return provenance;
+  return `${provenance}<p class="scale-break"><strong>Scale break:</strong> ${escapeHtml(breach)}.</p>`;
 }
 
 /** The NOT REGISTERED block (#113) — the twin of `renderNotRegisteredSectionMarkdown`. Renders
