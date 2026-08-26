@@ -19,6 +19,8 @@ import type {
   SlotTendency,
   WindowedRecordResult,
 } from "../query/types.js";
+import { spansWtnScaleBreak, wtnScaleEra } from "../query/rating-scale.js";
+import type { WtnScaleEra } from "../query/rating-scale.js";
 
 /**
  * Every scraped, human-facing string that reaches the terminal goes through here first.
@@ -427,6 +429,80 @@ export function formatWtnProvenanceLine(trajectories: RatingTrajectoryResult[]):
     `${unattributed.join(", ")} ${unattributed.length === 1 ? "is" : "are"} also on file and ` +
     "this line does not identify their publisher";
   return usta === "" ? others : `${usta}. Separately, ${others}`;
+}
+
+/**
+ * The disclosure that a roster's printed WTN numbers are not one scale (#172).
+ *
+ * `formatWtnProvenanceLine` renders a straddling roster as *"published between 2026-08-05 and
+ * 2026-08-19"*. That is a DATE RANGE, and a reader takes a date range for a freshness range — the
+ * newest number is the current one and the older ones are merely older. Here it means something
+ * else: ITF recalculated the World Tennis Number in between, so the two ends are different
+ * measurements printed in the same units. Doubles moved 4.36 and singles 1.27 on this repository's
+ * own field, which reorders ranks rather than shifting them.
+ *
+ * ADDITIVE RATHER THAN A REWRITE of that function, deliberately: it has twelve tests pinning
+ * sentences the HC reads in a printed binder, and a second concern spliced into it would put two
+ * disclosures behind one set of branches. This returns `null` when there is nothing to disclose,
+ * and every caller of the provenance line appends it.
+ *
+ * IT NAMES PEOPLE, because the alternative is a reader holding a printed roster with no way to tell
+ * which cells are the odd ones. The two groups are described separately and never merged: a
+ * pre-rescale number *predates the change*, while one dated inside the unknown window *cannot be
+ * placed on either side of it*, and calling the second the first would assert what the data does
+ * not support.
+ */
+export function formatWtnScaleBreakLine(
+  players: { name: string; ratingTrajectory: RatingTrajectoryResult }[],
+): string | null {
+  const dated = players.flatMap((player) =>
+    player.ratingTrajectory
+      .filter((entry) => USTA_WIDGET_WTN_SOURCES.has(entry.source))
+      .map((entry) => ({ name: player.name, era: wtnScaleEra(entry.latest.observedOn) })),
+  );
+  if (dated.length === 0) return null;
+  if (!spansWtnScaleBreak(players.flatMap((p) => p.ratingTrajectory
+    .filter((e) => USTA_WIDGET_WTN_SOURCES.has(e.source))
+    .map((e) => e.latest.observedOn)))) {
+    return null;
+  }
+
+  // A person, not an observation: someone whose singles AND doubles are both pre-rescale is one
+  // name in this sentence, not two. `Set` de-duplicates before anything is rendered.
+  const namesIn = (era: WtnScaleEra): string[] =>
+    [...new Set(dated.filter((entry) => entry.era === era).map((entry) => entry.name))].sort();
+
+  const pre = namesIn("pre-rescale");
+  const unknown = namesIn("indeterminate");
+
+  // The NUMBER predates the change, not the person — "Jamie Johnson predates the change" is what
+  // the first draft printed, and it reads as a statement about the player.
+  /** "A" · "A and B" · "A, B and C" — this sentence is read aloud off a printed binder, and a bare
+   * comma list reads as a table fragment rather than as prose. */
+  const joinNames = (names: string[]): string =>
+    names.length <= 1
+      ? (names[0] ?? "")
+      : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1] ?? ""}`;
+
+  const shownFor = (names: string[]) =>
+    `the number${names.length === 1 ? "" : "s"} shown for ${joinNames(names)}`;
+
+  const clauses: string[] = [];
+  if (pre.length > 0) {
+    clauses.push(`${shownFor(pre)} ${pre.length === 1 ? "predates" : "predate"} the change`);
+  }
+  if (unknown.length > 0) {
+    clauses.push(
+      `${shownFor(unknown)} ${unknown.length === 1 ? "carries a date" : "carry dates"} that cannot be ` +
+        "placed on either side of it",
+    );
+  }
+
+  return (
+    "These WTN numbers are not one scale: the ITF recalculated the World Tennis Number in August " +
+    `2026, and ${clauses.join("; ")}. Those figures are not comparable with the rest of this ` +
+    "column, and the ranks in it are not derived from them"
+  );
 }
 
 /**

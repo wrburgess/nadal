@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatWtnProvenanceLine } from "../src/cli/format-profile.js";
+import { formatWtnProvenanceLine, formatWtnScaleBreakLine } from "../src/cli/format-profile.js";
 import { escapeHtml, renderDossier } from "../src/report/html.js";
 import { renderDossierMarkdown } from "../src/report/markdown.js";
 import {
@@ -435,6 +435,39 @@ describe("renderDossier — WTN provenance disclosure (#132)", () => {
     const html = renderDossier(buildDossier({ players: [withWtn('2026-08-05"><script>x</script>')] }));
 
     expect(html).not.toContain("<script>x</script>");
+  });
+
+  // ISS#172. The provenance sentence renders a straddling roster as "published between X and Y",
+  // which reads as a freshness range. It is not one: ITF recalculated in between.
+  it("PLANTED DEFECT: a roster straddling the 2026-08 recalculation prints a scale-break paragraph", () => {
+    const html = renderDossier(buildDossier({ players: [withWtn("2026-08-19", 1), withWtn("2026-08-05", 2)] }));
+
+    expect(html).toContain("published between 2026-08-05 and 2026-08-19"); // the misleading range still shows
+    expect(html).toContain("Scale break:"); // and is now corrected beside it
+    expect(html).toContain("not one scale");
+    expect(html).toContain("Player 2"); // the un-recaptured player is named
+    expect(html).not.toMatch(/Scale break:[^<]*Player 1[^<]*</); // the correct one is not implicated
+  });
+
+  it("REGRESSION: a roster entirely on one scale prints no scale-break paragraph", () => {
+    // Without this, "the paragraph appears" could be true for every dossier, which would make the
+    // disclosure noise and teach the reader to skip it.
+    const html = renderDossier(buildDossier({ players: [withWtn("2026-08-19", 1), withWtn("2026-08-19", 2)] }));
+
+    expect(html).not.toContain("Scale break:");
+  });
+
+  it("discloses the break identically in both renderers", () => {
+    // Same guard as the sentence below, for the same reason: this repository has shipped one fact
+    // derived twice in two renderers four times.
+    const dossier = buildDossier({ players: [withWtn("2026-08-19", 1), withWtn("2026-08-05", 2)] });
+    const breach = formatWtnScaleBreakLine(
+      dossier.players.map((p) => ({ name: p.identity.canonicalName, ratingTrajectory: p.ratingTrajectory })),
+    );
+
+    expect(breach).not.toBeNull();
+    expect(renderDossier(dossier)).toContain(escapeHtml(breach!));
+    expect(renderDossierMarkdown(dossier)).toContain(breach!);
   });
 
   it("says the same sentence as the markdown dossier, from the one shared derivation", () => {

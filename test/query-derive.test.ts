@@ -5,6 +5,7 @@ import {
   partnerFrequency,
   ratingTrajectory,
   rowsWithin,
+  selectRosterRatingSource,
   slotTendencies,
   teamMatchRecord,
   windowedRecord,
@@ -498,5 +499,111 @@ describe("teamMatchRecord", () => {
   it("a row where the team is neither home nor visiting is ignored", () => {
     const rows = [teamMatchRow({ homeTeamId: 30, visitingTeamId: 40 })];
     expect(teamMatchRecord(rows, 10)).toEqual({ wins: 0, losses: 0, undecided: 0, excludedUndated: 0 });
+  });
+});
+
+// ISS#172, Deliverable 1. `selectRosterRatingSource` refuses to rank across rating SOURCES because
+// "a tr_dynamic of 3.67 and an ntrp of 4.0 are not points on the same axis". After ITF's 2026-08
+// recalculation that reasoning applies WITHIN wtn_doubles too, and nothing enforced it there.
+describe("selectRosterRatingSource — a WTN column that straddles the scale break (#172)", () => {
+  const wtn = (playerId: number, value: number, observedOn: string) => ({
+    playerId,
+    observations: [{ id: playerId, source: "wtn_doubles" as const, value, ratingType: null, observedOn }],
+  });
+  const withNtrp = (playerId: number, value: number, observedOn: string) => ({
+    playerId,
+    observations: [
+      { id: playerId, source: "wtn_doubles" as const, value, ratingType: null, observedOn },
+      { id: 100 + playerId, source: "ntrp" as const, value: 3.5, ratingType: null, observedOn: "2026-01-08" },
+    ],
+  });
+
+  it("HAPPY PATH: a roster all on the new scale still selects WTN when it covers the most", () => {
+    const selection = selectRosterRatingSource({
+      rosterPlayerIds: [1, 2, 3],
+      ratings: [wtn(1, 25.3, "2026-08-19"), wtn(2, 23.4, "2026-08-19"), wtn(3, 26.0, "2026-08-19")],
+    });
+
+    expect(selection.source).toBe("wtn_doubles");
+    expect(selection.latestBySource.size).toBe(3);
+  });
+
+  it("PLANTED DEFECT: comparability outranks coverage — a mixed WTN loses to a thinner NTRP", () => {
+    // Player 3 was never re-captured, so their number is on the retired scale. WTN covers 3 of 3
+    // here and NTRP only 1 of 3, and NTRP must still win: ranking 3 players on a mixed scale is
+    // silently wrong, while ranking 1 on a comparable one is visibly thin. This is the assertion
+    // that pins the ordering rule, not merely the disqualification.
+    const selection = selectRosterRatingSource({
+      rosterPlayerIds: [1, 2, 3],
+      ratings: [
+        wtn(1, 25.3, "2026-08-19"),
+        wtn(2, 23.4, "2026-08-19"),
+        {
+          playerId: 3,
+          observations: [
+            { id: 3, source: "wtn_doubles" as const, value: 29.7, ratingType: null, observedOn: "2026-08-05" },
+            { id: 103, source: "ntrp" as const, value: 3.5, ratingType: null, observedOn: "2026-01-08" },
+          ],
+        },
+      ],
+    });
+
+    expect(selection.source).toBe("ntrp");
+  });
+
+  it("PLANTED DEFECT: it falls back to the next source by precedence rather than to nothing", () => {
+    const selection = selectRosterRatingSource({
+      rosterPlayerIds: [1, 2, 3],
+      ratings: [withNtrp(1, 25.3, "2026-08-19"), withNtrp(2, 23.4, "2026-08-19"), withNtrp(3, 29.7, "2026-08-05")],
+    });
+
+    expect(selection.source).toBe("ntrp");
+    expect(selection.latestBySource.size).toBe(3);
+  });
+
+  it("PLANTED DEFECT: an indeterminate date disqualifies WTN even beside a uniform cohort", () => {
+    // 2026-08-12 sits inside the unknown window, so it is not provably on either scale.
+    const selection = selectRosterRatingSource({
+      rosterPlayerIds: [1, 2],
+      ratings: [withNtrp(1, 25.3, "2026-08-19"), withNtrp(2, 24.0, "2026-08-12")],
+    });
+
+    expect(selection.source).toBe("ntrp");
+  });
+
+  it("leaves non-WTN sources alone — a spread of ntrp dates is not a scale break", () => {
+    // The disqualification is scoped to the USTA-widget WTN sources. NTRP has no 2026-08 rescale,
+    // and applying the window to it would refuse a perfectly comparable column.
+    const selection = selectRosterRatingSource({
+      rosterPlayerIds: [1, 2],
+      ratings: [
+        {
+          playerId: 1,
+          observations: [{ id: 1, source: "ntrp" as const, value: 3.5, ratingType: null, observedOn: "2024-12-31" }],
+        },
+        {
+          playerId: 2,
+          observations: [{ id: 2, source: "ntrp" as const, value: 4.0, ratingType: null, observedOn: "2026-08-12" }],
+        },
+      ],
+    });
+
+    expect(selection.source).toBe("ntrp");
+  });
+
+  it("REGRESSION: WTN is chosen when nothing else covers the roster, mixed or not", () => {
+    // Fail-closed must not become fail-blank: with no alternative source, a caller still needs the
+    // values. What must not happen is a RANKING across the break, which `rankRoster` derives from
+    // the selection — so the contract here is "not selected when something else can be", and this
+    // pins the boundary of that rule rather than letting it quietly widen into "never selected".
+    const selection = selectRosterRatingSource({
+      rosterPlayerIds: [1, 2],
+      ratings: [wtn(1, 25.3, "2026-08-19"), wtn(2, 29.7, "2026-08-05")],
+    });
+
+    // The reader is still warned: `formatWtnScaleBreakLine` discloses the break from the
+    // trajectories regardless of which source was selected. See test/cli-format-profile.test.ts.
+    expect(selection.source).toBe("wtn_doubles");
+    expect(selection.latestBySource.size).toBe(2);
   });
 });
