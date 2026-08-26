@@ -6,10 +6,25 @@
 <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
 <meta name="googlebot" content="noindex, nofollow">
 <title>Springfield Game Plan — HOA 40 &amp; Over · Aug 27–30, 2026</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+/* ============ FONTS — VENDORED, NOT FETCHED ============ */
+/* Self-hosted from docs/fonts/. This page is read at Cooper Tennis Complex on
+   venue wifi; a Google Fonts round-trip is the one thing here that fails when
+   the network is poor, and it fails by silently substituting system faces.
+   Latin subset only, which is complete for this document: its entire non-ASCII
+   inventory is – — · nbsp × & °, every one of them inside the range below.
+   Nine faces, 136 KB. Regenerate by re-fetching the css2 URL that used to be
+   linked here and rewriting each src to a local path. */
+@font-face{font-family:'Barlow';font-style:normal;font-weight:400;font-display:swap;src:url(fonts/barlow-400.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Barlow';font-style:normal;font-weight:500;font-display:swap;src:url(fonts/barlow-500.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Barlow';font-style:normal;font-weight:600;font-display:swap;src:url(fonts/barlow-600.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Barlow';font-style:normal;font-weight:700;font-display:swap;src:url(fonts/barlow-700.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:500;font-display:swap;src:url(fonts/barlow-condensed-500.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:600;font-display:swap;src:url(fonts/barlow-condensed-600.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:700;font-display:swap;src:url(fonts/barlow-condensed-700.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url(fonts/ibm-plex-mono-400.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url(fonts/ibm-plex-mono-500.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+
 /* ============ ACCESS GATE ============ */
 #gate{position:fixed;inset:0;z-index:9999;background:var(--paper);display:flex;
   align-items:center;justify-content:center;padding:24px}
@@ -358,13 +373,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v3.0 &middot; Aug 25, 2026 &middot; 67 pages &middot; complete &mdash; all cards, all five scouting reports, and both cross-field views</div>
+  <div class="foot">v3.1 &middot; Aug 25, 2026 &middot; 67 pages &middot; complete &mdash; all cards, all five scouting reports, and both cross-field views</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
 <section class="page" id="toc">
   <h2 class="sec">Contents</h2>
-  <div class="sec-sub">Springfield Game Plan · v3.0 · Aug 25, 2026</div>
+  <div class="sec-sub">Springfield Game Plan · v3.1 · Aug 25, 2026</div>
   <div class="toc">
 
     <div class="toc-group"><h3>Plan</h3>
@@ -2589,15 +2604,26 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     if (y < 0) y = 0;
     // `behavior:"instant"` is required, not stylistic: every scroll that defers
     // to the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() —
-    // was measured being cancelled outright here, leaving scrollY at 0. The
-    // fallback is for browsers that reject the enum value.
+    // was measured being cancelled outright here, leaving scrollY at 0.
+    //
+    // The fallback is for browsers that reject the enum value, and it must NOT
+    // simply call the two-argument form: that defers to the CSS again and so
+    // reintroduces the exact bug this guard exists for. A contractor review
+    // caught precisely that on PR#187. Neutralise the behaviour instead, scroll,
+    // then put it back.
     try {
       window.scrollTo({ top: y, behavior: "instant" });
     } catch (err) {
+      var root = document.documentElement;
+      var prior = root.style.scrollBehavior;
+      root.style.scrollBehavior = "auto";
       window.scrollTo(0, y);
+      root.style.scrollBehavior = prior;
     }
   };
-  if (document.body.classList.contains("locked") && window.MutationObserver) {
+  if (!document.body.classList.contains("locked")) {
+    applyHash();
+  } else if (window.MutationObserver) {
     var mo = new MutationObserver(function () {
       if (!document.body.classList.contains("locked")) {
         mo.disconnect();
@@ -2606,7 +2632,21 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     });
     mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
   } else {
-    applyHash();
+    // No MutationObserver — the original code took this branch while the book
+    // was still hidden, so applyHash() returned at offsetParent === null and
+    // the deep link kept its original failure for that capability class. Also a
+    // contractor finding on PR#187. Poll briefly instead: the gate is the only
+    // thing standing between here and a visible book, and a reader who never
+    // unlocks does not need the scroll.
+    var tries = 0;
+    var timer = setInterval(function () {
+      if (!document.body.classList.contains("locked")) {
+        clearInterval(timer);
+        applyHash();
+      } else if (++tries > 600) {
+        clearInterval(timer); // ~5 minutes, then stop burning a timer
+      }
+    }, 500);
   }
 })();
 </script>

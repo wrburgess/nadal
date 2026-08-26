@@ -63,11 +63,17 @@ Not a gallery artifact — a static site in this repository, served by GitHub Pa
 
 | Artifact | URL | Verified |
 |---|---|---|
-| Springfield Game Plan | `https://gameplan.kc.tennis` — **intended, not yet resolving** | access gate exercised 2026-08-25; **numbers not re-derived** |
+| Springfield Game Plan | https://gameplan.kc.tennis — **live, HTTPS enforced** | access gate exercised 2026-08-25; **numbers not re-derived** |
 
-The URL is what `docs/CNAME` declares, not an address confirmed live: as of this row the `gameplan`
-CNAME does not exist at Cloudflare and no certificate has issued. Whoever finds this row stale in
-either direction should fix it here.
+**Live as of 2026-08-25**, v3.1. The `gameplan` CNAME resolves straight to the GitHub Pages anycast
+addresses — not through Cloudflare's proxy, which is what let the certificate issue — `http://`
+answers `301` to `https://`, and the Let's Encrypt certificate for `CN=gameplan.kc.tennis` runs to
+2026-11-23. Served from `main` `/docs`, so a merge to `main` deploys.
+
+*This paragraph replaced one saying the URL was "intended, not yet resolving" and that no certificate
+existed. Both were true when written and neither survived the afternoon — which is the argument for
+the sentence the previous version ended with, and it is kept: **whoever finds this row stale in
+either direction should fix it here.***
 
 `docs/index.html`, added by [PR#184](https://github.com/wrburgess/nadal/pull/184). It was assembled
 **by hand** from **eleven of the twelve** artifacts above — the four match cards, the five scouting
@@ -84,9 +90,10 @@ against that brief will meet the same discrepancy; the table above is the counta
 
 Two things a reader of this file should know, because they are easy to meet by surprise:
 
-- **Once Pages is enabled, this file is served too** — at `/artifacts.md` on whatever host answers.
-  Pages branch-source offers `/` or `/docs` and nothing else, so everything in `docs/` is published,
-  `findings.md` included.
+- **This file is served too**, at `https://gameplan.kc.tennis/artifacts.md`. Pages branch-source
+  offers `/` or `/docs` and nothing else, so everything in `docs/` is published — measured by
+  request, not assumed: `/findings.md` returns `200` and 719 KB of `text/markdown`, and
+  `/runbooks/login-assisted-scrape.md` returns `200`.
 - The page carries a four-digit access gate. It is a speed bump, not a control, and it does not
   cover the copies GitHub serves from this public repository. See `findings.md`, 2026-08-25.
 
