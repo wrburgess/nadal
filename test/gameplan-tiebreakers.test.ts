@@ -161,10 +161,16 @@ describe("the game plan states each tiebreaker ladder exactly once", () => {
   // page now reproduces the step and says nothing about the branch it does not cover. That is a
   // deliberate editorial choice, recorded in docs/findings.md rather than re-litigated here; what
   // survives is the guard that matters either way, that the wording stays the tournament's.
+  // "Exactly" is enforced against the whole cell, not against the sentence appearing somewhere in
+  // the section — a contractor read the first draft of this test and pointed out that a `toContain`
+  // on the sentence alone passes a row with extra wording bolted on either side, which is the
+  // failure mode the gloss's removal makes newly available. Pinning the closing `</td>` is what
+  // makes the title true.
   it("keeps step 2's wording exactly as the tournament issued it", () => {
     const standings = tiebreakerSection(gamePlan());
-    expect(standings, "step 2's wording must stay the tournament's").toContain(
-      "Winner of the head-to-head match, if all tied teams play each other.",
+    expect(standings, "step 2's row must be the tournament's wording and nothing else").toContain(
+      '<td class="stat">2</td><td><span class="fld">Head-to-head.</span> ' +
+        "Winner of the head-to-head match, if all tied teams play each other.</td>",
     );
   });
 
