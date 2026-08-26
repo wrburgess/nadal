@@ -52,7 +52,11 @@ body.locked .book{display:none}
   --mono:"IBM Plex Mono",Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
+/* Anchor targets must clear the sticky nav, which wraps to 3 rows on a phone
+   (112px at 390px wide) and 1 row on desktop. The JS at the foot of the file
+   measures it and overrides these; these are the fallbacks if it never runs. */
+html{scroll-behavior:smooth;scroll-padding-top:124px}
+@media (min-width:900px){html{scroll-padding-top:60px}}
 body{font-family:var(--body);color:var(--ink);background:#E4E7EB;line-height:1.5;font-size:15px}
 
 /* ============ SCREEN CHROME ============ */
@@ -95,6 +99,14 @@ h2.sec::after{content:"";position:absolute;left:0;bottom:-9px;width:64px;height:
 .cover .foot{margin-top:42px;font-family:var(--mono);font-size:11.5px;color:var(--steel);position:relative;z-index:1}
 
 /* ============ TABLES ============ */
+/* Every table sits in a .tw wrapper. The table keeps width:100% so it fills
+   when it fits; when its min-content width exceeds the page — 44 of 67 do on a
+   390px phone, the widest needing 626px against 358px — the wrapper scrolls
+   instead of the whole document. Wrapping rather than setting display:block on
+   the table is deliberate: display:block makes tables that DO fit shrink to
+   content width, which regresses the 23 narrow ones. */
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+@media print{.tw{overflow:visible}}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 th{font-family:var(--disp);font-size:14.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;
   text-align:left;background:var(--court);color:var(--line);padding:7px 10px}
@@ -400,7 +412,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 <section class="page" id="schedule">
   <h2 class="sec">Match Schedule</h2>
   <div class="sec-sub">Source: TennisLink per Randy · travel guide p.1 · arrive times are the 30-min-prior mark</div>
-  <table>
+  <div class="tw"><table>
     <thead><tr><th>Day</th><th>Date</th><th>Arrive Time</th><th>Game Time</th><th>Opponent</th></tr></thead>
     <tbody>
       <tr><td>Fri</td><td>Aug 28, 2026</td><td class="t">11:00 AM</td><td class="t">11:30 AM</td><td class="opp">IA / Versteeg</td></tr>
@@ -408,11 +420,11 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td>Sat</td><td>Aug 29, 2026</td><td class="t">12:45 PM</td><td class="t">1:15 PM</td><td class="opp">OK / Dickason</td></tr>
       <tr><td>Sun</td><td>Aug 30, 2026</td><td class="t">7:45 AM</td><td class="t">8:15 AM</td><td class="opp">NE / Penland</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <h2 class="sec" style="margin-top:34px">Drive Time Reference</h2>
   <div class="sec-sub">OSRM routing on Google Places coordinates · travel guide p.2</div>
-  <table>
+  <div class="tw"><table>
     <thead><tr><th>Leg</th><th>Time</th><th>Distance</th></tr></thead>
     <tbody>
       <tr><td>Downtown Overland Park → TownePlace Suites</td><td class="t">~3 hr 23 min*</td><td class="t">167.9 mi</td></tr>
@@ -425,7 +437,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td>TownePlace → Springfield Massage Collective</td><td class="t">Walk (~2 min)</td><td class="t">Same block</td></tr>
       <tr><td>TownePlace → Contemporary Massage &amp; Wellness</td><td class="t">Walk (~2 min)</td><td class="t">Same block</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:12.5px;color:var(--ink-soft);margin-top:8px">* Routing estimates run conservative on rural US highways — budget 3 to 3.5 hours door-to-door.</p>
 </section>
 
@@ -708,7 +720,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Seeding</div>
   <div class="sub-note">Seeded on how they'll actually play, not on league record &mdash; every one of these teams came out of a different league against a different standard. The two columns that travel are the roster's full body of work and what these same men did here last August.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>#</th><th>Team</th><th>League courts</th><th>Roster record</th><th>Springfield '25</th></tr></thead>
     <tbody>
       <tr><td class="stat">1</td><td class="who">OK / Dickason</td><td class="stat">40&ndash;10 &middot; .800</td><td class="stat">.581 &nbsp;344 courts</td><td class="stat">18&ndash;10 &middot; .643</td></tr>
@@ -717,7 +729,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">4</td><td class="who">HOA / Burgess&ndash;Zingg <span style="color:var(--steel)">us</span></td><td class="stat">25&ndash;7 &middot; .781</td><td class="stat">.619 &nbsp;370 courts</td><td class="stat">15&ndash;18 &middot; .455</td></tr>
       <tr><td class="stat">5</td><td class="who">STL / Petruska</td><td class="stat">16&ndash;8 &middot; .667</td><td class="stat lo">.454 &nbsp;359 courts</td><td class="stat">2&ndash;1 &middot; one man</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:8px">Three and four are a coin flip. <span class="fld">We have the best raw roster number in the draw</span> &mdash; .619 across 370 courts, first of five &mdash; and the worst recent result at this event. <span class="fld">That gap is the whole story of our weekend.</span></p>
 
   <div class="sub">IA / Versteeg &mdash; Friday 11:30 AM</div>
@@ -762,7 +774,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Why Every Game Matters</div>
   <div class="sub-note">The order ties get broken in, straight from the championship regulations. Read the first line twice.</div>
-  <table style="margin-top:10px;font-size:13px">
+  <div class="tw"><table style="margin-top:10px;font-size:13px">
     <thead><tr><th>#</th><th>Tiebreaker</th></tr></thead>
     <tbody>
       <tr><td class="stat">1</td><td><span class="fld">Individual matches won.</span> Total courts across the whole weekend &mdash; not team matches. Every single court counts the same, in a blowout or a loss.</td></tr>
@@ -772,7 +784,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">5</td><td>Game winning percentage.</td></tr>
       <tr><td class="stat">6</td><td>A method determined by the championships committee.</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="warnbox">
     <h4>There is no dead rubber and no dead set</h4>
     <p>If you're down a set and a break to a better team, <span class="fld">the games you claw back are worth something real</span> &mdash; they're step four, and in a five-team round robin ties are the norm, not the exception.</p>
@@ -780,7 +792,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   </div>
 
   <div class="sub">Our Schedule</div>
-  <table style="margin-top:10px;font-size:13px">
+  <div class="tw"><table style="margin-top:10px;font-size:13px">
     <thead><tr><th>When</th><th>Opponent</th><th>Seed</th></tr></thead>
     <tbody>
       <tr><td class="stat">Fri Aug 28 &middot; 11:30 AM</td><td class="who">IA / Versteeg</td><td class="stat">2</td></tr>
@@ -788,7 +800,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">Sat Aug 29 &middot; 1:15 PM</td><td class="who">OK / Dickason</td><td class="stat">1</td></tr>
       <tr><td class="stat">Sun Aug 30 &middot; 8:15 AM</td><td class="who">NE / Penland</td><td class="stat">3</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:8px">Four courts each match: S1, D1, D2, D3. Two matches on Saturday, three and a half hours apart. <span class="fld">Sunday is an 8:15 start against the team we know least about.</span></p>
   <div class="srcline">Records drawn from every non-Mixed court on file for each traveling roster, not just their 40+ 3.5 league season. Seeding is a judgment call built on roster record and 2025 Sectionals form; league records are not comparable across five different leagues and are shown for context only. Two numbers to hold loosely: NE's 2&ndash;17 is a year old and their league season since says otherwise, and we're assuming Moore takes Oklahoma's singles &mdash; he's their only traveling man with a real singles record, but they could seat him at D1 instead.</div>
 </section>
@@ -818,10 +830,10 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">S1 &middot; Singles</div>
     <h3>Ram Chettiar</h3>
     <div class="note">11 of his court matches have been at S1. At 40+ he is <span class="fld">4&ndash;1</span>, 56% of games &mdash; his singles in the age band Sectionals actually plays.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Singles</th><th>Match</th><th>Games</th><th>Sets</th><th>NTRP</th><th>TR</th><th>WTN-S</th></tr></thead>
       <tbody><tr><td class="who">Ram Chettiar</td><td class="stat">8&ndash;4</td><td class="stat">67%</td><td class="stat">53%</td><td class="stat">64%</td><td class="stat">3.5C</td><td class="stat">3.54</td><td class="stat">26.47</td></tr></tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -829,13 +841,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Randy Burgess &amp; Mark Johnson</h3>
     <div class="note">2 courts together on file, both this season.</div>
     <div class="together"><span class="fld">Together:</span> <span class="fld">2&ndash;0</span> in Adult 3.5, 71% of games &mdash; both at D2, May and June.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Randy Burgess</td><td class="stat">21&ndash;6</td><td class="stat">78%</td><td class="stat">60%</td><td class="stat">10&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.51</td><td class="stat">25.33</td></tr>
         <tr><td class="who">Mark Johnson</td><td class="stat">13&ndash;6</td><td class="stat">68%</td><td class="stat">60%</td><td class="stat">5&ndash;4</td><td class="stat">3.5C</td><td class="stat">3.48</td><td class="stat">25.46</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -843,13 +855,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Richard Bierman &amp; Dave Merritt</h3>
     <div class="note">Our most-proven pair &mdash; 5 courts over 6 months.</div>
     <div class="together"><span class="fld">Together:</span> <span class="fld">4&ndash;1</span>, 64% of games, three of those at D1. In the 40+ band specifically they are <span class="fld">2&ndash;0</span> and took 86% of games.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Richard Bierman</td><td class="stat">15&ndash;6</td><td class="stat">71%</td><td class="stat">61%</td><td class="stat">9&ndash;1</td><td class="stat">3.5C</td><td class="stat">3.28</td><td class="stat">25.52</td></tr>
         <tr><td class="who">Dave Merritt</td><td class="stat">8&ndash;3</td><td class="stat">73%</td><td class="stat">61%</td><td class="stat">4&ndash;0</td><td class="stat">3.5C</td><td class="stat">3.45</td><td class="stat">25.59</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -857,13 +869,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>John Jacobs &amp; Marc Morris</h3>
     <div class="note">First time D3 is Morris's slot &mdash; 14 of his courts, more than any other.</div>
     <div class="together"><span class="fld">Together:</span> No shared court on file. Read the two records on their own &mdash; there is no pair number to lean on.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">John Jacobs</td><td class="stat">20&ndash;14</td><td class="stat">59%</td><td class="stat">56%</td><td class="stat">7&ndash;5</td><td class="stat">3.5C</td><td class="stat">3.42</td><td class="stat">25.63</td></tr>
         <tr><td class="who">Marc Morris</td><td class="stat">13&ndash;5</td><td class="stat">72%</td><td class="stat">58%</td><td class="stat">7&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.41</td><td class="stat">24.80</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="bench">
@@ -878,7 +890,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Iowa &mdash; Doubles</div>
   <div class="sub-note">Rating has this team almost exactly backwards. Sorted by wins; every non-Mixed court match on file. Rates under 50% are marked.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-D / #</th></tr></thead>
     <tbody>
       <tr><td class="who">John Micka</td><td class="stat">35&ndash;11</td><td class="stat">76%</td><td class="stat">63%</td><td class="stat">75%</td><td class="stat">6&ndash;2</td><td class="stat">3.5 A</td><td class="stat">3.62 &nbsp;1</td><td class="stat">23.87 &nbsp;4</td></tr>
@@ -891,7 +903,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Mark Davidson</td><td class="stat">9&ndash;5</td><td class="stat">64%</td><td class="stat">57%</td><td class="stat">62%</td><td class="stat">4&ndash;0</td><td class="stat">3.5C</td><td class="stat">3.43 &nbsp;7</td><td class="stat">25.98 &nbsp;8</td></tr>
       <tr><td class="who">Scott Gabrilson</td><td class="stat">3&ndash;1</td><td class="stat">75%</td><td class="stat">66%</td><td class="stat">75%</td><td class="stat">3&ndash;0</td><td class="stat">3.5C</td><td class="stat">3.32 &nbsp;9</td><td class="stat">25.72 &nbsp;7</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">NTRP as published 2025-12-31 &middot; WTN as published 2026-08-19</div>
 
   <div class="readbox">
@@ -904,7 +916,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Iowa &mdash; Singles</div>
   <div class="sub-note">Only four of them have played a singles court. Sorted by wins; five men have no singles on file.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-S / #</th></tr></thead>
     <tbody>
       <tr><td class="who">Michael Hutchison</td><td class="stat">6&ndash;5</td><td class="stat">55%</td><td class="stat">51%</td><td class="stat">54%</td><td class="stat">4&ndash;1</td><td class="stat">3.5C</td><td class="stat">3.45 &nbsp;5</td><td class="stat">26.34 &nbsp;3</td></tr>
@@ -918,7 +930,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Max Wilker</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.49 &nbsp;4</td><td class="stat">&mdash;</td></tr>
       <tr><td class="who">Raymond Widder</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.36 &nbsp;8</td><td class="stat">26.89 &nbsp;4</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="readbox">
     <h4>Ram's court &mdash; the softest singles court in the field</h4>
@@ -940,7 +952,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h4>Court recovered</h4>
     <p>The singles was missing from both sides of the player-by-player capture &mdash; our S1 that day was a 2025 teammate not on this year's roster, so neither man had been pulled. It has since been read straight off tennisrecord's own team-match page: <span class="fld">Nathan Johnston beat Todd Schemmel 7-5 7-5.</span> That settles a tie this card previously could not call.</p>
   </div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Us</th><th>Them</th><th>Score</th><th>Result</th></tr></thead>
     <tbody>
       <tr><td class="stat">S1</td><td>Todd Schemmel <span style="color:var(--steel)">(2025 teammate)</span></td><td>Nathan Johnston <span style="color:var(--steel)">(not reg.)</span></td><td class="stat">7-5 7-5</td><td class="opp lo">Loss</td></tr>
@@ -949,7 +961,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td>John Jacobs &amp; Bryan Zingg</td><td>Michael Hutchison &amp; Thomas Hayes <span style="color:var(--steel)">(not reg.)</span></td><td class="stat">6-3 5-7 1-0</td><td class="opp lo">Loss</td></tr>
       <tr><td class="stat">D4</td><td>Marc Morris &amp; Andy Plungkhen</td><td>Raymond Widder &amp; Ruben Avilez <span style="color:var(--steel)">(not reg.)</span></td><td class="stat">6-3 4-6 1-0</td><td class="opp">Win</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">Adult 40+ 3.5 Sectionals, 2025-08-22 &mdash; all five courts, verified against tennisrecord's own match page. This year's card is four courts and has no D4.</div>
 
   <div class="readbox">
@@ -983,10 +995,10 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">S1 &middot; Singles</div>
     <h3>Marc Morris</h3>
     <div class="note">6 of his 10 singles courts have been at S1. At 40+ he is <span class="fld">3&ndash;3</span>, 43% of games &mdash; his singles in the age band Sectionals actually plays.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Singles</th><th>Match</th><th>Games</th><th>Sets</th><th>NTRP</th><th>TR</th><th>WTN-S</th></tr></thead>
       <tbody><tr><td class="who">Marc Morris</td><td class="stat">4&ndash;6</td><td class="stat lo">40%</td><td class="stat lo">40%</td><td class="stat lo">41%</td><td class="stat">3.5C</td><td class="stat">3.41</td><td class="stat">28.46</td></tr></tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -994,13 +1006,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Randy Burgess &amp; Ram Chettiar</h3>
     <div class="note">Our most-proven pair &mdash; 6 courts together, every one at D1.</div>
     <div class="together"><span class="fld">Together:</span> <span class="fld">5&ndash;1</span> in Adult 3.5, 63% of games &mdash; all six at D1. In the 40+ band they are <span class="fld">2&ndash;0</span> and took 69% of games.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Randy Burgess</td><td class="stat">21&ndash;6</td><td class="stat">78%</td><td class="stat">60%</td><td class="stat">10&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.51</td><td class="stat">25.33</td></tr>
         <tr><td class="who">Ram Chettiar</td><td class="stat">12&ndash;4</td><td class="stat">75%</td><td class="stat">59%</td><td class="stat">6&ndash;0</td><td class="stat">3.5C</td><td class="stat">3.54</td><td class="stat">23.83</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1008,13 +1020,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Richard Bierman &amp; Bryan Zingg</h3>
     <div class="note">One court together &mdash; 6-1 6-0 in March, in the 40+ band.</div>
     <div class="together"><span class="fld">Together:</span> <span class="fld">1&ndash;0</span>, 92% of games. One court is not a record &mdash; read the two rows below on their own.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Richard Bierman</td><td class="stat">15&ndash;6</td><td class="stat">71%</td><td class="stat">61%</td><td class="stat">9&ndash;1</td><td class="stat">3.5C</td><td class="stat">3.28</td><td class="stat">25.52</td></tr>
         <tr><td class="who">Bryan Zingg</td><td class="stat">21&ndash;12</td><td class="stat">64%</td><td class="stat">59%</td><td class="stat">11&ndash;5</td><td class="stat">3.5C</td><td class="stat">3.35</td><td class="stat">26.05</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1022,13 +1034,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>John Jacobs &amp; Andy Plungkhen</h3>
     <div class="note">First time D3 is Plungkhen's slot &mdash; 20 of his courts, more than any other.</div>
     <div class="together"><span class="fld">Together:</span> No shared court on file. Read the two records on their own &mdash; there is no pair number to lean on.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">John Jacobs</td><td class="stat">20&ndash;14</td><td class="stat">59%</td><td class="stat">56%</td><td class="stat">7&ndash;5</td><td class="stat">3.5C</td><td class="stat">3.42</td><td class="stat">25.63</td></tr>
         <tr><td class="who">Andy Plungkhen</td><td class="stat">17&ndash;8</td><td class="stat">68%</td><td class="stat">58%</td><td class="stat">8&ndash;4</td><td class="stat">3.5C</td><td class="stat">3.37</td><td class="stat">26.27</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="bench">
@@ -1043,7 +1055,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">St. Louis &mdash; Doubles</div>
   <div class="sub-note">The one record this weekend that is actually theirs. Sorted by wins; every non-Mixed court match on file. Rates under 50% are marked.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-D / #</th></tr></thead>
     <tbody>
       <tr><td class="who">Paul Petruska</td><td class="stat">27&ndash;18</td><td class="stat">60%</td><td class="stat">51%</td><td class="stat">57%</td><td class="stat">6&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.45 &nbsp;2</td><td class="stat">24.02 &nbsp;3</td></tr>
@@ -1058,7 +1070,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Burak Taysi</td><td class="stat">6&ndash;4</td><td class="stat">60%</td><td class="stat">51%</td><td class="stat">56%</td><td class="stat">3&ndash;1</td><td class="stat">3.5C</td><td class="stat">3.43 &nbsp;3</td><td class="stat">23.89 &nbsp;2</td></tr>
       <tr><td class="who">Craig Holman</td><td class="stat">3&ndash;8</td><td class="stat lo">27%</td><td class="stat lo">47%</td><td class="stat lo">39%</td><td class="stat">2&ndash;2</td><td class="stat">3.5 A</td><td class="stat">3.10 &nbsp;11</td><td class="stat">27.15 &nbsp;11</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">NTRP as published 2025-12-31 &middot; WTN as published 2026-08-19</div>
 
   <div class="readbox">
@@ -1071,7 +1083,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">St. Louis &mdash; Singles</div>
   <div class="sub-note">Their best court, not their worst. Sorted by wins; seven men have no singles on file.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-S / #</th></tr></thead>
     <tbody>
       <tr><td class="who">Borislav Ivanov</td><td class="stat">10&ndash;5</td><td class="stat">67%</td><td class="stat">56%</td><td class="stat">66%</td><td class="stat">3&ndash;0</td><td class="stat">3.5C</td><td class="stat">3.58 &nbsp;1</td><td class="stat">24.77 &nbsp;1</td></tr>
@@ -1087,7 +1099,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Harrison Bohn</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.17 &nbsp;10</td><td class="stat">&mdash;</td></tr>
       <tr><td class="who">Todd Ingersoll</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.34 &nbsp;7</td><td class="stat">27.54 &nbsp;3</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="readbox">
     <h4>Marc's court &mdash; the one court where St. Louis is deeper than the rating says</h4>
@@ -1111,7 +1123,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <p>Christopher Fikes played D4 for the Hit Men that day and beat Marc Morris and Andy Plungkhen <span class="fld">6-3 6-0</span>. He is on Petruska's roster now, with their second-best doubles record.</p>
     <p><span class="fld">A different St. Louis team.</span> The table below is not Saturday's opponent. It is the only HOA-versus-St. Louis data on file, and it is there for one reason: Fikes.</p>
   </div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Us</th><th>Them</th><th>Score</th><th>Result</th></tr></thead>
     <tbody>
       <tr><td class="stat">S1</td><td>Ram Chettiar</td><td>Michael Gillam</td><td class="stat">6-3 6-3</td><td class="opp">Win</td></tr>
@@ -1120,7 +1132,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td>John Jacobs &amp; Bryan Zingg</td><td>Kevin Mowery &amp; Sean Wernecker</td><td class="stat">6-3 1-6 1-0</td><td class="opp lo">Loss</td></tr>
       <tr><td class="stat">D4</td><td>Marc Morris &amp; Andy Plungkhen</td><td>Christopher Fikes <span style="color:var(--steel)">(now on Petruska)</span> &amp; George Hendrix</td><td class="stat">6-3 6-0</td><td class="opp lo">Loss</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">Adult 40+ 3.5 Sectionals, 2025-08-23 &mdash; HOA vs STL/Hit Men-Rhoads. All five courts on file; we lost 1&ndash;4. Verified against tennisrecord's match page.</div>
   <p style="font-size:13px;margin-top:8px">Write this as <span class="fld">"not on file"</span>, not "never happened". nadal captures USTA pages player by player, so a court appears only when one of the two men on it has been pulled. The two tables above are the whole of the scouting for this tie.</p>
 </section>
@@ -1148,10 +1160,10 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">S1 &middot; Singles</div>
     <h3>Rob Halksworth</h3>
     <div class="note">6 of his 9 singles courts have been at S1. At 40+ he is <span class="fld">3&ndash;1</span>, 65% of games &mdash; his strongest singles evidence, and it is in the band Sectionals actually plays.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Singles</th><th>Match</th><th>Games</th><th>Sets</th><th>NTRP</th><th>TR</th><th>WTN-S</th></tr></thead>
       <tbody><tr><td class="who">Rob Halksworth</td><td class="stat">5&ndash;4</td><td class="stat">56%</td><td class="stat">52%</td><td class="stat">55%</td><td class="stat">3.5C</td><td class="stat">3.48</td><td class="stat">27.13</td></tr></tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1159,13 +1171,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Randy Burgess &amp; Dave Merritt</h3>
     <div class="note">3 courts together on file, all this season.</div>
     <div class="together"><span class="fld">Together:</span> <span class="fld">2&ndash;1</span> in Adult 3.5, 61% of games. In the 40+ band they are <span class="fld">2&ndash;0</span> and took 69% &mdash; both at D1.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Randy Burgess</td><td class="stat">21&ndash;6</td><td class="stat">78%</td><td class="stat">60%</td><td class="stat">10&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.51</td><td class="stat">25.33</td></tr>
         <tr><td class="who">Dave Merritt</td><td class="stat">8&ndash;3</td><td class="stat">73%</td><td class="stat">61%</td><td class="stat">4&ndash;0</td><td class="stat">3.5C</td><td class="stat">3.45</td><td class="stat">25.59</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1173,13 +1185,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Bryan Zingg &amp; Mark Johnson</h3>
     <div class="note">First time D2 is both men's slot &mdash; 18 of Zingg's courts and 11 of Johnson's.</div>
     <div class="together"><span class="fld">Together:</span> No shared court on file. Read the two records on their own &mdash; there is no pair number to lean on.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Bryan Zingg</td><td class="stat">21&ndash;12</td><td class="stat">64%</td><td class="stat">59%</td><td class="stat">11&ndash;5</td><td class="stat">3.5C</td><td class="stat">3.35</td><td class="stat">26.05</td></tr>
         <tr><td class="who">Mark Johnson</td><td class="stat">13&ndash;6</td><td class="stat">68%</td><td class="stat">60%</td><td class="stat">5&ndash;4</td><td class="stat">3.5C</td><td class="stat">3.48</td><td class="stat">25.46</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1187,13 +1199,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>JT Martin &amp; Andy Plungkhen</h3>
     <div class="note">D3 is Plungkhen's slot &mdash; 20 of his courts, more than any other.</div>
     <div class="together"><span class="fld">Together:</span> <span class="fld">3&ndash;0</span>, 71% of games &mdash; but all three were in 18+. They have never played a 40+ court together.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">JT Martin</td><td class="stat">18&ndash;10</td><td class="stat">64%</td><td class="stat">56%</td><td class="stat">11&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.37</td><td class="stat">24.90</td></tr>
         <tr><td class="who">Andy Plungkhen</td><td class="stat">17&ndash;8</td><td class="stat">68%</td><td class="stat">58%</td><td class="stat">8&ndash;4</td><td class="stat">3.5C</td><td class="stat">3.37</td><td class="stat">26.27</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="bench">
@@ -1208,7 +1220,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Oklahoma &mdash; Doubles</div>
   <div class="sub-note">The best record in the field, and the least useful. Sorted by wins; every non-Mixed court match on file. Rates under 50% are marked.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-D / #</th></tr></thead>
     <tbody>
       <tr><td class="who">Christopher Dickason</td><td class="stat">34&ndash;26</td><td class="stat">57%</td><td class="stat">56%</td><td class="stat">58%</td><td class="stat">10&ndash;4</td><td class="stat">3.5C</td><td class="stat">3.50 &nbsp;3</td><td class="stat">23.55 &nbsp;3</td></tr>
@@ -1222,7 +1234,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Robert Mitchell</td><td class="stat">10&ndash;5</td><td class="stat">67%</td><td class="stat">52%</td><td class="stat">58%</td><td class="stat">5&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.32 &nbsp;8</td><td class="stat">24.72 &nbsp;9</td></tr>
       <tr><td class="who">Vlad Railian</td><td class="stat">4&ndash;2</td><td class="stat">67%</td><td class="stat">58%</td><td class="stat">64%</td><td class="stat">4&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.21 &nbsp;10</td><td class="stat">24.40 &nbsp;8</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">NTRP as published 2025-12-31 &middot; WTN as published 2026-08-19</div>
 
   <div class="readbox">
@@ -1235,7 +1247,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Oklahoma &mdash; Singles</div>
   <div class="sub-note">Two men carry it, and one of them is the story. Sorted by wins; five men have no singles on file.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-S / #</th></tr></thead>
     <tbody>
       <tr><td class="who">Keith Moore</td><td class="stat">11&ndash;1</td><td class="stat">92%</td><td class="stat">66%</td><td class="stat">82%</td><td class="stat">3&ndash;1</td><td class="stat">3.5C</td><td class="stat">3.48 &nbsp;4</td><td class="stat">24.46 &nbsp;1</td></tr>
@@ -1250,7 +1262,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Robert Mitchell</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.32 &nbsp;8</td><td class="stat">&mdash;</td></tr>
       <tr><td class="who">Vlad Railian</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.21 &nbsp;10</td><td class="stat">27.41 &nbsp;3</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="readbox">
     <h4>Rob's court &mdash; Keith Moore's record is an 18-and-over record</h4>
@@ -1297,10 +1309,10 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">S1 &middot; Singles</div>
     <h3>Ram Chettiar</h3>
     <div class="note">11 of his 12 singles courts have been at S1. At 40+ he is <span class="fld">4&ndash;1</span>, 56% of games &mdash; his singles in the age band Sectionals actually plays.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Singles</th><th>Match</th><th>Games</th><th>Sets</th><th>NTRP</th><th>TR</th><th>WTN-S</th></tr></thead>
       <tbody><tr><td class="who">Ram Chettiar</td><td class="stat">8&ndash;4</td><td class="stat">67%</td><td class="stat">53%</td><td class="stat">64%</td><td class="stat">3.5C</td><td class="stat">3.54</td><td class="stat">26.47</td></tr></tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1308,13 +1320,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Dave Merritt &amp; Mark Johnson</h3>
     <div class="note">First time D1 is Merritt's slot &mdash; 7 of his 11 courts, and he is <span class="fld">4&ndash;0</span> at 40+.</div>
     <div class="together"><span class="fld">Together:</span> No shared court on file. Read the two records on their own &mdash; there is no pair number to lean on.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Dave Merritt</td><td class="stat">8&ndash;3</td><td class="stat">73%</td><td class="stat">61%</td><td class="stat">4&ndash;0</td><td class="stat">3.5C</td><td class="stat">3.45</td><td class="stat">25.59</td></tr>
         <tr><td class="who">Mark Johnson</td><td class="stat">13&ndash;6</td><td class="stat">68%</td><td class="stat">60%</td><td class="stat">5&ndash;4</td><td class="stat">3.5C</td><td class="stat">3.48</td><td class="stat">25.46</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1322,13 +1334,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>JT Martin &amp; Marc Morris</h3>
     <div class="note">Our most-proven pair &mdash; 8 courts in Adult 3.5 over seventeen months.</div>
     <div class="together"><span class="fld">Together:</span> <span class="fld">7&ndash;1</span>, 64% of games. In the 40+ band they are <span class="fld">5&ndash;0</span> and took 69%. Five of the eight were at D3, where they are unbeaten; this is D2, where they are 2&ndash;1.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">JT Martin</td><td class="stat">18&ndash;10</td><td class="stat">64%</td><td class="stat">56%</td><td class="stat">11&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.37</td><td class="stat">24.90</td></tr>
         <tr><td class="who">Marc Morris</td><td class="stat">13&ndash;5</td><td class="stat">72%</td><td class="stat">58%</td><td class="stat">7&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.41</td><td class="stat">24.80</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="court">
@@ -1336,13 +1348,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h3>Rob Halksworth &amp; John Jacobs</h3>
     <div class="note">D1 is Jacobs's usual slot &mdash; 19 courts there; D3 is his least-played.</div>
     <div class="together"><span class="fld">Together:</span> No shared court on file. Read the two records on their own &mdash; there is no pair number to lean on.</div>
-    <table>
+    <div class="tw"><table>
       <thead><tr><th>Player</th><th>Doubles</th><th>Match</th><th>Games</th><th>At 40+</th><th>NTRP</th><th>TR</th><th>WTN-D</th></tr></thead>
       <tbody>
         <tr><td class="who">Rob Halksworth</td><td class="stat">11&ndash;6</td><td class="stat">65%</td><td class="stat">57%</td><td class="stat">6&ndash;3</td><td class="stat">3.5C</td><td class="stat">3.48</td><td class="stat">24.72</td></tr>
         <tr><td class="who">John Jacobs</td><td class="stat">20&ndash;14</td><td class="stat">59%</td><td class="stat">56%</td><td class="stat">7&ndash;5</td><td class="stat">3.5C</td><td class="stat">3.42</td><td class="stat">25.63</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </div>
 
   <div class="bench">
@@ -1357,7 +1369,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Nebraska &mdash; Doubles</div>
   <div class="sub-note">The strongest doubles group we face. Sorted by wins; every non-Mixed court match on file. Rates under 50% are marked.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-D / #</th></tr></thead>
     <tbody>
       <tr><td class="who">Mike Gardner</td><td class="stat">34&ndash;24</td><td class="stat">59%</td><td class="stat">53%</td><td class="stat">58%</td><td class="stat">5&ndash;3</td><td class="stat">3.5C</td><td class="stat">3.49 &nbsp;4</td><td class="stat">24.71 &nbsp;7</td></tr>
@@ -1372,7 +1384,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">David Crotzer</td><td class="stat">7&ndash;7</td><td class="stat">50%</td><td class="stat">57%</td><td class="stat">56%</td><td class="stat">4&ndash;5</td><td class="stat">3.5C</td><td class="stat">3.23 &nbsp;10</td><td class="stat">26.43 &nbsp;11</td></tr>
       <tr><td class="who">Nick Sowl</td><td class="stat">2&ndash;2</td><td class="stat">50%</td><td class="stat">64%</td><td class="stat">60%</td><td class="stat">2&ndash;1</td><td class="stat">3.5S</td><td class="stat">3.59 &nbsp;2</td><td class="stat">21.99 &nbsp;1</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">NTRP as published 2025-12-31 &middot; WTN as published 2026-08-19</div>
 
   <div class="readbox">
@@ -1386,7 +1398,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Nebraska &mdash; Singles</div>
   <div class="sub-note">Two men, and one of them is the best in the field. Sorted by wins; six men have no singles on file.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match</th><th>Games</th><th>Sets</th><th>At 40+</th><th>NTRP</th><th>TR / #</th><th>WTN-S / #</th></tr></thead>
     <tbody>
       <tr><td class="who">Jonathan Hernandez</td><td class="stat">14&ndash;2</td><td class="stat">88%</td><td class="stat">71%</td><td class="stat">83%</td><td class="stat">4&ndash;2</td><td class="stat">3.5C</td><td class="stat">3.47 &nbsp;5</td><td class="stat">25.04 &nbsp;1</td></tr>
@@ -1402,7 +1414,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Satya Maddipati</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.56 &nbsp;3</td><td class="stat">27.51 &nbsp;3</td></tr>
       <tr><td class="who">Sheetal Munjewar</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">&mdash;</td><td class="stat">3.5C</td><td class="stat">3.38 &nbsp;8</td><td class="stat">30.41 &nbsp;5</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="readbox">
     <h4>Ram's court &mdash; hardest singles of the weekend, but not as hard as 14&ndash;2</h4>
@@ -1420,7 +1432,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">History &mdash; We Beat Them 4&ndash;1 Last August</div>
   <div class="sub-note">One meeting: Springfield Sectionals, 23 August 2025. A five-court card &mdash; S1 and D1&ndash;D4. All five are on file and we took four. This is the only opponent this weekend whose head-to-head is complete; against Iowa a court is missing, and against St. Louis and Oklahoma there is nothing at all.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Us</th><th>Them</th><th>Score</th><th>Result</th></tr></thead>
     <tbody>
       <tr><td class="stat">S1</td><td>Todd Schemmel <span style="color:var(--steel)">(2025 teammate)</span></td><td>Andy Wang</td><td class="stat">6-2 6-2</td><td class="opp">Win</td></tr>
@@ -1429,7 +1441,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td>Marc Morris &amp; Andy Plungkhen</td><td>Satya Maddipati &amp; Sheetal Munjewar</td><td class="stat">6-7 6-4 1-0</td><td class="opp">Win</td></tr>
       <tr><td class="stat">D4</td><td>John Jacobs &amp; Bryan Zingg</td><td>Brandon Vasholz &amp; David Crotzer</td><td class="stat">4-6 6-0 1-0</td><td class="opp">Win</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">Adult 40+ 3.5 Sectionals, 2025-08-23 &mdash; all five courts, verified against tennisrecord's own match page. This year's card is four courts and has no D4.</div>
 
   <div class="readbox">
@@ -1464,7 +1476,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Doubles &mdash; Ranked by What They Produced</div>
   <div class="sub-note">Broad base: every non-Mixed court match on file. Rates under 50% are marked.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Nick Stahly</td><td class="stat">23&ndash;4</td><td class="stat">85%</td><td class="stat">60%</td><td class="stat">80%</td><td class="stat">6&ndash;1</td><td class="stat">3.44</td></tr>
@@ -1477,11 +1489,11 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Raymond Widder</td><td class="stat">12&ndash;14</td><td class="stat lo">46%</td><td class="stat">53%</td><td class="stat">52%</td><td class="stat">4&ndash;4</td><td class="stat">3.36</td></tr>
       <tr><td class="who">Michael Hutchison</td><td class="stat">14&ndash;17</td><td class="stat lo">45%</td><td class="stat lo">48%</td><td class="stat lo">47%</td><td class="stat">2&ndash;1</td><td class="stat">3.45</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="sub">Singles</div>
   <div class="sub-note">Michael Hutchison is their singles player and the only man on the roster who has never taken a doubles court for them &mdash; a specialist, not a swing man.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Michael Hutchison</td><td class="stat">6&ndash;5</td><td class="stat">55%</td><td class="stat">51%</td><td class="stat">54%</td><td class="stat">4&ndash;1</td><td class="stat">3.45</td></tr>
@@ -1490,7 +1502,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Nick Stahly</td><td class="stat">1&ndash;3</td><td class="stat lo">25%</td><td class="stat lo">46%</td><td class="stat lo">33%</td><td class="stat">1&ndash;1</td><td class="stat">3.44</td></tr>
       <tr><td colspan="7" style="font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);background:#F4F6F8">No singles on file &mdash; Micka, J. Johnson, Wilker, Davidson, Widder</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="readbox">
     <h4>The softest singles court in the field</h4>
     <p>Hutchison at 6&ndash;5, 55%, 51% games is the weakest of the four opponents' primary singles options &mdash; and he is <span class="fld">0&ndash;2 whenever he has been pushed up to 4.0</span>. His 4&ndash;1 at our exact level is real but thin.</p>
@@ -1499,7 +1511,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">How They Order a Card</div>
   <div class="sub-note">Average strength rank of the pair at each court on their own schedule &mdash; 1.00 means the strongest pair sat here every time. Scale 1 to 4.</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.67</td><td>strongest 3&times;</td></tr>
@@ -1507,12 +1519,12 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td class="stat">2.83</td><td>weakest 1&times;</td></tr>
       <tr><td class="stat">D4</td><td class="stat">3.50</td><td>weakest 4&times; &mdash; does not exist at Sectionals</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">Clean top-down</span> &mdash; strength falls off court by court with no exception worth the name. The habit is reliable even though the names filling it are not. Their league ran five courts; Sectionals runs four, so everyone below D1 shifts up and <span class="fld">their D3 firms up.</span></p>
 
   <div class="sub">Pairings</div>
   <div class="sub-note">Every traveling pairing on their own schedule, with what it produced.</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Pairing</th><th>Played</th><th>Record</th><th>Courts</th></tr></thead>
     <tbody>
       <tr><td class="who">Jamie Johnson / Nick Stahly</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D1 &times;1</td></tr>
@@ -1521,7 +1533,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">John Micka / Max Wilker</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D2 &times;1</td></tr>
       <tr><td class="who">Mark Davidson / Raymond Widder</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D3 &times;1</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">Not one traveling pair has played together more than once.</span> Twenty distinct partnerships across 24 doubles courts, and every repeat combination on this team involves a player who is staying home.</p>
 
   <div class="warnbox">
@@ -1581,7 +1593,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Doubles &mdash; Ranked by What They Produced</div>
   <div class="sub-note">The drop from their fifth player to their sixth is the steepest cliff in the field.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Christopher Fikes</td><td class="stat">25&ndash;14</td><td class="stat">64%</td><td class="stat">53%</td><td class="stat">60%</td><td class="stat">7&ndash;3</td><td class="stat">3.42</td></tr>
@@ -1596,11 +1608,11 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Craig Holman</td><td class="stat">3&ndash;8</td><td class="stat lo">27%</td><td class="stat lo">48%</td><td class="stat lo">39%</td><td class="stat">2&ndash;2</td><td class="stat">3.10</td></tr>
       <tr><td class="who">Harrison Bohn</td><td class="stat">7&ndash;21</td><td class="stat lo">25%</td><td class="stat lo">45%</td><td class="stat lo">36%</td><td class="stat">1&ndash;4</td><td class="stat">3.17</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="sub">Singles</div>
   <div class="sub-note">Two specialists, and neither plays much doubles for a reason.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Borislav Ivanov</td><td class="stat">10&ndash;5</td><td class="stat">67%</td><td class="stat">57%</td><td class="stat">66%</td><td class="stat">3&ndash;0</td><td class="stat">3.58</td></tr>
@@ -1610,7 +1622,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Sanjeev Kamat</td><td class="stat">0&ndash;5</td><td class="stat lo">0%</td><td class="stat lo">38%</td><td class="stat lo">9%</td><td class="stat">0&ndash;2</td><td class="stat">3.33</td></tr>
       <tr><td colspan="7" style="font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);background:#F4F6F8">No singles on file &mdash; Taysi, Fikes, Hagenbrock, Ingersoll, Becker, Bohn</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="readbox">
     <h4>Ivanov is real, but he has a ceiling</h4>
     <p>Ivanov &mdash; 10&ndash;5, 67%, 57% games, 66% sets, and 3&ndash;0 at 40+ 3.5. He is the highest-rated man on his own team and 7&ndash;10 in doubles, which tells you where his captain thinks he belongs.</p>
@@ -1620,18 +1632,18 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">How They Order a Card</div>
   <div class="sub-note">A perfect 3.00 at D3 is the cleanest signal this dataset produces. Scale 1 to 3.</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.33</td><td>strongest 4&times;</td></tr>
       <tr><td class="stat">D2</td><td class="stat">1.67</td><td>strongest 2&times;</td></tr>
       <tr><td class="stat">D3</td><td class="stat">3.00</td><td>weakest 6&times;</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px">D1 and D2 sit close together and both well clear of D3. <span class="fld">The drop is at the bottom, not spread across the card</span> &mdash; they concentrate strength up top and concede one court.</p>
 
   <div class="sub">Pairings</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Pairing</th><th>Played</th><th>Record</th><th>Courts</th></tr></thead>
     <tbody>
       <tr><td class="who">Paul Petruska / Todd Ingersoll</td><td class="stat">3</td><td class="stat">3&ndash;0</td><td class="stat">D1 &times;3</td></tr>
@@ -1643,7 +1655,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Paul Petruska / Harrison Bohn</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D1 &times;1</td></tr>
       <tr><td class="who">Burak Taysi / Todd Ingersoll</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D1 &times;1</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px">Twelve partnerships across 18 doubles courts &mdash; <span class="fld">the most concentrated rotation of anyone.</span> Petruska / Ingersoll is the anchor: three times, always D1, 3&ndash;0. Fikes has played D2 five times and nothing else.</p>
 
   <div class="warnbox">
@@ -1689,7 +1701,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Singles</div>
   <div class="sub-note">Read the At 40+ 3.5 column especially &mdash; it includes Sectionals and Districts, and it is where both of their real options show up.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Keith Moore</td><td class="stat">11&ndash;1</td><td class="stat">92%</td><td class="stat">65%</td><td class="stat">82%</td><td class="stat">3&ndash;1</td><td class="stat">3.48</td></tr>
@@ -1699,7 +1711,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Grenville Jones</td><td class="stat">0&ndash;1</td><td class="stat lo">0%</td><td class="stat">&mdash;</td><td class="stat lo">0%</td><td class="stat">0&ndash;1</td><td class="stat">3.41</td></tr>
       <tr><td colspan="7" style="font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);background:#F4F6F8">No singles on file &mdash; Coffey, Driesel, Mitchell, Moody, Railian</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="readbox">
     <h4>Two credible S1s, and the tool guessed neither confidently</h4>
     <p>The predicted card put Paul Richardson at S1 on rating alone, confidence low. On results Richardson is a 50% singles player overall but <span class="fld">4&ndash;0 at 40+ 3.5</span> and 6&ndash;2 across all 3.5 play, against 0&ndash;4 whenever pushed to 40+ 4.0.</p>
@@ -1708,7 +1720,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Doubles &mdash; Ranked by What They Produced</div>
   <div class="sub-note">The flattest roster in the field: nine of ten between 49% and 67%. No passenger, and no star.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Vlad Railian</td><td class="stat">4&ndash;2</td><td class="stat">67%</td><td class="stat">58%</td><td class="stat">64%</td><td class="stat">4&ndash;2</td><td class="stat">3.21</td></tr>
@@ -1722,7 +1734,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Grenville Jones</td><td class="stat">21&ndash;18</td><td class="stat">54%</td><td class="stat lo">48%</td><td class="stat">51%</td><td class="stat">6&ndash;1</td><td class="stat">3.41</td></tr>
       <tr><td class="who">Jim Vanderveen</td><td class="stat">33&ndash;34</td><td class="stat lo">49%</td><td class="stat">52%</td><td class="stat">51%</td><td class="stat">10&ndash;3</td><td class="stat">3.52</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="warnbox">
     <h4>Correction 2 &mdash; Vanderveen's 5&ndash;0 was a six-match illusion</h4>
@@ -1732,7 +1744,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">How They Order a Card</div>
   <div class="sub-note">Conventional top-down, strongest pair at D1 in 6 of 10. Scale 1 to 4.</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.80</td><td>strongest 6&times; &middot; weakest 1&times;</td></tr>
@@ -1740,11 +1752,11 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td class="stat">2.90</td><td>strongest 2&times; &middot; weakest 4&times;</td></tr>
       <tr><td class="stat">D4</td><td class="stat">3.00</td><td>weakest 4&times; &mdash; does not exist at Sectionals</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px">D3 at 2.90 and D4 at 3.00 are effectively tied &mdash; they did not run one designated sacrifice court, they ran two roughly equal soft ones. <span class="fld">Delete D4 and their D3 firms up.</span></p>
 
   <div class="sub">Pairings</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Pairing</th><th>Played</th><th>Record</th><th>Courts</th></tr></thead>
     <tbody>
       <tr><td class="who">Paul Richardson / Christopher Dickason</td><td class="stat">3</td><td class="stat lo">1&ndash;2</td><td class="stat">D1 &times;2, D2 &times;1</td></tr>
@@ -1755,7 +1767,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Christopher Dickason / Grenville Jones</td><td class="stat">1</td><td class="stat lo">0&ndash;1</td><td class="stat">D3 &times;1</td></tr>
       <tr><td class="who">Christopher Dickason / Chris Moody</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D4 &times;1</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">Note the top line:</span> Dickason and Richardson, their nominal best pair, are 1&ndash;2 together. Meanwhile Moore and Driesel are 3&ndash;0 and Mitchell and Railian are 2&ndash;0.</p>
 
   <div class="warnbox">
@@ -1799,7 +1811,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   </div>
 
   <div class="sub">Singles</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Mike Gardner</td><td class="stat">1&ndash;0</td><td class="stat">100%</td><td class="stat">100%</td><td class="stat">100%</td><td class="stat">1&ndash;0</td><td class="stat">3.49</td></tr>
@@ -1809,7 +1821,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">David Crotzer</td><td class="stat">0&ndash;1</td><td class="stat lo">0%</td><td class="stat lo">33%</td><td class="stat lo">0%</td><td class="stat">&mdash;</td><td class="stat">3.23</td></tr>
       <tr><td colspan="7" style="font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);background:#F4F6F8">No singles on file &mdash; Sowl, Maddipati, Acker, Munjewar, Ebert, Penland</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="readbox">
     <h4>One elite, one good, and a wrinkle</h4>
     <p>Hernandez is the elite. Andy Wang at 9&ndash;5 (64%) is a real second option &mdash; but note his <span class="fld">0&ndash;2 at 40+ 3.5 Sectionals</span>. He has played this tournament's singles court twice and lost both.</p>
@@ -1818,7 +1830,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Doubles &mdash; Ranked by What They Produced</div>
   <div class="sub-note">The top two here are the most dangerous doubles players in the tournament by results.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Chris Acker</td><td class="stat">12&ndash;2</td><td class="stat">86%</td><td class="stat">65%</td><td class="stat">80%</td><td class="stat">5&ndash;0</td><td class="stat">3.45</td></tr>
@@ -1833,7 +1845,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">David Crotzer</td><td class="stat">7&ndash;7</td><td class="stat">50%</td><td class="stat">58%</td><td class="stat">56%</td><td class="stat">4&ndash;5</td><td class="stat">3.23</td></tr>
       <tr><td class="who">Jonathan Hernandez</td><td class="stat">15&ndash;19</td><td class="stat lo">44%</td><td class="stat lo">48%</td><td class="stat lo">44%</td><td class="stat">7&ndash;11</td><td class="stat">3.47</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="warnbox">
     <h4>The pairing they have never made</h4>
@@ -1843,18 +1855,18 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">How They Order a Card</div>
   <div class="sub-note">Hard at D1, and then genuinely flat. Scale 1 to 3.</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.38</td><td>strongest 6&times; &middot; weakest 1&times;</td></tr>
       <tr><td class="stat">D2</td><td class="stat">2.38</td><td>strongest 1&times; &middot; weakest 4&times;</td></tr>
       <tr><td class="stat">D3</td><td class="stat">2.25</td><td>strongest 1&times; &middot; weakest 3&times;</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px">Six of eight times the strongest pair went to D1. Below that the ordering breaks down: D2 averages 2.38 and D3 averages 2.25, so <span class="fld">their nominal third court is on average the stronger of the two.</span> Past D1, court number tells you very little.</p>
 
   <div class="sub">Pairings</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Pairing</th><th>Played</th><th>Record</th><th>Courts</th></tr></thead>
     <tbody>
       <tr><td class="who">Satya Maddipati / David Crotzer</td><td class="stat">2</td><td class="stat">2&ndash;0</td><td class="stat">D1 &times;1, D2 &times;1</td></tr>
@@ -1867,7 +1879,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Chris Acker / Sheetal Munjewar</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D1 &times;1</td></tr>
       <tr><td class="who">Andy Wang / Michael Ebert</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D3 &times;1</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px">Nineteen distinct partnerships across 24 doubles courts, none used more than twice. <span class="fld">Penland rotates on purpose. Do not expect the pair you scouted.</span></p>
 
   <div class="sub">Continuity 73% &mdash; Mostly the Team You Can See</div>
@@ -1914,7 +1926,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Our Doubles &mdash; Ranked by What We Produced</div>
   <div class="sub-note">Broad base. This is the ordering that should drive selection.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Ram Chettiar</td><td class="stat">12&ndash;4</td><td class="stat">75%</td><td class="stat">59%</td><td class="stat">68%</td><td class="stat">6&ndash;0</td><td class="stat">3.54</td></tr>
@@ -1929,7 +1941,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">John Jacobs</td><td class="stat">22&ndash;16</td><td class="stat">58%</td><td class="stat">55%</td><td class="stat">57%</td><td class="stat">7&ndash;5</td><td class="stat">3.42</td></tr>
       <tr><td class="who">Andrew Plungkhen</td><td class="stat">21&ndash;23</td><td class="stat lo">48%</td><td class="stat">50%</td><td class="stat lo">49%</td><td class="stat">8&ndash;4</td><td class="stat">3.37</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="warnbox">
     <h4>What an opponent would notice</h4>
     <p>Chettiar, Merritt, Bierman and Morris are all at or above 71%. <span class="fld">That is a strong front four and it would hold up against any team here.</span> Below them the drop is steady rather than sharp until the last name.</p>
@@ -1938,7 +1950,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Our Singles, and How Thin It Is</div>
   <div class="sub-note">Five men on the roster have ever played a singles court. Six have not, and are recorded doubles-only.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
       <tr><td class="who">Ram Chettiar</td><td class="stat">8&ndash;4</td><td class="stat">67%</td><td class="stat">52%</td><td class="stat">64%</td><td class="stat">4&ndash;1</td><td class="stat">3.54</td></tr>
@@ -1948,7 +1960,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Randy Burgess</td><td class="stat">0&ndash;1</td><td class="stat lo">0%</td><td class="stat lo">29%</td><td class="stat lo">0%</td><td class="stat">&mdash;</td><td class="stat">3.51</td></tr>
       <tr><td colspan="7" style="font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);background:#F4F6F8">Doubles-only &mdash; M. Johnson, Merritt, Jacobs, Plungkhen, Zingg, Bierman</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="readbox">
     <h4>One real singles player, one credible deputy, and then a cliff</h4>
     <p><span class="fld">Ram Chettiar</span> at 8&ndash;4 (67%) is our singles player, and he is also our best doubles player at 75%. Every time he plays S1 we lose our strongest doubles body &mdash; <span class="fld">that is the tension the whole weekend turns on.</span></p>
@@ -1957,18 +1969,18 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   </div>
 
   <div class="sub">Our Tendencies, as an Opponent Would Chart Them</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.75</td><td>strongest 4&times; &middot; weakest 2&times;</td></tr>
       <tr><td class="stat">D2</td><td class="stat">2.38</td><td>strongest 2&times; &middot; weakest 5&times;</td></tr>
       <tr><td class="stat">D3</td><td class="stat">1.88</td><td>strongest 2&times; &middot; weakest 1&times;</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">We are the only team in the field that sinks its weakest pair at D2.</span> Every opponent here loads top-down. We load top and bottom and hollow out the middle.</p>
 
   <div class="sub">Our Pairings</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Pairing</th><th>Played</th><th>Record</th><th>Courts</th></tr></thead>
     <tbody>
       <tr><td class="who">John Jacobs / Bryan Zingg</td><td class="stat">4</td><td class="stat lo">2&ndash;2</td><td class="stat">D2 &times;3, D3 &times;1</td></tr>
@@ -1982,7 +1994,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">Andrew Plungkhen / Richard Bierman</td><td class="stat">1</td><td class="stat lo">0&ndash;1</td><td class="stat">D2 &times;1</td></tr>
       <tr><td class="who">Bryan Zingg / Richard Bierman</td><td class="stat">1</td><td class="stat">1&ndash;0</td><td class="stat">D3 &times;1</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">Our most-used pair is our least productive:</span> Jacobs / Zingg, four matches, 2&ndash;2. Five different pairs are 2&ndash;0. There is no settled top partnership &mdash; Burgess has been 2&ndash;0 with Chettiar and 2&ndash;0 with Merritt.</p>
 
   <div class="warnbox">
@@ -2000,7 +2012,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <p><span class="fld">Saturday is a two-match day.</span> A singles player there gives up his second match &mdash; so one singles court costs two doubles appearances. Spending Chettiar on Saturday singles buys one court and removes our 75% doubles player from the other match entirely.</p>
     <p>So: <span class="fld">Chettiar at S1 on Friday and Sunday</span>, not because those are the best matchups but because those are the two days where his singles is free.</p>
   </div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>When</th><th>Their likely S1</th><th>Broad</th><th>Match win</th><th>Game win</th><th>At 40+ 3.5</th><th>Verdict</th></tr></thead>
     <tbody>
       <tr><td class="stat">Sun 8:15a</td><td class="who">Hernandez (NE)</td><td class="stat">14&ndash;2</td><td class="stat">88%</td><td class="stat">71%</td><td class="stat">4&ndash;2</td><td class="lo">Hardest in the field</td></tr>
@@ -2009,7 +2021,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">Fri 11:30a</td><td class="who">Hutchison (IA)</td><td class="stat">6&ndash;5</td><td class="stat">55%</td><td class="stat">51%</td><td class="stat">4&ndash;1</td><td class="opp">Our best chance</td></tr>
       <tr><td class="stat">&mdash;</td><td class="who">Chettiar (us)</td><td class="stat">8&ndash;4</td><td class="stat">67%</td><td class="stat">52%</td><td class="stat">4&ndash;1</td><td style="color:var(--steel)">for comparison</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <ul class="src" style="margin-top:8px">
     <li><span class="fld">Friday against Hutchison is our best singles matchup</span> &mdash; 67% against 55%, and Hutchison is 0&ndash;2 whenever pushed above this level.</li>
     <li><span class="fld">Sunday against Hernandez is our worst</span>, and probably lost whoever plays it. Still the right place for Chettiar, because it costs nothing to try and any alternative loses by more.</li>
@@ -2024,7 +2036,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">Friday 11:30am &middot; vs IA / Versteeg</div>
     <h3>9 available, 7 needed</h3>
     <div class="note">IA stacks cleanly top-down, so we match it.</div>
-    <table style="margin-top:5px">
+    <div class="tw"><table style="margin-top:5px">
       <thead><tr><th>Court</th><th>Ours</th><th>Pair win rate</th><th>Facing</th></tr></thead>
       <tbody>
         <tr><td class="stat">S1</td><td class="who">Ram Chettiar</td><td class="stat">&mdash;</td><td>Hutchison &mdash; 55%</td></tr>
@@ -2033,7 +2045,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
         <tr><td class="stat">D3</td><td class="who">Burgess / M. Johnson</td><td class="stat">63%</td><td>their weakest</td></tr>
         <tr><td class="stat">Sitting</td><td colspan="3">Jacobs, Plungkhen</td></tr>
       </tbody>
-    </table>
+    </table></div>
     <p style="font-size:12.5px;margin-top:5px;color:var(--ink-soft)">Merritt / Bierman and Morris / Martin are both 2&ndash;0 together. Chettiar at S1 is free on a one-match day and it is our best singles matchup all weekend.</p>
   </div>
 
@@ -2041,7 +2053,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">Saturday 9:45am &middot; vs STL / Petruska</div>
     <h3>11 available &mdash; deliberately inverted</h3>
     <div class="note">Weakest pair to D3, against their sacrifice court.</div>
-    <table style="margin-top:5px">
+    <div class="tw"><table style="margin-top:5px">
       <thead><tr><th>Court</th><th>Ours</th><th>Pair win rate</th><th>Facing</th></tr></thead>
       <tbody>
         <tr><td class="stat">S1</td><td class="who">Robert Halksworth</td><td class="stat">&mdash;</td><td>Ivanov &mdash; 67%</td></tr>
@@ -2050,7 +2062,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
         <tr><td class="stat">D3</td><td class="who">Martin / Plungkhen</td><td class="stat">57%</td><td>their 25&ndash;38% group</td></tr>
         <tr><td class="stat">Sitting</td><td colspan="3">Bierman, Burgess, M. Johnson, Jacobs</td></tr>
       </tbody>
-    </table>
+    </table></div>
     <p style="font-size:12.5px;margin-top:5px;color:var(--ink-soft)">Plungkhen takes his single Saturday match here, in the morning as noted, and on the one court in the tournament where our weakest pair meets a genuinely weaker one. Halksworth's singles is his only match today.</p>
   </div>
 
@@ -2058,7 +2070,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">Saturday 1:15pm &middot; vs OK / Dickason</div>
     <h3>9 available &mdash; Halksworth and Plungkhen are done for the day</h3>
     <div class="note">OK is flat, so we stack.</div>
-    <table style="margin-top:5px">
+    <div class="tw"><table style="margin-top:5px">
       <thead><tr><th>Court</th><th>Ours</th><th>Pair win rate</th><th>Facing</th></tr></thead>
       <tbody>
         <tr><td class="stat">S1</td><td class="who">Randy Burgess</td><td class="stat">&mdash;</td><td>Moore &mdash; 92%</td></tr>
@@ -2067,7 +2079,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
         <tr><td class="stat">D3</td><td class="who">Martin / Zingg</td><td class="stat">63%</td><td>&mdash;</td></tr>
         <tr><td class="stat">Sitting</td><td colspan="3">M. Johnson, Jacobs</td></tr>
       </tbody>
-    </table>
+    </table></div>
     <p style="font-size:12.5px;margin-top:5px;color:var(--ink-soft)">Bierman takes his single Saturday match here. The S1 is a concession &mdash; Moore at 92% is not a court we win, so it costs the cheapest singles-eligible body rather than a good doubles player.</p>
   </div>
 
@@ -2075,7 +2087,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="slot">Sunday 8:15am &middot; vs NE / Penland</div>
     <h3>11 available</h3>
     <div class="note">Their D1 is strong and their D2/D3 are flat.</div>
-    <table style="margin-top:5px">
+    <div class="tw"><table style="margin-top:5px">
       <thead><tr><th>Court</th><th>Ours</th><th>Pair win rate</th><th>Facing</th></tr></thead>
       <tbody>
         <tr><td class="stat">S1</td><td class="who">Ram Chettiar</td><td class="stat">&mdash;</td><td>Hernandez &mdash; 88%</td></tr>
@@ -2084,7 +2096,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
         <tr><td class="stat">D3</td><td class="who">Martin / Halksworth</td><td class="stat">64%</td><td>&mdash;</td></tr>
         <tr><td class="stat">Sitting</td><td colspan="3">Zingg, M. Johnson, Jacobs, Plungkhen</td></tr>
       </tbody>
-    </table>
+    </table></div>
     <p style="font-size:12.5px;margin-top:5px;color:var(--ink-soft)">If you learn on the morning that Acker and Vasholz are paired, that court is likely gone &mdash; drop D1 to the third pair and load D2 and D3 instead, since their bottom two are interchangeable anyway.</p>
   </div>
 
@@ -2126,7 +2138,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">The Field at a Glance</div>
   <div class="sub-note">Continuity is the share of a team's league court appearances played by someone actually coming to Springfield &mdash; below about 70%, you are scouting a different team. Sacrifice court is where the weakest doubles pair landed most often.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Opponent</th><th>You play them</th><th>How they stack</th><th>Continuity</th><th>Sacrifice court</th><th>Evidence</th></tr></thead>
     <tbody>
       <tr><td class="who">STL / Petruska</td><td class="stat">Sat 9:45a</td><td>Rigid top-down. Most predictable in the field.</td><td class="stat">95%</td><td class="stat">D3 &mdash; 6 of 6</td><td class="stat">6 matches</td></tr>
@@ -2135,13 +2147,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="who">OK / Dickason</td><td class="stat">Sat 1:15p</td><td>Conventional top-down, bottom two courts tied.</td><td class="stat lo">52%</td><td class="stat">D3/D4 &mdash; 4 each</td><td class="stat">10 matches</td></tr>
       <tr><td class="who">HOA &mdash; us</td><td class="stat">&mdash;</td><td>We sink our weakest pair at D2, not D3.</td><td class="stat">88%</td><td class="stat">D2 &mdash; 5 of 8</td><td class="stat">8 matches</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">Continuity counts court appearances, not players. OK played 10 league matches &mdash; the largest sample in the field &mdash; and it is the least useful, because barely half was played by people who are coming.</div>
 
   <div class="sub">IA / Versteeg &mdash; Friday 11:30am</div>
   <div class="sub-note">9 traveling &middot; 6 matches on file &middot; 54% continuity. Textbook top-down, but you are scouting a ghost.</div>
   <p style="font-size:13px;margin-top:8px">Strength falls off cleanly court by court. The problem is that <span class="fld">46% of their league court time</span> was played by people not on the Sectionals roster, including their most-used partnerships. <span class="fld">Trust the shape of their lineup; do not trust the names in it.</span></p>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank of 4</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.67</td><td>strongest 3&times;</td></tr>
@@ -2149,21 +2161,21 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td class="stat">2.83</td><td></td></tr>
       <tr><td class="stat">D4</td><td class="stat">3.50</td><td>weakest 4&times; &mdash; does not exist at Sectionals</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="pairs"><b>Pairings:</b> 2&times; <span class="gone">Krishnan/Versteeg</span> &middot; 2&times; <span class="gone">Micka/Krishnan</span> &middot; 2&times; <span class="gone">Karrmann/Wilker</span> &middot; 1&times; Micka/Wilker (D2) &middot; 1&times; Johnson/Versteeg (D1) &middot; 1&times; Johnson/Stahly (D1) &middot; 1&times; Davidson/Gabrilson (D3) &middot; 1&times; Davidson/Widder (D3)</div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">No traveling pair has played together more than once.</span> Every repeat partnership involves someone staying home &mdash; 20 distinct partnerships across 24 doubles courts. Expect improvised pairings and the seams that come with them, especially in a Friday-morning first match.</p>
 
   <div class="sub">STL / Petruska &mdash; Saturday 9:45am</div>
   <div class="sub-note">11 traveling &middot; 6 matches on file &middot; 95% continuity. The most predictable team in the field &mdash; and the most honest.</div>
   <p style="font-size:13px;margin-top:8px">Six matches, six times the weakest pair went to D3. <span class="fld">Not most of the time. Every time.</span> Combined with 95% continuity, this is the one opponent whose lineup you can very nearly write out in advance.</p>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank of 3</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.33</td><td>strongest 4&times;</td></tr>
       <tr><td class="stat">D2</td><td class="stat">1.67</td><td>strongest 2&times;</td></tr>
       <tr><td class="stat">D3</td><td class="stat">3.00</td><td>weakest 6 of 6</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="pairs"><b>Pairings:</b> 3&times; Petruska/Ingersoll (D1) &middot; 2&times; Taysi/Fikes (D2) &middot; 2&times; Fikes/Kamat (D2) &middot; 2&times; Holman/Kamat (D3) &middot; 2&times; Becker/Hagenbrock &middot; 1&times; Bohn/Petruska (D1) &middot; 1&times; Taysi/Ingersoll (D1) &middot; 1&times; Becker/Holman (D3)</div>
   <div class="readbox">
     <h4>The play</h4>
@@ -2176,7 +2188,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h4>Corrected &mdash; their singles is a strength, not a hole</h4>
     <p>This page originally said the opposite and was wrong. Oklahoma's league singles was carried by Scott White and Jeff Vernon, neither registered &mdash; which is why every traveler shows 0&ndash;0 on the own-schedule base. Widen to every match on file and it inverts: <span class="fld">Keith Moore is 11&ndash;1 in singles</span> and went 2&ndash;1 in singles at the 40+ 3.5 Sectionals last year. Paul Richardson went 2&ndash;0 at that same event. <span class="fld">Plan against Moore, and assume he is good.</span></p>
   </div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank of 4</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.80</td><td>strongest 6&times;</td></tr>
@@ -2184,7 +2196,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td class="stat">2.90</td><td>weakest 4&times;</td></tr>
       <tr><td class="stat">D4</td><td class="stat">3.00</td><td>weakest 4&times; &mdash; does not exist at Sectionals</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px">Their bottom two courts are effectively tied &mdash; 2.90 against 3.00 &mdash; so they do not have one designated sacrifice court, they have two roughly equal soft ones. Delete D4 and <span class="fld">their D3 firms up.</span></p>
   <div class="pairs"><b>Pairings:</b> 4&times; <span class="gone">Penn/Henry</span> &middot; 3&times; Dickason/P. Richardson (D1&times;2, D2) &middot; 3&times; Driesel/Moore (D2&times;2, D4) &middot; 3&times; <span class="gone">Henderson/Vanderveen</span> &middot; 2&times; Mitchell/Railian (D3) &middot; 2&times; Dickason/Coffey &middot; 2&times; <span class="gone">Moody/Henley</span></div>
   <p style="font-size:13px;margin-top:6px">Three real traveling partnerships survive: Dickason/Richardson at the top, Driesel/Moore in the middle, Mitchell/Railian at D3. That is six of their ten &mdash; the other four will be assembled fresh.</p>
@@ -2192,21 +2204,21 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">NE / Penland &mdash; Sunday 8:15am</div>
   <div class="sub-note">11 traveling &middot; 8 matches on file &middot; 73% continuity. Hard at D1, then genuinely flat.</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Avg rank of 3</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="stat">D1</td><td class="stat">1.38</td><td>strongest 6&times;</td></tr>
       <tr><td class="stat">D2</td><td class="stat">2.38</td><td>weakest 4&times;</td></tr>
       <tr><td class="stat">D3</td><td class="stat">2.25</td><td>weakest 3&times;</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">Their D2 is weaker than their D3</span> &mdash; on any given day their nominal third court is the stronger of the two. It is a 0.13 gap on eight matches, small enough that it would flip if one match had gone differently, so the honest read is <span class="fld">"no meaningful difference between their bottom two courts"</span> &mdash; itself worth knowing. This is the one team where court number tells you very little past D1.</p>
   <div class="pairs"><b>Pairings:</b> 2&times; Maddipati/Munjewar &middot; 2&times; Crotzer/Maddipati &middot; 2&times; <span class="gone">Vasholz/Dixon</span> &middot; 2&times; <span class="gone">Dixon/Sowl</span> &middot; 1&times; Vasholz/Hernandez (D3) &middot; 1&times; Wang/Ebert (D3) &middot; 1&times; Acker/Munjewar (D1) &middot; 1&times; Vasholz/Gardner (D2)</div>
   <p style="font-size:13px;margin-top:6px"><span class="fld">The least stable pairing pattern in the field.</span> Nineteen distinct partnerships across 24 doubles courts, not one used more than twice. <span class="fld">Penland rotates on purpose. Do not expect the pair you scouted.</span> Note he puts his two lowest-rated men, Crotzer and himself, across all three courts &mdash; rating is clearly not how he sorts a card.</p>
 
   <div class="sub">Predicted Opponent Lineups</div>
   <div class="sub-note">Conf: <span class="fld">med</span> means a real partnership was found in their record; <span class="fld">low</span> means the pair was assembled by rating because no shared history exists.</div>
-  <table style="margin-top:10px;font-size:12px">
+  <div class="tw"><table style="margin-top:10px;font-size:12px">
     <thead><tr><th>Court</th><th>IA &mdash; Fri 11:30a</th><th>STL &mdash; Sat 9:45a</th><th>OK &mdash; Sat 1:15p</th><th>NE &mdash; Sun 8:15a</th></tr></thead>
     <tbody>
       <tr><td class="stat">S1</td><td>Hutchison <span style="color:var(--steel)">med</span></td><td>Ivanov <span style="color:var(--steel)">med</span></td><td>P. Richardson <span style="color:var(--steel)">low</span></td><td>Hernandez <span style="color:var(--steel)">med</span></td></tr>
@@ -2215,7 +2227,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td>Stahly / Davidson <span style="color:var(--steel)">low 6.87</span></td><td>Hagenbrock / Becker <span style="color:var(--steel)">med 6.61 &middot; 2&times;</span></td><td>Dickason / Coffey <span style="color:var(--steel)">med 6.92 &middot; 2&times;</span></td><td>Gardner / Acker <span style="color:var(--steel)">low 6.94</span></td></tr>
       <tr><td class="stat">Held back</td><td>Widder, Gabrilson</td><td>Friess, Kamat, Bohn, Holman</td><td>Vanderveen, Jones, Moody</td><td>Wang, Ebert, Crotzer, Penland</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div class="readbox">
     <h4>Read two of these cards against the grain</h4>
@@ -2226,7 +2238,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">Our Buildable Cards</div>
   <div class="sub-note">The three strategies the builder runs over whoever is available. Friday: 9 available, 7 needed.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Strength-first</th><th>History-first</th><th>Balanced</th></tr></thead>
     <tbody>
       <tr><td class="stat">S1</td><td>Chettiar</td><td>Morris</td><td>Chettiar</td></tr>
@@ -2235,9 +2247,9 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td>Morris / Plungkhen <span style="color:var(--steel)">6.79</span></td><td>M. Johnson / Jacobs <span style="color:var(--steel)">6.90</span></td><td>Merritt / Jacobs <span style="color:var(--steel)">6.87</span></td></tr>
       <tr><td class="stat">Sitting</td><td>Martin, Bierman</td><td>Plungkhen, Martin</td><td>Martin, Bierman</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="sub-note" style="margin-top:12px">Saturday and Sunday: 11 available.</div>
-  <table style="margin-top:8px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
     <thead><tr><th>Court</th><th>Strength-first</th><th>History-first</th><th>Balanced</th></tr></thead>
     <tbody>
       <tr><td class="stat">S1</td><td>Chettiar</td><td>Morris</td><td>Chettiar</td></tr>
@@ -2246,7 +2258,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">D3</td><td>Jacobs / Morris <span style="color:var(--steel)">6.84</span></td><td>Merritt / Bierman <span style="color:var(--steel)">6.73 &middot; 2&times;</span></td><td>Halksworth / Jacobs <span style="color:var(--steel)">6.91</span></td></tr>
       <tr><td class="stat">Sitting</td><td>Plungkhen, Zingg, Martin, Bierman</td><td>Plungkhen, Martin, M. Johnson, Halksworth</td><td>Plungkhen, Zingg, Martin, Bierman</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="srcline">Saturday and Sunday produce identical cards because the same eleven are available both days. That is a fact about the input, not a recommendation to field the same seven three times.</div>
 
   <div class="warnbox">
@@ -2271,7 +2283,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
   <div class="sub">You Have Already Played Three of Them</div>
   <div class="sub-note">Last year's Sectionals, Aug 22&ndash;23 2025. The only direct evidence in the file, and worth more per match than anything derived above. Greyed opponent names are not on this year's travel roster.</div>
-  <table style="margin-top:10px;font-size:12.5px">
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Date</th><th>Court</th><th>Result</th><th>Ours</th><th>Theirs</th><th>Opp</th><th>Winner's score</th></tr></thead>
     <tbody>
       <tr><td class="stat">08-22</td><td class="stat">D1</td><td class="opp lo">Lost</td><td>Burgess / Halksworth</td><td>Micka / Stahly</td><td class="stat">IA</td><td class="stat">6&ndash;4 6&ndash;2</td></tr>
@@ -2283,7 +2295,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td class="stat">08-23</td><td class="stat">D4</td><td class="opp">Won</td><td>Jacobs / Zingg</td><td>Vasholz / Crotzer</td><td class="stat">NE</td><td class="stat">4&ndash;6 6&ndash;0 [1&ndash;0]</td></tr>
       <tr><td class="stat">08-23</td><td class="stat">D4</td><td class="opp lo">Lost</td><td>Morris / Plungkhen</td><td>Fikes / <span style="color:var(--steel)">Hendrix</span></td><td class="stat">STL</td><td class="stat">6&ndash;3 6&ndash;0</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <div class="readbox">
     <h4>What each meeting is worth</h4>
     <p><span class="fld">IA &mdash; split 2&ndash;2.</span> Their top pair beat our top pair comfortably, and Micka and Stahly are both traveling again &mdash; the only intact opposing pair in this whole table. The two courts we won were both against partners who are not coming back.</p>
@@ -2373,7 +2385,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 <section class="page" id="directory">
   <h2 class="sec">Directory</h2>
   <div class="sec-sub">Google Places data pulled Aug 23, 2026 · travel guide p.6</div>
-  <table>
+  <div class="tw"><table>
     <thead><tr><th>Place</th><th>Address</th><th>Phone</th><th>Key hours (trip window)</th></tr></thead>
     <tbody>
       <tr><td><a href="https://lakeq.club/towneplace-suites">TownePlace Suites</a></td><td>2009 S National Ave</td><td class="t">(417) 881-8118</td><td>24 hr desk</td></tr>
@@ -2386,7 +2398,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td>Jimm's Steakhouse &amp; Pub</td><td>1935 S Glenstone Ave</td><td class="t">(417) 886-5466</td><td>Fri 11a–10p</td></tr>
       <tr><td>Sidebar Springfield</td><td>1111 E Republic Rd</td><td class="t">(417) 530-2308</td><td>Sat 11a–1:30a</td></tr>
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 <!-- ================= TOURNAMENT LINKS + CONTACT ================= -->
@@ -2522,6 +2534,35 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     if (input.value.length === 4) attempt();
   });
   if (gate) input.focus();
+})();
+</script>
+
+<script>
+// The TOC bar is position:sticky;top:0, so an anchor jump lands the heading
+// underneath it — reported from a phone, where the bar wraps to three rows and
+// swallows 112px. scroll-padding-top fixes it, but the right value is the bar's
+// measured height: it wraps at widths we cannot enumerate, so a fixed number is
+// wrong at most of them. The CSS carries fallbacks for the no-JS case.
+(function () {
+  var nav = document.querySelector("nav.toc-bar");
+  if (!nav) return;
+  var set = function () {
+    var h = nav.offsetHeight;
+    // A zero reading must never overwrite the CSS fallback. The bar sits INSIDE
+    // .book, which `body.locked` hides, so at load time behind the access gate
+    // it measures 0 — an earlier version of this wrote "12px" and left it there.
+    if (h > 0) document.documentElement.style.scrollPaddingTop = (h + 12) + "px";
+  };
+  set();
+  window.addEventListener("resize", set);
+  window.addEventListener("orientationchange", set);
+  // Recompute in the capture phase of any in-page link click. That is the only
+  // moment the value is actually consumed, so measuring there is correct even
+  // if every earlier attempt read zero. Capture, so it lands before the jump.
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    if (t && t.closest && t.closest('a[href^="#"]')) set();
+  }, true);
 })();
 </script>
 
