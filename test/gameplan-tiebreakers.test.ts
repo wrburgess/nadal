@@ -77,6 +77,22 @@ function plainText(fragment: string): string {
   return fragment.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 }
 
+// The standings ladder's rows, selected structurally rather than by searching the section's text.
+// A substring search over the whole section is satisfied by the literal appearing ANYWHERE in it —
+// a duplicate row, a stale copy, an HTML comment — while the row a reader actually sees says
+// something else. That was the second contractor finding on PR #201, against the first repair of
+// the assertion below.
+function standingsRows(html: string): string[] {
+  const section = tiebreakerSection(html);
+  const standings = section.slice(0, section.indexOf("Match Tiebreakers"));
+  const body = /<tbody>([\s\S]*?)<\/tbody>/.exec(standings)?.[1];
+  expect(body, "the standings ladder must have a <tbody>").toBeDefined();
+  return [...(body ?? "").matchAll(/<tr>([\s\S]*?)<\/tr>/g)]
+    .map((m) => m[1])
+    .filter((cells): cells is string => cells !== undefined)
+    .map((cells) => cells.trim());
+}
+
 // A ladder step named in the ladder's OWN vocabulary. Ordinary tennis prose about sets and games
 // does not match these — "fewest games" and "game win %" are the list's phrasing, not a report's.
 // Checked against the live document when this was written: The Springfield Five contained exactly
@@ -161,14 +177,16 @@ describe("the game plan states each tiebreaker ladder exactly once", () => {
   // page now reproduces the step and says nothing about the branch it does not cover. That is a
   // deliberate editorial choice, recorded in docs/findings.md rather than re-litigated here; what
   // survives is the guard that matters either way, that the wording stays the tournament's.
-  // "Exactly" is enforced against the whole cell, not against the sentence appearing somewhere in
-  // the section — a contractor read the first draft of this test and pointed out that a `toContain`
-  // on the sentence alone passes a row with extra wording bolted on either side, which is the
-  // failure mode the gloss's removal makes newly available. Pinning the closing `</td>` is what
-  // makes the title true.
+  // "Exactly" means the row a reader sees, and it took two contractor rounds to make the assertion
+  // say that. Round 1: a `toContain` on the sentence alone passes a row with extra wording bolted
+  // on either side. Round 2: pinning the full cell as a substring is still a search of the whole
+  // section, so a duplicate or commented-out copy of the correct row satisfies it while the live
+  // one drifts. Selecting row 2 out of the ladder's `<tbody>` and comparing the whole row is what
+  // finally matches the title.
   it("keeps step 2's wording exactly as the tournament issued it", () => {
-    const standings = tiebreakerSection(gamePlan());
-    expect(standings, "step 2's row must be the tournament's wording and nothing else").toContain(
+    const two = standingsRows(gamePlan()).filter((r) => r.startsWith('<td class="stat">2</td>'));
+    expect(two, "the standings ladder must have exactly one row 2").toHaveLength(1);
+    expect(two[0], "step 2's row must be the tournament's wording and nothing else").toBe(
       '<td class="stat">2</td><td><span class="fld">Head-to-head.</span> ' +
         "Winner of the head-to-head match, if all tied teams play each other.</td>",
     );
