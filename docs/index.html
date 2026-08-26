@@ -2563,6 +2563,51 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     var t = e.target;
     if (t && t.closest && t.closest('a[href^="#"]')) set();
   }, true);
+
+  // A deep link — /#schedule shared or bookmarked — never reaches its section
+  // when it opens behind the access gate. The target has no box while .book is
+  // display:none, so the browser's fragment scroll is a silent no-op, and
+  // unlocking reveals the book without retrying it. Measured before this fix:
+  // the reader lands at scrollY 0 with #schedule 2074px below, looking at the
+  // cover. Re-apply the fragment once the book is actually visible.
+  var applyHash = function () {
+    if (!window.location.hash) return;
+    var target;
+    try {
+      target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    } catch (err) {
+      return; // a malformed escape in the fragment is not worth throwing over
+    }
+    if (!target || target.offsetParent === null) return;
+    set();
+    // Deliberately NOT scrollIntoView(): with no explicit behavior it defers to
+    // `html{scroll-behavior:smooth}`, and a smooth scroll started at this moment
+    // is silently cancelled — measured, the page stayed at scrollY 0 with the
+    // target 2074px away. Computing the offset and jumping is deterministic, and
+    // a jump is what a fragment navigation should do anyway.
+    var y = target.getBoundingClientRect().top + (window.pageYOffset || 0) - (nav.offsetHeight + 12);
+    if (y < 0) y = 0;
+    // `behavior:"instant"` is required, not stylistic: every scroll that defers
+    // to the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() —
+    // was measured being cancelled outright here, leaving scrollY at 0. The
+    // fallback is for browsers that reject the enum value.
+    try {
+      window.scrollTo({ top: y, behavior: "instant" });
+    } catch (err) {
+      window.scrollTo(0, y);
+    }
+  };
+  if (document.body.classList.contains("locked") && window.MutationObserver) {
+    var mo = new MutationObserver(function () {
+      if (!document.body.classList.contains("locked")) {
+        mo.disconnect();
+        applyHash();
+      }
+    });
+    mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  } else {
+    applyHash();
+  }
 })();
 </script>
 
