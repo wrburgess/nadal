@@ -2588,10 +2588,17 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
 <script>
 // The TOC bar is position:sticky;top:0, so an anchor jump lands the heading
-// underneath it — reported from a phone, where the bar wraps to three rows and
-// swallows 112px. scroll-padding-top fixes it, but the right value is the bar's
-// measured height: it wraps at widths we cannot enumerate, so a fixed number is
-// wrong at most of them. The CSS carries fallbacks for the no-JS case.
+// underneath it — reported from a phone, where the bar wraps and swallows the
+// top of the page. scroll-padding-top fixes it, but the right value is the
+// bar's MEASURED height: it wraps at widths we cannot enumerate, so a fixed
+// number is wrong at most of them.
+//
+// Deliberately no pixel figure here. This comment used to carry one, and
+// adding a single nav link invalidated it — leaving two comments in this file
+// disagreeing about the same number, which a review caught rather than a
+// reader. The measured heights live in exactly one place: beside the CSS
+// fallbacks they explain, which are the only path that cannot measure and so
+// the only place a constant belongs.
 (function () {
   var nav = document.querySelector("nav.toc-bar");
   if (!nav) return;
