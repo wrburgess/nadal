@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="googlebot" content="noindex, nofollow">
+<title>Scouting Reports — Springfield 2026</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+<div class="book">
+
+<nav class="toc-bar" aria-label="Sections">
+  <a href="../index.html">&larr; Game Plan</a>
+  <a href="index.html" aria-current="page">Reports</a>
+  <a href="iowa-versteeg.html">Iowa</a>
+  <a href="st-louis-petruska.html">St. Louis</a>
+  <a href="oklahoma-dickason.html">Oklahoma</a>
+  <a href="nebraska-penland.html">Nebraska</a>
+  <a href="../index.html#scout-hoa">Ourselves</a>
+</nav>
+
+<section class="page" id="reports">
+  <div class="card-head">
+    <div class="eyebrow">Springfield 2026 &middot; Opponent Reports</div>
+    <h2>Scouting Reports</h2>
+    <div class="when">The four opponents, one page each &mdash; the long form behind the match cards</div>
+  </div>
+  <p style="font-size:13.5px;margin-top:12px">These four lived inside the <a href="../index.html">Game Plan</a> until the book got too long to carry them. Nothing in them changed; they were lifted whole. The match card for each tie &mdash; the lineup, the bench, the history &mdash; is still in the book.</p>
+
+  <div class="toc" style="margin-top:18px">
+    <div class="toc-group">
+      <a class="toc-row" href="iowa-versteeg.html"><span class="toc-t">Iowa / Versteeg</span><span class="toc-note">&mdash; Fri 11:30 AM &middot; seed 2 &middot; continuity 54%</span><span class="toc-dots"></span><span class="toc-pg">1 of 5</span></a>
+      <a class="toc-row" href="st-louis-petruska.html"><span class="toc-t">St. Louis / Petruska</span><span class="toc-note">&mdash; Sat 9:45 AM &middot; seed 5 &middot; continuity 95%</span><span class="toc-dots"></span><span class="toc-pg">2 of 5</span></a>
+      <a class="toc-row" href="oklahoma-dickason.html"><span class="toc-t">Oklahoma / Dickason</span><span class="toc-note">&mdash; Sat 1:15 PM &middot; seed 1 &middot; continuity 52%</span><span class="toc-dots"></span><span class="toc-pg">3 of 5</span></a>
+      <a class="toc-row" href="nebraska-penland.html"><span class="toc-t">Nebraska / Penland</span><span class="toc-note">&mdash; Sun 8:15 AM &middot; seed 3 &middot; continuity 73%</span><span class="toc-dots"></span><span class="toc-pg">4 of 5</span></a>
+      <a class="toc-row" href="../index.html#scout-hoa"><span class="toc-t">Ourselves &mdash; HOA / Burgess-Zingg</span><span class="toc-note">&mdash; the self-scout, still in the book</span><span class="toc-dots"></span><span class="toc-pg">5 of 5</span></a>
+    </div>
+  </div>
+
+  <div class="srcline" style="margin-top:18px">Built Aug 20, 2026, from every non-Mixed court on file for each traveling roster. Same access code as the book.</div>
+</section>
+
+</div>
+<div id="gate">
+  <div class="box">
+    <div class="mark">USTA Missouri Valley &middot; 40 &amp; Over 3.5</div>
+    <h1>Springfield<br>Game Plan</h1>
+    <div class="rule"></div>
+    <p>Team access only. Enter the four-digit code.</p>
+    <input id="code" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4"
+           autocomplete="off" aria-label="Four-digit access code">
+    <button id="go" type="button">Open</button>
+    <div class="err" id="err" role="status" aria-live="polite"></div>
+    <div class="foot">HOA / Burgess-Zingg<br>Aug 27&ndash;30, 2026</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var CODE = "4035";
+  var KEY = "sgp-unlocked";
+  var gate = document.getElementById("gate");
+  var input = document.getElementById("code");
+  var err = document.getElementById("err");
+
+  function unlock() {
+    document.body.classList.remove("locked");
+    if (gate && gate.parentNode) gate.parentNode.removeChild(gate);
+    try { sessionStorage.setItem(KEY, "1"); } catch (e) {}
+  }
+  function attempt() {
+    if (input.value.trim() === CODE) { unlock(); }
+    else {
+      err.textContent = "Not that one — try again.";
+      input.value = "";
+      input.focus();
+    }
+  }
+
+  document.body.classList.add("locked");
+  try { if (sessionStorage.getItem(KEY) === "1") unlock(); } catch (e) {}
+
+  document.getElementById("go").addEventListener("click", attempt);
+  input.addEventListener("keydown", function (e) { if (e.key === "Enter") attempt(); });
+  input.addEventListener("input", function () {
+    err.textContent = "";
+    if (input.value.length === 4) attempt();
+  });
+  if (gate) input.focus();
+})();
+</script>
+
+</body>
+</html>

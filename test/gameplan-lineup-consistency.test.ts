@@ -100,26 +100,34 @@ export function parseSummary(html: string): Lineup[] {
 }
 
 /**
- * The four match cards. Each court block is `<div class="court">`, a `<div class="slot">`
- * naming the court, then an `<h3>` naming our side.
- *
- * The slot div is why this is not a two-line regex: a first version assumed the h3
- * followed the court div directly and returned SIXTEEN EMPTY CELLS — a uniform total
- * failure, which is a broken probe rather than a finding. Hence `expectedCourts`.
+ * The four match cards, sliced out in playing order. Shared by every reader below —
+ * a second copy of "where does card N start and end" is the same duplication this
+ * file exists to catch, one level up.
  */
-export function parseCards(html: string): Lineup[] {
+export function cardSlices(html: string): { id: string; html: string }[] {
   const ids = ["card-ia", "card-stl", "card-ok", "card-ne"];
   const starts = ids.map((id) => {
     const at = html.indexOf(`id="${id}"`);
     if (at === -1) throw new Error(`match card ${id} not found`);
     return { id, at };
   }).sort((a, b) => a.at - b.at);
+  return starts.map(({ id, at }, n) => ({
+    id,
+    html: html.slice(at, n + 1 < starts.length ? starts[n + 1]!.at : html.length),
+  }));
+}
 
+/**
+ * The four match cards. Each court block is `<div class="court">`, a `<div class="slot">`
+ * naming the court, then an `<h3>` naming our side.
+ *
+ * The slot div is why this is not a two-line regex: a first version assumed the h3
+ * followed the court div directly and returned SIXTEEN EMPTY CELLS — a uniform total
+ * failure, which is a broken probe rather than a finding. Hence the block count check.
+ */
+export function parseCards(html: string): Lineup[] {
   const out: Lineup[] = [];
-  starts.forEach(({ id }, n) => {
-    const from = starts[n]!.at;
-    const to = n + 1 < starts.length ? starts[n + 1]!.at : html.length;
-    const section = html.slice(from, to);
+  cardSlices(html).forEach(({ id, html: section }, n) => {
     const blocks = [
       ...section.matchAll(/<div class="court">\s*<div class="slot">(.*?)<\/div>\s*<h3>(.*?)<\/h3>/gs),
     ];
@@ -133,6 +141,92 @@ export function parseCards(html: string): Lineup[] {
   });
   return out;
 }
+
+/**
+ * The FIFTH row of the self-scout's summary table: who is next man up in each match.
+ * Same table, same duplication, one row lower — and the row the lineup guard above
+ * was never looking at.
+ */
+export function parseSummaryNextManUp(html: string): string[] {
+  const at = html.indexOf('<div class="sub">The Four Cards</div>');
+  if (at === -1) throw new Error("self-scout summary not found: the 'The Four Cards' heading is gone");
+  const table = html.slice(at, html.indexOf("</table>", at));
+  const row = /<tr><td class="stat">Next man up<\/td>(.*?)<\/tr>/s.exec(table);
+  if (!row) throw new Error("the summary's 'Next man up' row is gone");
+  const cells = [...row[1]!.matchAll(/<td>(.*?)<\/td>/gs)].map((c) => c[1]!);
+  if (cells.length !== 4) {
+    throw new Error(`the 'Next man up' row has ${cells.length} match columns, expected 4`);
+  }
+  return cells.map((c, i) => {
+    const men = surnamesIn(c);
+    if (men.length !== 1) {
+      throw new Error(`summary next-man-up for match ${i} named [${men}], expected exactly one man`);
+    }
+    return men[0]!;
+  });
+}
+
+/**
+ * The other copy: each match card's `<div class="bench">` list, whose `next man up`
+ * entry says the same thing in prose. Exactly one entry per card must carry the
+ * phrase — zero means the copy is gone rather than agreeing, two means the card
+ * contradicts itself.
+ */
+export function parseCardNextManUp(html: string): string[] {
+  return cardSlices(html).map(({ id, html: section }) => {
+    const bench = /<div class="bench">(.*?)<\/ul>/s.exec(section);
+    if (!bench) throw new Error(`card ${id} has no bench block`);
+    const hits = [...bench[1]!.matchAll(/<li>(.*?)<\/li>/gs)]
+      .map((m) => m[1]!)
+      .filter((li) => /next man up/i.test(li.replace(/<[^>]+>/g, " ")));
+    if (hits.length !== 1) {
+      throw new Error(`card ${id} has ${hits.length} bench entries reading "next man up", expected 1`);
+    }
+    const men = surnamesIn(hits[0]!);
+    if (men.length !== 1) {
+      throw new Error(`card ${id}'s next-man-up entry named [${men}], expected exactly one man`);
+    }
+    return men[0]!;
+  });
+}
+
+describe("the self-scout's next-man-up row and the cards' bench blocks must agree", () => {
+  /**
+   * Found stale on 2026-08-26: the summary row read Plungkhen / M. Johnson / Bierman /
+   * Zingg and the four bench blocks read Plungkhen / Merritt / Morris / Burgess —
+   * THREE OF FOUR wrong, and wrong in the direction that puts a man on court who is
+   * not on the card. Exactly the ISS#191 shape one row below where the lineup guard
+   * was looking, which is the argument for checking the whole table rather than the
+   * rows that drifted last time.
+   */
+  it("names one man per match in each copy — a probe that finds nobody must not read as agreement", () => {
+    const html = readFileSync(BOOK, "utf8");
+    expect(parseSummaryNextManUp(html)).toHaveLength(4);
+    expect(parseCardNextManUp(html)).toHaveLength(4);
+  });
+
+  it("the summary row and the four bench blocks name the same man in every match", () => {
+    const html = readFileSync(BOOK, "utf8");
+    const summary = parseSummaryNextManUp(html);
+    const cards = parseCardNextManUp(html);
+    const disagreements = summary
+      .map((s, i) => (s === cards[i] ? null : `match ${i + 1}: summary has ${s}, the card has ${cards[i]}`))
+      .filter((d): d is string => d !== null);
+    expect(
+      disagreements,
+      `The self-scout's "Next man up" row and the match cards' bench blocks disagree. ` +
+        `Two hand-authored copies of one fact; whichever you just edited, edit the other.\n` +
+        disagreements.join("\n"),
+    ).toEqual([]);
+  });
+
+  it("a card that lost its next-man-up entry fails rather than passing quietly", () => {
+    const html = readFileSync(BOOK, "utf8");
+    const gutted = html.replace(/&middot; next man up/, "&middot; on the bench");
+    expect(gutted).not.toEqual(html);
+    expect(() => parseCardNextManUp(gutted)).toThrow(/has 0 bench entries reading "next man up"/);
+  });
+});
 
 describe("the game plan states each lineup twice, and the two copies must agree", () => {
   it("parses sixteen courts from each copy — a parser that finds nothing must not read as agreement", () => {
