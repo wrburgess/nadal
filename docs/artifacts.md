@@ -49,6 +49,14 @@ These carry **no WTN column** — `Player · Record · Match win · Game win · 
 because it means the 2026-08-10 WTN rescale cannot have made them stale, a concern that was raised
 and then measured away on 2026-08-25.
 
+**The four opponent reports now also live in this repository**, at `docs/scouting/`, and are served
+alongside the book — `https://gameplan.kc.tennis/scouting/`, behind the same four-digit gate. They
+were lifted **verbatim** out of `docs/index.html` on 2026-08-26 (the book had grown to 67 printed
+pages); nothing in them was re-derived, so the Verified column above still describes them. The fifth,
+*Ourselves (HOA)*, stayed in the book. Those pages share `docs/scouting/report.css`, which is a
+**copy** of the book's inline `<style>` block: restyle the book and these stop matching it, and
+nothing checks that.
+
 ## Cross-field views
 
 | Artifact | URL | Verified |
