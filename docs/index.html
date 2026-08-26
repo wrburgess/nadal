@@ -23,9 +23,21 @@
    longer browser-cacheable across visits. For eleven readers over four days
    that trade is not close.
 
-   Latin subset only, which is complete rather than a compromise: the entire
-   non-ASCII inventory of this document is – — · nbsp × & °, every one inside
-   the unicode-range below. Nine faces, 127 KB raw.
+   Latin subset only, nine faces, 127 KB raw. That covers every TEXT glyph in
+   the document — nbsp · × ° – — • … and the ASCII range — but four symbols
+   fall outside it and render in a system font: → (U+2192), ■ (U+25A0),
+   ☀ (U+2600) and ★ (U+2605).
+
+   That is unchanged from the Google-hosted version, whose latin subset declared
+   the identical unicode-range, and it is not worth a wider subset: these are
+   symbol glyphs that Barlow and IBM Plex Mono would fall back on regardless.
+
+   Stated precisely because an earlier draft of this comment called the
+   inventory "complete", on the strength of a grep that reported ONE non-ASCII
+   character in a 660 KB document full of dashes and degree signs. A uniform
+   result that implausible is a broken probe, not a clean bill of health — the
+   contractor review found all four of these. Anything added to this document
+   that is not plain text needs re-checking against the range below.
 
    To regenerate: fetch the css2 URL for these three families with a modern
    user-agent, take the `/* latin *​/` blocks, and replace each `src` URL with
@@ -82,11 +94,17 @@ body.locked .book{display:none}
   --mono:"IBM Plex Mono",Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-/* Anchor targets must clear the sticky nav, which wraps to 3 rows on a phone
-   (112px at 390px wide) and 1 row on desktop. The JS at the foot of the file
-   measures it and overrides these; these are the fallbacks if it never runs. */
-html{scroll-behavior:smooth;scroll-padding-top:124px}
-@media (min-width:900px){html{scroll-padding-top:60px}}
+/* Anchor targets must clear the sticky nav. Its height is NOT a constant — the
+   bar wraps, and adding the Cover link moved every one of these numbers, which
+   is the argument for measuring rather than hardcoding. Measured, 16 links:
+
+       <=390px  144px (4 rows)     414px  112px (3 rows)     >=600px  79px (2)
+
+   The JS at the foot of the file measures the live value and overrides these.
+   These are the fallbacks for the no-JS case, set from the table above; erring
+   large is safe (a wider gap), erring small hides the heading. */
+html{scroll-behavior:smooth;scroll-padding-top:156px}
+@media (min-width:600px){html{scroll-padding-top:91px}}
 body{font-family:var(--body);color:var(--ink);background:#E4E7EB;line-height:1.5;font-size:15px}
 
 /* ============ SCREEN CHROME ============ */
@@ -348,6 +366,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 <div class="print-hint">Team copy — not for circulation outside the roster. To save a PDF: Print → Destination "Save as PDF", Letter, background graphics ON.</div>
 
 <nav class="toc-bar" aria-label="Sections">
+  <a href="#cover">Cover</a>
   <a href="#toc">Contents</a>
   <a href="#schedule">Schedule</a>
   <a href="#carpool">Carpool</a>
