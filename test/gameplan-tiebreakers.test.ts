@@ -77,6 +77,22 @@ function plainText(fragment: string): string {
   return fragment.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 }
 
+// The standings ladder's rows, selected structurally rather than by searching the section's text.
+// A substring search over the whole section is satisfied by the literal appearing ANYWHERE in it —
+// a duplicate row, a stale copy, an HTML comment — while the row a reader actually sees says
+// something else. That was the second contractor finding on PR #201, against the first repair of
+// the assertion below.
+function standingsRows(html: string): string[] {
+  const section = tiebreakerSection(html);
+  const standings = section.slice(0, section.indexOf("Match Tiebreakers"));
+  const body = /<tbody>([\s\S]*?)<\/tbody>/.exec(standings)?.[1];
+  expect(body, "the standings ladder must have a <tbody>").toBeDefined();
+  return [...(body ?? "").matchAll(/<tr>([\s\S]*?)<\/tr>/g)]
+    .map((m) => m[1])
+    .filter((cells): cells is string => cells !== undefined)
+    .map((cells) => cells.trim());
+}
+
 // A ladder step named in the ladder's OWN vocabulary. Ordinary tennis prose about sets and games
 // does not match these — "fewest games" and "game win %" are the list's phrasing, not a report's.
 // Checked against the live document when this was written: The Springfield Five contained exactly
@@ -152,18 +168,27 @@ describe("the game plan states each tiebreaker ladder exactly once", () => {
 
   // The tournament's step 2 reads "winner of head-to-head match if all teams play each other",
   // which is reproduced verbatim — adding a condition it does not contain would be inventing a
-  // rule. But that wording names no winner in a circular three-way result (A beat B, B beat C, C
-  // beat A), while reading as though the step resolves the tie. A contractor review caught the
-  // gap. The page states the branch instead of closing it, and this pins that statement so it
-  // cannot be dropped or inverted into "this step always resolves the tie".
-  it("says out loud that step 2 can separate nobody", () => {
-    const standings = tiebreakerSection(gamePlan());
-    expect(standings, "step 2's wording must stay the tournament's").toContain(
-      "Winner of the head-to-head match, if all tied teams play each other.",
-    );
-    expect(standings, "the no-winner branch must be stated").toMatch(/names no winner/i);
-    expect(standings, "and its consequence — fall through, do not stop").toMatch(
-      /next line decides/i,
+  // rule, and that is what this pins.
+  //
+  // Issue #190 also had the page gloss the wording, because it names no winner in a circular
+  // three-way result (A beat B, B beat C, C beat A) while reading as though the step resolves the
+  // tie; that gloss was pinned here too. **The HC removed the gloss in #200** — one of four prose
+  // blocks cut from the book in that pass — so the two assertions that required it are gone. The
+  // page now reproduces the step and says nothing about the branch it does not cover. That is a
+  // deliberate editorial choice, recorded in docs/findings.md rather than re-litigated here; what
+  // survives is the guard that matters either way, that the wording stays the tournament's.
+  // "Exactly" means the row a reader sees, and it took two contractor rounds to make the assertion
+  // say that. Round 1: a `toContain` on the sentence alone passes a row with extra wording bolted
+  // on either side. Round 2: pinning the full cell as a substring is still a search of the whole
+  // section, so a duplicate or commented-out copy of the correct row satisfies it while the live
+  // one drifts. Selecting row 2 out of the ladder's `<tbody>` and comparing the whole row is what
+  // finally matches the title.
+  it("keeps step 2's wording exactly as the tournament issued it", () => {
+    const two = standingsRows(gamePlan()).filter((r) => r.startsWith('<td class="stat">2</td>'));
+    expect(two, "the standings ladder must have exactly one row 2").toHaveLength(1);
+    expect(two[0], "step 2's row must be the tournament's wording and nothing else").toBe(
+      '<td class="stat">2</td><td><span class="fld">Head-to-head.</span> ' +
+        "Winner of the head-to-head match, if all tied teams play each other.</td>",
     );
   });
 
