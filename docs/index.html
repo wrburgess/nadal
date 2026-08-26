@@ -96,15 +96,25 @@ body.locked .book{display:none}
 *{box-sizing:border-box;margin:0;padding:0}
 /* Anchor targets must clear the sticky nav. Its height is NOT a constant — the
    bar wraps, and adding the Cover link moved every one of these numbers, which
-   is the argument for measuring rather than hardcoding. Measured, 16 links:
+   is the argument for measuring rather than hardcoding. Adding Practice, Rules
+   and Tiebreakers moved them again — 16 links became 19, and BOTH values below
+   had to grow. Re-measured at 19 links, in a real viewport of each width:
 
-       <=390px  144px (4 rows)     414px  112px (3 rows)     >=600px  79px (2)
+       320-360px  177px (5 rows)     375-430px  144px (4 rows)
+       480-640px  112px (3 rows)     >=700px     79px (2 rows)
+
+   Each fallback is the worst case in the range it covers, plus the 12px the JS
+   adds: 177+12 below 600, 112+12 at or above it. The >=600 value is generous
+   above 700px on purpose — erring large is safe (a wider gap), erring small
+   hides the heading, and one constant per range beats four that a new nav link
+   would invalidate. Do not measure these with headless Chrome's --window-size:
+   it clamps to a 500px minimum and reports one identical answer for every phone
+   width asked for. Measure inside an iframe of the width you mean.
 
    The JS at the foot of the file measures the live value and overrides these.
-   These are the fallbacks for the no-JS case, set from the table above; erring
-   large is safe (a wider gap), erring small hides the heading. */
-html{scroll-behavior:smooth;scroll-padding-top:156px}
-@media (min-width:600px){html{scroll-padding-top:91px}}
+   These are the fallbacks for the no-JS case only. */
+html{scroll-behavior:smooth;scroll-padding-top:189px}
+@media (min-width:600px){html{scroll-padding-top:124px}}
 body{font-family:var(--body);color:var(--ink);background:#E4E7EB;line-height:1.5;font-size:15px}
 
 /* ============ SCREEN CHROME ============ */
@@ -148,11 +158,23 @@ h2.sec::after{content:"";position:absolute;left:0;bottom:-9px;width:64px;height:
 
 /* ============ TABLES ============ */
 /* Every table sits in a .tw wrapper. The table keeps width:100% so it fills
-   when it fits; when its min-content width exceeds the page — 44 of 67 do on a
-   390px phone, the widest needing 626px against 358px — the wrapper scrolls
+   when it fits; when its min-content width exceeds the page — 48 of 68 do on a
+   390px phone, the widest needing 626px against 354px — the wrapper scrolls
    instead of the whole document. Wrapping rather than setting display:block on
    the table is deliberate: display:block makes tables that DO fit shrink to
-   content width, which regresses the 23 narrow ones. */
+   content width, which regresses the 20 narrow ones.
+
+   Figures re-measured 2026-08-25 (#190) in a real 390px iframe viewport,
+   counting .tw wrappers whose scrollWidth exceeds their clientWidth. The two
+   Tiebreakers tables both fit, so this change moved the denominator and not the
+   count: 48 of 67 before it, 48 of 68 after.
+
+   The figure here previously read 44 of 67. That count could not be reproduced
+   at 390px by this pass — on the very commit that wrote it, this probe returns
+   48, and 44 is what it returns at 430px. The two probes disagree by four
+   tables and the reason is not established; it is in the findings log for
+   triage rather than silently overwritten as an error, and the argument for the
+   wrapper does not turn on which is right. */
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
 @media print{.tw{overflow:visible}}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -371,6 +393,9 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   <a href="#schedule">Schedule</a>
   <a href="#carpool">Carpool</a>
   <a href="#weather">Weather</a>
+  <a href="#practice">Practice</a>
+  <a href="#rules">Rules</a>
+  <a href="#tiebreakers">Tiebreakers</a>
   <a href="#thu">Thu</a>
   <a href="#fri">Fri</a>
   <a href="#sat">Sat</a>
@@ -407,51 +432,54 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v3.1 &middot; Aug 25, 2026 &middot; 67 pages &middot; complete &mdash; all cards, all five scouting reports, and both cross-field views</div>
+  <div class="foot">v3.2 &middot; Aug 25, 2026 &middot; 70 pages &middot; complete &mdash; practice courts, match rules, both tiebreaker ladders, all cards, all five scouting reports, and both cross-field views</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
 <section class="page" id="toc">
   <h2 class="sec">Contents</h2>
-  <div class="sec-sub">Springfield Game Plan · v3.1 · Aug 25, 2026</div>
+  <div class="sec-sub">Springfield Game Plan · v3.2 · Aug 25, 2026</div>
   <div class="toc">
 
     <div class="toc-group"><h3>Plan</h3>
       <a class="toc-row" href="#schedule"><span class="toc-t">Match Schedule &amp; Drive Times</span><span class="toc-note">— all four ties, leg-by-leg mileage</span><span class="toc-dots"></span><span class="toc-pg">3</span></a>
       <a class="toc-row" href="#carpool"><span class="toc-t">Carpool Plan</span><span class="toc-note">— who rides with whom</span><span class="toc-dots"></span><span class="toc-pg">4</span></a>
       <a class="toc-row" href="#weather"><span class="toc-t">Weather at Cooper</span><span class="toc-note">— actual / heat index, all four days</span><span class="toc-dots"></span><span class="toc-pg">5</span></a>
+      <a class="toc-row" href="#practice"><span class="toc-t">Practice Courts</span><span class="toc-note">— Perry and Gillenwaters, and which days each is open</span><span class="toc-dots"></span><span class="toc-pg">6</span></a>
+      <a class="toc-row" href="#rules"><span class="toc-t">Match Rules</span><span class="toc-note">— warm-up, line calls, the $5 indoor fee</span><span class="toc-dots"></span><span class="toc-pg">7</span></a>
+      <a class="toc-row" href="#tiebreakers"><span class="toc-t">Tiebreakers</span><span class="toc-note">— standings and match order, both in full</span><span class="toc-dots"></span><span class="toc-pg">8</span></a>
     </div>
 
     <div class="toc-group"><h3>Daily Itinerary</h3>
-      <a class="toc-row" href="#thu"><span class="toc-t">Thursday, Aug 27</span><span class="toc-note">— travel day · Rebar 8:00pm</span><span class="toc-dots"></span><span class="toc-pg">6</span></a>
-      <a class="toc-row" href="#fri"><span class="toc-t">Friday, Aug 28</span><span class="toc-note">— match day 1 · Jimm's 7:30pm</span><span class="toc-dots"></span><span class="toc-pg">7</span></a>
-      <a class="toc-row" href="#sat"><span class="toc-t">Saturday, Aug 29</span><span class="toc-note">— match day 2 · Sidebar 7:00pm</span><span class="toc-dots"></span><span class="toc-pg">9</span></a>
-      <a class="toc-row" href="#sun"><span class="toc-t">Sunday, Aug 30</span><span class="toc-note">— final day · drive home</span><span class="toc-dots"></span><span class="toc-pg">11</span></a>
+      <a class="toc-row" href="#thu"><span class="toc-t">Thursday, Aug 27</span><span class="toc-note">— travel day · Rebar 8:00pm</span><span class="toc-dots"></span><span class="toc-pg">10</span></a>
+      <a class="toc-row" href="#fri"><span class="toc-t">Friday, Aug 28</span><span class="toc-note">— match day 1 · Jimm's 7:30pm</span><span class="toc-dots"></span><span class="toc-pg">11</span></a>
+      <a class="toc-row" href="#sat"><span class="toc-t">Saturday, Aug 29</span><span class="toc-note">— match day 2 · Sidebar 7:00pm</span><span class="toc-dots"></span><span class="toc-pg">13</span></a>
+      <a class="toc-row" href="#sun"><span class="toc-t">Sunday, Aug 30</span><span class="toc-note">— final day · drive home</span><span class="toc-dots"></span><span class="toc-pg">15</span></a>
     </div>
 
     <div class="toc-group"><h3>The Field &amp; Match Cards</h3>
-      <a class="toc-row" href="#field"><span class="toc-t">The Springfield Five</span><span class="toc-note">&mdash; seeding, tiebreakers, how they see us</span><span class="toc-dots"></span><span class="toc-pg">12</span></a>
-      <a class="toc-row" href="#cards"><span class="toc-t">1 · vs Iowa / Versteeg</span><span class="toc-note">— Fri 11:30 AM · pp. 15–19</span><span class="toc-dots"></span><span class="toc-pg">15</span></a>
-      <a class="toc-row" href="#card-stl"><span class="toc-t">2 · vs St. Louis / Petruska</span><span class="toc-note">— Sat 9:45 AM · pp. 20–24</span><span class="toc-dots"></span><span class="toc-pg">20</span></a>
-      <a class="toc-row" href="#card-ok"><span class="toc-t">3 · vs Oklahoma / Dickason</span><span class="toc-note">— Sat 1:15 PM · pp. 25–28</span><span class="toc-dots"></span><span class="toc-pg">25</span></a>
-      <a class="toc-row" href="#card-ne"><span class="toc-t">4 · vs Nebraska / Penland</span><span class="toc-note">— Sun 8:15 AM · pp. 29–33</span><span class="toc-dots"></span><span class="toc-pg">29</span></a>
+      <a class="toc-row" href="#field"><span class="toc-t">The Springfield Five</span><span class="toc-note">&mdash; seeding, tiebreakers, how they see us</span><span class="toc-dots"></span><span class="toc-pg">16</span></a>
+      <a class="toc-row" href="#cards"><span class="toc-t">1 · vs Iowa / Versteeg</span><span class="toc-note">— Fri 11:30 AM · pp. 19–23</span><span class="toc-dots"></span><span class="toc-pg">19</span></a>
+      <a class="toc-row" href="#card-stl"><span class="toc-t">2 · vs St. Louis / Petruska</span><span class="toc-note">— Sat 9:45 AM · pp. 24–28</span><span class="toc-dots"></span><span class="toc-pg">24</span></a>
+      <a class="toc-row" href="#card-ok"><span class="toc-t">3 · vs Oklahoma / Dickason</span><span class="toc-note">— Sat 1:15 PM · pp. 29–32</span><span class="toc-dots"></span><span class="toc-pg">29</span></a>
+      <a class="toc-row" href="#card-ne"><span class="toc-t">4 · vs Nebraska / Penland</span><span class="toc-note">— Sun 8:15 AM · pp. 33–37</span><span class="toc-dots"></span><span class="toc-pg">33</span></a>
     </div>
 
     <div class="toc-group"><h3>Scouting Reports</h3>
-      <a class="toc-row" href="#scouting"><span class="toc-t">Iowa</span><span class="toc-note">— full report, pp. 34–37</span><span class="toc-dots"></span><span class="toc-pg">34</span></a>
-      <a class="toc-row" href="#scout-stl"><span class="toc-t">St. Louis</span><span class="toc-note">— full report, pp. 38–40</span><span class="toc-dots"></span><span class="toc-pg">38</span></a>
-      <a class="toc-row" href="#scout-ok"><span class="toc-t">Oklahoma</span><span class="toc-note">— full report, pp. 41–44</span><span class="toc-dots"></span><span class="toc-pg">41</span></a>
-      <a class="toc-row" href="#scout-ne"><span class="toc-t">Nebraska</span><span class="toc-note">— full report, pp. 45–48</span><span class="toc-dots"></span><span class="toc-pg">45</span></a>
-      <a class="toc-row" href="#scout-hoa"><span class="toc-t">Ourselves (HOA)</span><span class="toc-note">— self-scout + four lineup cards</span><span class="toc-dots"></span><span class="toc-pg">49</span></a>
-      <a class="toc-row" href="#boards"><span class="toc-t">Scouting Board</span><span class="toc-note">— cross-field views, pp. 56–62</span><span class="toc-dots"></span><span class="toc-pg">56</span></a>
+      <a class="toc-row" href="#scouting"><span class="toc-t">Iowa</span><span class="toc-note">— full report, pp. 38–41</span><span class="toc-dots"></span><span class="toc-pg">38</span></a>
+      <a class="toc-row" href="#scout-stl"><span class="toc-t">St. Louis</span><span class="toc-note">— full report, pp. 42–44</span><span class="toc-dots"></span><span class="toc-pg">42</span></a>
+      <a class="toc-row" href="#scout-ok"><span class="toc-t">Oklahoma</span><span class="toc-note">— full report, pp. 45–47</span><span class="toc-dots"></span><span class="toc-pg">45</span></a>
+      <a class="toc-row" href="#scout-ne"><span class="toc-t">Nebraska</span><span class="toc-note">— full report, pp. 48–51</span><span class="toc-dots"></span><span class="toc-pg">48</span></a>
+      <a class="toc-row" href="#scout-hoa"><span class="toc-t">Ourselves (HOA)</span><span class="toc-note">— self-scout + four lineup cards</span><span class="toc-dots"></span><span class="toc-pg">52</span></a>
+      <a class="toc-row" href="#boards"><span class="toc-t">Scouting Board</span><span class="toc-note">— cross-field views, pp. 59–65</span><span class="toc-dots"></span><span class="toc-pg">59</span></a>
     </div>
 
     <div class="toc-group"><h3>Reference</h3>
-      <a class="toc-row" href="#extras"><span class="toc-t">Extracurriculars — Recovery</span><span class="toc-note">— massage, cold plunge, cryo</span><span class="toc-dots"></span><span class="toc-pg">63</span></a>
-      <a class="toc-row" href="#directory"><span class="toc-t">Directory</span><span class="toc-note">— addresses, phones, hours</span><span class="toc-dots"></span><span class="toc-pg">64</span></a>
-      <a class="toc-row" href="#links"><span class="toc-t">Tournament Links &amp; Director</span><span class="toc-note">— USTA portals, Ben Coltharp</span><span class="toc-dots"></span><span class="toc-pg">65</span></a>
-      <a class="toc-row" href="#sources"><span class="toc-t">Sources</span><span class="toc-note">— where every figure came from</span><span class="toc-dots"></span><span class="toc-pg">66</span></a>
-      <a class="toc-row" href="#app"><span class="toc-t">Match Tennis Team App</span><span class="toc-note">— download links and QR codes</span><span class="toc-dots"></span><span class="toc-pg">67</span></a>
+      <a class="toc-row" href="#extras"><span class="toc-t">Extracurriculars — Recovery</span><span class="toc-note">— massage, cold plunge, cryo</span><span class="toc-dots"></span><span class="toc-pg">66</span></a>
+      <a class="toc-row" href="#directory"><span class="toc-t">Directory</span><span class="toc-note">— addresses, phones, hours</span><span class="toc-dots"></span><span class="toc-pg">67</span></a>
+      <a class="toc-row" href="#links"><span class="toc-t">Tournament Links &amp; Director</span><span class="toc-note">— USTA portals, Ben Coltharp</span><span class="toc-dots"></span><span class="toc-pg">68</span></a>
+      <a class="toc-row" href="#sources"><span class="toc-t">Sources</span><span class="toc-note">— where every figure came from</span><span class="toc-dots"></span><span class="toc-pg">69</span></a>
+      <a class="toc-row" href="#app"><span class="toc-t">Match Tennis Team App</span><span class="toc-note">— download links and QR codes</span><span class="toc-dots"></span><span class="toc-pg">70</span></a>
     </div>
 
   </div>
@@ -479,8 +507,10 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td>Downtown Overland Park → TownePlace Suites</td><td class="t">~3 hr 23 min*</td><td class="t">167.9 mi</td></tr>
       <tr><td>Downtown Overland Park → Cooper Tennis Complex</td><td class="t">~3 hr 19 min*</td><td class="t">166.6 mi</td></tr>
       <tr><td>TownePlace → Cooper Tennis Complex</td><td class="t">10 min</td><td class="t">4.2 mi</td></tr>
-      <tr><td>TownePlace → Gillenwater Tennis Complex</td><td class="t">7 min</td><td class="t">2.8 mi</td></tr>
-      <tr><td>Gillenwater → Cooper</td><td class="t">16 min</td><td class="t">7.0 mi</td></tr>
+      <tr><td>TownePlace → Perry Courts</td><td class="t">2 min</td><td class="t">0.8 mi</td></tr>
+      <tr><td>Perry Courts → Cooper</td><td class="t">8 min</td><td class="t">3.5 mi</td></tr>
+      <tr><td>TownePlace → Gillenwaters Tennis Center</td><td class="t">7 min</td><td class="t">2.8 mi</td></tr>
+      <tr><td>Gillenwaters → Cooper</td><td class="t">16 min</td><td class="t">7.0 mi</td></tr>
       <tr><td>TownePlace → Counter Negative (cold plunge)</td><td class="t">6 min</td><td class="t">2.6 mi</td></tr>
       <tr><td>TownePlace → BelowZero Cryo Spa</td><td class="t">8 min</td><td class="t">3.2 mi</td></tr>
       <tr><td>TownePlace → Springfield Massage Collective</td><td class="t">Walk (~2 min)</td><td class="t">Same block</td></tr>
@@ -548,8 +578,124 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
         The 8:15 start clears the court before the day's peak — hydrate for the drive home.</p>
     </div>
   </div>
-  <p style="font-size:12.5px;color:var(--ink-soft);margin-top:14px">Gillenwater warm-up courts are outdoor — Friday's 9:25am window sits near 73°, actual and index the same. Zero rain risk across all four days as of this pull. Heat index equals actual temperature below ~80°, so morning match starts carry no added heat load; the gap only opens in the afternoon.</p>
+  <p style="font-size:12.5px;color:var(--ink-soft);margin-top:14px">Friday's warm-up courts at Perry are outdoor — the 9:25am window sits near 73°, actual and index the same. Zero rain risk across all four days as of this pull. Heat index equals actual temperature below ~80°, so morning match starts carry no added heat load; the gap only opens in the afternoon.</p>
   <p style="font-size:12px;color:var(--ink-soft);margin-top:8px">Format: <span class="fld">actual / heat index</span>. Daily highs are the published NWS forecast values; heat index and match-window figures come from the NWS hourly apparent-temperature grid for the same point. Match-window temperatures are the forecast at that clock hour, not a guarantee.</p>
+</section>
+
+<!-- ================= PRACTICE COURTS ================= -->
+<section class="page" id="practice">
+  <h2 class="sec">Practice Courts</h2>
+  <div class="sec-sub">Two facilities near the hotel &middot; availability per the tournament, Aug 25, 2026 &middot; drive legs OSRM-routed, same method as the Drive Time Reference</div>
+
+  <div class="warnbox">
+    <h4>Gillenwaters is not open to us on Friday</h4>
+    <p>Friday is match day 1, and the warm-up that was booked at Gillenwaters has <span class="fld">moved to Perry Courts</span> &mdash; 1407 S National Ave, the same street as the hotel and two minutes north of it. Gillenwaters is open Saturday and Sunday.</p>
+  </div>
+
+  <div class="rec">
+    <h3>Perry Courts</h3>
+    <div class="meta">1407 S National Ave, Springfield, MO 65804 &middot; 6 courts</div>
+    <ul>
+      <li><span class="fld">Available:</span> Friday &mdash; this is the Friday warm-up site</li>
+      <li><span class="fld">From TownePlace:</span> 2 min &middot; 0.8 mi &mdash; straight up S National, same street as the hotel</li>
+      <li><span class="fld">To Cooper:</span> 8 min &middot; 3.5 mi &mdash; half the Gillenwaters hop</li>
+      <li>6 courts holds the whole travelling group at once: three doubles courts and spares</li>
+    </ul>
+  </div>
+
+  <div class="rec">
+    <h3>Gillenwaters Tennis Center</h3>
+    <div class="meta">3635 S Jefferson Ave, Springfield, MO 65807 &middot; (417) 891-1634</div>
+    <ul>
+      <li><span class="fld">Available:</span> Saturday and Sunday &mdash; <span class="lo">not Friday</span></li>
+      <li><span class="fld">From TownePlace:</span> 7 min &middot; 2.8 mi</li>
+      <li><span class="fld">To Cooper:</span> 16 min &middot; 7.0 mi</li>
+      <li>12 outdoor hard courts, public / first-come</li>
+    </ul>
+  </div>
+
+  <div class="readbox">
+    <h4>Neither is a booked court</h4>
+    <p>Gillenwaters is public and first-come &mdash; nobody is holding a court there for us. <span class="fld">Perry's booking rule is not on file</span>, and we have no phone number for it. If Friday's hour on court matters, send someone ahead of the group.</p>
+  </div>
+
+  <div class="srcline">Addresses, court count and Friday availability supplied by the HC, Aug 25, 2026. Drive times are OSRM routing on geocoded addresses &mdash; the same method as the Drive Time Reference, validated by reproducing its three published legs before the two Perry legs were added.</div>
+</section>
+
+<!-- ================= MATCH RULES ================= -->
+<section class="page" id="rules">
+  <h2 class="sec">Match Rules</h2>
+  <div class="sec-sub">The tournament's on-court rules, as issued &middot; Aug 25, 2026</div>
+
+  <div class="warnbox">
+    <h4>Carry $5 in cash</h4>
+    <p>If weather moves an outdoor match indoors, a <span class="fld">$5 per person fee</span> applies &mdash; charged per player, not per team. The Aug 25 forecast has all four days dry and sunny, so this is insurance rather than a plan. Carry the five anyway.</p>
+  </div>
+
+  <div class="rec">
+    <h3>On Court</h3>
+    <ul>
+      <li><span class="fld">Weather move:</span> if outdoor matches are moved indoors due to weather, a $5 per person fee will apply.</li>
+      <li><span class="fld">Warm-up:</span> 10 minute warm-up with opponent, including serves.</li>
+      <li><span class="fld">Score tenders:</span> all players should use the score tenders on court at all times.</li>
+      <li><span class="fld">Line calls:</span> any ball that cannot be called out with certainty is good.</li>
+      <li><span class="fld">Finishing:</span> at completion of match, tap rackets and confirm score before leaving court.</li>
+    </ul>
+  </div>
+
+  <div class="readbox">
+    <h4>What those five cost us</h4>
+    <p><span class="fld">Ten minutes is not a warm-up, and serves come out of the same ten.</span> That is the whole argument for the Practice Courts page &mdash; you arrive warm, or you spend the first three games getting there.</p>
+    <p><span class="fld">Confirm the score at the net, before anyone walks.</span> Games are a tiebreaker on both lists, so a court's score is standings data, not just a result. A score settled at the net is a score nobody has to reconstruct from memory an hour later.</p>
+  </div>
+
+  <div class="srcline">Rules supplied by the HC, Aug 25, 2026, as issued by the tournament. The five rules are the tournament's wording; the notes under them are ours.</div>
+</section>
+
+<!-- ================= TIEBREAKERS ================= -->
+<section class="page" id="tiebreakers">
+  <h2 class="sec">Tiebreakers</h2>
+  <div class="sec-sub">Two separate orders &mdash; one for the standings, one inside a single team match &middot; issued by the tournament, Aug 25, 2026</div>
+
+  <div class="sub">Standings Tiebreakers</div>
+  <div class="sub-note">Applied across the entire competition when teams finish level. Read the first line twice.</div>
+  <div class="tw"><table style="margin-top:10px;font-size:13px">
+    <thead><tr><th>#</th><th>Standings tiebreaker</th></tr></thead>
+    <tbody>
+      <tr><td class="stat">1</td><td><span class="fld">Individual matches.</span> Winner of the most individual matches in the entire competition &mdash; courts, not team matches. Every court counts the same, in a blowout or in a loss.</td></tr>
+      <tr><td class="stat">2</td><td><span class="fld">Head-to-head.</span> Winner of the head-to-head match, if all tied teams play each other.</td></tr>
+      <tr><td class="stat">3</td><td><span class="fld">Sets.</span> Loser of the fewest number of sets.</td></tr>
+      <tr><td class="stat">4</td><td><span class="fld">Games.</span> Loser of the fewest number of games.</td></tr>
+      <tr><td class="stat">5</td><td><span class="fld">Game win %.</span> Total games won divided by total games played.</td></tr>
+      <tr><td class="stat">6</td><td><span class="fld">Doubles 1.</span> Winner of the Doubles 1 court.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="sub">Match Tiebreakers</div>
+  <div class="sub-note">Applied inside one team match. Four courts, so the individual-match count settles it at 4&ndash;0 or 3&ndash;1 and the rest of the list is for 2&ndash;2.</div>
+  <div class="tw"><table style="margin-top:10px;font-size:13px">
+    <thead><tr><th>#</th><th>Match tiebreaker</th></tr></thead>
+    <tbody>
+      <tr><td class="stat">1</td><td><span class="fld">Individual matches.</span> 4&ndash;0 or 3&ndash;1.</td></tr>
+      <tr><td class="stat">2</td><td><span class="fld">Sets.</span> Loser of the fewest number of sets.</td></tr>
+      <tr><td class="stat">3</td><td><span class="fld">Games.</span> Loser of the fewest number of games.</td></tr>
+      <tr><td class="stat">4</td><td><span class="fld">Game win %.</span> Total games won divided by total games played.</td></tr>
+      <tr><td class="stat">5</td><td><span class="fld">Doubles 1.</span> Winner of the Doubles 1 court.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="warnbox">
+    <h4>There is no dead rubber and no dead set</h4>
+    <p>If you're down a set and a break to a better team, <span class="fld">the games you claw back are worth something real</span> &mdash; games are the fourth line of the standings list and the third line inside a match, and in a five-team round robin ties are the norm, not the exception.</p>
+    <p><span class="fld">Losing 4&ndash;6 5&ndash;7 and losing 0&ndash;6 0&ndash;6 are different results in the standings.</span></p>
+  </div>
+
+  <div class="readbox">
+    <h4>Both lists end at Doubles 1</h4>
+    <p>Whoever plays D1 is carrying the last tiebreaker on both ladders. It is the only court named anywhere in either order &mdash; worth knowing when a card is set.</p>
+  </div>
+
+  <div class="srcline">Both orders supplied by the HC, Aug 25, 2026, as issued by the tournament. This page is the only place in this document that states tiebreaker order &mdash; The Springfield Five cites it rather than restating it, so the two cannot drift apart.</div>
 </section>
 
 <!-- ================= THURSDAY ================= -->
@@ -604,14 +750,14 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   </ul></div>
 
   <div class="event"><h3>9:25–10:25am — Warm-Up</h3><ul>
-    <li><span class="fld">Depart hotel:</span> 9:15am</li>
-    <li><span class="fld">Location:</span> Gillenwater Park &amp; Tennis Complex</li>
-    <li><span class="fld">Address:</span> 3635 S Jefferson Ave, Springfield, MO 65807</li>
-    <li><span class="fld">Phone:</span> (417) 891-1634</li>
+    <li><span class="fld">Depart hotel:</span> 9:20am</li>
+    <li><span class="fld">Location:</span> Perry Courts</li>
+    <li><span class="fld">Address:</span> 1407 S National Ave, Springfield, MO 65804</li>
     <li><span class="fld">Notes:</span><ul>
-      <li>12 outdoor hard courts, public/first-come</li>
-      <li>7 min from hotel</li>
+      <li class="flag">Moved from Gillenwaters — it is not open to us on Friday</li>
+      <li>6 courts · 2 min from the hotel, same street</li>
       <li>Full hour on court</li>
+      <li>Not a booked court, and no phone number on file — see Practice Courts</li>
     </ul></li>
   </ul></div>
 
@@ -621,7 +767,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <li><span class="fld">Address:</span> 2331 E Pythian St, Springfield, MO 65802</li>
     <li><span class="fld">Phone:</span> (417) 837-5800</li>
     <li><span class="fld">Notes:</span><ul>
-      <li>Gillenwater → Cooper is 16 min — leave warm-up 10:30, arrive ~10:46</li>
+      <li>Perry → Cooper is 8 min — leave warm-up 10:30, arrive ~10:38, 22 min inside the 11:00 mark</li>
     </ul></li>
   </ul></div>
 
@@ -822,23 +968,9 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   <p style="font-size:13px;margin-top:6px">One thing we do own outright: <span class="fld">more Sectionals experience than anyone else in the field.</span> Nine returning men and 33 courts of it &mdash; more men and more courts than OK, IA or NE bring. Nobody here will be surprised by the venue, the heat, or the format.</p>
 
   <div class="sub">Why Every Game Matters</div>
-  <div class="sub-note">The order ties get broken in, straight from the championship regulations. Read the first line twice.</div>
-  <div class="tw"><table style="margin-top:10px;font-size:13px">
-    <thead><tr><th>#</th><th>Tiebreaker</th></tr></thead>
-    <tbody>
-      <tr><td class="stat">1</td><td><span class="fld">Individual matches won.</span> Total courts across the whole weekend &mdash; not team matches. Every single court counts the same, in a blowout or a loss.</td></tr>
-      <tr><td class="stat">2</td><td>Head-to-head, only if all tied teams played each other and one beat them all.</td></tr>
-      <tr><td class="stat">3</td><td>Fewest sets lost.</td></tr>
-      <tr><td class="stat">4</td><td>Fewest games lost.</td></tr>
-      <tr><td class="stat">5</td><td>Game winning percentage.</td></tr>
-      <tr><td class="stat">6</td><td>A method determined by the championships committee.</td></tr>
-    </tbody>
-  </table></div>
-  <div class="warnbox">
-    <h4>There is no dead rubber and no dead set</h4>
-    <p>If you're down a set and a break to a better team, <span class="fld">the games you claw back are worth something real</span> &mdash; they're step four, and in a five-team round robin ties are the norm, not the exception.</p>
-    <p><span class="fld">Losing 4&ndash;6 5&ndash;7 and losing 0&ndash;6 0&ndash;6 are different results in the standings.</span></p>
-  </div>
+  <div class="sub-note">Ties break on individual courts first, then sets, then games. The full order is on the Tiebreakers page &mdash; this is what it means for a five-team round robin.</div>
+  <p style="font-size:13px;margin-top:8px">The first line of the standings list is <span class="fld">individual matches won across the entire competition</span> &mdash; courts, not team matches. Every court counts the same in a blowout as in a win, and the games you claw back out of a lost set are the fourth line. In a five-team round robin ties are the norm, not the exception, so <span class="fld">losing 4&ndash;6 5&ndash;7 and losing 0&ndash;6 0&ndash;6 are different results in the standings.</span></p>
+  <p style="font-size:13px;margin-top:6px"><a href="#tiebreakers">Tiebreakers</a> carries both orders in full &mdash; the standings ladder and the one applied inside a single team match.</p>
 
   <div class="sub">Our Schedule</div>
   <div class="tw"><table style="margin-top:10px;font-size:13px">
@@ -2363,7 +2495,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <li><span class="fld">Every lineup strategy sorts on rating or partnership count. None sorts on winning.</span> That is why Jerry Martin benches at 5&ndash;0.</li>
     <li><span class="fld">The builder cannot express two matches in one day</span>, or a per-player match cap. Stated limits of the tool, not oversights.</li>
     <li><span class="fld">Nothing has been re-pulled since Aug 14.</span> All four league seasons had ended by then so the match record is effectively final &mdash; but dynamic ratings move weekly, and a late roster add would not appear.</li>
-    <li><span class="fld">No indoor/outdoor confirmation.</span> Outdoor assumed. Late-August Springfield heat is a real factor in a two-match Saturday and is in none of these numbers &mdash; see the weather page.</li>
+    <li><span class="fld">Outdoor, with a priced indoor contingency.</span> The tournament rules confirm outdoor play and put a $5 per person fee on any match weather moves indoors &mdash; see Match Rules. Late-August Springfield heat is a real factor in a two-match Saturday and is in none of these numbers &mdash; see the weather page.</li>
   </ul>
 </section>
 
@@ -2439,7 +2571,8 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <tbody>
       <tr><td><a href="https://lakeq.club/towneplace-suites">TownePlace Suites</a></td><td>2009 S National Ave</td><td class="t">(417) 881-8118</td><td>24 hr desk</td></tr>
       <tr><td><a href="https://lakeq.club/cooper-tennis-complex">Cooper Tennis Complex</a></td><td>2331 E Pythian St</td><td class="t">(417) 837-5800</td><td>Thu/Fri 7a–10p · Sat 8a–9p · Sun 8a–9p</td></tr>
-      <tr><td>Gillenwater Tennis Complex</td><td>3635 S Jefferson Ave</td><td class="t">(417) 891-1634</td><td>Public park courts</td></tr>
+      <tr><td>Perry Courts</td><td>1407 S National Ave</td><td class="t">—</td><td>6 courts · the Friday practice site</td></tr>
+      <tr><td>Gillenwaters Tennis Center</td><td>3635 S Jefferson Ave</td><td class="t">(417) 891-1634</td><td>Public park courts · <b>not Friday</b> · Sat &amp; Sun</td></tr>
       <tr><td>Springfield Massage Collective</td><td>1911 S National Ave #407</td><td class="t">(417) 612-8508</td><td>Thu/Fri 9a–8p · Sat 10a–5p</td></tr>
       <tr><td>Counter Negative</td><td>3800 S Fremont Ave</td><td class="t">(417) 420-9223</td><td>Thu/Fri 7:30a–7p · Sat 8a–3p</td></tr>
       <tr><td>BelowZero Cryo Spa</td><td>1374 E Republic Rd</td><td class="t">(417) 360-1044</td><td>Thu/Fri 6a–6p · Sat 8a–2p</td></tr>
