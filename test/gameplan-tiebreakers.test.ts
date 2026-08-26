@@ -26,15 +26,25 @@ const GAME_PLAN = join(REPO_ROOT, "docs", "index.html");
  *
  * So this file guards the invariant rather than either instance:
  *
- *   1. No passage outside `#tiebreakers` chains two ladder steps together.
- *   2. The two ordinal facts The Springfield Five DOES assert — that individual matches are the
- *      first line and games the fourth — match the rows of the ladder it cites. A citing page that
- *      may name a step must not be free to name the wrong one.
- *   3. The ladders themselves are complete and in the tournament's order.
+ *   1. No passage anywhere outside `#tiebreakers` chains two ladder steps together.
+ *   2. Inside The Springfield Five — the section that cites the ladder, and where both defects
+ *      occurred — at most ONE ladder step may be named at all, the one its argument turns on.
+ *   3. The ordinal facts The Springfield Five does assert — that individual matches are the first
+ *      line and games the fourth — match the rows of the ladder it cites. A citing page that may
+ *      name a step must not be free to name the wrong one.
+ *   4. The ladders themselves are complete and in the tournament's order.
  *
- * Rule 2 is the one that earns this file. It was claimed in a findings entry before it existed;
- * a second contractor review caught the claim outrunning what the repository enforced, which is
- * the reason the check is here and not in a scratch script.
+ * **What these checks do NOT amount to**, since overstating a guard is the exact class this file
+ * exists for. Rule 1 is a fixed phrase list, so a restatement phrased around it — "head-to-head is
+ * second, sets are third" — passes it. That gap is why rule 2 exists and why it is a whitelist
+ * rather than another blacklist: inside the section where the defect actually recurs, naming a
+ * second step fails whatever words it uses. Outside that section the coverage really is only the
+ * phrase list, and the rest of the document is prose about tennis that says "sets" and "games"
+ * constantly — a proximity rule tried against it returned four false positives out of five hits.
+ *
+ * Rule 3 is the one that earns this file. It was claimed in a findings entry before it existed; a
+ * contractor review caught the claim outrunning what the repository enforced, which is the reason
+ * the check is here and not in a scratch script.
  */
 
 function gamePlan(): string {
@@ -54,6 +64,34 @@ function outsideTiebreakers(html: string): string {
   const start = html.indexOf(section);
   return html.slice(0, start) + html.slice(start + section.length);
 }
+
+function springfieldFive(html: string): string {
+  const start = html.indexOf('<section class="page" id="field">');
+  expect(start, "the #field section must exist").toBeGreaterThan(-1);
+  const end = html.indexOf("\n</section>", start);
+  expect(end, "the #field section must be closed").toBeGreaterThan(start);
+  return html.slice(start, end);
+}
+
+function plainText(fragment: string): string {
+  return fragment.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+}
+
+// A ladder step named in the ladder's OWN vocabulary. Ordinary tennis prose about sets and games
+// does not match these — "fewest games" and "game win %" are the list's phrasing, not a report's.
+// Checked against the live document when this was written: The Springfield Five contained exactly
+// one hit, "individual matches", and every other section zero.
+const LADDER_STEP_NAMES: ReadonlyArray<readonly [string, RegExp]> = [
+  ["individual matches", /individual match(?:es)?\b/i],
+  ["head-to-head", /head-?to-?head/i],
+  ["sets", /\bfewest (?:number of )?sets\b|\bsets lost\b/i],
+  ["games", /\bfewest (?:number of )?games\b|\bgames lost\b/i],
+  ["game win %", /game win ?%|game winning percentage/i],
+  ["doubles 1", /doubles 1\b/i],
+];
+
+// The single step The Springfield Five's argument turns on, and is licensed to name.
+const CITED_STEP = "individual matches";
 
 // Two steps of a ladder named together. Any one of these phrases on its own is a single fact and
 // allowed — "the first line is individual matches" is an argument, not a copy of the list. Chained,
@@ -112,6 +150,23 @@ describe("the game plan states each tiebreaker ladder exactly once", () => {
     }
   });
 
+  // The tournament's step 2 reads "winner of head-to-head match if all teams play each other",
+  // which is reproduced verbatim — adding a condition it does not contain would be inventing a
+  // rule. But that wording names no winner in a circular three-way result (A beat B, B beat C, C
+  // beat A), while reading as though the step resolves the tie. A contractor review caught the
+  // gap. The page states the branch instead of closing it, and this pins that statement so it
+  // cannot be dropped or inverted into "this step always resolves the tie".
+  it("says out loud that step 2 can separate nobody", () => {
+    const standings = tiebreakerSection(gamePlan());
+    expect(standings, "step 2's wording must stay the tournament's").toContain(
+      "Winner of the head-to-head match, if all tied teams play each other.",
+    );
+    expect(standings, "the no-winner branch must be stated").toMatch(/names no winner/i);
+    expect(standings, "and its consequence — fall through, do not stop").toMatch(
+      /next line decides/i,
+    );
+  });
+
   it("ends both ladders on the Doubles 1 court, and nowhere else", () => {
     const html = gamePlan();
     const phrase = "Winner of the Doubles 1 court.";
@@ -124,9 +179,23 @@ describe("the game plan states each tiebreaker ladder exactly once", () => {
 
 describe("The Springfield Five cites the ladder without drifting from it", () => {
   it("points at #tiebreakers rather than restating the order", () => {
-    expect(gamePlan()).toContain(
+    // Scoped to the section, not the document: a citation anywhere else would satisfy a
+    // whole-document search while this section quietly carried its own copy of the ladder.
+    expect(springfieldFive(gamePlan())).toContain(
       '<a href="#tiebreakers">Tiebreakers</a> carries both orders in full',
     );
+  });
+
+  it("names at most the one ladder step its argument turns on", () => {
+    const text = plainText(springfieldFive(gamePlan()));
+    const named = LADDER_STEP_NAMES.filter(([, pattern]) => pattern.test(text)).map(([n]) => n);
+    const extra = named.filter((n) => n !== CITED_STEP);
+    expect(
+      extra,
+      `The Springfield Five cites the ladder; it must not re-list it. These ladder steps are ` +
+        `named here beyond the one it argues from ("${CITED_STEP}"): ${extra.join(", ")}. ` +
+        `Two steps named together is the list, however it is worded — put it on #tiebreakers.`,
+    ).toEqual([]);
   });
 
   // The page is allowed to name a single step as an argument. It is not allowed to name the wrong
