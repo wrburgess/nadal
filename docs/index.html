@@ -2006,34 +2006,25 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     try { history.scrollRestoration = "manual"; } catch (err) {}
   }
 
-  // The other half, and probably the half that was actually biting: a
-  // back/forward-cache restore. Safari — by far the most aggressive user of it,
-  // which is why this surfaced on an iPhone — can resume a whole document from
-  // memory. No script re-runs, the DOM and the JS heap come back untouched, and
-  // so does the scroll offset. Everything above this line is dead on that path;
-  // `pageshow` with `event.persisted` is the only hook that fires at all.
+  // The other half: a document that comes back WITHOUT running. Two shapes, and
+  // they need opposite handling — which took three review rounds to get right.
   //
-  // A contractor review caught this as a must-fix. The first version of this
-  // change set `scrollRestoration` and stopped, which would have left the
-  // reported symptom in place on the one browser it was reported from.
+  //   A back/forward-cache restore. Safari — by far the most aggressive user of
+  //   it, which is why this surfaced on an iPhone — resumes the whole document
+  //   from memory: no script runs, and the scroll offset returns with it.
+  //   NOTHING IS NEEDED HERE, and two earlier versions of this code added
+  //   machinery anyway. A bfcache restore only ever happens on a history
+  //   traversal — the reader pressed Back — and keeping their place is exactly
+  //   right for that. An app switch does not produce one; the tab simply stays
+  //   as it was, which no script can or should override.
   //
-  // Distinguishing a RESTORE from a RETURN. A reader who tapped through to a
-  // scouting page and pressed Back wants their place; a reader whose phone
-  // simply handed the page back — app switch, tab revisit — wants the cover.
+  //   A Back that MISSES the cache. The document reloads, so `scrollRestoration`
+  //   above — just set to manual — means the browser will not put the reader
+  //   back. This is the only case that needs code, and without it Back loses the
+  //   reader's place where `main` keeps it.
   //
-  // AN IN-MEMORY FLAG IS NOT ENOUGH, and the first version of this used one. It
-  // works on the bfcache path, because bfcache preserves the JS heap — but that
-  // made the promise depend on whether the cache happened to be warm. On a Back
-  // that MISSES the cache the document reloads, the flag is gone with the old
-  // heap, `pageshow` fires with `persisted` false, and the reader is sent to the
-  // cover. `main` restores their place on that path today, so a flag alone also
-  // shipped a regression. A contractor review caught it.
-  //
-  // So the departure is recorded somewhere that survives a real reload, and both
-  // return paths read the one record. `sessionStorage` is per-tab and dies with
-  // it, which is the lifetime this wants — an app switch does not clear it, but
-  // an app switch is not a Back, and the navigation type below is what separates
-  // those. The record is consumed on use so a stale one cannot be replayed.
+  // So: record where the reader was when they left, and replay it on exactly one
+  // condition — a navigation the browser reports as `back_forward`.
   var LEFT_KEY = "sgp-left-at";
   var docUrl = function () { return window.location.href.split("#")[0]; };
 
@@ -2043,21 +2034,21 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     if (firstEntry && firstEntry.type) navType = firstEntry.type;
   } catch (err) {}
 
-  document.addEventListener("click", function (e) {
-    var t = e.target;
-    var a = t && t.closest ? t.closest("a[href]") : null;
-    if (!a) return;
-    // A same-document fragment link never unloads, so it is not a departure.
-    // Compare with the fragment stripped rather than testing for one: `#foo`
-    // from a page already at `#bar` is still same-document.
-    if (a.href.split("#")[0] === docUrl()) return;
+  // `pagehide`, not a click listener on anchors. A review round found the anchor
+  // version leaves a STALE record: it only sees departures the reader makes by
+  // tapping a link, so leaving via the address bar or a script navigation wrote
+  // nothing, and a later Back replayed whatever offset the last tapped link had
+  // recorded. `pagehide` fires on every departure, so the record is always the
+  // position at the actual moment of leaving — and it needs no same-document
+  // check, because a `#fragment` jump does not hide the page.
+  window.addEventListener("pagehide", function () {
     try {
       sessionStorage.setItem(LEFT_KEY, JSON.stringify({
         u: docUrl(),
         y: Math.round(window.pageYOffset || 0)
       }));
     } catch (err) {}
-  }, true);
+  });
 
   // The record, if it belongs to THIS document — and cleared as it is read, so a
   // later reopen cannot inherit a departure that was already spent.
@@ -2074,16 +2065,6 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     }
     return typeof rec.y === "number" && rec.y > 0 ? rec.y : null;
   };
-
-  window.addEventListener("pageshow", function (e) {
-    if (!e.persisted) return;          // a normal load already ran placeReader
-    // Restored from cache with the scroll intact. If the reader left here
-    // deliberately, that scroll IS their place — consume the record and leave it
-    // alone. `navType` is not consulted: on a bfcache restore the performance
-    // entry still describes the ORIGINAL navigation, measured as "navigate".
-    if (takeDeparture() !== null) return;
-    placeReader();
-  });
 
   // `behavior:"instant"` is required, not stylistic: every scroll that defers to
   // the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() — was
