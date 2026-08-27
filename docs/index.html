@@ -2017,14 +2017,32 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   // change set `scrollRestoration` and stopped, which would have left the
   // reported symptom in place on the one browser it was reported from.
   //
-  // Distinguishing a RESTORE from a RETURN, and why a plain flag is enough for
-  // it: a reader who tapped through to a scouting page and pressed Back wants
-  // their place; a reader whose phone simply handed the page back — app switch,
-  // tab revisit — wants the cover. The difference is knowable because bfcache
-  // preserves the JS heap, so a variable set on the way out survives to be read
-  // on the way in. `sessionStorage` would work too, but it also survives paths
-  // this must not treat as a return, and it is shared with the access gate.
-  var leftByNavigating = false;
+  // Distinguishing a RESTORE from a RETURN. A reader who tapped through to a
+  // scouting page and pressed Back wants their place; a reader whose phone
+  // simply handed the page back — app switch, tab revisit — wants the cover.
+  //
+  // AN IN-MEMORY FLAG IS NOT ENOUGH, and the first version of this used one. It
+  // works on the bfcache path, because bfcache preserves the JS heap — but that
+  // made the promise depend on whether the cache happened to be warm. On a Back
+  // that MISSES the cache the document reloads, the flag is gone with the old
+  // heap, `pageshow` fires with `persisted` false, and the reader is sent to the
+  // cover. `main` restores their place on that path today, so a flag alone also
+  // shipped a regression. A contractor review caught it.
+  //
+  // So the departure is recorded somewhere that survives a real reload, and both
+  // return paths read the one record. `sessionStorage` is per-tab and dies with
+  // it, which is the lifetime this wants — an app switch does not clear it, but
+  // an app switch is not a Back, and the navigation type below is what separates
+  // those. The record is consumed on use so a stale one cannot be replayed.
+  var LEFT_KEY = "sgp-left-at";
+  var docUrl = function () { return window.location.href.split("#")[0]; };
+
+  var navType = "";
+  try {
+    var firstEntry = performance.getEntriesByType("navigation")[0];
+    if (firstEntry && firstEntry.type) navType = firstEntry.type;
+  } catch (err) {}
+
   document.addEventListener("click", function (e) {
     var t = e.target;
     var a = t && t.closest ? t.closest("a[href]") : null;
@@ -2032,17 +2050,38 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     // A same-document fragment link never unloads, so it is not a departure.
     // Compare with the fragment stripped rather than testing for one: `#foo`
     // from a page already at `#bar` is still same-document.
-    if (a.href.split("#")[0] !== window.location.href.split("#")[0]) {
-      leftByNavigating = true;
-    }
+    if (a.href.split("#")[0] === docUrl()) return;
+    try {
+      sessionStorage.setItem(LEFT_KEY, JSON.stringify({
+        u: docUrl(),
+        y: Math.round(window.pageYOffset || 0)
+      }));
+    } catch (err) {}
   }, true);
+
+  // The record, if it belongs to THIS document — and cleared as it is read, so a
+  // later reopen cannot inherit a departure that was already spent.
+  var takeDeparture = function () {
+    var rec = null;
+    try {
+      var raw = sessionStorage.getItem(LEFT_KEY);
+      if (!raw) return null;
+      rec = JSON.parse(raw);
+      if (!rec || rec.u !== docUrl()) return null;
+      sessionStorage.removeItem(LEFT_KEY);
+    } catch (err) {
+      return null;                     // unreadable or unparseable: treat as absent
+    }
+    return typeof rec.y === "number" && rec.y > 0 ? rec.y : null;
+  };
 
   window.addEventListener("pageshow", function (e) {
     if (!e.persisted) return;          // a normal load already ran placeReader
-    if (leftByNavigating) {            // a Back from somewhere the reader chose
-      leftByNavigating = false;        // reset: the next restore is not a return
-      return;
-    }
+    // Restored from cache with the scroll intact. If the reader left here
+    // deliberately, that scroll IS their place — consume the record and leave it
+    // alone. `navType` is not consulted: on a bfcache restore the performance
+    // entry still describes the ORIGINAL navigation, measured as "navigate".
+    if (takeDeparture() !== null) return;
     placeReader();
   });
 
@@ -2090,7 +2129,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   var placeReader = function () {
     if (!window.location.hash) {
       if (document.body.classList.contains("locked")) return;
-      jumpTo(0);
+      // A Back that missed the cache: the document reloaded, so nothing has the
+      // reader's place except the departure record. Restore it. Any other load —
+      // typed, bookmarked, reopened, reloaded — gets the cover. `back_forward`
+      // is required as well as the record, so that reopening the URL after a
+      // departure still lands on the cover rather than inheriting it.
+      var back = navType === "back_forward" ? takeDeparture() : null;
+      jumpTo(back === null ? 0 : back);
       return;
     }
     var target;
