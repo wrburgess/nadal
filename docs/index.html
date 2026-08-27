@@ -440,7 +440,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v4.3 &middot; Aug 26, 2026 &middot; 44 pages</div>
+  <div class="foot">v4.4 &middot; Aug 26, 2026 &middot; 44 pages</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
@@ -2037,10 +2037,17 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   // entry when the platform will not tell you which entry you are on. A promise
   // that cannot be kept is worse than an absent feature, so the feature is gone.
   //
-  // The cost, stated where it will be read: Back from a scouting page opens the
-  // book at the cover instead of where you were. The nav bar is sticky, so that
-  // is one tap. What remains below has one rule and no exceptions — a load with
-  // no fragment shows the cover.
+  // The cost, stated where it will be read: a Back from a scouting page that
+  // RELOADS this document now opens at the cover instead of where you were. The
+  // nav bar is sticky, so that is one tap.
+  //
+  // A Back served from the back/forward cache still keeps your place, and that
+  // is the browser's doing rather than ours — the document is resumed from
+  // memory with its scroll intact and none of this file runs. So the behaviour
+  // on Back is not uniform, and saying otherwise is what a review round caught
+  // in the first draft of this very comment. It is acceptable because both
+  // outcomes are reasonable for a deliberate history traversal; it would not be
+  // acceptable to claim only one of them happens.
 
   // `behavior:"instant"` is required, not stylistic: every scroll that defers to
   // the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() — was
@@ -2087,7 +2094,9 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     if (!window.location.hash) {
       if (document.body.classList.contains("locked")) return;
       // Every load with no fragment shows the cover — typed, bookmarked,
-      // reopened, reloaded, or Backed into. One rule, no exceptions.
+      // reopened, reloaded, or Backed into. The exception is not a load at all:
+      // a back/forward-cache restore resumes the document without running any
+      // script, so it never reaches this line and the reader keeps their place.
       var y = 0;
       jumpTo(y);
       // AND AGAIN AFTER LAYOUT. This function runs from a MutationObserver
