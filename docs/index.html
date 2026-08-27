@@ -440,7 +440,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v4.2 &middot; Aug 26, 2026 &middot; 44 pages</div>
+  <div class="foot">v4.3 &middot; Aug 26, 2026 &middot; 44 pages</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
@@ -2021,72 +2021,26 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     try { history.scrollRestoration = "manual"; } catch (err) {}
   }
 
-  // The other half: a document that comes back WITHOUT running. Two shapes, and
-  // they need opposite handling — which took three review rounds to get right.
+  // WITHDRAWN, deliberately: the book no longer remembers where you were.
   //
-  //   A back/forward-cache restore. Safari — by far the most aggressive user of
-  //   it, which is why this surfaced on an iPhone — resumes the whole document
-  //   from memory: no script runs, and the scroll offset returns with it.
-  //   NOTHING IS NEEDED HERE, and two earlier versions of this code added
-  //   machinery anyway. A bfcache restore only ever happens on a history
-  //   traversal — the reader pressed Back — and keeping their place is exactly
-  //   right for that. An app switch does not produce one; the tab simply stays
-  //   as it was, which no script can or should override.
+  // A previous version restored the reader's place when they pressed Back from a
+  // scouting page — a departure recorded on `pagehide`, replayed on a
+  // `back_forward` navigation. It was never asked for; it was added because a
+  // review round pointed out that turning off scroll restoration cost it.
   //
-  //   A Back that MISSES the cache. The document reloads, so `scrollRestoration`
-  //   above — just set to manual — means the browser will not put the reader
-  //   back. This is the only case that needs code, and without it Back loses the
-  //   reader's place where `main` keeps it.
+  // Six review rounds, and EVERY defect found in this change was in that
+  // feature, never in the fix anyone actually reported. The last two were the
+  // reason to stop rather than patch again: both were comments claiming more
+  // than the code could enforce, and both were unenforceable in principle —
+  // `location.href` does not identify a history entry, because two entries can
+  // carry the same URL, and one `sessionStorage` slot cannot hold a position per
+  // entry when the platform will not tell you which entry you are on. A promise
+  // that cannot be kept is worse than an absent feature, so the feature is gone.
   //
-  // So: record where the reader was when they left, and replay it on exactly one
-  // condition — a navigation the browser reports as `back_forward`.
-  var LEFT_KEY = "sgp-left-at";
-  // The FULL href, fragment included — this identifies the history entry, and a
-  // history entry is what is being restored. Stripping the fragment (an earlier
-  // version did) conflates `/`, `/#schedule` and `/#sources` into one slot, so
-  // Backing out of a fragment excursion could replay an offset recorded at a
-  // different entry. A review round named the class: fragment-qualified entries
-  // were unrepresented in the key. An entry with no record now falls through to
-  // the cover rather than borrowing a neighbour's position.
-  var entryUrl = function () { return window.location.href; };
-
-  var navType = "";
-  try {
-    var firstEntry = performance.getEntriesByType("navigation")[0];
-    if (firstEntry && firstEntry.type) navType = firstEntry.type;
-  } catch (err) {}
-
-  // `pagehide`, not a click listener on anchors. A review round found the anchor
-  // version leaves a STALE record: it only sees departures the reader makes by
-  // tapping a link, so leaving via the address bar or a script navigation wrote
-  // nothing, and a later Back replayed whatever offset the last tapped link had
-  // recorded. `pagehide` fires on every departure, so the record is always the
-  // position at the actual moment of leaving — and it needs no same-document
-  // check, because a `#fragment` jump does not hide the page.
-  window.addEventListener("pagehide", function () {
-    try {
-      sessionStorage.setItem(LEFT_KEY, JSON.stringify({
-        u: entryUrl(),
-        y: Math.round(window.pageYOffset || 0)
-      }));
-    } catch (err) {}
-  });
-
-  // The record, if it belongs to THIS history entry — and cleared as it is read,
-  // so a later reopen cannot inherit a departure that was already spent.
-  var takeDeparture = function () {
-    var rec = null;
-    try {
-      var raw = sessionStorage.getItem(LEFT_KEY);
-      if (!raw) return null;
-      rec = JSON.parse(raw);
-      if (!rec || rec.u !== entryUrl()) return null;
-      sessionStorage.removeItem(LEFT_KEY);
-    } catch (err) {
-      return null;                     // unreadable or unparseable: treat as absent
-    }
-    return typeof rec.y === "number" && rec.y > 0 ? rec.y : null;
-  };
+  // The cost, stated where it will be read: Back from a scouting page opens the
+  // book at the cover instead of where you were. The nav bar is sticky, so that
+  // is one tap. What remains below has one rule and no exceptions — a load with
+  // no fragment shows the cover.
 
   // `behavior:"instant"` is required, not stylistic: every scroll that defers to
   // the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() — was
@@ -2132,13 +2086,9 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   var placeReader = function () {
     if (!window.location.hash) {
       if (document.body.classList.contains("locked")) return;
-      // A Back that missed the cache: the document reloaded, so nothing has the
-      // reader's place except the departure record. Restore it. Any other load —
-      // typed, bookmarked, reopened, reloaded — gets the cover. `back_forward`
-      // is required as well as the record, so that reopening the URL after a
-      // departure still lands on the cover rather than inheriting it.
-      var back = navType === "back_forward" ? takeDeparture() : null;
-      var y = back === null ? 0 : back;
+      // Every load with no fragment shows the cover — typed, bookmarked,
+      // reopened, reloaded, or Backed into. One rule, no exceptions.
+      var y = 0;
       jumpTo(y);
       // AND AGAIN AFTER LAYOUT. This function runs from a MutationObserver
       // callback, which is a microtask — it fires before the browser has laid
@@ -2148,11 +2098,15 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       // the book. Two frames put this after the layout that reveals the book,
       // and the timeout covers a browser that lays out later still.
       //
-      // A reader who DOES scroll in that window keeps their scroll. An earlier
-      // version of this comment claimed the window was too short for anyone to
-      // have scrolled on purpose, and enforced nothing — a review round pointed
-      // out that the claim was the only thing standing between a fast reader and
-      // having their scroll yanked back. Now a real input gesture cancels it.
+      // A reader who scrolls BY WHEEL, TOUCH OR KEY in that window keeps their
+      // scroll. Those three, and not a claim of completeness: dragging a desktop
+      // scrollbar moves the page without firing any of them, so on a desktop
+      // that one gesture can still be overridden within 300ms. Named rather than
+      // papered over — the reported bug is a phone bug, touch is the phone
+      // gesture, and the worst case on a desktop is landing on the cover, which
+      // is where this load was going anyway. An earlier comment here claimed a
+      // blanket "a reader who scrolls keeps their scroll"; a review round was
+      // right that nothing enforced it.
       //
       // Position alone cannot decide this: the bug being fixed ALSO moves the
       // scroll away from `y`, so "not where I put it" is true in both cases. The
