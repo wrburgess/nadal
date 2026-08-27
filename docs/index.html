@@ -1996,19 +1996,55 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   // actually read. Chrome reproduces the same class on reload: scrolled to
   // 20000, reloaded, came back at 20000 with no fragment in the URL.
   //
-  // Turning restoration off is the fix, and it is deliberately unconditional
-  // rather than sniffed for Safari — every browser that restores is restoring
-  // the same wrong thing for a document with a cover.
+  // Turning restoration off is deliberately unconditional rather than sniffed
+  // for Safari — every browser that restores is restoring the same wrong thing
+  // for a document with a cover.
   //
-  // THE COST, stated rather than buried: going back to the book from a scouting
-  // page no longer resumes where you were; it opens at the cover. That is the
-  // same setting doing the same job — `scrollRestoration` is a property of the
-  // history entry, so it cannot be off for a reopen and on for a back. The
-  // sticky nav bar makes returning to a section one tap, which is why this side
-  // of the trade was taken.
+  // This is half the fix. It governs a document that RELOADS. It does nothing
+  // for the case below, where the document comes back without running at all.
   if ("scrollRestoration" in history) {
     try { history.scrollRestoration = "manual"; } catch (err) {}
   }
+
+  // The other half, and probably the half that was actually biting: a
+  // back/forward-cache restore. Safari — by far the most aggressive user of it,
+  // which is why this surfaced on an iPhone — can resume a whole document from
+  // memory. No script re-runs, the DOM and the JS heap come back untouched, and
+  // so does the scroll offset. Everything above this line is dead on that path;
+  // `pageshow` with `event.persisted` is the only hook that fires at all.
+  //
+  // A contractor review caught this as a must-fix. The first version of this
+  // change set `scrollRestoration` and stopped, which would have left the
+  // reported symptom in place on the one browser it was reported from.
+  //
+  // Distinguishing a RESTORE from a RETURN, and why a plain flag is enough for
+  // it: a reader who tapped through to a scouting page and pressed Back wants
+  // their place; a reader whose phone simply handed the page back — app switch,
+  // tab revisit — wants the cover. The difference is knowable because bfcache
+  // preserves the JS heap, so a variable set on the way out survives to be read
+  // on the way in. `sessionStorage` would work too, but it also survives paths
+  // this must not treat as a return, and it is shared with the access gate.
+  var leftByNavigating = false;
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest("a[href]") : null;
+    if (!a) return;
+    // A same-document fragment link never unloads, so it is not a departure.
+    // Compare with the fragment stripped rather than testing for one: `#foo`
+    // from a page already at `#bar` is still same-document.
+    if (a.href.split("#")[0] !== window.location.href.split("#")[0]) {
+      leftByNavigating = true;
+    }
+  }, true);
+
+  window.addEventListener("pageshow", function (e) {
+    if (!e.persisted) return;          // a normal load already ran placeReader
+    if (leftByNavigating) {            // a Back from somewhere the reader chose
+      leftByNavigating = false;        // reset: the next restore is not a return
+      return;
+    }
+    placeReader();
+  });
 
   // `behavior:"instant"` is required, not stylistic: every scroll that defers to
   // the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() — was
