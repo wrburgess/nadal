@@ -80,7 +80,13 @@ describe("every hand-edited page in the game plan closes the tags it opens", () 
 
   it("catches an orphaned end tag — the guard can fail, on the real defect's shape", () => {
     const html = readFileSync(BOOK, "utf8");
-    const broken = html.replace("</table></div>\n\n  <div class=\"sub\">Our Tendencies", "</table></div>\n  </div>\n\n  <div class=\"sub\">Our Tendencies");
+    // Re-anchored on the Tiebreakers page after a prose pass deleted the previous
+    // anchor ("Our Tendencies") and this probe silently stopped seeding anything
+    // while the guard above stayed green. Nothing enforces that this anchor
+    // survives either — it is a literal string, and the next edit to that heading
+    // breaks this test. That is the intended failure mode: it fails loudly, on its
+    // own assertion below, rather than passing while measuring nothing.
+    const broken = html.replace("</table></div>\n\n  <div class=\"sub\">Match Tiebreakers", "</table></div>\n  </div>\n\n  <div class=\"sub\">Match Tiebreakers");
     expect(broken, "the seeded defect changed nothing — this probe is measuring itself").not.toEqual(html);
     const { open, close } = tagBalance(broken, "div");
     expect(close - open).toBe(1);
@@ -95,5 +101,32 @@ describe("every hand-edited page in the game plan closes the tags it opens", () 
     expect(sections.length).toBeGreaterThan(20);
     const unclassed = sections.filter((a) => !/class="(page|cover)"/.test(a));
     expect(unclassed, `sections without class="page" or class="cover": ${unclassed}`).toEqual([]);
+  });
+
+  it("the signed lineup table is held whole across a print page break", () => {
+    // The Four Cards is the captain's card. Split across a page break it orphans the
+    // lower courts onto the next printed page, where a reader can miss a row — which
+    // is exactly what happened when PR #217 removed three blocks above it and D3 and
+    // Next-man-up landed alone on page 40.
+    //
+    // Both halves are asserted because either alone fails open: the class with no rule
+    // behind it, or the rule with nothing carrying the class. Located by walking back
+    // from the heading rather than by a hardcoded line, so the check survives edits
+    // above it.
+    const html = readFileSync(BOOK, "utf8");
+
+    const heading = html.indexOf('<div class="sub">The Four Cards</div>');
+    expect(heading, "The Four Cards heading is gone — re-point this check").toBeGreaterThan(-1);
+    const wrapper = html.slice(heading).match(/<div class="([^"]*\btw\b[^"]*)"><table/);
+    expect(wrapper, "no table wrapper follows The Four Cards heading").not.toBeNull();
+    expect(
+      wrapper![1],
+      "The Four Cards wrapper lost `keep-whole` — the signed lineup can split across pages",
+    ).toContain("keep-whole");
+
+    expect(
+      html,
+      "`keep-whole` has no print declaration — the class on the wrapper does nothing",
+    ).toMatch(/@media print\{[^}]*\.keep-whole\{break-inside:avoid\}/);
   });
 });

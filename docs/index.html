@@ -350,6 +350,10 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 .bench li{padding:1px 0}
 .srcline{font-family:var(--mono);font-size:11px;color:var(--steel);margin-top:5px}
 @media print{.court,.readbox,.bench{break-inside:avoid}}
+/* The Four Cards is the signed lineup. Split across a page break it orphans the
+   lower courts, and a captain reading the printed book can miss a row. Applied
+   only to that table — a blanket .tw rule would overflow the long rosters. */
+@media print{.keep-whole{break-inside:avoid}}
 
 .warnbox{border:2px solid var(--flag);border-radius:2px;padding:12px 15px;margin-top:14px;background:#FBF3F4}
 .warnbox h4{font-family:var(--disp);font-size:18px;font-weight:700;color:var(--flag);
@@ -440,7 +444,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v4.4 &middot; Aug 26, 2026 &middot; 44 pages</div>
+  <div class="foot">v4.5 &middot; Aug 26, 2026 &middot; 44 pages</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
@@ -1099,7 +1103,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="lbl">On the bench</div>
     <ul>
       <li><span class="fld">Andy Plungkhen</span> &middot; next man up</li>
-      <li><span class="fld">JT Martin</span> &middot; resting his back</li>
+      <li><span class="fld">JT Martin</span> &middot; rests until Saturday</li>
       <li><span class="fld">Rob Halksworth</span> &middot; unavailable</li>
       <li><span class="fld">Bryan Zingg</span> &middot; unavailable</li>
     </ul>
@@ -1126,7 +1130,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   <div class="readbox">
     <h4>Sort by rating and you put the wrong men on the top court</h4>
     <p><span class="fld">John Micka</span> is their highest TR at 3.62 &mdash; and he has earned it. 35&ndash;11, 63% of games &mdash; the best games rate of anyone on the roster with more than four courts.</p>
-    <p><span class="fld">Todd Versteeg</span> is their second-highest at 3.56 &mdash; and he is a 51% player.</p>
+    <p><span class="fld">Todd Versteeg</span> is their second-highest at 3.56 &mdash; and he is 21&ndash;20 in doubles, 51%.</p>
     <p><span class="fld">Nick Stahly</span> is only their sixth-highest at 3.44 &mdash; and he has won 85% of his doubles.</p>
     <p><span class="fld">The three to respect:</span> Stahly, Jamie Johnson and Micka. Between them 75&ndash;20.</p>
   </div>
@@ -1266,7 +1270,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <li><span class="fld">Mark Johnson</span> &middot; next man up</li>
       <li><span class="fld">Dave Merritt</span> &middot; plays both later cards</li>
       <li><span class="fld">Rob Halksworth</span> &middot; singles in the 1:15</li>
-      <li><span class="fld">JT Martin</span> &middot; back &mdash; rests until the 1:15</li>
+      <li><span class="fld">JT Martin</span> &middot; rests until the 1:15</li>
     </ul>
   </div>
 
@@ -1322,7 +1326,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h4>Marc's court &mdash; the one court where St. Louis is deeper than the rating says</h4>
     <p>Borislav Ivanov is 10&ndash;5 in singles and <span class="fld">3&ndash;0 in the 40+ band</span>, taking 66% of games there. Behind him Stuart Friess is 9&ndash;8 overall and also 3&ndash;0 at 40+. <span class="fld">Every other opponent this weekend has one singles man; St. Louis has two.</span></p>
     <p>Ivanov is a singles player who fills in at doubles &mdash; 10&ndash;5 in singles, 7&ndash;10 in doubles. His 3.58 is the highest rating on their roster and it was earned here, not at D1.</p>
-    <p class="flag">Morris is 4&ndash;6 in singles and 3&ndash;3 at 40+, taking 43% of games. This is the court we are most likely to lose, and the card was built that way &mdash; the three doubles courts are where this tie is won.</p>
+    <p class="flag">Ivanov is the strongest singles opponent on our schedule in the pool that counts &mdash; 3&ndash;0 at 40+, taking 66% of games. The three doubles courts are where this tie is won.</p>
     <p><span class="fld">The qualifier:</span> Both of their singles men are unbeaten at 40+, but that is three courts each. The volume is in 18+: Ivanov 7&ndash;1 there, Friess 6&ndash;5. If Ivanov plays singles their doubles loses nothing &mdash; he is 41% there. That is the trade they should make, and it is still the right one for us.</p>
   </div>
 
@@ -1577,7 +1581,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <li><span class="fld">Bryan Zingg</span> &middot; next man up</li>
       <li><span class="fld">Randy Burgess</span> &middot; played the first three cards</li>
       <li><span class="fld">Andy Plungkhen</span> &middot; played both Saturday cards</li>
-      <li><span class="fld">Rich Bierman</span> &middot; likely home</li>
+      <li><span class="fld">Rich Bierman</span> &middot; not on this card</li>
     </ul>
   </div>
 
@@ -1605,7 +1609,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h4>Reading the doubles table</h4>
     <p><span class="fld">Brandon Vasholz</span> is 21&ndash;6 &mdash; 78% of matches, 64% of games, and 10&ndash;2 at 40+. The most proven man on this roster &mdash; though Acker's rate is higher on half the volume, and Iowa's Stahly is 23&ndash;4 across the same 27 courts.</p>
     <p><span class="fld">Chris Acker</span> is 12&ndash;2, 86% of matches, and 5&ndash;0 at 40+ taking 71% of games.</p>
-    <p><span class="fld">Jonathan Hernandez</span> is their best singles player and their worst doubles player: 14&ndash;2 in singles, 15&ndash;19 in doubles. A rating cannot see that split &mdash; his TR is their fifth-highest and his WTN-D their second-best.</p>
+    <p><span class="fld">Jonathan Hernandez</span> has their strongest singles record and their weakest in doubles: 14&ndash;2 in singles, 15&ndash;19 in doubles. A rating cannot see that split &mdash; his TR is their fifth-highest and his WTN-D their second-best.</p>
     <p><span class="fld">Mike Gardner</span> leads them in wins, 34&ndash;24. <span class="fld">Nick Sowl</span> is their best WTN-D at 21.99 and their second-highest TR at 3.59 &mdash; on a 2&ndash;2 record. There is almost no evidence behind those two numbers. Do not let them set your expectations.</p>
     <p><span class="fld">The three to respect:</span> Vasholz, Acker and Maddipati. Between them 46&ndash;15.</p>
   </div>
@@ -1634,7 +1638,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <h4>Ram's court &mdash; hardest singles of the weekend, but not as hard as 14&ndash;2</h4>
     <p>Jonathan Hernandez is 14&ndash;2 in singles, taking 71% of games &mdash; the strongest singles record in the field by a distance. Split by age band it is <span class="fld">10&ndash;0 in Adult 18+ 3.5</span> taking 80% of games, and <span class="fld">4&ndash;2 in Adult 40+ 3.5</span> taking 58%. Sectionals is the 40+ pool.</p>
     <p>This is the one singles court where the opponent is ahead in the pool that counts &mdash; but only just. Chettiar at 40+ is 4&ndash;1, 56% of games; Hernandez is 4&ndash;2, 58%. Two points of game rate, and Chettiar has the better record. <span class="fld">Read this as level, not lost.</span></p>
-    <p>He is a specialist. 15&ndash;19 and 44% in doubles &mdash; the worst doubles rate on their travelling roster. If they play him at singles they are holding out their weakest doubles man, which is the right trade for them. Their singles does not fall off if he moves: Andy Wang is 9&ndash;5 in singles and 3&ndash;2 at 40+. There is no soft version of this court.</p>
+    <p>He is a specialist. 15&ndash;19 and 44% in doubles &mdash; the lowest doubles rate on their travelling roster. Playing him at singles costs them least in doubles, which is the right trade for them. Their singles does not fall off if he moves: Andy Wang is 9&ndash;5 in singles and 3&ndash;2 at 40+. There is no soft version of this court.</p>
     <p>We have met both. At Tri-Level Sectionals last November, Wang and Hernandez beat Andy Plungkhen's pair 6-1 7-5 &mdash; but that was a D335 play-up line, not 3.5.</p>
   </div>
 
@@ -1680,15 +1684,8 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div><div class="k">Seed</div><div class="v">4</div></div>
   </div>
 
-  <div class="readbox">
-    <h4>Sorted by results instead of rating, our roster reorders almost completely</h4>
-    <p><span class="fld">Rich Bierman</span> carries the lowest TR on the team at 3.28 and is our third-best doubles player by results &mdash; 20&ndash;8, 71%, on 28 matches. Every rating-driven lineup we ran left him out or put him last.</p>
-    <p><span class="fld">Andy Plungkhen</span> sits mid-table on rating at 3.37 and last on results &mdash; 21&ndash;23, 48%, on 44 matches. That is the largest sample of anyone outside the top three, so the figure is real rather than noise. D3 is his most-played slot by some way &mdash; 20 of those courts, more than any other &mdash; so that is where his evidence is deepest.</p>
-    <p><span class="fld">JT Martin</span> has played 51 doubles matches at 65%, more than anyone on the roster, and rating ranked him ninth of eleven. A solid, heavily-tested middle-order player.</p>
-  </div>
-
   <div class="sub">Our Doubles &mdash; Ranked by What We Produced</div>
-  <div class="sub-note">Broad base. This is the ordering that should drive selection.</div>
+  <div class="sub-note">Broad base.</div>
   <div class="tw"><table style="margin-top:10px;font-size:12.5px">
     <thead><tr><th>Player</th><th>Record</th><th>Match win</th><th>Game win</th><th>Set win</th><th>At 40+ 3.5</th><th>TR</th></tr></thead>
     <tbody>
@@ -1707,7 +1704,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   </table></div>
   <div class="warnbox">
     <h4>What an opponent would notice</h4>
-    <p>Chettiar, Merritt, Bierman and Morris are all at or above 71%. <span class="fld">That is a strong front four and it would hold up against any team here.</span> Below them the drop is steady rather than sharp until the last name.</p>
+    <p>Chettiar, Merritt, Bierman and Morris are all at or above 71%. <span class="fld">That is a strong front four and it would hold up against any team here.</span> Below them the drop is steady rather than sharp.</p>
   </div>
 
   <div class="sub">Our Singles, and How Thin It Is</div>
@@ -1723,17 +1720,6 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <tr><td colspan="7" style="font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);background:#F4F6F8">Doubles-only &mdash; M. Johnson, Merritt, Jacobs, Plungkhen, Zingg, Bierman</td></tr>
     </tbody>
   </table></div>
-
-  <div class="sub">Our Tendencies, as an Opponent Would Chart Them</div>
-  <div class="tw"><table style="margin-top:8px;font-size:12.5px">
-    <thead><tr><th>Court</th><th>Avg rank</th><th>Note</th></tr></thead>
-    <tbody>
-      <tr><td class="stat">D1</td><td class="stat">1.75</td><td>strongest 4&times; &middot; weakest 2&times;</td></tr>
-      <tr><td class="stat">D2</td><td class="stat">2.38</td><td>strongest 2&times; &middot; weakest 5&times;</td></tr>
-      <tr><td class="stat">D3</td><td class="stat">1.88</td><td>strongest 2&times; &middot; weakest 1&times;</td></tr>
-    </tbody>
-  </table></div>
-  <p style="font-size:13px;margin-top:6px"><span class="fld">We are the only team in the field that sinks its weakest pair at D2.</span> Every opponent here loads top-down. We load top and bottom and hollow out the middle.</p>
 
   <div class="sub">Our Pairings</div>
   <div class="tw"><table style="margin-top:8px;font-size:12.5px">
@@ -1752,16 +1738,10 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     </tbody>
   </table></div>
 
-  <div class="warnbox">
-    <h4>The weakness a scout would target</h4>
-    <p>STL puts their weakest pair at D3 in six matches out of six. If we run our normal shape against them &mdash; strong D1, weak D2, strong D3 &mdash; <span class="fld">our strong D3 beats their sacrifice court while our weak D2 loses to their second-best pair.</span> We would be trading a court we did not need to win for one we could have.</p>
-    <p><span class="fld">Against STL specifically, put the weaker pair at D3 and load D1 and D2.</span> That is the one deliberate shape change worth making this weekend.</p>
-  </div>
-
   <div class="sub">The Four Cards</div>
   <div class="sub-note">The lineups as signed, reproduced from the captain's card. The four match cards earlier in this book carry the same assignments court by court.</div>
 
-  <div class="tw"><table style="margin-top:10px">
+  <div class="tw keep-whole"><table style="margin-top:10px">
     <thead><tr><th>Court</th><th>Fri 11:30 &middot; IA</th><th>Sat 9:45 &middot; STL</th><th>Sat 1:15 &middot; OK</th><th>Sun 8:15 &middot; NE</th></tr></thead>
     <tbody>
       <tr><td class="stat">S1</td><td>Chettiar</td><td>Morris</td><td>Halksworth</td><td>Chettiar</td></tr>
