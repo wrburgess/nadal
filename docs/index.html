@@ -433,7 +433,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v4.0 &middot; Aug 26, 2026 &middot; 44 pages</div>
+  <div class="foot">v4.1 &middot; Aug 26, 2026 &middot; 44 pages</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
@@ -1929,13 +1929,29 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   document.body.classList.add("locked");
   try { if (sessionStorage.getItem(KEY) === "1") unlock(); } catch (e) {}
 
-  document.getElementById("go").addEventListener("click", attempt);
-  input.addEventListener("keydown", function (e) { if (e.key === "Enter") attempt(); });
-  input.addEventListener("input", function () {
-    err.textContent = "";
-    if (input.value.length === 4) attempt();
-  });
-  if (gate) input.focus();
+  // Wire the gate only if it is still standing. unlock() above DETACHES #gate,
+  // so on every return visit within a session the next line used to re-query the
+  // DOM for a button that was no longer in it and throw
+  // `TypeError: Cannot read properties of null (reading 'addEventListener')`,
+  // killing the rest of this function. It looked harmless — everything below is
+  // only needed while the gate is up — but it left an uncaught error on the most
+  // common load of the page and made the remaining lines dead code that only
+  // appeared to run. Found on all six gated pages.
+  //
+  // `go` is looked up here rather than beside `gate` above so the lookup happens
+  // on the branch that actually uses it, and cannot go stale in between.
+  if (document.body.classList.contains("locked")) {
+    var go = document.getElementById("go");
+    if (go) go.addEventListener("click", attempt);
+    if (input) {
+      input.addEventListener("keydown", function (e) { if (e.key === "Enter") attempt(); });
+      input.addEventListener("input", function () {
+        err.textContent = "";
+        if (input.value.length === 4) attempt();
+      });
+      input.focus();
+    }
+  }
 })();
 </script>
 
@@ -1973,14 +1989,74 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     if (t && t.closest && t.closest('a[href^="#"]')) set();
   }, true);
 
+  // Opening the bare URL must land on the cover, and on an iPhone it did not.
+  // Safari remembers a scroll offset per URL and re-applies it when the page is
+  // reopened, so a reader who left off at the back of the book was returned
+  // there instead of to the cover — reported from an iPhone, where this book is
+  // actually read. Chrome reproduces the same class on reload: scrolled to
+  // 20000, reloaded, came back at 20000 with no fragment in the URL.
+  //
+  // Turning restoration off is the fix, and it is deliberately unconditional
+  // rather than sniffed for Safari — every browser that restores is restoring
+  // the same wrong thing for a document with a cover.
+  //
+  // THE COST, stated rather than buried: going back to the book from a scouting
+  // page no longer resumes where you were; it opens at the cover. That is the
+  // same setting doing the same job — `scrollRestoration` is a property of the
+  // history entry, so it cannot be off for a reopen and on for a back. The
+  // sticky nav bar makes returning to a section one tap, which is why this side
+  // of the trade was taken.
+  if ("scrollRestoration" in history) {
+    try { history.scrollRestoration = "manual"; } catch (err) {}
+  }
+
+  // `behavior:"instant"` is required, not stylistic: every scroll that defers to
+  // the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() — was
+  // measured being cancelled outright at this moment, leaving scrollY at 0. A
+  // call that "should have run" is not evidence that it did.
+  //
+  // The fallback is for browsers that reject the enum value, and it must NOT
+  // simply call the two-argument form: that defers to the CSS again and so
+  // reintroduces the exact bug this guard exists for. A contractor review caught
+  // precisely that on PR#187. Neutralise the behaviour instead, scroll, then put
+  // it back.
+  //
+  // One helper, two callers — the fragment jump and the scroll-to-cover. It was
+  // inlined in the fragment path when the cover path was added; duplicating it
+  // would have meant two copies of a rule whose whole point is that getting it
+  // wrong looks like working code.
+  var jumpTo = function (y) {
+    try {
+      window.scrollTo({ top: y, behavior: "instant" });
+    } catch (err) {
+      var root = document.documentElement;
+      var prior = root.style.scrollBehavior;
+      root.style.scrollBehavior = "auto";
+      window.scrollTo(0, y);
+      root.style.scrollBehavior = prior;
+    }
+  };
+
   // A deep link — /#schedule shared or bookmarked — never reaches its section
   // when it opens behind the access gate. The target has no box while .book is
   // display:none, so the browser's fragment scroll is a silent no-op, and
   // unlocking reveals the book without retrying it. Measured before this fix:
   // the reader lands at scrollY 0 with #schedule 2074px below, looking at the
   // cover. Re-apply the fragment once the book is actually visible.
-  var applyHash = function () {
-    if (!window.location.hash) return;
+  //
+  // With no fragment, the job is the mirror image — put the reader at the top —
+  // and it needs the same "once the book is visible" gate for the same reason:
+  // while .book is hidden the document is one viewport tall, so a scroll now is
+  // clamped to 0 and the browser re-applies its remembered offset the moment the
+  // content appears. `scrollRestoration = "manual"` above is what stops that on
+  // browsers that honour it; this is the belt to its braces, and the only guard
+  // for any that do not.
+  var placeReader = function () {
+    if (!window.location.hash) {
+      if (document.body.classList.contains("locked")) return;
+      jumpTo(0);
+      return;
+    }
     var target;
     try {
       target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
@@ -1996,38 +2072,21 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     // a jump is what a fragment navigation should do anyway.
     var y = target.getBoundingClientRect().top + (window.pageYOffset || 0) - (nav.offsetHeight + 12);
     if (y < 0) y = 0;
-    // `behavior:"instant"` is required, not stylistic: every scroll that defers
-    // to the CSS `smooth` — scrollIntoView(), and the two-argument scrollTo() —
-    // was measured being cancelled outright here, leaving scrollY at 0.
-    //
-    // The fallback is for browsers that reject the enum value, and it must NOT
-    // simply call the two-argument form: that defers to the CSS again and so
-    // reintroduces the exact bug this guard exists for. A contractor review
-    // caught precisely that on PR#187. Neutralise the behaviour instead, scroll,
-    // then put it back.
-    try {
-      window.scrollTo({ top: y, behavior: "instant" });
-    } catch (err) {
-      var root = document.documentElement;
-      var prior = root.style.scrollBehavior;
-      root.style.scrollBehavior = "auto";
-      window.scrollTo(0, y);
-      root.style.scrollBehavior = prior;
-    }
+    jumpTo(y);
   };
   if (!document.body.classList.contains("locked")) {
-    applyHash();
+    placeReader();
   } else if (window.MutationObserver) {
     var mo = new MutationObserver(function () {
       if (!document.body.classList.contains("locked")) {
         mo.disconnect();
-        applyHash();
+        placeReader();
       }
     });
     mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
   } else {
     // No MutationObserver — the original code took this branch while the book
-    // was still hidden, so applyHash() returned at offsetParent === null and
+    // was still hidden, so placeReader() returned at offsetParent === null and
     // the deep link kept its original failure for that capability class. Also a
     // contractor finding on PR#187. Poll briefly instead: the gate is the only
     // thing standing between here and a visible book, and a reader who never
@@ -2036,7 +2095,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     var timer = setInterval(function () {
       if (!document.body.classList.contains("locked")) {
         clearInterval(timer);
-        applyHash();
+        placeReader();
       } else if (++tries > 600) {
         clearInterval(timer); // ~5 minutes, then stop burning a timer
       }
