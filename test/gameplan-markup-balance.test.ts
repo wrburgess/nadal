@@ -80,7 +80,10 @@ describe("every hand-edited page in the game plan closes the tags it opens", () 
 
   it("catches an orphaned end tag — the guard can fail, on the real defect's shape", () => {
     const html = readFileSync(BOOK, "utf8");
-    const broken = html.replace("</table></div>\n\n  <div class=\"sub\">Our Tendencies", "</table></div>\n  </div>\n\n  <div class=\"sub\">Our Tendencies");
+    // Anchored on the Tiebreakers page, not the self-scout: reference content is not
+    // rewritten by prose passes, and the previous anchor ("Our Tendencies") was deleted
+    // by one — which broke this probe while the guard above stayed green.
+    const broken = html.replace("</table></div>\n\n  <div class=\"sub\">Match Tiebreakers", "</table></div>\n  </div>\n\n  <div class=\"sub\">Match Tiebreakers");
     expect(broken, "the seeded defect changed nothing — this probe is measuring itself").not.toEqual(html);
     const { open, close } = tagBalance(broken, "div");
     expect(close - open).toBe(1);
