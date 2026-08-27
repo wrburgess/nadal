@@ -115,6 +115,13 @@ body.locked .book{display:none}
    These are the fallbacks for the no-JS case only. */
 html{scroll-behavior:smooth;scroll-padding-top:189px}
 @media (min-width:600px){html{scroll-padding-top:124px}}
+/* Scroll anchoring is the browser adjusting your scroll offset to keep whatever
+   you were looking at visually still when content appears. That is the right
+   default almost everywhere and the wrong one here: unlocking the access gate
+   reveals the ENTIRE book — 44,000px — in a single frame, and anchoring to any
+   node in it moves the reader deep into the pages. The book has exactly one
+   correct opening position and the script below sets it. */
+html{overflow-anchor:none}
 body{font-family:var(--body);color:var(--ink);background:#E4E7EB;line-height:1.5;font-size:15px}
 
 /* ============ SCREEN CHROME ============ */
@@ -433,7 +440,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v4.1 &middot; Aug 26, 2026 &middot; 44 pages</div>
+  <div class="foot">v4.2 &middot; Aug 26, 2026 &middot; 44 pages</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
@@ -1913,6 +1920,14 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   var err = document.getElementById("err");
 
   function unlock() {
+    // Close the keyboard BEFORE the book appears. On iOS, focusing this input
+    // opens the keyboard, and the browser holds a scroll offset to keep the
+    // focused field visible. While `.book` is display:none the document is one
+    // viewport tall so that offset has nowhere to go — but the next two lines
+    // make the document 44,000px tall and then delete the element being kept in
+    // view, and the offset lands somewhere in the middle of the book. Blurring
+    // first means there is nothing to keep in view by the time either happens.
+    if (input && input.blur) { try { input.blur(); } catch (e) {} }
     document.body.classList.remove("locked");
     if (gate && gate.parentNode) gate.parentNode.removeChild(gate);
     try { sessionStorage.setItem(KEY, "1"); } catch (e) {}
@@ -2123,7 +2138,24 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       // is required as well as the record, so that reopening the URL after a
       // departure still lands on the cover rather than inheriting it.
       var back = navType === "back_forward" ? takeDeparture() : null;
-      jumpTo(back === null ? 0 : back);
+      var y = back === null ? 0 : back;
+      jumpTo(y);
+      // AND AGAIN AFTER LAYOUT. This function runs from a MutationObserver
+      // callback, which is a microtask — it fires before the browser has laid
+      // out the book it was told about. Scrolling there is a no-op the layout
+      // then overrules, which is exactly the shape of the bug reported from an
+      // iPhone: the reader entered the access code and arrived at the back of
+      // the book. Two frames put this after the layout that reveals the book,
+      // and the timeout covers a browser that lays out later still.
+      //
+      // Safe to re-assert: this only runs on a load with no fragment, and all
+      // of it lands within ~300ms of the gate opening — before a reader who has
+      // just typed a four-digit code could have scrolled anywhere on purpose.
+      var again = function () { jumpTo(y); };
+      if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(function () { window.requestAnimationFrame(again); });
+      }
+      window.setTimeout(again, 300);
       return;
     }
     var target;
