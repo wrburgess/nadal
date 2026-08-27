@@ -2026,7 +2026,14 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   // So: record where the reader was when they left, and replay it on exactly one
   // condition — a navigation the browser reports as `back_forward`.
   var LEFT_KEY = "sgp-left-at";
-  var docUrl = function () { return window.location.href.split("#")[0]; };
+  // The FULL href, fragment included — this identifies the history entry, and a
+  // history entry is what is being restored. Stripping the fragment (an earlier
+  // version did) conflates `/`, `/#schedule` and `/#sources` into one slot, so
+  // Backing out of a fragment excursion could replay an offset recorded at a
+  // different entry. A review round named the class: fragment-qualified entries
+  // were unrepresented in the key. An entry with no record now falls through to
+  // the cover rather than borrowing a neighbour's position.
+  var entryUrl = function () { return window.location.href; };
 
   var navType = "";
   try {
@@ -2044,21 +2051,21 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   window.addEventListener("pagehide", function () {
     try {
       sessionStorage.setItem(LEFT_KEY, JSON.stringify({
-        u: docUrl(),
+        u: entryUrl(),
         y: Math.round(window.pageYOffset || 0)
       }));
     } catch (err) {}
   });
 
-  // The record, if it belongs to THIS document — and cleared as it is read, so a
-  // later reopen cannot inherit a departure that was already spent.
+  // The record, if it belongs to THIS history entry — and cleared as it is read,
+  // so a later reopen cannot inherit a departure that was already spent.
   var takeDeparture = function () {
     var rec = null;
     try {
       var raw = sessionStorage.getItem(LEFT_KEY);
       if (!raw) return null;
       rec = JSON.parse(raw);
-      if (!rec || rec.u !== docUrl()) return null;
+      if (!rec || rec.u !== entryUrl()) return null;
       sessionStorage.removeItem(LEFT_KEY);
     } catch (err) {
       return null;                     // unreadable or unparseable: treat as absent
