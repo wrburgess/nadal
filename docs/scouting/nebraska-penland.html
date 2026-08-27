@@ -177,13 +177,29 @@
   document.body.classList.add("locked");
   try { if (sessionStorage.getItem(KEY) === "1") unlock(); } catch (e) {}
 
-  document.getElementById("go").addEventListener("click", attempt);
-  input.addEventListener("keydown", function (e) { if (e.key === "Enter") attempt(); });
-  input.addEventListener("input", function () {
-    err.textContent = "";
-    if (input.value.length === 4) attempt();
-  });
-  if (gate) input.focus();
+  // Wire the gate only if it is still standing. unlock() above DETACHES #gate,
+  // so on every return visit within a session the next line used to re-query the
+  // DOM for a button that was no longer in it and throw
+  // `TypeError: Cannot read properties of null (reading 'addEventListener')`,
+  // killing the rest of this function. It looked harmless — everything below is
+  // only needed while the gate is up — but it left an uncaught error on the most
+  // common load of the page and made the remaining lines dead code that only
+  // appeared to run. Found on all six gated pages.
+  //
+  // `go` is looked up here rather than beside `gate` above so the lookup happens
+  // on the branch that actually uses it, and cannot go stale in between.
+  if (document.body.classList.contains("locked")) {
+    var go = document.getElementById("go");
+    if (go) go.addEventListener("click", attempt);
+    if (input) {
+      input.addEventListener("keydown", function (e) { if (e.key === "Enter") attempt(); });
+      input.addEventListener("input", function () {
+        err.textContent = "";
+        if (input.value.length === 4) attempt();
+      });
+      input.focus();
+    }
+  }
 })();
 </script>
 
