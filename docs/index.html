@@ -2148,10 +2148,27 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       // the book. Two frames put this after the layout that reveals the book,
       // and the timeout covers a browser that lays out later still.
       //
-      // Safe to re-assert: this only runs on a load with no fragment, and all
-      // of it lands within ~300ms of the gate opening — before a reader who has
-      // just typed a four-digit code could have scrolled anywhere on purpose.
-      var again = function () { jumpTo(y); };
+      // A reader who DOES scroll in that window keeps their scroll. An earlier
+      // version of this comment claimed the window was too short for anyone to
+      // have scrolled on purpose, and enforced nothing — a review round pointed
+      // out that the claim was the only thing standing between a fast reader and
+      // having their scroll yanked back. Now a real input gesture cancels it.
+      //
+      // Position alone cannot decide this: the bug being fixed ALSO moves the
+      // scroll away from `y`, so "not where I put it" is true in both cases. The
+      // gesture is the only signal that separates them.
+      var readerMoved = false;
+      var noteReaderInput = function () { readerMoved = true; };
+      try {
+        window.addEventListener("wheel", noteReaderInput, { passive: true, once: true });
+        window.addEventListener("touchmove", noteReaderInput, { passive: true, once: true });
+        window.addEventListener("keydown", noteReaderInput, { once: true });
+      } catch (err) {
+        window.addEventListener("wheel", noteReaderInput);
+        window.addEventListener("touchmove", noteReaderInput);
+        window.addEventListener("keydown", noteReaderInput);
+      }
+      var again = function () { if (!readerMoved) jumpTo(y); };
       if (window.requestAnimationFrame) {
         window.requestAnimationFrame(function () { window.requestAnimationFrame(again); });
       }
