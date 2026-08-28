@@ -98,13 +98,19 @@ body.locked .book{display:none}
    bar wraps, and adding the Cover link moved every one of these numbers, which
    is the argument for measuring rather than hardcoding. Adding Practice, Rules
    and Tiebreakers moved them again — 16 links became 19, and BOTH values below
-   had to grow. Re-measured at 19 links, in a real viewport of each width:
+   had to grow. Adding Day 1 took it to 20 and moved every band again — and this
+   time only ONE fallback changed, which is the argument for re-measuring rather
+   than assuming a new link costs both. Re-measured at 20 links, in a real
+   viewport of each width:
 
-       320-360px  177px (5 rows)     375-430px  144px (4 rows)
-       480-640px  112px (3 rows)     >=700px     79px (2 rows)
+       320px      209px (6 rows)     360-390px  177px (5 rows)
+       414-480px  144px (4 rows)     540-700px  112px (3 rows)
+       >=768px     79px (2 rows)
 
    Each fallback is the worst case in the range it covers, plus the 12px the JS
-   adds: 177+12 below 600, 112+12 at or above it. The >=600 value is generous
+   adds: 209+12 below 600, 112+12 at or above it. The >=600 value is unchanged
+   from 19 links because 600-700px still wraps to three rows; the sub-600 value
+   grew by a whole row because 320px did. The >=600 value is generous
    above 700px on purpose — erring large is safe (a wider gap), erring small
    hides the heading, and one constant per range beats four that a new nav link
    would invalidate. Do not measure these with headless Chrome's --window-size:
@@ -113,7 +119,7 @@ body.locked .book{display:none}
 
    The JS at the foot of the file measures the live value and overrides these.
    These are the fallbacks for the no-JS case only. */
-html{scroll-behavior:smooth;scroll-padding-top:189px}
+html{scroll-behavior:smooth;scroll-padding-top:221px}
 @media (min-width:600px){html{scroll-padding-top:124px}}
 /* Scroll anchoring is the browser adjusting your scroll offset to keep whatever
    you were looking at visually still when content appears. That is the right
@@ -411,6 +417,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   <a href="#tiebreakers">Tiebreakers</a>
   <a href="#thu">Thu</a>
   <a href="#fri">Fri</a>
+  <a href="#day1">Day 1</a>
   <a href="#sat">Sat</a>
   <a href="#sun">Sun</a>
   <a href="#cards">Match Cards</a>
@@ -444,7 +451,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v4.6 &middot; Aug 27, 2026 &middot; 44 pages</div>
+  <div class="foot">v4.7 &middot; Aug 28, 2026 &middot; 49 pages</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
@@ -465,24 +472,25 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <div class="toc-group"><h3>Daily Itinerary</h3>
       <a class="toc-row" href="#thu"><span class="toc-t">Thursday, Aug 27</span><span class="toc-note">— travel day · Rebar 8:00pm</span><span class="toc-dots"></span><span class="toc-pg">10</span></a>
       <a class="toc-row" href="#fri"><span class="toc-t">Friday, Aug 28</span><span class="toc-note">— match day 1 · Jimm's 7:30pm</span><span class="toc-dots"></span><span class="toc-pg">11</span></a>
-      <a class="toc-row" href="#sat"><span class="toc-t">Saturday, Aug 29</span><span class="toc-note">— match day 2 · Sidebar 7:00pm</span><span class="toc-dots"></span><span class="toc-pg">13</span></a>
-      <a class="toc-row" href="#sun"><span class="toc-t">Sunday, Aug 30</span><span class="toc-note">— final day · drive home</span><span class="toc-dots"></span><span class="toc-pg">15</span></a>
+      <a class="toc-row" href="#day1"><span class="toc-t">Day 1 Report</span><span class="toc-note">— results, standings, what Friday changed · pp. 13&ndash;17</span><span class="toc-dots"></span><span class="toc-pg">13</span></a>
+      <a class="toc-row" href="#sat"><span class="toc-t">Saturday, Aug 29</span><span class="toc-note">— match day 2 · Sidebar 7:00pm</span><span class="toc-dots"></span><span class="toc-pg">18</span></a>
+      <a class="toc-row" href="#sun"><span class="toc-t">Sunday, Aug 30</span><span class="toc-note">— final day · drive home</span><span class="toc-dots"></span><span class="toc-pg">20</span></a>
     </div>
 
     <div class="toc-group"><h3>Scouting Reports</h3>
-      <a class="toc-row" href="#field"><span class="toc-t">The Springfield Five</span><span class="toc-note">&mdash; seeding, tiebreakers, how they see us</span><span class="toc-dots"></span><span class="toc-pg">16</span></a>
-      <a class="toc-row" href="#cards"><span class="toc-t">1 · vs Iowa / Versteeg</span><span class="toc-note">— Fri 11:30 AM · pp. 19–23</span><span class="toc-dots"></span><span class="toc-pg">19</span></a>
-      <a class="toc-row" href="#card-stl"><span class="toc-t">2 · vs St. Louis / Petruska</span><span class="toc-note">— Sat 9:45 AM · pp. 24–28</span><span class="toc-dots"></span><span class="toc-pg">24</span></a>
-      <a class="toc-row" href="#card-ok"><span class="toc-t">3 · vs Oklahoma / Dickason</span><span class="toc-note">— Sat 1:15 PM · pp. 29–32</span><span class="toc-dots"></span><span class="toc-pg">29</span></a>
-      <a class="toc-row" href="#card-ne"><span class="toc-t">4 · vs Nebraska / Penland</span><span class="toc-note">— Sun 8:15 AM · pp. 33–37</span><span class="toc-dots"></span><span class="toc-pg">33</span></a>
-      <a class="toc-row" href="#scout-hoa"><span class="toc-t">Ourselves (HOA)</span><span class="toc-note">— self-scout + the four lineup cards, pp. 38–40</span><span class="toc-dots"></span><span class="toc-pg">38</span></a>
+      <a class="toc-row" href="#field"><span class="toc-t">The Springfield Five</span><span class="toc-note">&mdash; seeding, tiebreakers, how they see us</span><span class="toc-dots"></span><span class="toc-pg">21</span></a>
+      <a class="toc-row" href="#cards"><span class="toc-t">1 · vs Iowa / Versteeg</span><span class="toc-note">— Fri 11:30 AM · pp. 24–28</span><span class="toc-dots"></span><span class="toc-pg">24</span></a>
+      <a class="toc-row" href="#card-stl"><span class="toc-t">2 · vs St. Louis / Petruska</span><span class="toc-note">— Sat 9:45 AM · pp. 29–33</span><span class="toc-dots"></span><span class="toc-pg">29</span></a>
+      <a class="toc-row" href="#card-ok"><span class="toc-t">3 · vs Oklahoma / Dickason</span><span class="toc-note">— Sat 1:15 PM · pp. 34–37</span><span class="toc-dots"></span><span class="toc-pg">34</span></a>
+      <a class="toc-row" href="#card-ne"><span class="toc-t">4 · vs Nebraska / Penland</span><span class="toc-note">— Sun 8:15 AM · pp. 38–42</span><span class="toc-dots"></span><span class="toc-pg">38</span></a>
+      <a class="toc-row" href="#scout-hoa"><span class="toc-t">Ourselves (HOA)</span><span class="toc-note">— self-scout + the four lineup cards, pp. 43–45</span><span class="toc-dots"></span><span class="toc-pg">43</span></a>
     </div>
 
     <div class="toc-group"><h3>Reference</h3>
-      <a class="toc-row" href="#directory"><span class="toc-t">Directory</span><span class="toc-note">— addresses, phones, hours</span><span class="toc-dots"></span><span class="toc-pg">41</span></a>
-      <a class="toc-row" href="#links"><span class="toc-t">Tournament Links &amp; Director</span><span class="toc-note">— USTA portals, Ben Coltharp</span><span class="toc-dots"></span><span class="toc-pg">42</span></a>
-      <a class="toc-row" href="#sources"><span class="toc-t">Sources</span><span class="toc-note">— where every figure came from</span><span class="toc-dots"></span><span class="toc-pg">43</span></a>
-      <a class="toc-row" href="#app"><span class="toc-t">Match Tennis Team App</span><span class="toc-note">— download links and QR codes</span><span class="toc-dots"></span><span class="toc-pg">44</span></a>
+      <a class="toc-row" href="#directory"><span class="toc-t">Directory</span><span class="toc-note">— addresses, phones, hours</span><span class="toc-dots"></span><span class="toc-pg">46</span></a>
+      <a class="toc-row" href="#links"><span class="toc-t">Tournament Links &amp; Director</span><span class="toc-note">— USTA portals, Ben Coltharp</span><span class="toc-dots"></span><span class="toc-pg">47</span></a>
+      <a class="toc-row" href="#sources"><span class="toc-t">Sources</span><span class="toc-note">— where every figure came from</span><span class="toc-dots"></span><span class="toc-pg">48</span></a>
+      <a class="toc-row" href="#app"><span class="toc-t">Match Tennis Team App</span><span class="toc-note">— download links and QR codes</span><span class="toc-dots"></span><span class="toc-pg">49</span></a>
     </div>
 
   </div>
@@ -844,6 +852,157 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <li>8 min from hotel</li>
     </ul></li>
   </ul></div>
+</section>
+
+<!-- ================= DAY 1 REPORT ================= -->
+<section class="page" id="day1">
+  <div class="card-head">
+    <div class="eyebrow">Day 1 Report</div>
+    <h2>Friday, Aug 28</h2>
+    <div class="when">All four flight matches complete &middot; read off TennisLink at 6:09 PM</div>
+  </div>
+
+  <p style="font-size:13.5px;margin-top:12px">We lost the tie to Iowa <span class="fld">1&ndash;3</span>. Ram Chettiar won the singles; the three doubles courts went in straight sets. <span class="fld">All four ties in the flight finished 3&ndash;1</span> &mdash; nobody has played a 2&ndash;2 yet, so no team has had to reach past the first line of the tiebreaker ladder.</p>
+
+  <div class="sub">Where We Stand</div>
+  <div class="sub-note">Official standings, 8/28 6:09 PM. Each team takes one bye per round, so the ties-played counts differ.</div>
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>Team</th><th>Ties</th><th>Courts</th><th>Sets</th><th>Games</th><th>Game %</th></tr></thead>
+    <tbody>
+      <tr><td class="who">IA / Versteeg</td><td class="stat">2&ndash;0</td><td class="stat">6&ndash;2</td><td class="stat">13&ndash;4</td><td class="stat">92&ndash;56</td><td class="stat">62.16%</td></tr>
+      <tr><td class="who">NE / Penland</td><td class="stat">1&ndash;1</td><td class="stat">4&ndash;4</td><td class="stat">8&ndash;8</td><td class="stat">74&ndash;74</td><td class="stat">50.00%</td></tr>
+      <tr><td class="who">OK / Dickason</td><td class="stat">1&ndash;0</td><td class="stat">3&ndash;1</td><td class="stat">7&ndash;2</td><td class="stat">48&ndash;33</td><td class="stat">59.26%</td></tr>
+      <tr><td class="who">STL / Petruska</td><td class="stat">0&ndash;2</td><td class="stat">2&ndash;6</td><td class="stat">4&ndash;13</td><td class="stat">61&ndash;91</td><td class="stat lo">40.13%</td></tr>
+      <tr><td class="who">HOA / Burgess&ndash;Zingg <span style="color:var(--steel)">us</span></td><td class="stat">0&ndash;1</td><td class="stat">1&ndash;3</td><td class="stat">2&ndash;7</td><td class="stat">25&ndash;46</td><td class="stat lo">35.21%</td></tr>
+    </tbody>
+  </table></div>
+  <div class="srcline">TennisLink Championship Reports &mdash; Team Standings, pulled 2026-08-28 6:09 PM</div>
+
+  <div class="readbox">
+    <h4>The table is sorted on courts, not on ties</h4>
+    <p>Nebraska sits above Oklahoma here while holding the worse tie record &mdash; 1&ndash;1 against 1&ndash;0. That is the <a href="#tiebreakers">standings ladder</a> doing exactly what the Tiebreakers page says it does: <span class="fld">line one is individual matches won across the entire competition</span>, courts rather than team matches, and Nebraska has four to Oklahoma's three.</p>
+    <p><span class="fld">We have banked one court and twelve are still to play</span> &mdash; three ties, four courts each. A weekend of 2&ndash;2, 3&ndash;1, 3&ndash;1 finishes on nine, which is inside the range that separates second from fifth in a flight this tight.</p>
+    <p class="flag">Our 35.21% is last in the field, and games are line four. Every game clawed out of a set already gone is still worth something on Sunday afternoon. The Tiebreakers page said that before the weekend started and Friday has not changed it.</p>
+  </div>
+
+  <div class="sub">Our Match &mdash; HOA 1, Iowa 3</div>
+  <div class="sub-note">Match #3167552 &middot; 11:30 AM &middot; Cooper. Scores are written from our side.</div>
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>Court</th><th>Us</th><th>Iowa</th><th>Score</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td class="stat">S1</td><td>Ram Chettiar</td><td>Scott Gabrilson</td><td class="stat">5-7 6-3 1-0</td><td class="opp">Win</td></tr>
+      <tr><td class="stat">D1</td><td>Randy Burgess &amp; Mark Johnson</td><td>Todd Versteeg &amp; Jamie Johnson</td><td class="stat">2-6 3-6</td><td class="opp lo">Loss</td></tr>
+      <tr><td class="stat">D2</td><td>Rich Bierman &amp; Dave Merritt</td><td>Nick Stahly &amp; Max Wilker</td><td class="stat">1-6 3-6</td><td class="opp lo">Loss</td></tr>
+      <tr><td class="stat">D3</td><td>John Jacobs &amp; Marc Morris</td><td>John Micka &amp; Michael Hutchison</td><td class="stat">3-6 1-6</td><td class="opp lo">Loss</td></tr>
+    </tbody>
+  </table></div>
+  <div class="srcline">Games 25&ndash;46 &middot; sets 2&ndash;7 &middot; game-winning 35.21%</div>
+
+  <div class="readbox">
+    <h4>The card was played exactly as written</h4>
+    <p>S1 Chettiar, D1 Burgess and Johnson, D2 Bierman and Merritt, D3 Jacobs and Morris &mdash; four for four against the Match 1 card in this book, and the bench went as written too. <span class="fld">Friday is not a lineup story on our side.</span></p>
+  </div>
+
+  <div class="warnbox">
+    <h4>Iowa put one of its three best doubles men on every court</h4>
+    <p>This book named the three Iowa men to respect in doubles: <span class="fld">Stahly, Jamie Johnson and Micka</span>, 75&ndash;20 between them. All three played, and Iowa placed <span class="fld">exactly one of them on each doubles court</span> &mdash; Jamie Johnson at D1, Stahly at D2, Micka at D3.</p>
+    <p>That is why there was no soft court to attack. Their D1 was the weakest of the three pairs by combined record &mdash; <span class="fld">38&ndash;25</span>, against D2's 50&ndash;23 and D3's 49&ndash;28 &mdash; and it still won 6-2 6-3.</p>
+    <p><span class="fld">Micka at D3 is the number to carry forward.</span> He is 35&ndash;11 with the best games rate on their roster, he did not play the 8:00 AM tie at all, and he arrived fresh against our third court.</p>
+  </div>
+
+  <div class="warnbox">
+    <h4>Hutchison played doubles &mdash; this book said he never does</h4>
+    <p>The Iowa card called Michael Hutchison &ldquo;a specialist, not a swing man &mdash; the only registered Iowa player who has never taken a doubles court for this team.&rdquo; <span class="fld">On Friday he played S1 singles at 8:00, won it 6-3 6-4, and then played D3 doubles against us and won that too.</span></p>
+    <p>So the singles court we scouted hardest never appeared. Iowa gave S1 against us to <span class="fld">Scott Gabrilson</span> &mdash; 1&ndash;1 in singles on file, their ninth-rated man &mdash; and Chettiar still needed three sets, dropping the first 5-7 before taking it 6-3 1-0.</p>
+    <p class="flag">The lesson carries to Saturday and Sunday both: a scouted &ldquo;this man does not do X&rdquo; describes what is on file, not a rule the opponent has agreed to. Iowa used all nine of its registered men on Friday, and <span class="fld">five of them played a different court or a different discipline in the afternoon than in the morning</span> &mdash; Hutchison, Gabrilson, Stahly, Wilker and Jamie Johnson.</p>
+  </div>
+
+  <div class="sub">The Rest of the Flight</div>
+  <div class="sub-note">The three ties we were not on court for &mdash; which team took each court.</div>
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>Time</th><th>Tie</th><th>S1</th><th>D1</th><th>D2</th><th>D3</th></tr></thead>
+    <tbody>
+      <tr><td class="stat">8:00</td><td class="who">OK 3, STL 1</td><td class="stat">OK</td><td class="stat">STL</td><td class="stat">OK</td><td class="stat">OK</td></tr>
+      <tr><td class="stat">8:00</td><td class="who">IA 3, NE 1</td><td class="stat">IA</td><td class="stat">IA</td><td class="stat">NE</td><td class="stat">IA</td></tr>
+      <tr><td class="stat">11:30</td><td class="who">NE 3, STL 1</td><td class="stat">STL</td><td class="stat">NE</td><td class="stat">NE</td><td class="stat">NE</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="sub">Saturday 9:45 &mdash; St. Louis, After Two Losses</div>
+  <div class="sub-note">They are 0&ndash;2 and last in the field on games. What Friday actually showed.</div>
+
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>Court</th><th>vs Oklahoma, 8:00</th><th>Score</th><th>vs Nebraska, 11:30</th><th>Score</th></tr></thead>
+    <tbody>
+      <tr><td class="stat">S1</td><td>Borislav Ivanov</td><td class="stat lo">1-6 6-7</td><td>Stuart Friess</td><td class="stat">6-2 6-4</td></tr>
+      <tr><td class="stat">D1</td><td>Petruska &amp; Ingersoll</td><td class="stat">6-4 6-7 1-0</td><td>Taysi &amp; Ingersoll</td><td class="stat lo">0-6 4-6</td></tr>
+      <tr><td class="stat">D2</td><td>Fikes &amp; Taysi</td><td class="stat lo">2-6 4-6</td><td>Bohn &amp; Petruska</td><td class="stat lo">1-6 2-6</td></tr>
+      <tr><td class="stat">D3</td><td>Hagenbrock &amp; Becker</td><td class="stat lo">3-6 4-6</td><td>Kamat &amp; Holman</td><td class="stat lo">6-7 3-6</td></tr>
+    </tbody>
+  </table></div>
+  <div class="srcline">Matches #3167549 and #3167553 &mdash; scores from St. Louis's side</div>
+
+  <div class="readbox">
+    <h4>All eleven of their men have already played</h4>
+    <p>This book counted eleven St. Louis men registered for Springfield. <span class="fld">All eleven were on court on Friday.</span> They have no rested man to bring in against us and no combination they have been holding back &mdash; whatever takes the four courts at 9:45 is a re-shuffle of men who have already played twice.</p>
+    <p><span class="fld">Petruska and Ingersoll are real, and the book said so.</span> Their D1 beat Oklahoma's Dickason and Richardson in a match tiebreak &mdash; the only court St. Louis won all morning. Then the pair was split: Ingersoll went to D1 with Taysi and lost 0-6 4-6, Petruska dropped to D2 with Bohn and lost 1-6 2-6.</p>
+    <p class="flag"><span class="fld">Their bottom two courts went 0&ndash;4 and did not take a single set.</span> Becker, Kamat, Holman and Bohn are the four men this book marked under 40% in doubles; all four played and all four lost. The plan on the St. Louis page &mdash; take the bottom courts decisively, make the top two competitive &mdash; came through Friday intact.</p>
+  </div>
+
+  <div class="readbox">
+    <h4>Ivanov lost, and it is one court rather than a re-rating</h4>
+    <p>The St. Louis card called Borislav Ivanov the strongest singles opponent on our schedule in the 40+ pool &mdash; 3&ndash;0 there, 66% of games. On Friday he lost S1 <span class="fld">1-6 6-7</span>, and the first set was not close.</p>
+    <p><span class="fld">Read the opponent before re-rating the man:</span> that was Keith Moore, who this book already calls the best singles player in the draw. Ivanov losing to Moore is the expected result, not new information about Ivanov.</p>
+    <p>What <em>is</em> new is that they have <span class="fld">two usable singles men and used both in one day</span> &mdash; Friess beat Nebraska's Andy Wang 6-2 6-4 in the afternoon. Marc, you may draw either.</p>
+  </div>
+
+  <div class="sub">Saturday 1:15 &mdash; Oklahoma, One Tie In</div>
+  <div class="sub-note">They beat St. Louis 3&ndash;1 at 8:00 and took the 11:30 bye.</div>
+
+  <div class="readbox">
+    <h4>Three of their ten have not played yet</h4>
+    <p>Oklahoma used seven men on Friday: Moore, Dickason, Richardson, Driesel, Coffey, Mitchell and Railian. <span class="fld">Chris Moody, Jim Vanderveen and Grenville Jones have not been on court.</span> Moody is the one to watch &mdash; 19&ndash;10 in doubles at 66% of matches, the second-best rate on their roster and the only 3.5S on it.</p>
+    <p>That is the mirror image of St. Louis, and it lands the wrong way round for us: <span class="fld">we play the team with no fresh men in the morning and the team holding three of them in the afternoon.</span></p>
+  </div>
+
+  <div class="warnbox">
+    <h4>Rob's court just got harder to call</h4>
+    <p>Keith Moore played S1 and beat Ivanov <span class="fld">6-1 7-6</span>. This book discounted Moore's 11&ndash;1 as mostly an 18-and-over record &mdash; 3&ndash;1 and 55% of games in the 40+ band, level with Hutchison and behind Halksworth's 65%.</p>
+    <p>Friday is one court against that read, and a well-chosen one: he took a 6-1 set off a man who was 3&ndash;0 at 40+ with 66% of games. <span class="fld">The discount may still be right, and the 40+ sample is now four courts rather than three</span> &mdash; but go in expecting the higher version of Moore, not the lower one.</p>
+    <p>The one crack: after that 6-1 he needed a tiebreak for the second set. He was pushed once the match settled.</p>
+  </div>
+
+  <div class="readbox">
+    <h4>Their D1 lost, and it was the pair this book named</h4>
+    <p>&ldquo;The traveling pair to watch is Dickason and Richardson.&rdquo; They played D1 and lost <span class="fld">4-6 7-6 0-1</span> to Petruska and Ingersoll &mdash; Oklahoma's only dropped court of the morning.</p>
+    <p>Behind them Coffey and Driesel took D2 6-2 6-4, and Mitchell and Railian took D3 6-3 6-4. Coffey was one of the three men this book said to respect and he delivered; the other two on that list, Dickason and Moody, went 0&ndash;1 and unused.</p>
+  </div>
+
+  <div class="sub">Nebraska &mdash; Sunday, and Already Not Last Year's Team</div>
+  <div class="sub-note">Eight of these men won 2 of 19 courts here last August. On Friday they went 1&ndash;1 and sit second on courts.</div>
+  <p style="font-size:13px;margin-top:8px">They lost 1&ndash;3 to Iowa and beat St. Louis 3&ndash;1. Jonathan Hernandez &mdash; the man this book named as the likeliest explanation for the change &mdash; lost S1 to Hutchison 3-6 4-6 in the morning, then <span class="fld">moved to D1 doubles and won 6-0 6-4</span> in the afternoon. Andy Wang took the singles in that second tie and lost it to Friess.</p>
+  <p style="font-size:13px;margin-top:6px"><span class="fld">Brandon Vasholz went 2&ndash;0 on the day</span> &mdash; D2 with Nick Sowl to beat Iowa's Jamie Johnson and Gabrilson 6-4 7-5, then D2 with Chris Acker to beat St. Louis 6-1 6-2. This book flagged Vasholz and Acker as their strongest doubles men who had never paired at D1. <span class="fld">They have now paired, at D2, and won it comfortably.</span></p>
+  <p style="font-size:13px;margin-top:6px">The 2-of-19 read is dead. Sunday is a real match.</p>
+
+  <div class="sub">Scouting, Marked</div>
+  <div class="sub-note">The calls this book made before the weekend, against one day of evidence. One day is one day.</div>
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>The call</th><th>Friday</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Hutchison is Iowa's singles man and has never taken a doubles court for them</td><td>Played S1 at 8:00, then D3 against us</td><td class="opp lo">Wrong</td></tr>
+      <tr><td>Iowa's S1 is the softest singles court in the field</td><td>We drew Gabrilson, not Hutchison; won it in three</td><td class="stat">Untested</td></tr>
+      <tr><td>Stahly, Jamie Johnson and Micka are the three to respect</td><td>One per doubles court; all three won</td><td class="opp">Right</td></tr>
+      <tr><td>St. Louis is top-heavy &mdash; the top two courts are real</td><td>Their only two wins came at D1 and S1</td><td class="opp">Right</td></tr>
+      <tr><td>St. Louis has very little below the top two</td><td>D2 and D3 went 0&ndash;4 without taking a set</td><td class="opp">Right</td></tr>
+      <tr><td>Ivanov is the strongest 40+ singles man we face</td><td>Lost 1-6 6-7 &mdash; but to Keith Moore</td><td class="stat">Open</td></tr>
+      <tr><td>Moore's 11&ndash;1 is an 18+ record; treat him level with Hutchison</td><td>Beat a 3&ndash;0-at-40+ opponent 6-1 7-6</td><td class="opp lo">Doubtful</td></tr>
+      <tr><td>Oklahoma's traveling pair to watch is Dickason and Richardson</td><td>Played D1 and lost it in a match tiebreak</td><td class="opp lo">Wrong</td></tr>
+      <tr><td>Nebraska's 2-of-19 last August is the read on them</td><td>Went 1&ndash;1 and sit second on courts</td><td class="opp lo">Superseded</td></tr>
+      <tr><td>There is no dead set &mdash; games are line four</td><td>We are last in the field on games at 35.21%</td><td class="opp">Live</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="srcline">All results and standings read from TennisLink League Championship Reports &mdash; 3.5 Men- Single RR, 2026-08-28 6:09 PM; matches #3167549, #3167550, #3167552, #3167553. TennisLink prints each set winner-first without naming the winning side, so per-court winners are derived from the set scores and reconciled against every standings column &mdash; courts, sets and games &mdash; for all five teams. All five reconcile exactly.</div>
 </section>
 
 <!-- ================= SATURDAY ================= -->
@@ -1831,6 +1990,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
     <li><span class="fld">Massage recommendations:</span> Bryan's research, relayed Aug 25 — ratings, pricing, and hours per current business listings</li>
     <li><span class="fld">Extracurricular websites:</span> Each business's own site, address-matched against the Directory entry, Aug 26 &mdash; <span class="lo">belowzerocryospa.com did not respond when checked</span></li>
     <li><span class="fld">Tournament links &amp; TD contact:</span> Per Randy, Aug 25</li>
+    <li><span class="fld">Day 1 results and standings:</span> TennisLink League Championship Reports &mdash; Championship Level, 3.5 Men- Single RR, read 2026-08-28 6:09 PM. Matches #3167549, #3167550, #3167552, #3167553. TennisLink prints set scores winner-first without naming the winning side; per-court winners are derived from those scores and reconciled against the standings' own courts, sets and games columns for all five teams &mdash; all five reconcile exactly.</li>
   </ul>
 
 </section>
