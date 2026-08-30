@@ -311,8 +311,13 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 .bl.p .sp{color:var(--ball)}
 .bl.d .sp{color:var(--court-deep)}
 .bl.k .sp{color:var(--flag)}
+.bl.sa .sp{color:var(--flag)}
+.bl.mc .sp{color:var(--court)}
+/* Day 3's speaker tag is ten characters — "Stephen A." — and the 62px rail
+   truncates it, so this one section gets a wider rail. */
+#booth-day3 .bl{grid-template-columns:80px 1fr}
 @media print{.bl,.booth-art{break-inside:avoid}.booth-art svg{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-@media (max-width:640px){.bl{grid-template-columns:1fr;gap:1px}.bl .sp{padding-top:0}}
+@media (max-width:640px){.bl{grid-template-columns:1fr;gap:1px}.bl .sp{padding-top:0}#booth-day3 .bl{grid-template-columns:1fr}}
 @media print{.card-head{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 @media (max-width:640px){.card-facts{grid-template-columns:1fr 1fr}}
 
@@ -513,6 +518,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <a class="toc-row" href="#booth"><span class="toc-t">The Booth &middot; Day 1</span><span class="toc-note">— Cotton McKnight &amp; Pepper Brooks · pp. 50&ndash;55</span><span class="toc-dots"></span><span class="toc-pg">50</span></a>
       <a class="toc-row" href="#booth-day2a"><span class="toc-t">Day 2, Part 1</span><span class="toc-note">— Sat 9:45 vs St. Louis, called by Harry Doyle · pp. 56&ndash;58</span><span class="toc-dots"></span><span class="toc-pg">56</span></a>
       <a class="toc-row" href="#booth-day2b"><span class="toc-t">Day 2, Part 2</span><span class="toc-note">— Sat 1:15 vs Oklahoma, called by Harry Caray · pp. 59&ndash;61</span><span class="toc-dots"></span><span class="toc-pg">59</span></a>
+      <a class="toc-row" href="#booth-day3"><span class="toc-t">Day 3 — The Finale</span><span class="toc-note">— Sun 8:15 vs Nebraska, Stephen A. Smith &amp; Pat McAfee · pp. 62&ndash;65</span><span class="toc-dots"></span><span class="toc-pg">62</span></a>
     </div>
 
   </div>
@@ -2530,6 +2536,121 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   <p class="bl k"><span class="sp">Caray</span><span>Last thing. If you gave a man a WHOLE back — brand new, every muscle, right off the shelf — could he beat a BEAR? ...No. BUT. Could he beat a bear that ALSO had a bad back? ...NOW WE'RE TALKING! Now it's a MATCH! And I'll tell ya who I want in that one. JT Martin. In three.</span></p>
 
   <p class="bl k"><span class="sp">Caray</span><span>HOLY COW. That's tennis. Somebody tell me where I parked.</span></p>
+
+</section>
+
+<!-- ================= BOOTH-DAY3 ================= -->
+<section class="page" id="booth-day3">
+  <div class="card-head">
+    <h2>DAY 3 — THE FINALE, SUNDAY 8:15 vs NEBRASKA</h2>
+    <div class="when"><em>with Stephen A. Smith and Pat McAfee</em></div>
+  </div>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>GOOD MORNING, beautiful people! It is 8:15 in the AM at the Cooper Tennis Complex in Springfield, Missouri. The sun is up, the doubles are outdoors, the singles are indoors, it is a gorgeous seventy-three degrees, and sitting next to me, a man who has been yelling since the valet stand — my partner, Stephen A. Smith!</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>Pat. Pat. Before you say another word. I have been in this business a long, LONG time. I have covered heavyweight fights. I have covered Game Sevens. I have covered franchises in Brooklyn that I will not name out of respect for the deceased. And I have NEVER — and I want to be crystal clear — NEVER been asked to summarize what I witnessed here this morning.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>It was a rough one for the boys.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>Rough? ROUGH?! Nebraska FOUR. Kansas City ZERO. Zero, Pat! The number that comes before one! These gentlemen beat this <em>exact</em> Nebraska outfit four courts to one LAST August — it's in their own book, with a table — and they showed up this morning and got swept off the premises before the complimentary breakfast at the TownePlace Suites was fully cleared!</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">THE TAPE</div>
+
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>Court</th><th>Ours</th><th>Nebraska</th><th>Score</th><th></th></tr></thead>
+    <tbody>
+      <tr><td class="stat"><span class="fld">S1</span></td><td>Ram Chettiar</td><td>NE / Penland</td><td class="stat">&mdash;</td><td class="opp lo">❌</td></tr>
+      <tr><td class="stat"><span class="fld">D1</span></td><td>Mark Johnson &amp; Dave Merritt</td><td>NE / Penland</td><td class="stat">&mdash;</td><td class="opp lo">❌</td></tr>
+      <tr><td class="stat"><span class="fld">D2</span></td><td>JT Martin &amp; Marc Morris</td><td>NE / Penland</td><td class="stat">&mdash;</td><td class="opp lo">❌</td></tr>
+      <tr><td class="stat"><span class="fld">D3</span></td><td>Rob Halksworth &amp; John Jacobs</td><td>NE / Penland</td><td class="stat">&mdash;</td><td class="opp lo">❌</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>You'll notice we are not showing the scores.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>The booth took a vote, ladies and gentlemen. The vote was two to nothing. It is the only shutout this morning I feel good about.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>And a word for Ram Chettiar, who walked into that building UNDEFEATED — two and oh on the weekend, the best player on the roster, took the singles indoors and battled. Those boys competed, Stephen A. Every one of 'em.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>They competed, Pat. And Nebraska did to Ram Chettiar what Ram Chettiar spends his weekends doing to other people. That is the cruelty of this sport, and I can live with it. What I CANNOT live with is the piece of paper those men were sent out there holding. Which brings me—</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Here we go.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">AND THE CAPTAIN</div>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>Randy. Burgess. And Pat, I want to be fair, because I am NOTHING if not fair. The man wrote a fifty-five-page book. Weather gridpoints. A carpool manifest. A tiebreaker LADDER. I have read shorter collective bargaining agreements. And after captaining this team to four courts out of twelve across three matches, this man made the single greatest personnel decision of his tenure: he benched HIMSELF.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Self-awareness. Hammer down. I respect it.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>It took him FOUR MATCHES, Pat! And it was the only correct call on the card! Because walk with me here. Andy Plungkhen played two courts this weekend. He won BOTH. Six-love, seven-five on Saturday morning. Seven-six, six-four Saturday afternoon. The only man on this roster to play more than once and never lose. So on Sunday morning, with the season on the line, the captain looked at the one man who did not know how to lose... and SAT HIM DOWN.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Made him next man up.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>He made him NEXT MAN UP, Pat! The man was already up! He was the ONLY man up! You do not take the up man and make him the next man! That is not how UP works! And it gets worse. Twelve doubles courts this weekend. TWELVE. This captain ran out twelve DIFFERENT pairings. Not one combination repeated. Not ONE! Three of those pairs won a court — Burgess and Chettiar, Jacobs and Plungkhen, Martin and Plungkhen — and every single one of them was dissolved by sunrise, never to be seen together again, like witnesses in a federal case!</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>He's a chemist, Stephen A. The man's in the lab. He's mixing compounds.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>The compounds went OH-AND-THREE this morning, Pat! Three doubles courts, three pairings that had never played together in their LIVES — Johnson and Merritt, Martin and Morris, Halksworth and Jacobs — in an elimination-adjacent situation, against a team you already OWNED the blueprint for! That is not chemistry! That is a man shaking the beaker to see what turns BLUE!</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">THE McAFEE HYPOTHESIS</div>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Can I offer an alternative explanation for the oh-and-four?</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>No.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>The pyramids—</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>PAT.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Hear me out! The pyramids were aligned to TRUE NORTH when they went up. Dead perfect. Today? Off by a fraction of a degree. Why? Because the Earth's axis WOBBLES, brother. Big slow wobble, twenty-six thousand years around. The aliens built those things as antennas, the wobble knocked 'em out of tune, and every so often the signal pools up in one spot on the globe. And at this particular moment in human history, that spot is Springfield, Missouri. This town WARPS the cosmos, Stephen A. Those eleven men never had a chance.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>I want the audience to understand what I deal with. Pat. I have DRIVEN this town. Do you know what is in Springfield, Missouri? Strip malls. That is what is here! It is a Verizon store, a vape emporium, and a Panera Bread, sharing a parking lot, REPEATED, for eleven consecutive MILES! You cannot warp the cosmos from a strip mall! The cosmos does not HAVE a suite available between the mattress outlet and the nail salon!</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Then explain Sidebar.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>...Explain what?</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Sidebar! The restaurant! We ate there last night — whole team was there, over on East Republic Road. That entire operation — the bar, the floor, the kitchen, the door, open till 1:30 in the morning — is run by TWO human beings. Two! I counted, Stephen A. I counted twice and got two both times. Two people cannot run a full-service restaurant in normal spacetime. That is time dilation. Those two employees are experiencing a longer evening than the rest of us.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>That is a STAFFING SHORTAGE, Pat! That is the labor market in a mid-size Missouri metro! That is two hard-working individuals holding down six jobs, and I salute them — although I will concede, and I do this reluctantly, that my entrée arrived DISTURBINGLY fast.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Thank you. Exhibit two: Mercy Hospital. Beautiful building. You can see it from everywhere in this town. Now try to DRIVE to it. You can't! Every road bends away from it! That is why everybody in Springfield takes a HELICOPTER to Mercy, Stephen A. — it's the only vehicle that doesn't use the roads. When the roads themselves curve around a fixed point, brother, that is the textbook definition of a gravity well.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>It is a MEDICAL helicopter, Pat! Every hospital in the United States of America has one! It is for EMERGENCIES!</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Then why is it always full?</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>I— that is not— you cannot see into the helicopter, Pat!</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Exhibit three. The San Antonio Missions. Double-A baseball club. Came up here to play a series against Springfield. Look at the schedule, Stephen A. — they are never leaving. That series does not END. Those young men are going to play out the remainder of their natural careers inside the Springfield city limits, and the Texas League is just gonna have to send mail.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>The series is six games, Pat! It is a standard six-game road trip! It—</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Is it? Check it.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>...Somebody check on the Missions.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">FINAL — NEBRASKA 4, HOA/BURGESS-ZINGG 0</div>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>Let the record reflect the totality of it. Zero and four in the ties. Four courts won out of sixteen for the weekend. Dead last in the field they arrived seeded fourth in. And before we sign off, I sought comment from inside that locker room, and a member of this team — I will not say who, out of what remains of my respect for this organization — summed up the weekend for me. I am going to read the quote exactly as it was delivered. Quote: <span class="fld">"We ran the IBS strategy. We crapped all over the courts."</span> End quote.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>BANG! Now THAT is self-scouting! That's the most honest line produced by this organization all weekend and it wasn't even in the book! Page fifty-six, captain! Write it down!</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>I have covered professional athletics for DECADES, Pat, and I have never had a scouting report and a gastroenterology report arrive in the same sentence. And now eleven men will get into their pre-assigned carpool vehicles — it is on the carpool page, I checked, of COURSE it's on a page — and drive one hundred and sixty-six miles back to Kansas City. In silence.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>IF Springfield lets 'em leave.</span></p>
+
+  <p class="bl sa"><span class="sp">Stephen A.</span><span>...Pat.</span></p>
+
+  <p class="bl mc"><span class="sp">McAfee</span><span>Ask the Missions, Stephen A. Ask the Missions. For the great Stephen A. Smith, I'm Pat McAfee. Springfield, you beautiful cosmic anomaly — we're comin' home. Probably.</span></p>
 
 </section>
 </div>
