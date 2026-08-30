@@ -295,6 +295,22 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   padding:2px 9px;border-radius:2px;background:#E3E7EC;color:var(--placeholder);display:inline-block;margin-top:8px}
 .badge.ok{background:#DDE5F1;color:var(--court-deep)}
 .badge.warn{background:#F3E0E4;color:var(--flag)}
+/* ============ THE BOOTH — Day 1 comedy wrap ============ */
+/* Two-column dialogue: the speaker tag is a fixed rail so every line of prose
+   shares one left edge. Grid rather than a hanging indent because the tag is a
+   different font and size from the body, and text-indent cannot be trusted to
+   land on the same pixel at both. */
+.booth-art{margin-top:16px;border:1px solid var(--rule);border-radius:2px;background:var(--court-deep);overflow:hidden}
+.booth-art svg{display:block;width:100%;height:auto}
+.booth-cap{font-family:var(--mono);font-size:10.5px;line-height:1.45;color:var(--steel);margin-top:6px}
+.booth-rule{border:0;border-top:1px solid var(--rule);margin:20px 0 0}
+.booth-line{font-size:13.5px;margin-top:10px}
+.bl{display:grid;grid-template-columns:62px 1fr;gap:10px;margin-top:11px;font-size:13.5px;line-height:1.5}
+.bl .sp{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;padding-top:3px}
+.bl.c .sp{color:var(--court)}
+.bl.p .sp{color:var(--ball)}
+@media print{.bl,.booth-art{break-inside:avoid}.booth-art svg{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+@media (max-width:640px){.bl{grid-template-columns:1fr;gap:1px}.bl .sp{padding-top:0}}
 @media print{.card-head{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 @media (max-width:640px){.card-facts{grid-template-columns:1fr 1fr}}
 
@@ -426,6 +442,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
   <a href="#links">Links</a>
   <a href="#sources">Sources</a>
   <a href="#app">App</a>
+  <a href="#booth">Booth</a>
 </nav>
 
 <!-- ================= COVER ================= -->
@@ -451,7 +468,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <div class="addr">2331 E Pythian St, Springfield, MO 65802<br>(417) 837-5800</div>
     </div>
   </div>
-  <div class="foot">v4.7 &middot; Aug 28, 2026 &middot; 49 pages</div>
+  <div class="foot">v4.8 &middot; Aug 29, 2026 &middot; 55 pages</div>
 </section>
 
 <!-- ================= TABLE OF CONTENTS ================= -->
@@ -491,6 +508,7 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
       <a class="toc-row" href="#links"><span class="toc-t">Tournament Links &amp; Director</span><span class="toc-note">— USTA portals, Ben Coltharp</span><span class="toc-dots"></span><span class="toc-pg">47</span></a>
       <a class="toc-row" href="#sources"><span class="toc-t">Sources</span><span class="toc-note">— where every figure came from</span><span class="toc-dots"></span><span class="toc-pg">48</span></a>
       <a class="toc-row" href="#app"><span class="toc-t">Match Tennis Team App</span><span class="toc-note">— download links and QR codes</span><span class="toc-dots"></span><span class="toc-pg">49</span></a>
+      <a class="toc-row" href="#booth"><span class="toc-t">The Booth</span><span class="toc-note">— Day 1, called by Cotton McKnight and Pepper Brooks · pp. 50&ndash;55</span><span class="toc-dots"></span><span class="toc-pg">50</span></a>
     </div>
 
   </div>
@@ -2037,6 +2055,290 @@ td a{color:var(--court);text-decoration:none;border-bottom:1px dotted var(--cour
 
 
 
+
+<!-- ================= THE BOOTH ================= -->
+<section class="page" id="booth">
+  <div class="card-head">
+    <h2>🎾 SPRINGFIELD SECTIONALS — DAY 1 WRAP</h2>
+    <div class="when"><em>with Cotton McKnight and Pepper Brooks</em></div>
+  </div>
+
+  <div class="booth-art">
+    <svg viewBox="0 0 1000 380" role="img" aria-labelledby="boothTitle boothDesc">
+      <title id="boothTitle">The broadcast booth</title>
+      <desc id="boothDesc">Two announcers in headsets at a commentary desk, a monitor behind them showing the Day 1 scoreline, HOA 1 and Iowa 3.</desc>
+      <rect width="1000" height="380" fill="#16233F"/>
+      <g stroke="#2C4772" stroke-width="2" opacity=".55">
+        <path d="M0 214h1000M0 246h1000"/>
+        <path d="M140 60v154M860 60v154"/>
+      </g>
+      <g opacity=".9">
+        <rect x="352" y="44" width="296" height="132" rx="4" fill="#0E1729" stroke="#2C4772" stroke-width="3"/>
+        <text x="500" y="76" fill="#6B7480" font-family="IBM Plex Mono, Consolas, monospace" font-size="13" letter-spacing="3" text-anchor="middle">FINAL · MATCH 1 OF 4</text>
+        <text x="437" y="132" fill="#C8CDD4" font-family="Barlow Condensed, Arial Narrow, sans-serif" font-size="46" font-weight="700" text-anchor="middle">HOA 1</text>
+        <text x="563" y="132" fill="#C8CDD4" font-family="Barlow Condensed, Arial Narrow, sans-serif" font-size="46" font-weight="700" text-anchor="middle">IA 3</text>
+        <path d="M500 96v52" stroke="#2C4772" stroke-width="3"/>
+        <text x="500" y="160" fill="#C2596B" font-family="IBM Plex Mono, Consolas, monospace" font-size="12" letter-spacing="2" text-anchor="middle">25–46 GAMES</text>
+      </g>
+      <g>
+        <rect x="40" y="44" width="118" height="34" rx="3" fill="#7E2434"/>
+        <text x="99" y="67" fill="#FFFFFF" font-family="IBM Plex Mono, Consolas, monospace" font-size="14" letter-spacing="4" text-anchor="middle">ON AIR</text>
+      </g>
+      <g transform="translate(258 222)">
+        <path d="M-88 124C-88 58-48 34 0 34s88 24 88 90Z" fill="#2C4772"/>
+        <circle cx="0" cy="-12" r="44" fill="#34507C"/>
+        <path d="M-48-16a48 48 0 0 1 96 0" fill="none" stroke="#C8CDD4" stroke-width="7" stroke-linecap="round"/>
+        <rect x="-59" y="-22" width="17" height="28" rx="7" fill="#C8CDD4"/>
+        <rect x="42" y="-22" width="17" height="28" rx="7" fill="#C8CDD4"/>
+        <path d="M45 6Q30 38 10 36" fill="none" stroke="#C8CDD4" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="7" cy="36" r="8" fill="#7E2434"/>
+      </g>
+      <g transform="translate(742 222) scale(-1 1)">
+        <path d="M-88 124C-88 58-48 34 0 34s88 24 88 90Z" fill="#2C4772"/>
+        <circle cx="0" cy="-12" r="44" fill="#34507C"/>
+        <path d="M-48-16a48 48 0 0 1 96 0" fill="none" stroke="#C8CDD4" stroke-width="7" stroke-linecap="round"/>
+        <rect x="-59" y="-22" width="17" height="28" rx="7" fill="#C8CDD4"/>
+        <rect x="42" y="-22" width="17" height="28" rx="7" fill="#C8CDD4"/>
+        <path d="M45 6Q30 38 10 36" fill="none" stroke="#C8CDD4" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="7" cy="36" r="8" fill="#7E2434"/>
+      </g>
+      <rect x="0" y="286" width="1000" height="94" fill="#2C4772"/>
+      <rect x="0" y="286" width="1000" height="4" fill="#C8CDD4" opacity=".55"/>
+      <rect x="322" y="306" width="356" height="56" rx="3" fill="#16233F" stroke="#C8CDD4" stroke-width="2" opacity=".85"/>
+      <text x="500" y="330" fill="#C8CDD4" font-family="IBM Plex Mono, Consolas, monospace" font-size="12" letter-spacing="4" text-anchor="middle">COTTON McKNIGHT · PEPPER BROOKS</text>
+      <text x="500" y="351" fill="#6B7480" font-family="IBM Plex Mono, Consolas, monospace" font-size="11" letter-spacing="3" text-anchor="middle">COOPER TENNIS COMPLEX · FRI AUG 28</text>
+      <circle cx="176" cy="330" r="15" fill="#C8CDD4"/>
+      <path d="M165 322a26 26 0 0 0 0 16M187 322a26 26 0 0 1 0 16" fill="none" stroke="#2C4772" stroke-width="2"/>
+    </svg>
+  </div>
+  <div class="booth-cap">Original illustration. Cotton McKnight and Pepper Brooks are characters from <em>DodgeBall: A True Underdog Story</em> (2004); no film imagery is reproduced here.</div>
+
+  <hr class="booth-rule">
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Good evening, ladies and gentlemen, and welcome to Cooper Tennis Complex in Springfield, Missouri, where eleven men from Kansas City arrived Friday morning with a forty-nine-page tactical document, a color-coded carpool manifest, and an hourly weather forecast pulled from a National Weather Service gridpoint. I'm Cotton McKnight, alongside my colleague, Pepper Brooks.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Thanks, Cotton. They lost.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>They did indeed, Pepper. HOA/Burgess-Zingg falls to Iowa's Versteeg squad by a count of <span class="fld">one court to three</span>.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Forty-nine pages.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Forty-nine pages, Pepper.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">The Tape</div>
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>Court</th><th>Ours</th><th>Iowa</th><th>Score</th><th></th></tr></thead>
+    <tbody>
+      <tr><td class="stat"><span class="fld">S1</span></td><td>Ram Chettiar</td><td>Scott Gabrilson</td><td class="stat">5-7 6-3 1-0</td><td class="opp">✅ <span class="fld">WIN</span></td></tr>
+      <tr><td class="stat"><span class="fld">D1</span></td><td>Randy Burgess &amp; Mark Johnson</td><td>Versteeg &amp; Jamie Johnson</td><td class="stat">2-6 3-6</td><td class="opp lo">❌</td></tr>
+      <tr><td class="stat"><span class="fld">D2</span></td><td>Rich Bierman &amp; Dave Merritt</td><td>Stahly &amp; Wilker</td><td class="stat">1-6 3-6</td><td class="opp lo">❌</td></tr>
+      <tr><td class="stat"><span class="fld">D3</span></td><td>John Jacobs &amp; Marc Morris</td><td>Micka &amp; Hutchison</td><td class="stat">3-6 1-6</td><td class="opp lo">❌</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="booth-line"><span class="fld">Games 25–46. Sets 2–7. Thirty-five percent of games won — dead last in the field.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Is thirty-five good, Cotton?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>It is not, Pepper.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">S1 — Chettiar d. Gabrilson, 5-7 6-3 1-0</div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Ladies and gentlemen, the lone bright spot! Ram Chettiar, the man this book calls its most complete tennis player, walks onto the singles court against Scott Gabrilson — <span class="fld">Iowa's ninth-rated man</span>, a fellow with a career singles record of one and one — and Ram promptly loses the first set.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Why'd he do that, Cotton?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span><em>Drama</em>, Pepper. Sheer, unrepentant theater. He wins it back 6-3, takes the tiebreak 1-0, and delivers this team its only court of the entire day. A hero — a hero who made us all watch three sets to get there.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>He's the only guy who won, Cotton. He could've taken four sets and I'd have watched.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">D1 — Versteeg &amp; Johnson d. Burgess &amp; Johnson, 6-2 6-3</div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Court one, and here's your captain, Randy Burgess, paired with Mark Johnson — a duo the pre-tournament literature described as <em>two-and-oh together, seventy-one percent of games.</em></span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>What'd they get?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Five games, Pepper. Total.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Out of how many?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Let's move on. And I must note the cruelty of the draw here: Mark Johnson, of Kansas City, falls to <span class="fld">Jamie Johnson</span>, of Iowa. In a battle of Johnsons, Cotton McKnight is obligated to report that the wrong Johnson won.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Bold strategy, bringing only the one Johnson.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>And here's the twist of the knife: Iowa's D1 was, on paper, <span class="fld">the weakest of their three pairs</span>. The book measured it. Thirty-eight and twenty-five combined, against fifty-and-twenty-three at D2. Our captain drew the softest court Iowa had to offer and produced five games.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>He wrote the book that said that, right, Cotton?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>He wrote the book that said that, Pepper.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">D2 — Stahly &amp; Wilker d. Bierman &amp; Merritt, 6-1 6-3</div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>And now to court two, where we find <span class="fld">the most-proven pair on this entire roster.</span> Rich Bierman and Dave Merritt: four and one together, five courts over six months, and in the forty-and-over band specifically — I'm reading directly from the document, Pepper — <em>"two and oh, and they took eighty-six percent of games."</em></span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>How many'd they take today?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Four, Pepper. They took four games.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>That's not eighty-six percent, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>It is not. And spare a thought for Dave Merritt, who <span class="fld">drove up to Springfield alone on Friday morning</span> — solo, by his own arrangement, a change that required an amendment to the carpool page — for the privilege of winning one game in the first set.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>He's got the drive home too, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>He does, Pepper. He has all of that time to think.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">D3 — Micka &amp; Hutchison d. Jacobs &amp; Morris, 6-3 6-1</div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Court three! John Jacobs and Marc Morris, a pairing the book introduced with the words — and again I quote — <em>"Together: no shared court on file. There is no pair number to lean on."</em></span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>There's a number now, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>There is a number now, Pepper. It is zero and one.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Progress.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>And Marc Morris, a man for whom D3 is <em>the</em> slot — fourteen of his career courts, more than any other position on a tennis court — playing what should be his living room, drops it 6-3 6-1 to John Micka and Michael Hutchison.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Who's Hutchison?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Michael Hutchison, Pepper, is the man this book identified — in print, in bold, on a page somebody laminated — as <em>"the only registered Iowa player who has never taken a doubles court for this team."</em></span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>And he played doubles.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>He played singles at eight in the morning, won it. Then he played doubles against us in the afternoon, and won that too.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>So the book was wrong, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>The book was <span class="fld">spectacularly</span> wrong, Pepper. And here is the part that will keep a captain up at night: Iowa put <span class="fld">exactly one of its three best doubles men on every single court.</span> Johnson at one, Stahly at two, Micka at three. There was no soft court to attack, because Iowa refused to build one.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>That's a bold strategy, Cotton. Let's see if it pays off for 'em.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>It paid off, Pepper. It paid off three courts to one. It has already finished paying off.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">The Bench — A Tribute</div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Let us not neglect the four men who did not take a court on Friday, Pepper, for they went <span class="fld">undefeated.</span></span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Wow.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span><span class="fld">Andy Plungkhen</span>, listed in the document as <em>next man up</em> — the most agonizing job in sport. Andy spent Friday fully warm, fully stretched, and fully seated. He remains, at time of broadcast, next.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>He's still next, Cotton?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>He will always be next, Pepper. It's a title, like Duke.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span><span class="fld">JT Martin</span>, resting a back that has carried this franchise across <em>fifty-one career courts</em> — more than any man on the roster — sat Friday out entirely. Thirty-three and eighteen, Pepper. He has personally won more tennis matches than several of these opponents have played.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>And he rested.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>And he rested, Pepper, and watched his team win one court. That back is going to feel <em>terrific</em> about the decision.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span><span class="fld">Rob Halksworth</span> — unavailable Friday, and thus the only man in this flight whose scouting report Iowa could not falsify. And finally, <span class="fld">Bryan Zingg</span>, who is <em>literally in the name of the team</em> — HOA slash Burgess dash <span class="fld">Zingg</span> — and who spent the day one hundred and sixty miles away.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>His name played, Cotton. He didn't.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>His name went oh and one, Pepper.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">The Book Grades Itself</div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>And now the segment nobody on this roster requested. The forty-nine-page document made nine calls before a ball was struck. Friday returned the following:</span></p>
+
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>The call</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Hutchison never plays doubles for Iowa</td><td class="opp lo"><span class="fld">WRONG</span></td></tr>
+      <tr><td>Dickason &amp; Richardson are Oklahoma's pair to watch</td><td class="opp lo"><span class="fld">WRONG</span></td></tr>
+      <tr><td>Keith Moore's record is inflated</td><td class="opp lo"><span class="fld">DOUBTFUL</span></td></tr>
+      <tr><td>Iowa's S1 is the softest in the field</td><td class="opp"><span class="fld">UNTESTED</span></td></tr>
+      <tr><td>Stahly, Johnson, Micka are the three to respect</td><td class="opp">RIGHT</td></tr>
+      <tr><td>St. Louis is top-heavy</td><td class="opp">RIGHT</td></tr>
+      <tr><td>St. Louis has nothing below the top two</td><td class="opp">RIGHT</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Two wrongs, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Two wrongs, a doubtful, and one call that never got out of the parking lot, Pepper.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>But three rights.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Three rights! And all three of them, Pepper, were correct predictions about <span class="fld">how thoroughly we would lose.</span></span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>That's still forecasting, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>It is the most accurate forecasting in the building, Pepper.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">And the Captain</div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>A closing word on Randy Burgess. Captain. Author. Cartographer. This man built a document containing a tiebreaker ladder, an hourly temperature index, indoor and outdoor court assignments, a practice-court booking, a <span class="fld">carpool schedule</span>, and a self-scouting report in which he ranked his own eleven men against each other, in public, by merit.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Where'd he rank himself?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Fifth, Pepper. He put himself fifth. Out of eleven. In his own book.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>That's honest, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>It is <em>devastatingly</em> honest. And I would be failing this broadcast if I did not report that the same document lists his career singles record as <span class="fld">oh and one, twenty-nine percent of games won</span> — a number he chose to publish, about himself, on a page other people would read.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Why would he do that, Cotton?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Integrity, Pepper. Ruinous, self-inflicted integrity. And then the card he wrote was played <span class="fld">exactly as written</span> — S1, D1, D2, D3, and the bench, four for four, not one substitution, not one deviation.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>So the plan worked.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>The plan was executed <em>flawlessly</em>, Pepper.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>And they lost 1–3.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>And they lost 1–3.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>...I don't know what to do with that, Cotton.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>Nobody does, Pepper. That's why it's sport.</span></p>
+
+  <hr class="booth-rule">
+
+  <div class="sub">Where We Stand</div>
+
+  <div class="tw"><table style="margin-top:10px;font-size:12.5px">
+    <thead><tr><th>Team</th><th>Ties</th><th>Courts</th><th>Game %</th></tr></thead>
+    <tbody>
+      <tr><td class="who">IA / Versteeg</td><td class="stat">2–0</td><td class="stat">6–2</td><td class="stat">62.16%</td></tr>
+      <tr><td class="who">NE / Penland</td><td class="stat">1–1</td><td class="stat">4–4</td><td class="stat">50.00%</td></tr>
+      <tr><td class="who">OK / Dickason</td><td class="stat">1–0</td><td class="stat">3–1</td><td class="stat">59.26%</td></tr>
+      <tr><td class="who">STL / Petruska</td><td class="stat">0–2</td><td class="stat">2–6</td><td class="stat">40.13%</td></tr>
+      <tr><td class="who"><span class="fld">HOA — us</span></td><td class="stat">0–1</td><td class="stat"><span class="fld">1–3</span></td><td class="stat lo"><span class="fld">35.21%</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>One court banked. <span class="fld">Twelve still to play.</span> And ladies and gentlemen, here is the thing this book got <em>entirely</em> right, the sentence that survives Friday completely intact: <span class="fld">games are the fourth line of the standings ladder.</span> There is no dead set in this tournament. Every game clawed out of a set already lost is still worth something on Sunday afternoon.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>So the losing counts, Cotton?</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>The <em>quality</em> of the losing counts, Pepper.</span></p>
+
+  <p class="bl p"><span class="sp">Pepper</span><span>Then they're having a great tournament.</span></p>
+
+  <p class="bl c"><span class="sp">Cotton</span><span>For Pepper Brooks, I'm Cotton McKnight. Goodnight, Springfield.</span></p>
+
+</section>
 </div>
 <div id="gate">
   <div class="box">
